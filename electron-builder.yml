@@ -214,9 +214,11 @@ win:
   extraResources:
     - from: resources/oix/win32-${arch}
       to: oix
-    - from: resources/codex/win32-${arch}/codex-command-runner.exe
+    # OIX ships the version-matched Codex sandbox helpers. The app also needs
+    # them beside the packaged executable for Windows helper discovery.
+    - from: resources/oix/win32-${arch}/codex-resources/codex-command-runner.exe
       to: codex-command-runner.exe
-    - from: resources/codex/win32-${arch}/codex-windows-sandbox-setup.exe
+    - from: resources/oix/win32-${arch}/codex-resources/codex-windows-sandbox-setup.exe
       to: codex-windows-sandbox-setup.exe
     - from: resources/pdfcpu/win32-${arch}/pdfcpu.exe
       to: pdfcpu/pdfcpu.exe

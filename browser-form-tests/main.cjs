@@ -695,9 +695,9 @@ async function prepareEnvironment(outputDir) {
   const pnpm = getPnpmCommand();
   await runCommand({
     command: pnpm,
-    args: ['run', 'download:codex', '--', '--current-platform'],
+    args: ['run', 'download:oix', '--', '--current-platform'],
     cwd: REPO_ROOT,
-    logPath: path.join(outputDir, 'setup-download-codex.log'),
+    logPath: path.join(outputDir, 'setup-download-oix.log'),
   });
   await runCommand({
     command: pnpm,

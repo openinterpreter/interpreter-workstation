@@ -37,7 +37,6 @@ git clone --recurse-submodules https://github.com/openinterpreter/interpreter-wo
 cd interpreter-workstation
 pnpm install
 pnpm run download:oix -- --current-platform
-pnpm run download:codex -- --current-platform
 pnpm run download:pdfcpu -- --current-platform
 pnpm run download:qwen-asr -- --current-platform
 pnpm run build

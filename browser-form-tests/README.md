@@ -111,7 +111,7 @@ Each run writes to:
 
 Useful files inside a run:
 
-- `setup-download-codex.log`
+- `setup-download-oix.log`
 - `setup-download-node.log`
 - `setup-js-repl-runtime.log`
 - `setup-browser-extension-relay.log`

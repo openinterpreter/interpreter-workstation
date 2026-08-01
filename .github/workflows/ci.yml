@@ -67,6 +67,7 @@ jobs:
           bun-version: 1.2.20
       - uses: dtolnay/rust-toolchain@stable
       - run: pnpm install --frozen-lockfile
+      - run: pnpm run download:oix -- --current-platform
       - run: pnpm run test:e2e:ci
 
   voice-e2e:
@@ -95,6 +96,7 @@ jobs:
           npm install --global node-gyp@12.3.0
           "npm_config_node_gyp=$(npm root --global)\node-gyp\bin\node-gyp.js" >> $env:GITHUB_ENV
       - run: pnpm install --frozen-lockfile
+      - run: pnpm run download:oix -- --current-platform
       - run: pnpm run test:e2e:voice:ci
 
   package-smoke:
@@ -135,7 +137,6 @@ jobs:
             libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev \
             libopenblas-dev
       - run: pnpm install --frozen-lockfile
-      - run: pnpm run download:codex -- --current-platform
       - run: pnpm run download:oix -- --current-platform
       - run: pnpm run download:pdfcpu -- --current-platform
       - run: pnpm run download:qwen-asr -- --current-platform
