@@ -1,0 +1,2317 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    :root {
+      --bg: #eef2f7;
+      --bg-top: #f8fafc;
+      --bg-bottom: #edf2f7;
+      --panel: rgba(255, 255, 255, 0.97);
+      --panel-strong: #ffffff;
+      --surface: #f8fafc;
+      --line: rgba(15, 23, 42, 0.10);
+      --line-strong: rgba(15, 23, 42, 0.16);
+      --text: #162033;
+      --muted: #5f6f86;
+      --danger: #c2410c;
+      --shadow: 0 3px 10px rgba(15, 23, 42, 0.05);
+      --accent: #0f766e;
+      --accent-soft: rgba(15, 118, 110, 0.10);
+      --accent-strong: rgba(15, 118, 110, 0.18);
+      --font-ui: "Aptos", "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background:
+        radial-gradient(circle at top right, color-mix(in srgb, var(--accent) 14%, transparent), transparent 28%),
+        linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
+      color: var(--text);
+      font-family: var(--font-ui);
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    button,
+    input,
+    textarea,
+    select {
+      font: inherit;
+    }
+
+    .theme-teal,
+    .theme-cyan,
+    .theme-sky,
+    .theme-olive,
+    .theme-sage {
+      --accent: #0f766e;
+      --accent-soft: rgba(15, 118, 110, 0.10);
+      --accent-strong: rgba(15, 118, 110, 0.18);
+    }
+
+    .theme-blue,
+    .theme-indigo {
+      --accent: #2563eb;
+      --accent-soft: rgba(37, 99, 235, 0.10);
+      --accent-strong: rgba(37, 99, 235, 0.18);
+    }
+
+    .theme-amber,
+    .theme-stone {
+      --accent: #b45309;
+      --accent-soft: rgba(180, 83, 9, 0.10);
+      --accent-strong: rgba(180, 83, 9, 0.18);
+    }
+
+    .theme-mode-light {
+      --bg: #eef2f7;
+      --bg-top: #f8fafc;
+      --bg-bottom: #edf2f7;
+      --panel: rgba(255, 255, 255, 0.97);
+      --panel-strong: #ffffff;
+      --surface: #f8fafc;
+      --line: rgba(15, 23, 42, 0.10);
+      --line-strong: rgba(15, 23, 42, 0.16);
+      --text: #162033;
+      --muted: #5f6f86;
+      --danger: #c2410c;
+      --shadow: 0 3px 10px rgba(15, 23, 42, 0.05);
+    }
+
+    .theme-mode-tint {
+      --bg: color-mix(in srgb, var(--accent) 7%, #eef2f7);
+      --bg-top: color-mix(in srgb, var(--accent) 8%, #f8fafc);
+      --bg-bottom: color-mix(in srgb, var(--accent) 12%, #edf2f7);
+      --panel: color-mix(in srgb, var(--accent) 4%, rgba(255, 255, 255, 0.96));
+      --panel-strong: color-mix(in srgb, var(--accent) 6%, #ffffff);
+      --surface: color-mix(in srgb, var(--accent) 7%, #f8fafc);
+      --line: color-mix(in srgb, var(--accent) 14%, rgba(15, 23, 42, 0.08));
+      --line-strong: color-mix(in srgb, var(--accent) 22%, rgba(15, 23, 42, 0.16));
+      --text: #1d2740;
+      --muted: #5f6b85;
+      --danger: #c2410c;
+      --shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+    }
+
+    .theme-mode-dark {
+      --bg: #0f172a;
+      --bg-top: color-mix(in srgb, var(--accent) 16%, #0f172a);
+      --bg-bottom: #111827;
+      --panel: rgba(17, 24, 39, 0.94);
+      --panel-strong: #0f172a;
+      --surface: rgba(15, 23, 42, 0.96);
+      --line: rgba(148, 163, 184, 0.16);
+      --line-strong: rgba(148, 163, 184, 0.28);
+      --text: #e5edf7;
+      --muted: #96a6bf;
+      --danger: #fb7185;
+      --shadow: 0 12px 30px rgba(2, 6, 23, 0.34);
+    }
+
+    .window-shell {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-height: 100vh;
+      padding: 2px;
+    }
+
+    .topbar,
+    .app-frame,
+    .workspace-card,
+    .aside-card,
+    .form-panel,
+    .section-card,
+    .metric-card,
+    .timeline-card,
+    .success-message {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+    }
+
+    .topbar {
+      align-items: center;
+      display: flex;
+      gap: 3px;
+      justify-content: space-between;
+      min-height: 22px;
+      padding: 2px 6px;
+    }
+
+    .brand-stack {
+      display: flex;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .brand-name {
+      font-size: 11px;
+      font-weight: 760;
+      letter-spacing: -0.03em;
+      line-height: 1;
+    }
+
+    .brand-subtitle,
+    .meta-label,
+    .field-caption,
+    .aside-text,
+    .status-label {
+      color: var(--muted);
+      font-size: 7px;
+    }
+
+    .pill-row,
+    .action-row,
+    .tab-row,
+    .meta-row {
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+
+    .topbar-center {
+      display: none;
+    }
+
+    .topbar-kicker {
+      color: var(--muted);
+      font-size: 8px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .topbar-location {
+      align-items: center;
+      display: flex;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .topbar-location-text {
+      font-size: 9px;
+      font-weight: 600;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .topbar-meta {
+      color: var(--muted);
+      font-size: 8px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .toolbar-actions {
+      align-items: center;
+      display: flex;
+      gap: 3px;
+      justify-content: flex-end;
+    }
+
+    .pill {
+      background: var(--accent-soft);
+      border: 1px solid var(--accent-strong);
+      border-radius: 999px;
+      color: var(--accent);
+      font-size: 8px;
+      font-weight: 700;
+      padding: 1px 6px;
+    }
+
+    .ghost-button,
+    .nav-item,
+    .tab-item,
+    .primary-button {
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 10px;
+    }
+
+    .ghost-button,
+    .nav-item,
+    .tab-item {
+      background: transparent;
+      border: 1px solid var(--line-strong);
+      color: var(--text);
+      padding: 3px 6px;
+    }
+
+    .button-content,
+    .sidebar-content {
+      align-items: center;
+      display: inline-flex;
+      gap: 4px;
+    }
+
+    .button-icon,
+    .sidebar-icon {
+      color: currentColor;
+      display: inline-flex;
+      flex: 0 0 auto;
+      height: 11px;
+      justify-content: center;
+      width: 11px;
+    }
+
+    .button-icon svg,
+    .sidebar-icon svg {
+      display: block;
+      height: 11px;
+      width: 11px;
+    }
+
+    .toolbar-button {
+      align-items: center;
+      background: transparent;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      color: var(--text);
+      cursor: pointer;
+      display: inline-flex;
+      gap: 3px;
+      font-size: 7px;
+      font-weight: 650;
+      padding: 2px 4px;
+      white-space: nowrap;
+    }
+
+    .toolbar-button.icon-only {
+      justify-content: center;
+      padding: 3px;
+      width: 18px;
+    }
+
+    .toolbar-button .button-icon {
+      height: 11px;
+      width: 11px;
+    }
+
+    .nav-item.active,
+    .tab-item.active,
+    .ghost-button.active {
+      background: var(--accent-soft);
+      border-color: var(--accent-strong);
+      color: var(--accent);
+    }
+
+    .primary-button {
+      background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 88%, white 12%), color-mix(in srgb, var(--accent) 70%, black 30%));
+      border: none;
+      border-radius: 8px;
+      color: white;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 6px 10px;
+    }
+
+    .primary-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
+    .app-frame {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .layout-split {
+      display: grid;
+      flex: 1;
+      gap: 0;
+      grid-template-columns: minmax(0, 1fr);
+      min-height: 0;
+      padding: 0;
+    }
+
+    .layout-focus {
+      display: grid;
+      flex: 1;
+      gap: 0;
+      grid-template-columns: minmax(0, 1fr);
+      min-height: 0;
+      padding: 0;
+    }
+
+    .layout-stack {
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      gap: 0;
+      min-height: 0;
+      padding: 0;
+    }
+
+    .workspace-card,
+    .form-panel,
+    .aside-card,
+    .section-card,
+    .timeline-card,
+    .metric-card {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-height: 0;
+      padding: 5px 6px;
+    }
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .sidebar-list,
+    .simple-list,
+    .meta-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      list-style: none;
+    }
+
+    .sidebar-item {
+      background: rgba(248, 250, 252, 0.90);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      font-size: 9px;
+      font-weight: 600;
+      padding: 4px 6px;
+    }
+
+    .sidebar-item.active {
+      background: var(--accent-soft);
+      border-color: var(--accent-strong);
+      color: var(--accent);
+    }
+
+    .page-title {
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      line-height: 1.06;
+    }
+
+    .page-subtitle {
+      color: var(--muted);
+      font-size: 8px;
+    }
+
+    .header-block {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .header-main-row {
+      align-items: center;
+      display: flex;
+      gap: 4px;
+      justify-content: space-between;
+      flex-wrap: wrap;
+    }
+
+    .record-header {
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding-bottom: 5px;
+    }
+
+    .header-main-row .header-block {
+      min-width: 0;
+    }
+
+    .header-meta-list {
+      align-items: center;
+      color: var(--muted);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2px 6px;
+      font-size: 7px;
+    }
+
+    .header-meta-item {
+      align-items: center;
+      display: inline-flex;
+      gap: 5px;
+    }
+
+    .header-meta-item strong {
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .header-meta-icon {
+      color: var(--accent);
+      display: inline-flex;
+      height: 9px;
+      width: 9px;
+    }
+
+    .status-strip {
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 3px;
+    }
+
+    .section-title,
+    .card-title,
+    .list-title {
+      font-size: 8px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .fields-grid {
+      display: grid;
+      gap: 4px 6px;
+      grid-template-columns: 1fr;
+    }
+
+    .fields-grid.two-column {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .form-field {
+      --field-label-size: 8px;
+      --field-input-font-size: 9px;
+      --field-input-padding-y: 3px;
+      --field-input-padding-x: 5px;
+      --field-input-min-height: 25px;
+      --field-textarea-min-height: 38px;
+      --field-chip-padding-y: 2px;
+      --field-chip-padding-x: 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .form-field[data-size="compact"] {
+      --field-label-size: 7px;
+      --field-input-font-size: 8px;
+      --field-input-padding-y: 2px;
+      --field-input-padding-x: 4px;
+      --field-input-min-height: 22px;
+      --field-textarea-min-height: 32px;
+      --field-chip-padding-y: 1px;
+      --field-chip-padding-x: 4px;
+    }
+
+    .form-field[data-size="regular"] {
+      --field-label-size: 8px;
+      --field-input-font-size: 9px;
+      --field-input-padding-y: 3px;
+      --field-input-padding-x: 5px;
+      --field-input-min-height: 25px;
+      --field-textarea-min-height: 38px;
+      --field-chip-padding-y: 2px;
+      --field-chip-padding-x: 4px;
+    }
+
+    .form-field[data-size="large"] {
+      --field-label-size: 10px;
+      --field-input-font-size: 12px;
+      --field-input-padding-y: 6px;
+      --field-input-padding-x: 8px;
+      --field-input-min-height: 36px;
+      --field-textarea-min-height: 74px;
+      --field-chip-padding-y: 4px;
+      --field-chip-padding-x: 7px;
+    }
+
+    .form-field.full-width {
+      grid-column: 1 / -1;
+    }
+
+    .form-field label {
+      font-size: var(--field-label-size);
+      font-weight: 700;
+    }
+
+    .required-indicator {
+      color: var(--danger);
+      font-weight: 800;
+    }
+
+    .form-field input,
+    .form-field textarea,
+    .form-field select {
+      background: var(--panel-strong);
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: var(--field-input-font-size);
+      min-height: var(--field-input-min-height);
+      padding: var(--field-input-padding-y) var(--field-input-padding-x);
+      width: 100%;
+    }
+
+    .custom-select {
+      overflow: visible;
+      position: relative;
+      z-index: 3;
+    }
+
+    .checkout-combobox-root {
+      overflow: visible;
+      position: relative;
+      z-index: 3;
+    }
+
+    .checkout-shell {
+      align-items: center;
+      background: var(--panel-strong);
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      color: var(--text);
+      cursor: pointer;
+      display: flex;
+      font-size: var(--field-input-font-size);
+      justify-content: space-between;
+      min-height: var(--field-input-min-height);
+      padding: var(--field-input-padding-y) var(--field-input-padding-x);
+      text-align: left;
+      width: 100%;
+    }
+
+    .checkout-shell.placeholder {
+      color: var(--muted);
+    }
+
+    .checkout-shell-value {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .checkout-shell-caret {
+      color: var(--muted);
+      flex: 0 0 auto;
+      font-size: 8px;
+      margin-left: 8px;
+    }
+
+    .checkout-edit-input {
+      background: var(--panel-strong);
+      border: 1px solid var(--accent-strong);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: var(--field-input-font-size);
+      min-height: var(--field-input-min-height);
+      padding: var(--field-input-padding-y) var(--field-input-padding-x);
+      width: 100%;
+    }
+
+    .checkout-popover {
+      background: var(--panel-strong);
+      border: 1px solid var(--line-strong);
+      border-radius: 10px;
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      max-height: 180px;
+      overflow: auto;
+      padding: 4px;
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      width: 100%;
+      z-index: 220;
+    }
+
+    .checkout-popover[hidden] {
+      display: none;
+    }
+
+    .checkout-option {
+      align-items: center;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      color: var(--text);
+      cursor: pointer;
+      display: flex;
+      font-size: calc(var(--field-input-font-size) - 1px);
+      justify-content: flex-start;
+      min-height: calc(var(--field-input-min-height) - 1px);
+      padding: calc(var(--field-input-padding-y) + 1px) calc(var(--field-input-padding-x) + 1px);
+      text-align: left;
+      width: 100%;
+    }
+
+    .checkout-option:hover,
+    .checkout-option.highlighted,
+    .checkout-option:focus {
+      background: var(--accent-soft);
+      border-color: var(--accent-strong);
+      outline: none;
+    }
+
+    .checkout-empty-state {
+      color: var(--muted);
+      font-size: calc(var(--field-input-font-size) - 1px);
+      padding: calc(var(--field-input-padding-y) + 1px) calc(var(--field-input-padding-x) + 1px);
+    }
+
+    .select-trigger {
+      align-items: center;
+      background: var(--panel-strong);
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      color: var(--text);
+      cursor: pointer;
+      display: flex;
+      font-size: var(--field-input-font-size);
+      justify-content: space-between;
+      min-height: var(--field-input-min-height);
+      padding: var(--field-input-padding-y) var(--field-input-padding-x);
+      text-align: left;
+      width: 100%;
+    }
+
+    .select-trigger.placeholder {
+      color: var(--muted);
+    }
+
+    .select-caret {
+      color: var(--muted);
+      flex: 0 0 auto;
+      font-size: 8px;
+      margin-left: 8px;
+    }
+
+    .select-menu {
+      background: var(--panel-strong);
+      border: 1px solid var(--line-strong);
+      border-radius: 10px;
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      max-height: 140px;
+      overflow: auto;
+      padding: 4px;
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      width: 100%;
+      z-index: 220;
+    }
+
+    .select-menu.open-upward {
+      bottom: calc(100% + 4px);
+      top: auto;
+    }
+
+    .select-menu[hidden] {
+      display: none;
+    }
+
+    .select-option {
+      align-items: center;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      color: var(--text);
+      cursor: pointer;
+      display: flex;
+      font-size: calc(var(--field-input-font-size) - 1px);
+      justify-content: flex-start;
+      min-height: calc(var(--field-input-min-height) - 1px);
+      padding: calc(var(--field-input-padding-y) + 1px) calc(var(--field-input-padding-x) + 1px);
+      text-align: left;
+      width: 100%;
+    }
+
+    .select-option:hover,
+    .select-option.highlighted,
+    .select-option:focus {
+      background: var(--accent-soft);
+      border-color: var(--accent-strong);
+      outline: none;
+    }
+
+    .form-field textarea {
+      line-height: 1.35;
+      min-height: var(--field-textarea-min-height);
+      resize: vertical;
+    }
+
+    .radio-group,
+    .checkbox-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2px;
+    }
+
+    .radio-option,
+    .checkbox-option {
+      align-items: center;
+      background: rgba(248, 250, 252, 0.92);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      display: flex;
+      gap: 3px;
+      padding: var(--field-chip-padding-y) var(--field-chip-padding-x);
+    }
+
+    .radio-option label,
+    .checkbox-option label {
+      font-size: calc(var(--field-input-font-size) - 1px);
+      line-height: 1.2;
+    }
+
+    .radio-option input[type="radio"],
+    .checkbox-option input[type="checkbox"] {
+      margin: 0;
+      width: auto;
+    }
+
+    .meta-grid {
+      display: grid;
+      gap: 6px;
+      grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+    }
+
+    .metric-card {
+      background: rgba(248, 250, 252, 0.92);
+      border-radius: 8px;
+      box-shadow: none;
+      gap: 2px;
+      padding: 5px;
+    }
+
+    .metric-value {
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+
+    .form-scroll {
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      gap: 3px;
+      min-height: 0;
+      overflow: auto;
+      padding-right: 1px;
+    }
+
+    .submit-row {
+      align-items: center;
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      border-top: 1px solid var(--line);
+      padding-top: 5px;
+    }
+
+    .success-message {
+      background: #ecfdf5;
+      border-color: rgba(15, 118, 110, 0.18);
+      color: #065f46;
+      display: none;
+      font-size: 9px;
+      font-weight: 700;
+      padding: 6px 9px;
+    }
+
+    .validation-message {
+      background: rgba(254, 242, 242, 0.96);
+      border: 1px solid rgba(239, 68, 68, 0.18);
+      border-radius: 8px;
+      color: #991b1b;
+      display: none;
+      font-size: 9px;
+      font-weight: 700;
+      padding: 6px 9px;
+    }
+
+    .form-field.invalid label,
+    .form-field.invalid .field-caption {
+      color: #991b1b;
+    }
+
+    .form-field.invalid input,
+    .form-field.invalid textarea,
+    .form-field.invalid select,
+    .form-field.invalid .select-trigger,
+    .form-field.invalid .radio-option,
+    .form-field.invalid .checkbox-option {
+      border-color: rgba(239, 68, 68, 0.55);
+      box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.12);
+    }
+
+    .timeline-item {
+      border-left: 2px solid var(--accent-strong);
+      padding-left: 8px;
+    }
+
+    .timeline-copy {
+      font-size: 9px;
+      line-height: 1.55;
+    }
+
+    .section-card {
+      background: transparent;
+      border: none;
+      border-top: 1px solid var(--line);
+      border-radius: 0;
+      box-shadow: none;
+      padding: 6px 0 0;
+    }
+
+    @media (max-width: 860px) {
+      .window-shell {
+        gap: 4px;
+        padding: 4px;
+      }
+
+      .topbar {
+        gap: 8px;
+        padding: 5px 8px;
+      }
+
+      .topbar-center {
+        align-items: center;
+        flex-direction: row;
+        gap: 8px;
+      }
+
+      .toolbar-actions {
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
+      .header-main-row {
+        align-items: center;
+        flex-direction: row;
+      }
+
+      .brand-name,
+      .page-title {
+        font-size: 16px;
+      }
+
+      .app-frame {
+        overflow: auto;
+      }
+
+      .layout-split,
+      .layout-focus,
+      .layout-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 6px;
+      }
+
+      .layout-split > .sidebar {
+        display: none;
+      }
+
+      .layout-split > .aside-card,
+      .layout-focus > .aside-card,
+      .layout-stack > .aside-card {
+        display: none;
+      }
+
+      .layout-split > .form-panel,
+      .layout-focus > .form-panel,
+      .layout-stack > .form-panel {
+        min-height: 0;
+        order: 1;
+      }
+
+      .workspace-card,
+      .form-panel,
+      .aside-card,
+      .section-card,
+      .timeline-card,
+      .metric-card {
+        padding: 8px;
+      }
+
+      .meta-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .topbar-center,
+      .toolbar-actions {
+        width: 100%;
+      }
+
+      .topbar-center,
+      .header-main-row {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .toolbar-actions {
+        justify-content: flex-start;
+      }
+
+      .meta-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .radio-group,
+      .checkbox-group {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .fields-grid.two-column {
+        grid-template-columns: 1fr;
+      }
+
+      .submit-row {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .primary-button {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+    const React = require('react');
+    const ReactDOMServer = require('react-dom/server');
+    const {
+      Archive,
+      BadgeCheck,
+      Bell,
+      Building2,
+      Circle,
+      Clock3,
+      Copy,
+      FileSearch,
+      FileText,
+      Filter,
+      FolderKanban,
+      Forward,
+      History,
+      LayoutGrid,
+      MapPin,
+      MessageSquare,
+      PanelLeft,
+      Reply,
+      Save,
+      Search,
+      Settings2,
+      Share2,
+      ShieldCheck,
+      UserPlus,
+      UserRound,
+      Users,
+    } = require('lucide-react');
+    const appRoot = document.getElementById('app');
+    const customSelectState = new Map();
+    const checkoutComboboxState = new Map();
+    const formDebugEvents = [];
+    let formDebugSeq = 0;
+    const formDebugStartedAt = performance.now();
+
+    const ICON_COMPONENTS = {
+      access: ShieldCheck,
+      archive: Archive,
+      bell: Bell,
+      building: Building2,
+      check: BadgeCheck,
+      clock: Clock3,
+      document: FileText,
+      dot: Circle,
+      duplicate: Copy,
+      filter: Filter,
+      forward: Forward,
+      history: History,
+      layout: LayoutGrid,
+      panel: PanelLeft,
+      pin: MapPin,
+      profile: UserRound,
+      reply: Reply,
+      save: Save,
+      search: Search,
+      settings: Settings2,
+      share: Share2,
+      shield: ShieldCheck,
+      stack: FolderKanban,
+      user: UserRound,
+      userPlus: UserPlus,
+      users: Users,
+      workspace: FileSearch,
+      activity: MessageSquare,
+    };
+
+    function safeSliceText(value, maxLength = 120) {
+      return String(value || '').trim().slice(0, maxLength);
+    }
+
+    function describeElement(element) {
+      if (!(element instanceof Element)) {
+        return null;
+      }
+
+      const description = {
+        tag: element.tagName,
+        id: element.id || '',
+        className: typeof element.className === 'string' ? element.className : '',
+        ariaLabel: element.getAttribute('aria-label') || '',
+        role: element.getAttribute('role') || '',
+        fieldId: element.dataset?.fieldId || element.dataset?.formFieldId || '',
+        text: safeSliceText(element.textContent),
+      };
+
+      if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
+        description.value = element.value || '';
+        if (element instanceof HTMLInputElement) {
+          description.inputType = element.type;
+        }
+      }
+
+      const rect = element.getBoundingClientRect();
+      description.rect = {
+        left: Math.round(rect.left),
+        top: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      };
+
+      return description;
+    }
+
+    function collectVisibleValues() {
+      const values = {};
+      document.querySelectorAll('.form-field[data-form-field-id]').forEach((field) => {
+        const fieldId = field.dataset.formFieldId;
+        if (!fieldId) {
+          return;
+        }
+        const firstInput = field.querySelector('input, textarea, select');
+        if (!firstInput) {
+          return;
+        }
+
+        if (firstInput instanceof HTMLInputElement && firstInput.type === 'radio') {
+          const checked = field.querySelector('input[type="radio"]:checked');
+          values[fieldId] = checked ? checked.value : '';
+          return;
+        }
+
+        if (firstInput instanceof HTMLInputElement && firstInput.type === 'checkbox') {
+          const checked = Array.from(field.querySelectorAll('input[type="checkbox"]:checked'));
+          values[fieldId] = checked.map((input) => input.value);
+          return;
+        }
+
+        values[fieldId] = firstInput.value || '';
+      });
+      return values;
+    }
+
+    function getSelectionDebugState() {
+      const activeElement = document.activeElement;
+      const selection = {
+        activeElement: describeElement(activeElement),
+      };
+      if (activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement) {
+        selection.selectionStart = activeElement.selectionStart;
+        selection.selectionEnd = activeElement.selectionEnd;
+      }
+      return selection;
+    }
+
+    function recordDebugEvent(type, payload = {}) {
+      formDebugSeq += 1;
+      formDebugEvents.push({
+        seq: formDebugSeq,
+        timeMs: Math.round(performance.now() - formDebugStartedAt),
+        type,
+        ...payload,
+      });
+      if (formDebugEvents.length > 5000) {
+        formDebugEvents.splice(0, formDebugEvents.length - 5000);
+      }
+    }
+
+    window.__getFormTestDebugState = () => ({
+      activeElement: describeElement(document.activeElement),
+      selection: getSelectionDebugState(),
+      openControls: [
+        ...Array.from(document.querySelectorAll('.custom-select[data-open="true"]'))
+          .map((root) => root.dataset.fieldId || root.querySelector('[data-field-id]')?.dataset?.fieldId || ''),
+        ...Array.from(checkoutComboboxState.entries())
+          .filter(([root, state]) => root.classList.contains('editing') || !state.popover.hidden)
+          .map(([, state]) => state.field.id),
+      ],
+      visibleValues: collectVisibleValues(),
+      jsEvents: formDebugEvents.slice(),
+    });
+
+    function createElement(tag, className, text) {
+      const element = document.createElement(tag);
+      if (className) {
+        element.className = className;
+      }
+      if (text !== undefined) {
+        element.textContent = text;
+      }
+      return element;
+    }
+
+    function inferIconName(label) {
+      const value = String(label || '').toLowerCase();
+      if (value.includes('search')) return 'search';
+      if (value.includes('reply')) return 'reply';
+      if (value.includes('forward')) return 'forward';
+      if (value.includes('archive')) return 'archive';
+      if (value.includes('share') || value.includes('export')) return 'share';
+      if (value.includes('duplicate') || value.includes('copy')) return 'duplicate';
+      if (value.includes('save') || value.includes('create') || value.includes('add') || value.includes('activate') || value.includes('provision')) return 'save';
+      if (value.includes('review') || value.includes('approve')) return 'check';
+      if (value.includes('profile') || value.includes('contact') || value.includes('candidate') || value.includes('customer')) return 'user';
+      if (value.includes('company') || value.includes('companies') || value.includes('account') || value.includes('vendor')) return 'building';
+      if (value.includes('activity') || value.includes('history') || value.includes('timeline')) return 'clock';
+      if (value.includes('note') || value.includes('details') || value.includes('summary') || value.includes('overview') || value.includes('compliance')) return 'document';
+      if (value.includes('queue') || value.includes('pipeline') || value.includes('stage') || value.includes('workspace')) return 'stack';
+      if (value.includes('dispatch') || value.includes('location') || value.includes('region')) return 'pin';
+      if (value.includes('access')) return 'access';
+      if (value.includes('settings')) return 'settings';
+      return 'dot';
+    }
+
+    function createIcon(iconName) {
+      const span = createElement('span', 'button-icon');
+      span.setAttribute('aria-hidden', 'true');
+      const IconComponent = ICON_COMPONENTS[iconName] || ICON_COMPONENTS.dot;
+      span.innerHTML = ReactDOMServer.renderToStaticMarkup(React.createElement(IconComponent, { size: 14, strokeWidth: 1.8 }));
+      return span;
+    }
+
+    function renderToolbarButton(label, iconOnly = false) {
+      const button = createElement('button', `toolbar-button${iconOnly ? ' icon-only' : ''}`);
+      button.type = 'button';
+      button.setAttribute('aria-label', label);
+      if (iconOnly) {
+        button.appendChild(createIcon(inferIconName(label)));
+      } else {
+        setLabeledContent(button, label);
+      }
+      return button;
+    }
+
+    function setLabeledContent(element, label, iconClassName = 'button-icon') {
+      const wrapper = createElement('span', iconClassName === 'sidebar-icon' ? 'sidebar-content' : 'button-content');
+      const icon = createIcon(inferIconName(label));
+      icon.className = iconClassName;
+      wrapper.appendChild(icon);
+      wrapper.appendChild(createElement('span', '', label));
+      element.replaceChildren(wrapper);
+    }
+
+    function normalizeInputType(type) {
+      switch (type) {
+        case 'select':
+        case 'radio':
+        case 'checkbox':
+        case 'textarea':
+          return type;
+        default:
+          return 'text';
+      }
+    }
+
+    function renderButtonRow(values, activeLabel) {
+      const row = createElement('div', 'action-row');
+      (values || []).forEach((label) => {
+        const button = createElement('button', `ghost-button${label === activeLabel ? ' active' : ''}`);
+        button.type = 'button';
+        button.setAttribute('aria-label', label);
+        button.textContent = label;
+        row.appendChild(button);
+      });
+      return row;
+    }
+
+    function renderPills(values) {
+      const row = createElement('div', 'pill-row');
+      (values || []).forEach((value) => row.appendChild(createElement('span', 'pill', value)));
+      return row;
+    }
+
+    function renderSidebar(title, items, activeItem) {
+      const sidebar = createElement('aside', 'workspace-card sidebar');
+      sidebar.appendChild(createElement('div', 'card-title', title));
+      const list = createElement('div', 'sidebar-list');
+      (items || []).forEach((item) => {
+        const entry = createElement('div', `sidebar-item${item === activeItem ? ' active' : ''}`);
+        setLabeledContent(entry, item, 'sidebar-icon');
+        list.appendChild(entry);
+      });
+      sidebar.appendChild(list);
+      return sidebar;
+    }
+
+    function renderMetaCards(meta) {
+      const grid = createElement('div', 'meta-grid');
+      (meta || []).forEach((item) => {
+        const card = createElement('div', 'metric-card');
+        card.appendChild(createElement('div', 'meta-label', item.label));
+        card.appendChild(createElement('div', 'metric-value', item.value));
+        grid.appendChild(card);
+      });
+      return grid;
+    }
+
+    function closeAllCustomSelects(exceptRoot) {
+      appRoot.querySelectorAll('.custom-select').forEach((root) => {
+        if (exceptRoot && root === exceptRoot) {
+          return;
+        }
+        const state = customSelectState.get(root);
+        const trigger = state?.trigger || root.querySelector('.select-trigger');
+        const menu = state?.menu || root.querySelector('.select-menu');
+        if (trigger) {
+          trigger.setAttribute('aria-expanded', 'false');
+        }
+        if (menu) {
+          menu.classList.remove('floating');
+          menu.hidden = true;
+        }
+        root.dataset.open = 'false';
+      });
+    }
+
+    function closeCheckoutCombobox(root) {
+      const state = checkoutComboboxState.get(root);
+      if (!state) {
+        return;
+      }
+      if (state.blurTimer) {
+        clearTimeout(state.blurTimer);
+        state.blurTimer = null;
+      }
+      state.popover.hidden = true;
+      state.shell.hidden = false;
+      state.shell.setAttribute('aria-expanded', 'false');
+      root.classList.remove('editing');
+      if (state.input && state.input.isConnected) {
+        state.input.remove();
+      }
+      delete root.dataset.highlightedValue;
+    }
+
+    function closeAllInteractiveControls(exceptRoot = null) {
+      closeAllCustomSelects(exceptRoot);
+      checkoutComboboxState.forEach((_state, root) => {
+        if (root !== exceptRoot) {
+          closeCheckoutCombobox(root);
+        }
+      });
+    }
+
+    function positionCustomSelectMenu(root) {
+      const state = customSelectState.get(root);
+      if (!state) {
+        return;
+      }
+      const { trigger, menu } = state;
+      const triggerRect = trigger.getBoundingClientRect();
+      const viewportPadding = 8;
+      menu.classList.remove('open-upward');
+      menu.hidden = false;
+      const measuredHeight = Math.min(menu.scrollHeight || 140, 220);
+      const availableBelow = window.innerHeight - triggerRect.bottom - viewportPadding;
+      const openUpward = availableBelow < Math.min(measuredHeight, 140) && triggerRect.top > measuredHeight + viewportPadding;
+      menu.style.maxHeight = `${Math.max(72, Math.min(measuredHeight, openUpward ? triggerRect.top - viewportPadding : availableBelow))}px`;
+      menu.classList.toggle('open-upward', openUpward);
+    }
+
+    function syncOpenCustomSelects() {
+      appRoot.querySelectorAll('.custom-select[data-open="true"]').forEach((root) => {
+        positionCustomSelectMenu(root);
+      });
+    }
+
+    function openCustomSelect(root) {
+      const state = customSelectState.get(root);
+      if (!state) {
+        return;
+      }
+      const { trigger, menu } = state;
+      root.dataset.open = 'true';
+      trigger.setAttribute('aria-expanded', 'true');
+      positionCustomSelectMenu(root);
+    }
+
+    function getCommittedFieldValue(fieldId) {
+      const fieldRoot = appRoot.querySelector(`.form-field[data-form-field-id="${fieldId}"]`);
+      if (!fieldRoot) {
+        return '';
+      }
+      const hiddenInput = fieldRoot.querySelector(`input[type="hidden"][name="${fieldId}"], input[type="hidden"]#${fieldId}`);
+      if (hiddenInput) {
+        return hiddenInput.value || '';
+      }
+      return getFieldValue(fieldRoot);
+    }
+
+    function resolveDynamicOptions(field) {
+      if (Array.isArray(field.options) && field.options.length > 0) {
+        return field.options;
+      }
+      if (!field.optionGroups) {
+        return [];
+      }
+      const dependencyValue = getCommittedFieldValue(field.dependsOn);
+      return Array.isArray(field.optionGroups[dependencyValue]) ? field.optionGroups[dependencyValue] : [];
+    }
+
+    function getCustomSelectOptions(root) {
+      return Array.from(root.querySelectorAll('.select-option'));
+    }
+
+    function setHighlightedCustomOption(root, option) {
+      getCustomSelectOptions(root).forEach((entry) => {
+        const isActive = entry === option;
+        entry.classList.toggle('highlighted', isActive);
+        entry.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      });
+      if (option) {
+        root.dataset.highlightedValue = option.dataset.selectValue || '';
+        option.scrollIntoView({ block: 'nearest' });
+      } else {
+        delete root.dataset.highlightedValue;
+      }
+    }
+
+    function selectCustomOption(root, optionText) {
+      const state = customSelectState.get(root);
+      if (!state) {
+        return false;
+      }
+      const { trigger, inputEl } = state;
+      const fieldLabel = trigger.dataset.fieldLabel || trigger.getAttribute('aria-label') || '';
+      const option = getCustomSelectOptions(root).find((entry) => entry.dataset.selectValue === optionText);
+      if (!option) {
+        return false;
+      }
+      inputEl.value = optionText;
+      trigger.classList.remove('placeholder');
+      trigger.childNodes[0].textContent = optionText;
+      if (fieldLabel) {
+        const accessibleLabel = `${fieldLabel}: ${optionText}`;
+        trigger.setAttribute('aria-label', accessibleLabel);
+        trigger.setAttribute('title', accessibleLabel);
+      }
+      setHighlightedCustomOption(root, option);
+      closeAllCustomSelects();
+      return true;
+    }
+
+    function clearDependentCheckoutFields(parentFieldId) {
+      checkoutComboboxState.forEach((state, root) => {
+        if (state.field.dependsOn !== parentFieldId) {
+          return;
+        }
+        state.hiddenInput.value = '';
+        state.displayValue.textContent = state.placeholder;
+        state.shell.classList.add('placeholder');
+        if (state.input && state.input.isConnected) {
+          state.input.value = '';
+          renderCheckoutComboboxOptions(root, '');
+        }
+        clearDependentCheckoutFields(state.field.id);
+      });
+    }
+
+    function renderCheckoutComboboxOptions(root, filterText = '') {
+      const state = checkoutComboboxState.get(root);
+      if (!state) {
+        return;
+      }
+      const normalizedFilter = String(filterText || '').trim().toLowerCase();
+      const options = resolveDynamicOptions(state.field).filter((optionText) => {
+        if (!normalizedFilter) {
+          return true;
+        }
+        return String(optionText).toLowerCase().includes(normalizedFilter);
+      });
+      state.popover.innerHTML = '';
+      if (options.length === 0) {
+        const emptyMessage = state.field.dependsOn && !getCommittedFieldValue(state.field.dependsOn)
+          ? 'Choose the previous field first.'
+          : 'No matching options.';
+        state.popover.appendChild(createElement('div', 'checkout-empty-state', emptyMessage));
+        delete root.dataset.highlightedValue;
+        return;
+      }
+      options.forEach((optionText, index) => {
+        const option = createElement('button', `checkout-option${index === 0 ? ' highlighted' : ''}`, optionText);
+        option.type = 'button';
+        option.dataset.fieldId = state.field.id;
+        option.dataset.selectValue = optionText;
+        option.setAttribute('role', 'option');
+        option.setAttribute('aria-selected', index === 0 ? 'true' : 'false');
+        option.setAttribute('aria-label', `${state.field.label}: ${optionText}`);
+        option.setAttribute('title', `${state.field.label}: ${optionText}`);
+        option.addEventListener('mousedown', (event) => {
+          event.preventDefault();
+          commitCheckoutCombobox(root, optionText);
+        });
+        option.addEventListener('click', (event) => {
+          event.preventDefault();
+          commitCheckoutCombobox(root, optionText);
+        });
+        state.popover.appendChild(option);
+      });
+      root.dataset.highlightedValue = options[0];
+    }
+
+    function focusCheckoutComboboxOption(root, direction) {
+      const options = Array.from(root.querySelectorAll('.checkout-option'));
+      if (!options.length) {
+        return;
+      }
+      const currentValue = root.dataset.highlightedValue || '';
+      const currentIndex = Math.max(0, options.findIndex((entry) => entry.dataset.selectValue === currentValue));
+      const nextIndex = direction > 0
+        ? Math.min(options.length - 1, currentIndex + 1)
+        : Math.max(0, currentIndex - 1);
+      options.forEach((option, index) => {
+        const active = index === nextIndex;
+        option.classList.toggle('highlighted', active);
+        option.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      root.dataset.highlightedValue = options[nextIndex].dataset.selectValue || '';
+      options[nextIndex].scrollIntoView({ block: 'nearest' });
+    }
+
+    function commitCheckoutCombobox(root, optionText) {
+      const state = checkoutComboboxState.get(root);
+      if (!state) {
+        return false;
+      }
+      const normalizedValue = String(optionText || '').trim();
+      const availableOptions = resolveDynamicOptions(state.field);
+      if (!normalizedValue || !availableOptions.includes(normalizedValue)) {
+        return false;
+      }
+      const previousValue = state.hiddenInput.value || '';
+      state.hiddenInput.value = normalizedValue;
+      state.displayValue.textContent = normalizedValue;
+      state.shell.classList.remove('placeholder');
+      if (state.input && state.input.isConnected) {
+        state.input.value = normalizedValue;
+      }
+      closeCheckoutCombobox(root);
+      if (previousValue !== normalizedValue) {
+        clearDependentCheckoutFields(state.field.id);
+      }
+      return true;
+    }
+
+    function openCheckoutCombobox(root) {
+      const state = checkoutComboboxState.get(root);
+      if (!state) {
+        return;
+      }
+      if (root.classList.contains('editing') && state.input) {
+        state.input.focus();
+        return;
+      }
+      closeAllInteractiveControls(root);
+      root.classList.add('editing');
+      state.shell.hidden = true;
+      state.shell.setAttribute('aria-expanded', 'true');
+      if (!state.input || !state.input.isConnected) {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'checkout-edit-input';
+        input.value = state.hiddenInput.value || '';
+        input.placeholder = state.placeholder;
+        input.dataset.fieldId = state.field.id;
+        input.setAttribute('role', 'searchbox');
+        input.setAttribute('aria-autocomplete', 'list');
+        input.setAttribute('aria-expanded', 'true');
+        input.setAttribute('aria-label', state.field.label);
+        input.setAttribute('title', state.field.label);
+        input.addEventListener('input', () => {
+          renderCheckoutComboboxOptions(root, input.value || '');
+        });
+        input.addEventListener('keydown', (event) => {
+          if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            focusCheckoutComboboxOption(root, 1);
+            return;
+          }
+          if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            focusCheckoutComboboxOption(root, -1);
+            return;
+          }
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            const activeValue = root.dataset.highlightedValue || '';
+            const fallbackValue = input.value || '';
+            commitCheckoutCombobox(root, activeValue || fallbackValue);
+            return;
+          }
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            closeCheckoutCombobox(root);
+            state.shell.focus();
+          }
+        });
+        input.addEventListener('blur', () => {
+          state.blurTimer = window.setTimeout(() => {
+            closeCheckoutCombobox(root);
+          }, 120);
+        });
+        state.input = input;
+      }
+      root.insertBefore(state.input, state.popover);
+      state.popover.hidden = false;
+      renderCheckoutComboboxOptions(root, state.input.value || '');
+      requestAnimationFrame(() => {
+        state.input.focus();
+        state.input.select();
+      });
+    }
+
+    function focusMatchingCustomOption(root, searchText) {
+      const normalizedSearch = String(searchText || '').trim().toLowerCase();
+      if (!normalizedSearch) {
+        return false;
+      }
+      const option = getCustomSelectOptions(root).find((entry) => String(entry.dataset.selectValue || '').toLowerCase().startsWith(normalizedSearch));
+      if (!option) {
+        return false;
+      }
+      setHighlightedCustomOption(root, option);
+      return true;
+    }
+
+    function applyFieldSemantics(element, field, labelText) {
+      if (!element) {
+        return;
+      }
+      element.setAttribute('aria-label', labelText);
+      element.setAttribute('title', labelText);
+      element.dataset.required = field.required ? 'true' : 'false';
+      if ('required' in element) {
+        element.required = Boolean(field.required);
+      }
+      element.setAttribute('aria-required', field.required ? 'true' : 'false');
+    }
+
+    function getFieldValue(field) {
+      const firstInput = field.querySelector('input, textarea, select');
+      if (!firstInput) {
+        return '';
+      }
+
+      if (firstInput instanceof HTMLInputElement && firstInput.type === 'radio') {
+        const checked = field.querySelector('input[type="radio"]:checked');
+        return checked ? checked.value : '';
+      }
+
+      if (firstInput instanceof HTMLInputElement && firstInput.type === 'checkbox') {
+        const checked = Array.from(field.querySelectorAll('input[type="checkbox"]:checked'));
+        return checked.map((input) => input.value);
+      }
+
+      return firstInput.value || '';
+    }
+
+    function applyInitialValues(config) {
+      const initialValues = config.initialValues || {};
+      Object.entries(initialValues).forEach(([fieldId, rawValue]) => {
+        const field = (config.fields || []).find((entry) => entry.id === fieldId);
+        if (!field) {
+          return;
+        }
+
+        const fieldRoot = appRoot.querySelector(`.form-field[data-form-field-id="${fieldId}"]`);
+        if (!fieldRoot) {
+          return;
+        }
+
+        if (field.controlVariant === 'checkout-transient-combobox') {
+          const hiddenInput = fieldRoot.querySelector(`input[type="hidden"][name="${fieldId}"]`);
+          const root = fieldRoot.querySelector('.checkout-combobox-root');
+          const state = root ? checkoutComboboxState.get(root) : null;
+          if (hiddenInput && state) {
+            hiddenInput.value = String(rawValue);
+            state.displayValue.textContent = String(rawValue);
+            state.shell.classList.toggle('placeholder', String(rawValue).trim().length === 0);
+          }
+          return;
+        }
+
+        if (field.type === 'select' && config.selectVariant === 'web') {
+          const selectRoot = fieldRoot.querySelector('.custom-select');
+          if (selectRoot) {
+            selectCustomOption(selectRoot, String(rawValue));
+          }
+          return;
+        }
+
+        if (field.type === 'select') {
+          const input = fieldRoot.querySelector('select');
+          if (input) {
+            input.value = String(rawValue);
+          }
+          return;
+        }
+
+        if (field.type === 'radio') {
+          const target = fieldRoot.querySelector(`input[type="radio"][value="${String(rawValue).replace(/"/g, '&quot;')}"]`);
+          if (target) {
+            target.checked = true;
+          }
+          return;
+        }
+
+        if (field.type === 'checkbox') {
+          const selectedValues = Array.isArray(rawValue) ? rawValue.map(String) : [String(rawValue)];
+          fieldRoot.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+            input.checked = selectedValues.includes(input.value);
+          });
+          return;
+        }
+
+        const input = fieldRoot.querySelector('input, textarea');
+        if (input) {
+          input.value = String(rawValue);
+        }
+      });
+    }
+
+    function markFieldValidity(field, isValid) {
+      field.classList.toggle('invalid', !isValid);
+    }
+
+    function validateRequiredFields(main) {
+      const fields = Array.from(main.querySelectorAll('.form-field[data-form-field-id]'));
+      const invalidFields = [];
+
+      fields.forEach((field) => {
+        if (field.dataset.required !== 'true') {
+          markFieldValidity(field, true);
+          return;
+        }
+
+        const value = getFieldValue(field);
+        const isValid = Array.isArray(value) ? value.length > 0 : String(value).trim().length > 0;
+        markFieldValidity(field, isValid);
+        if (!isValid) {
+          invalidFields.push(field);
+        }
+      });
+
+      const validationMessage = main.querySelector('[data-validation-message]');
+      if (validationMessage) {
+        validationMessage.style.display = invalidFields.length > 0 ? 'block' : 'none';
+      }
+
+      recordDebugEvent('validate-required-fields', {
+        invalidFieldIds: invalidFields.map((field) => field.dataset.formFieldId || ''),
+        visibleValues: collectVisibleValues(),
+      });
+
+      if (invalidFields.length > 0) {
+        invalidFields[0].scrollIntoView({ block: 'center', behavior: 'instant' });
+      }
+
+      return invalidFields.length === 0;
+    }
+
+    function renderField(field, selectVariant) {
+      const fieldDiv = createElement('div', 'form-field');
+      fieldDiv.dataset.formFieldId = field.id;
+      fieldDiv.dataset.required = field.required ? 'true' : 'false';
+      fieldDiv.dataset.size = field.size || 'regular';
+      if (field.fullWidth || field.type === 'radio' || field.type === 'checkbox' || field.type === 'textarea') {
+        fieldDiv.classList.add('full-width');
+      }
+
+      const label = document.createElement('label');
+      label.htmlFor = field.id;
+      label.appendChild(document.createTextNode(field.label));
+      if (field.required) {
+        label.appendChild(document.createTextNode(' '));
+        label.appendChild(createElement('span', 'required-indicator', '*'));
+      }
+      fieldDiv.appendChild(label);
+
+      let inputEl;
+      if (field.type === 'textarea') {
+        inputEl = document.createElement('textarea');
+        inputEl.id = field.id;
+        inputEl.name = field.id;
+        inputEl.dataset.fieldId = field.id;
+        if (field.rows) {
+          inputEl.rows = field.rows;
+        }
+        applyFieldSemantics(inputEl, field, field.label);
+        fieldDiv.appendChild(inputEl);
+      } else if (field.controlVariant === 'checkout-transient-combobox') {
+        const root = createElement('div', 'checkout-combobox-root');
+        root.dataset.fieldId = field.id;
+
+        inputEl = document.createElement('input');
+        inputEl.type = 'hidden';
+        inputEl.id = field.id;
+        inputEl.name = field.id;
+        inputEl.dataset.fieldId = field.id;
+        applyFieldSemantics(inputEl, field, field.label);
+        root.appendChild(inputEl);
+
+        const shell = createElement('div', 'checkout-shell placeholder');
+        shell.tabIndex = 0;
+        shell.dataset.fieldId = field.id;
+        shell.setAttribute('role', 'combobox');
+        shell.setAttribute('aria-haspopup', 'listbox');
+        shell.setAttribute('aria-expanded', 'false');
+        shell.setAttribute('aria-label', field.label);
+        shell.setAttribute('title', field.label);
+
+        const displayValue = createElement('span', 'checkout-shell-value', field.placeholder || 'Select an option');
+        displayValue.setAttribute('aria-hidden', 'true');
+        const caret = createElement('span', 'checkout-shell-caret', '▾');
+        caret.setAttribute('aria-hidden', 'true');
+        shell.appendChild(displayValue);
+        shell.appendChild(caret);
+        root.appendChild(shell);
+
+        const popover = createElement('div', 'checkout-popover');
+        popover.hidden = true;
+        popover.setAttribute('role', 'listbox');
+        popover.setAttribute('aria-label', `${field.label} options`);
+        root.appendChild(popover);
+
+        checkoutComboboxState.set(root, {
+          field,
+          hiddenInput: inputEl,
+          shell,
+          displayValue,
+          popover,
+          placeholder: field.placeholder || 'Select an option',
+          input: null,
+          blurTimer: null,
+        });
+
+        const openRoot = () => {
+          openCheckoutCombobox(root);
+        };
+
+        shell.addEventListener('click', (event) => {
+          event.preventDefault();
+          openRoot();
+        });
+        shell.addEventListener('focus', () => {
+          openRoot();
+        });
+        shell.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowDown') {
+            event.preventDefault();
+            openRoot();
+          }
+        });
+
+        fieldDiv.appendChild(root);
+      } else if (field.type === 'select' && selectVariant === 'web') {
+        const selectRoot = createElement('div', 'custom-select');
+        selectRoot.dataset.fieldId = field.id;
+        inputEl = document.createElement('input');
+        inputEl.type = 'hidden';
+        inputEl.id = field.id;
+        inputEl.name = field.id;
+        inputEl.dataset.fieldId = field.id;
+        applyFieldSemantics(inputEl, field, field.label);
+        selectRoot.appendChild(inputEl);
+
+        const trigger = createElement('button', 'select-trigger placeholder', 'Select an option');
+        trigger.type = 'button';
+        trigger.id = `${field.id}-trigger`;
+        trigger.dataset.fieldId = field.id;
+        trigger.dataset.fieldLabel = field.label;
+        trigger.setAttribute('aria-label', field.label);
+        trigger.setAttribute('title', field.label);
+        trigger.setAttribute('aria-haspopup', 'listbox');
+        trigger.setAttribute('aria-expanded', 'false');
+        trigger.appendChild(createElement('span', 'select-caret', '▾'));
+        selectRoot.appendChild(trigger);
+
+        const menu = createElement('div', 'select-menu');
+        menu.id = `${field.id}-menu`;
+        menu.setAttribute('role', 'listbox');
+        menu.setAttribute('aria-label', `${field.label} options`);
+        menu.hidden = true;
+        customSelectState.set(selectRoot, { trigger, menu, inputEl });
+        (field.options || []).forEach((optionText) => {
+          const option = createElement('button', 'select-option', optionText);
+          option.type = 'button';
+          option.dataset.fieldId = field.id;
+          option.dataset.selectValue = optionText;
+          option.setAttribute('aria-label', `${field.label}: ${optionText}`);
+          option.setAttribute('title', `${field.label}: ${optionText}`);
+          option.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            selectCustomOption(selectRoot, optionText);
+          });
+          option.addEventListener('mousedown', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            selectCustomOption(selectRoot, optionText);
+          });
+          menu.appendChild(option);
+        });
+        selectRoot.appendChild(menu);
+
+        trigger.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const willOpen = menu.hidden;
+          closeAllInteractiveControls(willOpen ? selectRoot : null);
+          if (willOpen) {
+            openCustomSelect(selectRoot);
+            setHighlightedCustomOption(selectRoot, getCustomSelectOptions(selectRoot)[0] || null);
+          }
+        });
+
+        trigger.addEventListener('keydown', (event) => {
+          const options = getCustomSelectOptions(selectRoot);
+          const isOpen = selectRoot.dataset.open === 'true';
+          if (!options.length) {
+            return;
+          }
+
+          const highlightedValue = selectRoot.dataset.highlightedValue || '';
+          const highlightedIndex = Math.max(0, options.findIndex((entry) => entry.dataset.selectValue === highlightedValue));
+
+          if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            if (!isOpen) {
+              openCustomSelect(selectRoot);
+              setHighlightedCustomOption(selectRoot, options[0]);
+              return;
+            }
+            setHighlightedCustomOption(selectRoot, options[Math.min(options.length - 1, highlightedIndex + 1)]);
+            return;
+          }
+
+          if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            if (!isOpen) {
+              openCustomSelect(selectRoot);
+              setHighlightedCustomOption(selectRoot, options[0]);
+              return;
+            }
+            setHighlightedCustomOption(selectRoot, options[Math.max(0, highlightedIndex - 1)]);
+            return;
+          }
+
+          if (event.key === 'Enter') {
+            if (!isOpen) {
+              return;
+            }
+            event.preventDefault();
+            const activeOption = options[Math.max(0, options.findIndex((entry) => entry.dataset.selectValue === (selectRoot.dataset.highlightedValue || '')))];
+            if (activeOption) {
+              selectCustomOption(selectRoot, activeOption.dataset.selectValue || '');
+            }
+            return;
+          }
+
+          if (event.key === 'Escape') {
+            closeAllInteractiveControls();
+            return;
+          }
+
+          if (event.key === ' ' && !isOpen) {
+            event.preventDefault();
+            openCustomSelect(selectRoot);
+            setHighlightedCustomOption(selectRoot, options[0]);
+            return;
+          }
+
+          if (event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey) {
+            if (!isOpen) {
+              openCustomSelect(selectRoot);
+              setHighlightedCustomOption(selectRoot, options[0]);
+            }
+            event.preventDefault();
+            const existingBuffer = selectRoot.dataset.typeaheadBuffer || '';
+            const nextBuffer = `${existingBuffer}${event.key}`.trim().toLowerCase();
+            selectRoot.dataset.typeaheadBuffer = nextBuffer;
+            window.clearTimeout(selectRoot.__typeaheadTimeout);
+            selectRoot.__typeaheadTimeout = window.setTimeout(() => {
+              delete selectRoot.dataset.typeaheadBuffer;
+            }, 600);
+            focusMatchingCustomOption(selectRoot, nextBuffer);
+          }
+        });
+
+        fieldDiv.appendChild(selectRoot);
+      } else if (field.type === 'select') {
+        inputEl = document.createElement('select');
+        inputEl.id = field.id;
+        inputEl.name = field.id;
+        inputEl.dataset.fieldId = field.id;
+        applyFieldSemantics(inputEl, field, field.label);
+
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = 'Select an option';
+        placeholder.disabled = true;
+        placeholder.selected = true;
+        inputEl.appendChild(placeholder);
+
+        (field.options || []).forEach((optionText) => {
+          const option = document.createElement('option');
+          option.value = optionText;
+          option.textContent = optionText;
+          inputEl.appendChild(option);
+        });
+
+        fieldDiv.appendChild(inputEl);
+      } else if (field.type === 'radio') {
+        const group = createElement('div', 'radio-group');
+        group.id = `${field.id}-group`;
+        group.dataset.fieldId = field.id;
+        (field.options || []).forEach((optionText) => {
+          const option = createElement('div', 'radio-option');
+          const input = document.createElement('input');
+          input.type = 'radio';
+          input.name = field.id;
+          input.id = `${field.id}-${optionText.toLowerCase().replace(/\s+/g, '-')}`;
+          input.value = optionText;
+          input.dataset.fieldId = field.id;
+          applyFieldSemantics(input, field, `${field.label}: ${optionText}`);
+          const optionLabel = document.createElement('label');
+          optionLabel.htmlFor = input.id;
+          optionLabel.textContent = optionText;
+          option.addEventListener('click', (event) => {
+            if (event.target === option) {
+              input.click();
+            }
+          });
+          option.appendChild(input);
+          option.appendChild(optionLabel);
+          group.appendChild(option);
+        });
+        fieldDiv.appendChild(group);
+      } else if (field.type === 'checkbox') {
+        const group = createElement('div', 'checkbox-group');
+        group.id = `${field.id}-group`;
+        group.dataset.fieldId = field.id;
+        (field.options || []).forEach((optionText) => {
+          const option = createElement('div', 'checkbox-option');
+          const input = document.createElement('input');
+          input.type = 'checkbox';
+          input.name = field.id;
+          input.id = `${field.id}-${optionText.toLowerCase().replace(/\s+/g, '-')}`;
+          input.value = optionText;
+          input.className = `${field.id}-checkbox`;
+          input.dataset.fieldId = field.id;
+          applyFieldSemantics(input, field, `${field.label}: ${optionText}`);
+          const optionLabel = document.createElement('label');
+          optionLabel.htmlFor = input.id;
+          optionLabel.textContent = optionText;
+          option.addEventListener('click', (event) => {
+            if (event.target === option) {
+              input.click();
+            }
+          });
+          option.appendChild(input);
+          option.appendChild(optionLabel);
+          group.appendChild(option);
+        });
+        fieldDiv.appendChild(group);
+      } else {
+        inputEl = document.createElement('input');
+        inputEl.type = normalizeInputType(field.type);
+        inputEl.id = field.id;
+        inputEl.name = field.id;
+        inputEl.dataset.fieldId = field.id;
+        applyFieldSemantics(inputEl, field, field.label);
+        if (field.type !== inputEl.type) {
+          inputEl.dataset.originalType = field.type;
+        }
+        fieldDiv.appendChild(inputEl);
+      }
+
+      return fieldDiv;
+    }
+
+    function groupFields(fields) {
+      const grouped = new Map();
+      fields.forEach((field) => {
+        const key = field.sectionTitle || 'Details';
+        if (!grouped.has(key)) {
+          grouped.set(key, []);
+        }
+        grouped.get(key).push(field);
+      });
+      return grouped;
+    }
+
+    function renderFormSections(config) {
+      const scroll = createElement('div', 'form-scroll');
+      groupFields(config.fields).forEach((fields, sectionTitle) => {
+        const section = createElement('section', 'section-card');
+        section.appendChild(createElement('div', 'section-title', sectionTitle));
+        const grid = createElement('div', `fields-grid${config.twoColumn ? ' two-column' : ''}`);
+        fields.forEach((field) => grid.appendChild(renderField(field, config.selectVariant)));
+        section.appendChild(grid);
+        scroll.appendChild(section);
+      });
+      return scroll;
+    }
+
+    function renderHeader(surface, config) {
+      const header = createElement('section', 'record-header');
+      const block = createElement('div', 'header-block');
+      const mainRow = createElement('div', 'header-main-row');
+      const titleBlock = createElement('div', 'header-block');
+      titleBlock.appendChild(createElement('div', 'page-title', config.title));
+      titleBlock.appendChild(createElement('div', 'page-subtitle', surface.workspaceLabel));
+      mainRow.appendChild(titleBlock);
+      const statusStrip = createElement('div', 'status-strip');
+      statusStrip.appendChild(createElement('span', 'pill', surface.status));
+      mainRow.appendChild(statusStrip);
+      block.appendChild(mainRow);
+      if (surface.meta && surface.meta.length > 0) {
+        const metaList = createElement('div', 'header-meta-list');
+        surface.meta.forEach((item) => {
+          const entry = createElement('div', 'header-meta-item');
+          const icon = createIcon(inferIconName(item.label));
+          icon.className = 'header-meta-icon';
+          entry.appendChild(icon);
+          const label = createElement('span', '');
+          const strong = createElement('strong', '', `${item.label}:`);
+          label.appendChild(strong);
+          label.appendChild(document.createTextNode(` ${item.value}`));
+          entry.appendChild(label);
+          metaList.appendChild(entry);
+        });
+        block.appendChild(metaList);
+      }
+      if (surface.tabs && surface.tabs.length > 0) {
+        block.appendChild(renderButtonRow(surface.tabs, surface.activeTab));
+      }
+      header.appendChild(block);
+      return header;
+    }
+
+    function renderAside(surface) {
+      const aside = createElement('aside', 'aside-card');
+      aside.appendChild(createElement('div', 'card-title', surface.sideCardTitle));
+      aside.appendChild(renderMetaCards(surface.meta));
+      const timeline = createElement('div', 'timeline-card');
+      timeline.appendChild(createElement('div', 'list-title', 'Recent activity'));
+      const items = [
+        `${surface.productName} record opened for update.`,
+        `Status is currently ${surface.status}.`,
+        `Primary action is ${surface.primaryAction}.`,
+      ];
+      items.forEach((text) => {
+        const item = createElement('div', 'timeline-item');
+        item.appendChild(createElement('div', 'timeline-copy', text));
+        timeline.appendChild(item);
+      });
+      aside.appendChild(timeline);
+      return aside;
+    }
+
+    function renderFormWorkspace(config) {
+      document.body.className = `theme-${config.surface.accent} theme-mode-${config.surface.themeMode}`;
+      const shell = createElement('div', 'window-shell');
+
+      const topbar = createElement('header', 'topbar');
+      const brand = createElement('div', 'brand-stack');
+      brand.appendChild(createElement('div', 'brand-name', config.surface.productName));
+      brand.appendChild(createElement('div', 'brand-subtitle', config.surface.workspaceLabel));
+      topbar.appendChild(brand);
+
+      const right = createElement('div', 'toolbar-actions');
+      right.appendChild(renderToolbarButton('Search', true));
+      right.appendChild(renderToolbarButton('History', true));
+      right.appendChild(renderToolbarButton('Settings', true));
+      topbar.appendChild(right);
+      shell.appendChild(topbar);
+
+      const frame = createElement('div', 'app-frame layout-stack');
+
+      const main = createElement('main', 'form-panel');
+      main.setAttribute('aria-label', `${config.surface.productName} form`);
+      main.appendChild(renderHeader(config.surface, config));
+      main.appendChild(renderFormSections(config));
+
+      if (config.hasSubmit) {
+        const validationMessage = createElement('div', 'validation-message', 'Complete the required fields before continuing.');
+        validationMessage.setAttribute('data-validation-message', 'true');
+        main.appendChild(validationMessage);
+        const submitRow = createElement('div', 'submit-row');
+        const submitLabel = config.submitButtonText || config.surface.primaryAction || 'Save';
+        const submitButton = createElement('button', 'primary-button');
+        submitButton.id = 'primary-action';
+        submitButton.type = 'button';
+        submitButton.setAttribute('aria-label', submitLabel);
+        setLabeledContent(submitButton, submitLabel);
+        submitButton.addEventListener('click', () => {
+          recordDebugEvent('submit-button-click', {
+            target: describeElement(submitButton),
+            visibleValues: collectVisibleValues(),
+          });
+          if (!validateRequiredFields(main)) {
+            recordDebugEvent('submit-button-blocked', {
+              target: describeElement(submitButton),
+            });
+            return;
+          }
+          const successMsg = createElement('div', 'success-message', config.successMessage || 'Action completed successfully.');
+          successMsg.setAttribute('data-success-message', 'true');
+          successMsg.style.display = 'block';
+          main.appendChild(successMsg);
+          submitButton.disabled = true;
+          recordDebugEvent('submit-button-success', {
+            target: describeElement(submitButton),
+          });
+          ipcRenderer.send('form-submitted');
+          recordDebugEvent('ipc-form-submitted-sent');
+        });
+        submitRow.appendChild(submitButton);
+        main.appendChild(submitRow);
+      }
+
+      frame.appendChild(main);
+
+      shell.appendChild(frame);
+      return shell;
+    }
+
+    function buildForm(config) {
+      closeAllInteractiveControls();
+      customSelectState.clear();
+      checkoutComboboxState.clear();
+      appRoot.innerHTML = '';
+      appRoot.appendChild(renderFormWorkspace(config));
+      applyInitialValues(config);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          ipcRenderer.send('form-test-window-ready', 'form');
+        });
+      });
+    }
+
+    document.addEventListener('mousedown', (event) => {
+      recordDebugEvent('dom-mousedown', {
+        x: Math.round(event.clientX),
+        y: Math.round(event.clientY),
+        target: describeElement(event.target),
+      });
+      if (event.target.closest('.custom-select') || event.target.closest('.select-menu')) {
+        return;
+      }
+      if (event.target.closest('.checkout-combobox-root') || event.target.closest('.checkout-popover')) {
+        return;
+      }
+      closeAllInteractiveControls();
+    });
+
+    document.addEventListener('mouseup', (event) => {
+      recordDebugEvent('dom-mouseup', {
+        x: Math.round(event.clientX),
+        y: Math.round(event.clientY),
+        target: describeElement(event.target),
+      });
+    }, true);
+
+    document.addEventListener('click', (event) => {
+      recordDebugEvent('dom-click', {
+        x: Math.round(event.clientX),
+        y: Math.round(event.clientY),
+        target: describeElement(event.target),
+      });
+    }, true);
+
+    document.addEventListener('keydown', (event) => {
+      recordDebugEvent('dom-keydown', {
+        key: event.key,
+        ctrlKey: Boolean(event.ctrlKey),
+        metaKey: Boolean(event.metaKey),
+        shiftKey: Boolean(event.shiftKey),
+        altKey: Boolean(event.altKey),
+        target: describeElement(event.target),
+      });
+      if (event.key === 'Escape') {
+        closeAllInteractiveControls();
+      }
+    });
+
+    document.addEventListener('focusin', (event) => {
+      recordDebugEvent('dom-focusin', {
+        target: describeElement(event.target),
+      });
+    });
+
+    document.addEventListener('input', (event) => {
+      recordDebugEvent('dom-input', {
+        target: describeElement(event.target),
+      });
+    }, true);
+
+    window.addEventListener('resize', () => {
+      syncOpenCustomSelects();
+    });
+
+    document.addEventListener('scroll', () => {
+      syncOpenCustomSelects();
+    }, true);
+
+    ipcRenderer.on('set-form-config', (_event, config) => {
+      buildForm(config);
+    });
+  </script>
+</body>
+</html>

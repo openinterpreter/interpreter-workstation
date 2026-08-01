@@ -82,7 +82,7 @@
     "ensure:js-repl-runtime-assets": "node scripts/ensure-js-repl-runtime-assets.mjs",
     "build:browser-extension-relay-runtime": "node scripts/build-browser-extension-relay-runtime.mjs",
     "ensure:browser-extension-relay-assets": "node scripts/ensure-browser-extension-relay-assets.mjs",
-    "extension:bootstrap": "git submodule update --init --recursive apps/interpreter-extension && pnpm --dir apps/interpreter-extension run bootstrap",
+    "extension:bootstrap": "git submodule update --init --recursive apps/interpreter-extension && cross-env NODE_ENV=development pnpm --dir apps/interpreter-extension run bootstrap",
     "extension:assets": "node scripts/build-browser-extension-brand-assets.mjs",
     "extension:build": "node -e \"const fs=require('node:fs');const p='apps/interpreter-extension/playwriter/shell-emulator-placeholder.tsbuildinfo';if(!fs.existsSync(p))fs.writeFileSync(p,'');\" && pnpm --config.shell-emulator=true --dir apps/interpreter-extension run build",
     "extension:watch": "pnpm --dir apps/interpreter-extension run watch",

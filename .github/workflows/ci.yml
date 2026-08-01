@@ -88,6 +88,12 @@ jobs:
         with:
           bun-version: 1.2.20
       - uses: dtolnay/rust-toolchain@stable
+      - name: Use a Visual Studio 2026-compatible node-gyp
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          npm install --global node-gyp@12.3.0
+          "npm_config_node_gyp=$(npm root --global)\node-gyp\bin\node-gyp.js" >> $env:GITHUB_ENV
       - run: pnpm install --frozen-lockfile
       - run: pnpm run test:e2e:voice:ci
 
@@ -115,12 +121,19 @@ jobs:
         with:
           bun-version: 1.2.20
       - uses: dtolnay/rust-toolchain@stable
+      - name: Use a Visual Studio 2026-compatible node-gyp
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          npm install --global node-gyp@12.3.0
+          "npm_config_node_gyp=$(npm root --global)\node-gyp\bin\node-gyp.js" >> $env:GITHUB_ENV
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev
+            libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev \
+            libopenblas-dev
       - run: pnpm install --frozen-lockfile
       - run: pnpm run download:codex -- --current-platform
       - run: pnpm run download:oix -- --current-platform

@@ -26,12 +26,6 @@ logs/
 
 # Test artifacts (saved to test-runs/ per run)
 test-runs/
-form-tests/
-!form-tests/
-form-tests/*
-!form-tests/generated/
-!form-tests/manual-workbench.html
-!form-tests/scope-drag-region.cjs
 form-tests/generated/*
 !form-tests/generated/SUMMARY.md
 !form-tests/generated/test-900/

@@ -1,0 +1,1394 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    :root {
+      --bg: #edf2f7;
+      --panel: rgba(255, 255, 255, 0.96);
+      --panel-strong: #ffffff;
+      --surface: #f8fafc;
+      --line: rgba(15, 23, 42, 0.10);
+      --line-strong: rgba(15, 23, 42, 0.16);
+      --text: #162033;
+      --muted: #5f6f86;
+      --shadow: 0 3px 10px rgba(15, 23, 42, 0.05);
+      --accent: #2563eb;
+      --accent-soft: rgba(37, 99, 235, 0.10);
+      --accent-strong: rgba(37, 99, 235, 0.16);
+      --font-ui: "Aptos", "Segoe UI", sans-serif;
+      --font-reading: "Iowan Old Style", "Georgia", serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background:
+        radial-gradient(circle at top left, rgba(37, 99, 235, 0.10), transparent 26%),
+        linear-gradient(180deg, #f7fafc 0%, #edf2f7 100%);
+      color: var(--text);
+      font-family: var(--font-ui);
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    button {
+      font: inherit;
+    }
+
+    .theme-indigo {
+      --accent: #4f46e5;
+      --accent-soft: rgba(79, 70, 229, 0.10);
+      --accent-strong: rgba(79, 70, 229, 0.16);
+    }
+
+    .theme-slate {
+      --accent: #0f766e;
+      --accent-soft: rgba(15, 118, 110, 0.10);
+      --accent-strong: rgba(15, 118, 110, 0.16);
+    }
+
+    .theme-teal {
+      --accent: #0f766e;
+      --accent-soft: rgba(15, 118, 110, 0.10);
+      --accent-strong: rgba(15, 118, 110, 0.16);
+    }
+
+    .theme-amber {
+      --accent: #b45309;
+      --accent-soft: rgba(180, 83, 9, 0.10);
+      --accent-strong: rgba(180, 83, 9, 0.16);
+    }
+
+    .theme-stone {
+      --accent: #57534e;
+      --accent-soft: rgba(87, 83, 78, 0.10);
+      --accent-strong: rgba(87, 83, 78, 0.16);
+    }
+
+    .theme-olive,
+    .theme-sage {
+      --accent: #4d7c0f;
+      --accent-soft: rgba(77, 124, 15, 0.10);
+      --accent-strong: rgba(77, 124, 15, 0.16);
+    }
+
+    .theme-cyan,
+    .theme-sky {
+      --accent: #0891b2;
+      --accent-soft: rgba(8, 145, 178, 0.10);
+      --accent-strong: rgba(8, 145, 178, 0.16);
+    }
+
+    .window-shell {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-height: 100vh;
+      padding: 2px;
+    }
+
+    .app-frame,
+    .topbar,
+    .section-card,
+    .content-card,
+    .side-card,
+    .sidebar-card,
+    .thread-card,
+    .message-card,
+    .fact-card,
+    .note-card,
+    .crm-card,
+    .meta-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+    }
+
+    .topbar {
+      align-items: center;
+      display: flex;
+      gap: 3px;
+      justify-content: space-between;
+      min-height: 22px;
+      padding: 2px 6px;
+    }
+
+    .brand-stack {
+      display: flex;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .brand-name {
+      font-size: 11px;
+      font-weight: 760;
+      letter-spacing: -0.03em;
+      line-height: 1;
+    }
+
+    .brand-subtitle {
+      color: var(--muted);
+      font-size: 7px;
+    }
+
+    .pill-row,
+    .meta-row,
+    .action-row,
+    .tab-row {
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+
+    .topbar-center {
+      display: none;
+    }
+
+    .topbar-kicker {
+      color: var(--muted);
+      font-size: 8px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .topbar-location {
+      align-items: center;
+      display: flex;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .topbar-location-text {
+      font-size: 9px;
+      font-weight: 600;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .topbar-meta {
+      color: var(--muted);
+      font-size: 8px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .toolbar-actions {
+      align-items: center;
+      display: flex;
+      gap: 3px;
+      justify-content: flex-end;
+    }
+
+    .pill,
+    .section-badge {
+      background: var(--accent-soft);
+      border: 1px solid var(--accent-strong);
+      border-radius: 999px;
+      color: var(--accent);
+      font-size: 8px;
+      font-weight: 700;
+      padding: 1px 6px;
+    }
+
+    .ghost-button {
+      background: transparent;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 9px;
+      padding: 3px 6px;
+    }
+
+    .button-content,
+    .sidebar-content {
+      align-items: center;
+      display: inline-flex;
+      gap: 4px;
+    }
+
+    .button-icon,
+    .sidebar-icon {
+      color: currentColor;
+      display: inline-flex;
+      flex: 0 0 auto;
+      height: 11px;
+      justify-content: center;
+      width: 11px;
+    }
+
+    .button-icon svg,
+    .sidebar-icon svg {
+      display: block;
+      height: 11px;
+      width: 11px;
+    }
+
+    .toolbar-button {
+      align-items: center;
+      background: transparent;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      color: var(--text);
+      cursor: pointer;
+      display: inline-flex;
+      gap: 3px;
+      font-size: 7px;
+      font-weight: 650;
+      padding: 2px 4px;
+      white-space: nowrap;
+    }
+
+    .toolbar-button.icon-only {
+      justify-content: center;
+      padding: 3px;
+      width: 18px;
+    }
+
+    .toolbar-button .button-icon {
+      height: 12px;
+      width: 12px;
+    }
+
+    .ghost-button.active {
+      background: var(--accent-soft);
+      border-color: var(--accent-strong);
+      color: var(--accent);
+    }
+
+    .app-frame {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .sidebar-card {
+      border-radius: 10px 0 0 10px;
+      border-right: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      padding: 5px;
+      width: 84px;
+    }
+
+    .sidebar-title,
+    .section-label,
+    .meta-label,
+    .list-label {
+      color: var(--muted);
+      font-size: 7px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .sidebar-list,
+    .simple-list,
+    .meta-list,
+    .bullet-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      list-style: none;
+    }
+
+    .sidebar-item,
+    .simple-list-item {
+      background: rgba(248, 250, 252, 0.9);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      font-size: 8px;
+      font-weight: 600;
+      padding: 3px 5px;
+    }
+
+    .sidebar-item.active,
+    .simple-list-item.active {
+      background: var(--accent-soft);
+      border-color: var(--accent-strong);
+      color: var(--accent);
+    }
+
+    .content-area {
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      gap: 3px;
+      min-height: 0;
+      overflow: auto;
+      padding: 4px;
+    }
+
+    .content-header {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .document-title {
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      line-height: 1.05;
+    }
+
+    .document-subtitle {
+      color: var(--muted);
+      font-size: 8px;
+    }
+
+    .meta-card,
+    .content-card,
+    .side-card,
+    .section-card,
+    .thread-card,
+    .note-card,
+    .crm-card {
+      padding: 5px;
+    }
+
+    .content-card,
+    .side-card,
+    .thread-card,
+    .note-card,
+    .crm-card {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .section-card {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .section-title {
+      font-size: 8px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .paragraph,
+    .bullet-item,
+    .message-text,
+    .meta-value,
+    .note-text {
+      font-size: 9px;
+      line-height: 1.45;
+    }
+
+    .article-copy {
+      font-family: var(--font-reading);
+      font-size: 10px;
+      line-height: 1.45;
+    }
+
+    .facts-grid,
+    .crm-grid {
+      display: grid;
+      gap: 4px;
+      grid-template-columns: repeat(auto-fit, minmax(136px, 1fr));
+    }
+
+    .fact-card,
+    .crm-card {
+      background: var(--panel-strong);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding: 5px;
+    }
+
+    .fact-label,
+    .crm-label {
+      color: var(--muted);
+      font-size: 7px;
+      font-weight: 700;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+
+    .fact-value,
+    .crm-value {
+      font-size: 9px;
+      font-weight: 650;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+
+    .message-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .message-card {
+      background: var(--panel-strong);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 5px;
+    }
+
+    .message-meta {
+      align-items: center;
+      color: var(--muted);
+      display: flex;
+      font-size: 7px;
+      font-weight: 800;
+      justify-content: space-between;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .message-bubble.mine {
+      background: var(--accent-soft);
+      border-radius: 16px 16px 6px 16px;
+    }
+
+    .message-bubble.theirs {
+      background: rgba(241, 245, 249, 0.95);
+      border-radius: 16px 16px 16px 6px;
+    }
+
+    .email-layout,
+    .chat-layout,
+    .notes-layout {
+      display: grid;
+      flex: 1;
+      grid-template-columns: 84px minmax(0, 1fr);
+      min-height: 0;
+    }
+
+    .email-main,
+    .chat-main,
+    .notes-main,
+    .article-main,
+    .crm-main {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-height: 0;
+      overflow: auto;
+      padding: 4px;
+    }
+
+    .article-layout {
+      display: grid;
+      flex: 1;
+      gap: 4px;
+      grid-template-columns: minmax(0, 1fr) 132px;
+      min-height: 0;
+      padding: 4px;
+    }
+
+    .crm-layout {
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      gap: 3px;
+      min-height: 0;
+      padding: 4px;
+    }
+
+    .receipt-layout {
+      display: grid;
+      flex: 1;
+      gap: 4px;
+      grid-template-columns: 84px minmax(0, 1fr) 142px;
+      min-height: 0;
+      padding: 4px;
+    }
+
+    .receipt-main {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-height: 0;
+      overflow: auto;
+    }
+
+    .receipt-stage {
+      align-items: center;
+      background:
+        radial-gradient(circle at top left, rgba(255, 255, 255, 0.22), transparent 24%),
+        linear-gradient(180deg, #dbe4ef 0%, #c8d2df 100%);
+      border: 1px solid var(--line-strong);
+      border-radius: 14px;
+      display: flex;
+      flex: 1;
+      justify-content: center;
+      min-height: 0;
+      overflow: hidden;
+      padding: 10px;
+      position: relative;
+    }
+
+    .receipt-stage::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+      background-size: 28px 28px;
+      pointer-events: none;
+    }
+
+    .receipt-photo {
+      border-radius: 12px;
+      box-shadow: 0 18px 50px rgba(15, 23, 42, 0.22);
+      max-height: 100%;
+      max-width: 100%;
+      object-fit: contain;
+      position: relative;
+      z-index: 1;
+    }
+
+    .receipt-aside {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-height: 0;
+    }
+
+    .thumbnail-strip {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .thumbnail-card {
+      align-items: center;
+      background: rgba(248, 250, 252, 0.92);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      padding: 6px;
+    }
+
+    .thumbnail-preview {
+      background:
+        linear-gradient(180deg, #f8fafc 0%, #e5e7eb 100%);
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      border-radius: 6px;
+      height: 68px;
+      width: 46px;
+    }
+
+    .thumbnail-label {
+      font-size: 7px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .viewer-tip {
+      color: var(--muted);
+      font-size: 8px;
+      line-height: 1.45;
+    }
+
+    .meta-grid {
+      display: grid;
+      gap: 4px;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    }
+
+    .meta-item {
+      background: rgba(248, 250, 252, 0.88);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      padding: 6px;
+    }
+
+    .split-row {
+      display: grid;
+      gap: 4px;
+      grid-template-columns: minmax(0, 1fr) 128px;
+    }
+
+    .timeline-item {
+      border-left: 2px solid var(--accent-strong);
+      padding-left: 8px;
+    }
+
+    .detail-list {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .detail-row {
+      align-items: baseline;
+      display: grid;
+      gap: 8px;
+      grid-template-columns: 56px minmax(0, 1fr);
+      padding: 5px 0;
+      border-bottom: 1px solid rgba(15, 23, 42, 0.07);
+    }
+
+    .detail-row:last-child {
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+
+    .detail-label {
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .detail-value {
+      font-size: 10px;
+      line-height: 1.45;
+      min-width: 0;
+      word-break: break-word;
+    }
+
+    .compact-meta-list {
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 6px;
+      color: var(--muted);
+      font-size: 8px;
+    }
+
+    @media (max-width: 860px) {
+      .window-shell {
+        gap: 4px;
+        padding: 4px;
+      }
+
+      .topbar {
+        gap: 8px;
+        padding: 5px 8px;
+      }
+
+      .topbar-center {
+        align-items: center;
+        flex-direction: row;
+        gap: 8px;
+      }
+
+      .toolbar-actions {
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
+      .brand-name,
+      .document-title {
+        font-size: 16px;
+      }
+
+      .app-frame {
+        overflow: auto;
+      }
+
+      .email-layout,
+      .chat-layout,
+      .notes-layout,
+      .article-layout,
+      .receipt-layout {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 6px;
+      }
+
+      .email-layout > .sidebar-card,
+      .chat-layout > .sidebar-card,
+      .notes-layout > .sidebar-card {
+        display: none;
+      }
+
+      .article-layout > .side-card {
+        display: none;
+      }
+
+      .receipt-layout > .side-card,
+      .receipt-layout > .sidebar-card {
+        display: none;
+      }
+
+      .meta-grid,
+      .facts-grid,
+      .crm-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .split-row {
+        grid-template-columns: 1fr;
+      }
+
+      .content-card,
+      .side-card,
+      .thread-card,
+      .note-card,
+      .crm-card,
+      .meta-card,
+      .section-card {
+        padding: 8px;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .topbar-center,
+      .toolbar-actions {
+        width: 100%;
+      }
+
+      .topbar-center {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .toolbar-actions {
+        justify-content: flex-start;
+      }
+
+      .document-subtitle,
+      .paragraph,
+      .bullet-item,
+      .message-text {
+        font-size: 12px;
+      }
+
+      .meta-grid,
+      .facts-grid,
+      .crm-grid {
+        grid-template-columns: 1fr;
+      }
+
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+    const React = require('react');
+    const ReactDOMServer = require('react-dom/server');
+    const {
+      Archive,
+      ArrowUpRight,
+      BadgeCheck,
+      Bell,
+      Building2,
+      Circle,
+      Clock3,
+      Copy,
+      FileSearch,
+      FileText,
+      Filter,
+      FolderKanban,
+      Forward,
+      Hash,
+      History,
+      LayoutGrid,
+      Mail,
+      MapPin,
+      MessageSquare,
+      Paperclip,
+      PanelLeft,
+      Reply,
+      Save,
+      Search,
+      Settings2,
+      Share2,
+      StickyNote,
+      UserRound,
+      Users,
+    } = require('lucide-react');
+    const appRoot = document.getElementById('app');
+
+    const ICON_COMPONENTS = {
+      archive: Archive,
+      building: Building2,
+      check: BadgeCheck,
+      clock: Clock3,
+      document: FileText,
+      dot: Circle,
+      duplicate: Copy,
+      filter: Filter,
+      forward: Forward,
+      hash: Hash,
+      jump: ArrowUpRight,
+      layout: LayoutGrid,
+      mail: Mail,
+      message: MessageSquare,
+      paperclip: Paperclip,
+      pin: MapPin,
+      reply: Reply,
+      save: Save,
+      search: Search,
+      settings: Settings2,
+      share: Share2,
+      sidebar: PanelLeft,
+      stack: FolderKanban,
+      sticky: StickyNote,
+      user: UserRound,
+      users: Users,
+      verify: BadgeCheck,
+      workspace: History,
+      bell: Bell,
+      files: FileSearch,
+    };
+
+    function createElement(tag, className, text) {
+      const element = document.createElement(tag);
+      if (className) {
+        element.className = className;
+      }
+      if (text !== undefined) {
+        element.textContent = text;
+      }
+      return element;
+    }
+
+    function inferIconName(label) {
+      const value = String(label || '').toLowerCase();
+      if (value.includes('search')) return 'search';
+      if (value.includes('reply')) return 'reply';
+      if (value.includes('forward')) return 'forward';
+      if (value.includes('archive')) return 'archive';
+      if (value.includes('share') || value.includes('export')) return 'share';
+      if (value.includes('jump')) return 'jump';
+      if (value.includes('duplicate') || value.includes('copy')) return 'duplicate';
+      if (value.includes('save')) return 'save';
+      if (value.includes('review') || value.includes('verified')) return 'verify';
+      if (value.includes('profile') || value.includes('contact') || value.includes('candidate') || value.includes('customer')) return 'user';
+      if (value.includes('company') || value.includes('companies') || value.includes('account') || value.includes('vendor')) return 'building';
+      if (value.includes('activity') || value.includes('history') || value.includes('timeline')) return 'clock';
+      if (value.includes('note') || value.includes('details') || value.includes('summary') || value.includes('overview') || value.includes('briefing')) return 'document';
+      if (value.includes('queue') || value.includes('pipeline') || value.includes('review')) return 'stack';
+      if (value.includes('thread') || value.includes('message') || value.includes('mail') || value.includes('inbox')) return 'mail';
+      if (value.includes('room') || value.includes('channel')) return 'hash';
+      if (value.includes('attach')) return 'paperclip';
+      if (value.includes('dispatch') || value.includes('location')) return 'pin';
+      if (value.includes('member')) return 'users';
+      if (value.includes('folder') || value.includes('view')) return 'sidebar';
+      return 'dot';
+    }
+
+    function createIcon(iconName) {
+      const span = createElement('span', 'button-icon');
+      span.setAttribute('aria-hidden', 'true');
+      const IconComponent = ICON_COMPONENTS[iconName] || ICON_COMPONENTS.dot;
+      span.innerHTML = ReactDOMServer.renderToStaticMarkup(React.createElement(IconComponent, { size: 14, strokeWidth: 1.8 }));
+      return span;
+    }
+
+    function renderToolbarButton(label, iconOnly = false) {
+      const button = createElement('button', `toolbar-button${iconOnly ? ' icon-only' : ''}`);
+      button.type = 'button';
+      button.setAttribute('aria-label', label);
+      if (iconOnly) {
+        button.appendChild(createIcon(inferIconName(label)));
+      } else {
+        setLabeledContent(button, label);
+      }
+      return button;
+    }
+
+    function setLabeledContent(element, label, iconClassName = 'button-icon') {
+      const wrapper = createElement('span', iconClassName === 'sidebar-icon' ? 'sidebar-content' : 'button-content');
+      const icon = createIcon(inferIconName(label));
+      icon.className = iconClassName;
+      wrapper.appendChild(icon);
+      wrapper.appendChild(createElement('span', '', label));
+      element.replaceChildren(wrapper);
+    }
+
+    function applySourceFieldId(element, item) {
+      if (item && item.fieldId) {
+        element.dataset.sourceFieldId = item.fieldId;
+      }
+    }
+
+    function applySourceFieldIds(element, fieldIds) {
+      if (Array.isArray(fieldIds) && fieldIds.length > 0) {
+        element.dataset.sourceFieldIds = fieldIds.join(',');
+      }
+    }
+
+    function renderButtonRow(labels, activeLabel) {
+      const row = createElement('div', 'action-row');
+      (labels || []).forEach((label) => {
+        const button = createElement('button', `ghost-button${label === activeLabel ? ' active' : ''}`);
+        button.type = 'button';
+        button.setAttribute('aria-label', label);
+        button.textContent = label;
+        row.appendChild(button);
+      });
+      return row;
+    }
+
+    function renderSidebar(title, items, activeItem) {
+      const sidebar = createElement('aside', 'sidebar-card');
+      sidebar.appendChild(createElement('div', 'sidebar-title', title));
+      const list = createElement('div', 'sidebar-list');
+      (items || []).forEach((item) => {
+        const entry = createElement('div', `sidebar-item${item === activeItem ? ' active' : ''}`);
+        entry.textContent = item;
+        list.appendChild(entry);
+      });
+      sidebar.appendChild(list);
+      return sidebar;
+    }
+
+    function renderPills(values) {
+      const row = createElement('div', 'pill-row');
+      (values || []).slice(0, 2).forEach((value) => row.appendChild(createElement('span', 'pill', value)));
+      return row;
+    }
+
+    function renderMetaGrid(meta) {
+      const grid = createElement('div', 'meta-grid');
+      (meta || []).forEach((item) => {
+        const card = createElement('div', 'meta-item');
+        card.appendChild(createElement('div', 'meta-label', item.label));
+        card.appendChild(createElement('div', 'meta-value', item.value));
+        grid.appendChild(card);
+      });
+      return grid;
+    }
+
+    function renderDetailList(meta) {
+      const list = createElement('div', 'detail-list');
+      (meta || []).forEach((item) => {
+        const row = createElement('div', 'detail-row');
+        row.appendChild(createElement('div', 'detail-label', item.label));
+        row.appendChild(createElement('div', 'detail-value', item.value));
+        list.appendChild(row);
+      });
+      return list;
+    }
+
+    function renderCompactMetaList(meta) {
+      const list = createElement('div', 'compact-meta-list');
+      (meta || []).forEach((item) => {
+        const entry = createElement('span', '', `${item.label}: ${item.value}`);
+        list.appendChild(entry);
+      });
+      return list;
+    }
+
+    function renderFactGrid(items) {
+      const grid = createElement('div', 'facts-grid');
+      items.forEach((item) => {
+        const card = createElement('div', 'fact-card');
+        applySourceFieldId(card, item);
+        card.appendChild(createElement('div', 'fact-label', item.label));
+        card.appendChild(createElement('div', 'fact-value', item.value));
+        grid.appendChild(card);
+      });
+      return grid;
+    }
+
+    function renderMessageList(items) {
+      const list = createElement('div', 'message-list');
+      items.forEach((item, index) => {
+        const card = createElement('article', `message-card message-bubble ${index === 0 ? 'theirs' : 'mine'}`);
+        applySourceFieldId(card, item);
+        const meta = createElement('div', 'message-meta');
+        meta.appendChild(createElement('span', '', item.speaker));
+        meta.appendChild(createElement('span', '', item.time));
+        card.appendChild(meta);
+        card.appendChild(createElement('div', 'message-text', item.text));
+        list.appendChild(card);
+      });
+      return list;
+    }
+
+    function renderBullets(items) {
+      const list = createElement('ul', 'bullet-list');
+      items.forEach((item) => {
+        const li = createElement('li', 'bullet-item', item.text);
+        applySourceFieldId(li, item);
+        list.appendChild(li);
+      });
+      return list;
+    }
+
+    function renderParagraphs(items, articleMode) {
+      const container = createElement('div', articleMode ? 'content-card article-copy' : 'content-card');
+      items.forEach((item) => {
+        const paragraph = createElement('p', 'paragraph', item.text);
+        applySourceFieldId(paragraph, item);
+        container.appendChild(paragraph);
+      });
+      return container;
+    }
+
+    function splitSections(documentConfig) {
+      const sections = documentConfig.sections || [];
+      const summaryLineItems = Array.isArray(documentConfig.summaryLines)
+        ? documentConfig.summaryLines
+            .map((text, index) => ({
+              type: 'paragraph',
+              text: String(text || '').trim(),
+              fieldId: `summary-line-${index}`,
+            }))
+            .filter((item) => item.text.length > 0)
+        : [];
+
+      const sectionParagraphs = sections.flatMap((section) => (section.items || []).filter((item) => item.type === 'paragraph'));
+      return {
+        paragraphs: [...summaryLineItems, ...sectionParagraphs],
+        facts: sections.flatMap((section) => (section.items || []).filter((item) => item.type === 'fact')),
+        messages: sections.flatMap((section) => (section.items || []).filter((item) => item.type === 'message')),
+        bullets: sections.flatMap((section) => (section.items || []).filter((item) => item.type === 'bullet')),
+      };
+    }
+
+    function renderTopbar(surface) {
+      const topbar = createElement('header', 'topbar');
+      const brand = createElement('div', 'brand-stack');
+      brand.appendChild(createElement('div', 'brand-name', surface.productName));
+      brand.appendChild(createElement('div', 'brand-subtitle', surface.workspaceLabel));
+      topbar.appendChild(brand);
+
+      const actions = createElement('div', 'toolbar-actions');
+      (surface.headerActions || []).forEach((label) => actions.appendChild(renderToolbarButton(label, true)));
+      actions.appendChild(renderToolbarButton('Search', true));
+      topbar.appendChild(actions);
+      return topbar;
+    }
+
+    function renderEmailClient(infoConfig) {
+      const { surface, document: documentConfig } = infoConfig;
+      const split = splitSections(documentConfig);
+      const shell = createElement('div', `window-shell theme-${surface.accent}`);
+      shell.appendChild(renderTopbar(surface));
+
+      const frame = createElement('div', 'app-frame email-layout');
+      frame.appendChild(renderSidebar(surface.sidebarTitle, surface.sidebarItems, surface.activeSidebarItem));
+
+      const main = createElement('main', 'email-main');
+      main.setAttribute('aria-label', `${surface.productName} message view`);
+      const header = createElement('section', 'meta-card');
+      header.appendChild(createElement('div', 'document-title', documentConfig.title));
+      if (documentConfig.subtitle) {
+        header.appendChild(createElement('div', 'document-subtitle', documentConfig.subtitle));
+      }
+      header.appendChild(renderPills(surface.filters));
+      header.appendChild(renderDetailList(documentConfig.meta));
+      main.appendChild(header);
+
+      if (split.paragraphs.length > 0) {
+        const card = createElement('section', 'section-card');
+        card.appendChild(createElement('div', 'section-title', 'Open message'));
+        card.appendChild(renderParagraphs(split.paragraphs, false));
+        main.appendChild(card);
+      }
+
+      if (split.facts.length > 0) {
+        const card = createElement('section', 'section-card');
+        card.appendChild(createElement('div', 'section-title', 'Forwarded details'));
+        card.appendChild(renderFactGrid(split.facts));
+        main.appendChild(card);
+      }
+
+      if (split.bullets.length > 0) {
+        const card = createElement('section', 'section-card');
+        card.appendChild(createElement('div', 'section-title', 'Thread notes'));
+        card.appendChild(renderBullets(split.bullets));
+        main.appendChild(card);
+      }
+
+      frame.appendChild(main);
+      shell.appendChild(frame);
+      return shell;
+    }
+
+    function renderTeamChat(infoConfig) {
+      const { surface, document: documentConfig } = infoConfig;
+      const split = splitSections(documentConfig);
+      const shell = createElement('div', `window-shell theme-${surface.accent}`);
+      shell.appendChild(renderTopbar(surface));
+
+      const frame = createElement('div', 'app-frame chat-layout');
+      frame.appendChild(renderSidebar(surface.sidebarTitle, surface.sidebarItems, surface.activeSidebarItem));
+
+      const main = createElement('main', 'chat-main');
+      const header = createElement('section', 'meta-card');
+      header.appendChild(createElement('div', 'document-title', documentConfig.title));
+      header.appendChild(createElement('div', 'document-subtitle', documentConfig.subtitle || 'Thread'));
+      header.appendChild(renderPills(surface.filters));
+      header.appendChild(renderCompactMetaList(documentConfig.meta));
+      main.appendChild(header);
+
+      if (split.messages.length > 0) {
+        const thread = createElement('section', 'thread-card');
+        thread.appendChild(createElement('div', 'section-title', 'Conversation'));
+        thread.appendChild(renderMessageList(split.messages));
+        main.appendChild(thread);
+      }
+
+      frame.appendChild(main);
+      shell.appendChild(frame);
+      return shell;
+    }
+
+    function renderArticleReader(infoConfig) {
+      const { surface, document: documentConfig } = infoConfig;
+      const split = splitSections(documentConfig);
+      const shell = createElement('div', `window-shell theme-${surface.accent}`);
+      shell.appendChild(renderTopbar(surface));
+
+      const frame = createElement('div', 'app-frame article-layout');
+      const main = createElement('main', 'article-main');
+      const header = createElement('section', 'meta-card');
+      header.appendChild(createElement('div', 'document-title', documentConfig.title));
+      if (documentConfig.subtitle) {
+        header.appendChild(createElement('div', 'document-subtitle', documentConfig.subtitle));
+      }
+      header.appendChild(renderPills(surface.filters));
+      header.appendChild(renderCompactMetaList(documentConfig.meta));
+      main.appendChild(header);
+
+      if (split.paragraphs.length > 0) {
+        const card = createElement('section', 'section-card');
+        card.appendChild(createElement('div', 'section-title', 'Briefing'));
+        card.appendChild(renderParagraphs(split.paragraphs, true));
+        main.appendChild(card);
+      }
+
+      if (split.facts.length > 0) {
+        const card = createElement('section', 'section-card');
+        card.appendChild(createElement('div', 'section-title', 'Fact box'));
+        card.appendChild(renderFactGrid(split.facts));
+        main.appendChild(card);
+      }
+
+      if (split.bullets.length > 0) {
+        const card = createElement('section', 'section-card');
+        card.appendChild(createElement('div', 'section-title', 'Context'));
+        card.appendChild(renderBullets(split.bullets));
+        main.appendChild(card);
+      }
+
+      frame.appendChild(main);
+
+      if (split.bullets.length > 0) {
+        const aside = createElement('aside', 'side-card');
+        aside.appendChild(createElement('div', 'section-title', 'Context'));
+        aside.appendChild(renderBullets(split.bullets));
+        frame.appendChild(aside);
+      }
+
+      shell.appendChild(frame);
+      return shell;
+    }
+
+    function renderNotesWorkspace(infoConfig) {
+      const { surface, document: documentConfig } = infoConfig;
+      const split = splitSections(documentConfig);
+      const shell = createElement('div', `window-shell theme-${surface.accent}`);
+      shell.appendChild(renderTopbar(surface));
+
+      const frame = createElement('div', 'app-frame notes-layout');
+      frame.appendChild(renderSidebar(surface.sidebarTitle, surface.sidebarItems, surface.activeSidebarItem));
+
+      const main = createElement('main', 'notes-main');
+      const note = createElement('section', 'note-card');
+      note.appendChild(createElement('div', 'document-title', documentConfig.title));
+      if (documentConfig.subtitle) {
+        note.appendChild(createElement('div', 'document-subtitle', documentConfig.subtitle));
+      }
+      note.appendChild(renderPills(surface.filters));
+      note.appendChild(renderCompactMetaList(documentConfig.meta));
+      if (split.facts.length > 0) {
+        const propertyCard = createElement('section', 'section-card');
+        propertyCard.appendChild(createElement('div', 'section-title', 'Property sheet'));
+        propertyCard.appendChild(renderFactGrid(split.facts));
+        note.appendChild(propertyCard);
+      }
+      if (split.bullets.length > 0) {
+        const listCard = createElement('section', 'section-card');
+        listCard.appendChild(createElement('div', 'section-title', 'Checklist'));
+        listCard.appendChild(renderBullets(split.bullets));
+        note.appendChild(listCard);
+      }
+      if (split.paragraphs.length > 0) {
+        const summary = createElement('section', 'section-card');
+        summary.appendChild(createElement('div', 'section-title', 'Summary'));
+        summary.appendChild(renderParagraphs(split.paragraphs, false));
+        note.appendChild(summary);
+      }
+      main.appendChild(note);
+      frame.appendChild(main);
+      shell.appendChild(frame);
+      return shell;
+    }
+
+    function renderCrmRecord(infoConfig) {
+      const { surface, document: documentConfig } = infoConfig;
+      const split = splitSections(documentConfig);
+      const shell = createElement('div', `window-shell theme-${surface.accent}`);
+      shell.appendChild(renderTopbar(surface));
+
+      const frame = createElement('div', 'app-frame crm-layout');
+      const main = createElement('main', 'crm-main');
+      const header = createElement('section', 'meta-card');
+      header.appendChild(createElement('div', 'document-title', documentConfig.title));
+      if (documentConfig.subtitle) {
+        header.appendChild(createElement('div', 'document-subtitle', documentConfig.subtitle));
+      }
+      header.appendChild(renderPills(surface.filters));
+      header.appendChild(renderCompactMetaList(documentConfig.meta));
+      main.appendChild(header);
+
+      const splitRow = createElement('div', 'split-row');
+      const left = createElement('section', 'section-card');
+      left.appendChild(createElement('div', 'section-title', 'Primary information'));
+      left.appendChild(split.facts.length > 0 ? renderFactGrid(split.facts) : createElement('div', 'paragraph', 'No details available.'));
+      splitRow.appendChild(left);
+
+      const right = createElement('section', 'side-card');
+      right.appendChild(createElement('div', 'section-title', 'Activity'));
+      right.appendChild(split.bullets.length > 0 ? renderBullets(split.bullets) : createElement('div', 'paragraph', 'No recent activity.'));
+      splitRow.appendChild(right);
+      main.appendChild(splitRow);
+
+      frame.appendChild(main);
+      shell.appendChild(frame);
+      return shell;
+    }
+
+    function renderReceiptReview(infoConfig) {
+      const { surface, document: documentConfig } = infoConfig;
+      const split = splitSections(documentConfig);
+      const shell = createElement('div', `window-shell theme-${surface.accent}`);
+      shell.appendChild(renderTopbar(surface));
+
+      const frame = createElement('div', 'app-frame receipt-layout');
+      frame.appendChild(renderSidebar(surface.sidebarTitle, surface.sidebarItems, surface.activeSidebarItem));
+
+      const main = createElement('main', 'receipt-main');
+      const header = createElement('section', 'meta-card');
+      header.appendChild(createElement('div', 'document-title', documentConfig.title));
+      header.appendChild(createElement('div', 'document-subtitle', documentConfig.subtitle || 'Receipt image'));
+      header.appendChild(renderPills(surface.filters));
+      header.appendChild(renderCompactMetaList(documentConfig.meta));
+      main.appendChild(header);
+
+      const stageCard = createElement('section', 'section-card');
+      stageCard.appendChild(createElement('div', 'section-title', 'Uploaded receipt'));
+      const stage = createElement('div', 'receipt-stage');
+      applySourceFieldIds(stage, documentConfig.imageFieldIds);
+      stage.setAttribute('aria-label', documentConfig.imageLabel || 'Uploaded receipt image');
+      const image = document.createElement('img');
+      image.className = 'receipt-photo';
+      image.src = documentConfig.imageUrl;
+      image.alt = documentConfig.imageLabel || 'Uploaded receipt image';
+      stage.appendChild(image);
+      stageCard.appendChild(stage);
+      stageCard.appendChild(createElement('div', 'viewer-tip', 'Use the receipt image to capture merchant, date, total, payment details, and code the expense.'));
+      main.appendChild(stageCard);
+
+      if (split.bullets.length > 0) {
+        const notes = createElement('section', 'section-card');
+        notes.appendChild(createElement('div', 'section-title', 'Processing notes'));
+        notes.appendChild(renderBullets(split.bullets));
+        main.appendChild(notes);
+      }
+
+      frame.appendChild(main);
+
+      const aside = createElement('aside', 'receipt-aside');
+      const thumbCard = createElement('section', 'side-card');
+      thumbCard.appendChild(createElement('div', 'section-title', 'Pages'));
+      const strip = createElement('div', 'thumbnail-strip');
+      const thumb = createElement('div', 'thumbnail-card');
+      thumb.appendChild(createElement('div', 'thumbnail-preview'));
+      thumb.appendChild(createElement('div', 'thumbnail-label', 'Page 1'));
+      strip.appendChild(thumb);
+      thumbCard.appendChild(strip);
+      aside.appendChild(thumbCard);
+
+      const tipCard = createElement('section', 'side-card');
+      tipCard.appendChild(createElement('div', 'section-title', 'Queue status'));
+      tipCard.appendChild(createElement('div', 'viewer-tip', 'Attachment is pending manual coding because the uploaded document is an image-based receipt.'));
+      aside.appendChild(tipCard);
+      frame.appendChild(aside);
+
+      shell.appendChild(frame);
+      return shell;
+    }
+
+    function renderInfo(infoConfig) {
+      let view;
+      switch (infoConfig.surface.family) {
+        case 'email-client':
+          view = renderEmailClient(infoConfig);
+          break;
+        case 'team-chat':
+          view = renderTeamChat(infoConfig);
+          break;
+        case 'article-reader':
+          view = renderArticleReader(infoConfig);
+          break;
+        case 'notes-workspace':
+          view = renderNotesWorkspace(infoConfig);
+          break;
+        case 'crm-record':
+          view = renderCrmRecord(infoConfig);
+          break;
+        case 'receipt-review':
+          view = renderReceiptReview(infoConfig);
+          break;
+        default:
+          view = renderArticleReader(infoConfig);
+          break;
+      }
+
+      appRoot.innerHTML = '';
+      appRoot.appendChild(view);
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          ipcRenderer.send('form-test-window-ready', 'info');
+        });
+      });
+    }
+
+    ipcRenderer.on('set-info-config', (_event, infoConfig) => {
+      renderInfo(infoConfig);
+    });
+  </script>
+</body>
+</html>
