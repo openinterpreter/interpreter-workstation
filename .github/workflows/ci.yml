@@ -41,7 +41,7 @@ jobs:
       - name: Generate production dependency license inventory
         run: pnpm run --silent release:licenses > production-license-inventory.json
       - name: Upload production dependency license inventory
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: production-license-inventory
           path: production-license-inventory.json
