@@ -35,7 +35,7 @@ exercises the same runtime shape the app packages and ships.
 Do not use this as a substitute for:
 
 - `pnpm run extension:test:integration` when you only need the submodule browser/relay regression layer
-- `pnpm run form-tests:auto` when you need overlay/computer-use coverage instead of browser-control coverage
+- the private overlay benchmark suite when you need full GUI/computer-use scoring instead of browser-control coverage
 
 ## Run
 

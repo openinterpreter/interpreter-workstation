@@ -26,10 +26,7 @@ logs/
 
 # Test artifacts (saved to test-runs/ per run)
 test-runs/
-form-tests/generated/*
-!form-tests/generated/SUMMARY.md
-!form-tests/generated/test-900/
-!form-tests/generated/test-900/**
+form-tests/
 browser-form-tests/
 !browser-form-tests/
 browser-form-tests/*

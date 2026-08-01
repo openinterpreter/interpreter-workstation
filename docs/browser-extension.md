@@ -39,9 +39,9 @@ pnpm run ensure:browser-extension-relay-assets
 
 The staged directory is gitignored on purpose and should be treated like build output.
 
-## Why This Is Separate From `form-tests`
+## Why This Is Separate From The Overlay Benchmarks
 
-`form-tests` benchmark the overlay runtime against a realistic GUI task harness.
+The private benchmark suite exercises the overlay runtime against realistic GUI tasks.
 The browser extension covers a different contract:
 
 - Chrome/Chromium with the extension loaded
@@ -49,8 +49,7 @@ The browser extension covers a different contract:
 - CDP visibility for approved tabs
 - `playwright-core` connecting to the relay
 
-So the extension test path should stay separate. It can borrow Chrome-launching patterns from
-`form-tests` later, but it should not be the same harness.
+The extension test path stays separate because it verifies a different runtime boundary.
 
 ## One-Time Setup
 
