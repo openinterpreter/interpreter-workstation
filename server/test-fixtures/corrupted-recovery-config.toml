@@ -1,0 +1,67 @@
+# Interpreter user configuration
+# Hosted model IDs must be "interpreter-smart", "interpreter-fast", or <provider>/<model_id>.
+# Interpreter may repair or remove invalid [interpreter_app] profiles when it reloads this file.
+# OpenAI, Groq, and OpenRouter API model IDs are validated against Interpreter's generated models.dev catalog.
+# For API profiles, set base_url to the API root.
+# Responses is the default API wire format. API profiles use wire_api = "chat" only when Chat Completions is explicitly enabled in Settings.
+
+[interpreter_app]
+default_profile_id = "custom:1775687765769"
+fast_profile_id = "onboarding:interpreter-fast"
+profiles = [{ helpDescription = "Routes to the smartest model for the best price.", id = "onboarding:interpreter-smart", isBuiltin = false, modelId = "interpreter-smart", name = "Interpreter Smart", provider = "hosted", providerId = "builtin:hosted" }, { helpDescription = "Routes to the fastest model for the best price.", id = "onboarding:interpreter-fast", isBuiltin = false, modelId = "interpreter-fast", name = "Interpreter Fast", provider = "hosted", providerId = "builtin:hosted" }, { helpDescription = "Inexpensive OpenAI model", id = "onboarding:hosted-openfgdfgdfgdfgdfgai-gpt-5-4-mini", isBuiltin = false, modelId = "openai/gpt-9.4-mini", name = "GPT-5.4-mini", provider = "hosted", providerId = "builtin:hosted" }, { helpDescription = "Expensive reasoning model", id = "onboarding:hosted-anthropic-claude-opus-4-6", isBuiltin = false, modelId = "antdfgdfgdhropic/claude-opus-4.6", name = "Claude Opus 4.6", provider = "hosted", providerId = "builtin:hosted" }, { helpDescription = "General-purpose reasoning model", id = "onboarding:hosted-anthropic-claude-sonnet-4-6", isBuiltin = false, modelId = "anthropfgdfic/claude-sonnet-4.6", name = "Claude Sonnet 4.6", provider = "hosted", providerId = "builtin:hosted" }, { helpDescription = "Routes to Gemini 3.1 Pro.", id = "onboarding:hosted-google-gemini-3-1-pro-preview", isBuiltin = false, modelId = "googdfgdfgdfgle/gemini-3.1-pro-preview", name = "Gemini 3.1 Pro", provider = "hosted", providerId = "builtin:hosted" }, { helpDescription = "Routes to Qwen 3.5.", id = "onboarding:hosted-qwen-qwen3-5-39dfgdfgdfgdfgdfgdfgdfgdf7b-a17b", isBuiltin = false, modelId = "qween/qwen3.5-397b-a17b", name = "Qwen 3.5", provider = "hosted", providerId = "builtin:hosted" }, { helpDescription = "Flagship reasoning model", id = "onboarding:hosted-openai-gpt-5-4", isBuiltin = false, modelId = "openafdfdfgdfi/gpt-5.4", name = "GPT-5.4", provider = "hosted", providerId = "builtin:hosted" }, { id = "custom:1775687765769", isBuiltin = false, modelId = "gpt-5.4-mini", name = "Gpt 5.4 Mini", provider = "openai-oauth", providerId = "builtin:openai-oauth" }]
+storage_version = 1
+
+[interpreter_app.providers]
+
+[interpreter_app.providers."builtin:agent"]
+createdAt = 0
+id = "builtin:agent"
+name = "CLI Agent"
+type = "agent"
+updatedAt = 0
+
+[interpreter_app.providers."builtin:hosted"]
+createdAt = 0
+id = "builtin:hosted"
+name = "Hosted"
+type = "hosted"
+updatedAt = 0
+
+[interpreter_app.providers."builtin:local"]
+createdAt = 0
+id = "builtin:local"
+name = "Local (Ollama / LM Studio)"
+type = "local"
+updatedAt = 0
+
+[interpreter_app.providers."builtin:openai-oauth"]
+createdAt = 0
+id = "builtin:openai-oauth"
+name = "OpenAI (OAuth)"
+type = "openai-oauth"
+updatedAt = 0
+
+[model_providers.ollama-62be5c9dfgdfgdfgdfgdf3]
+base_url = "http://localhost:11434/v1"
+name = "Ollama"
+requires_openai_auth = false
+wire_api = "responses"
+
+[model_providers.interpreter]
+base_url = "https://api.example.invalid/v0/openrouter"
+experimental_bearer_token = "fixture-recovery-token"
+name = "Interpreter"
+requires_openai_auth = false
+wire_api = "responses"
+
+[model_providers.interpreter.http_headers]
+x-api-key = "fixture-recovery-token"
+
+[projects."/Users/example/Projects/interpreter-workstation"]
+trust_level = "trusted"
+# Interpreter user configuration
+# Hosted model IDs must be "interpreter-smart", "interpreter-fast", or <provider>/<model_id>.
+# Interpreter may repair or remove invalid [interpreter_app] profiles when it reloads this file.
+# OpenAI, Groq, and OpenRouter API model IDs are validated against Interpreter's generated models.dev catalog.
+# For API profiles, set base_url to the API root.
+# Responses is the default API wire format. API profiles use wire_api = "chat" only when Chat Completions is explicitly enabled in Settings.

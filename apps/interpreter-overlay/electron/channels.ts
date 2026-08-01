@@ -1,0 +1,15 @@
+export const INTERPRETER_OVERLAY_CHANNELS = {
+  STATE: 'interpreter-overlay:state',
+  ACTION: 'interpreter-overlay:action',
+  GET_BOOTSTRAP: 'interpreter-overlay:get-bootstrap',
+  LIST_SKILLS: 'interpreter-overlay:list-skills',
+  CHOOSE_WORKSPACE_FOLDER: 'interpreter-overlay:choose-workspace-folder',
+  SET_SELECTION_PREFERENCES: 'interpreter-overlay:set-selection-preferences',
+  SET_IGNORE_MOUSE_EVENTS: 'interpreter-overlay:set-ignore-mouse-events',
+  REQUEST_INPUT_FOCUS: 'interpreter-overlay:request-input-focus',
+  DRAG_PREVIEW: 'interpreter-overlay:drag-preview',
+  ADVANCED_VOICE_CREATE_CALL: 'interpreter-overlay:advanced-voice-create-call',
+  ADVANCED_VOICE_TOOL_CALL: 'interpreter-overlay:advanced-voice-tool-call',
+  ADVANCED_VOICE_TEST_AUDIO: 'interpreter-overlay:advanced-voice-test-audio',
+  ADVANCED_VOICE_AUDIO_EVENT: 'interpreter-overlay:advanced-voice-audio-event',
+} as const;

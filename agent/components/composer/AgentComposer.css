@@ -1,0 +1,146 @@
+/**
+ * AgentComposer Styles
+ *
+ * Styles for the Tiptap editor to match the existing textarea styling
+ */
+
+.agent-composer {
+  width: 100%;
+}
+
+.tiptap-editor {
+  width: 100%;
+  min-height: 3rem; /* ~2 rows */
+  resize: none;
+  border: none;
+  background: transparent;
+  font-size: var(--text-ui-sm); /* 12px - matches Input and other UI text */
+  line-height: 1.5;
+  color: var(--oa-text, var(--foreground));
+  -webkit-text-fill-color: var(--oa-text, var(--foreground));
+  outline: none;
+  padding: 0;
+}
+
+.tiptap-editor:disabled {
+  cursor: not-allowed;
+}
+
+/* Placeholder styling */
+.tiptap-editor p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--oa-text-muted, var(--muted-foreground));
+  pointer-events: none;
+}
+
+.tiptap-editor p.is-editor-empty:first-child {
+  position: relative;
+}
+
+/* ProseMirror placeholder styling (for Tiptap) */
+.ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--muted-foreground);
+  pointer-events: none;
+}
+
+.ProseMirror p.is-editor-empty:first-child {
+  position: relative;
+}
+
+/* Hide CSS placeholder for main composer - we use a DOM element instead */
+.main-composer-content .ProseMirror p.is-editor-empty:first-child::before {
+  content: none;
+}
+
+.main-composer-content,
+.main-composer-content .ProseMirror {
+  font-size: 15px;
+  line-height: 1.7rem;
+}
+
+/* Remove default paragraph margins */
+.tiptap-editor p {
+  margin: 0;
+}
+
+/* Style for mention nodes */
+.tiptap-editor .mention-node-view {
+  display: inline;
+}
+
+/* Compact mentions: icon-only grid for leading clusters of 3+.
+ * The .mention-chip-compact class is applied to the outer Tiptap wrapper
+ * (<span class="react-renderer node-fileMention">) by applyMentionCompactClasses(). */
+
+/* Override FileSystemProxy inline styles for tight grid layout */
+.mention-chip-compact .inline-flex {
+  gap: 0 !important;
+  padding: 4px !important;
+  margin: 2px !important;
+  vertical-align: top !important;
+  box-shadow: none !important;
+}
+
+/* Hide filename label */
+.mention-chip-compact .truncate {
+  display: none !important;
+}
+
+/* Hide remove (×) button */
+.mention-chip-compact button {
+  display: none !important;
+}
+
+/* Hide fragment/line references */
+.mention-chip-compact .text-muted-foreground {
+  display: none !important;
+}
+
+/* Slightly bigger thumbnails in compact grid */
+.mention-chip-compact .inline-flex > div:first-child {
+  width: 20px !important;
+  height: 20px !important;
+}
+
+/* Focus styles */
+.tiptap-editor:focus {
+  outline: none;
+  ring: 0;
+}
+
+/* ProseMirror specific styles */
+.tiptap-editor .ProseMirror {
+  outline: none;
+  color: var(--oa-text, var(--foreground));
+  -webkit-text-fill-color: var(--oa-text, var(--foreground));
+  caret-color: var(--oa-text, var(--foreground));
+}
+
+.tiptap-editor .ProseMirror:focus {
+  outline: none;
+}
+
+/* Selection color to match theme */
+.tiptap-editor .ProseMirror ::selection {
+  background-color: color-mix(in srgb, var(--oa-primary, var(--foreground)) 20%, transparent);
+}
+
+/* Main composer - keep the two-line resting height aligned with assistant copy */
+.main-composer-content .ProseMirror.main-composer-editor {
+  min-height: calc(1.7rem * 2);
+  display: flex;
+  flex-direction: column;
+}
+
+/* Ensure first paragraph fills the space */
+.main-composer-content .ProseMirror.main-composer-editor p:first-child {
+  flex: 1;
+  min-height: calc(1.7rem * 2);
+}

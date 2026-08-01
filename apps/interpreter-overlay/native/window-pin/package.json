@@ -1,0 +1,22 @@
+{
+  "name": "interpreter-window-pin",
+  "version": "0.0.2",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "In-process native addon for pinning an Electron BrowserWindow above a target OS window.",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "binding.gyp",
+    "src",
+    "index.js",
+    "index.d.ts"
+  ],
+  "scripts": {
+    "install": "node-gyp rebuild"
+  },
+  "dependencies": {
+    "node-addon-api": "^7.1.0"
+  },
+  "gypfile": true
+}

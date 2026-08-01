@@ -1,0 +1,4 @@
+interface:
+  display_name: "Interpreter Design"
+  short_description: "Minimal UI guidance with clear hierarchy"
+  default_prompt: "Use $interpreter-design to simplify Interpreter UI for non-developers, make the main action obvious, preserve calm visual balance, and remove technical implementation detail from the main interface."

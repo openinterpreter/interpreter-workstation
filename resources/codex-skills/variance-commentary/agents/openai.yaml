@@ -1,0 +1,4 @@
+interface:
+  display_name: "Variance Commentary"
+  short_description: "Explain P&L and balance-sheet flux drivers"
+  default_prompt: "Use the variance commentary skill to write month-end flux commentary. Compare actuals against prior period and budget, flag lines over threshold, source drivers from underlying activity, and mark unclear drivers for controller review."

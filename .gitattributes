@@ -1,0 +1,18 @@
+
+# Use bd merge for beads JSONL files
+.beads/issues.jsonl merge=beads
+
+# Force LF line endings for shell scripts (CRLF breaks bash)
+*.sh text eol=lf
+
+# Keep generated and test media out of text diffs and line-ending conversion.
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.mp3 binary
+*.mp4 binary
+*.wav binary
+*.docx binary
+*.pptx binary
+*.xlsx binary

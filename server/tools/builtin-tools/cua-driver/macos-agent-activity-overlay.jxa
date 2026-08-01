@@ -1,0 +1,116 @@
+function run(argv) {
+  ObjC.import('Cocoa');
+
+  const statePath = argv[0];
+  if (!statePath) return;
+
+  const app = $.NSApplication.sharedApplication;
+  app.setActivationPolicy($.NSApplicationActivationPolicyAccessory);
+
+  const panelHeight = 34;
+  const maxPanelWidth = 420;
+  const minPanelWidth = 140;
+  const margin = 16;
+
+  const panel = $.NSPanel.alloc.initWithContentRectStyleMaskBackingDefer(
+    $.NSMakeRect(16, 16, minPanelWidth, panelHeight),
+    $.NSWindowStyleMaskBorderless | $.NSWindowStyleMaskNonactivatingPanel,
+    $.NSBackingStoreBuffered,
+    false,
+  );
+  panel.setLevel($.NSStatusWindowLevel);
+  panel.setOpaque(false);
+  panel.setBackgroundColor($.NSColor.clearColor);
+  panel.setIgnoresMouseEvents(true);
+  panel.setCollectionBehavior($.NSWindowCollectionBehaviorCanJoinAllSpaces | $.NSWindowCollectionBehaviorTransient);
+
+  const content = $.NSView.alloc.initWithFrame($.NSMakeRect(0, 0, minPanelWidth, panelHeight));
+  content.setWantsLayer(true);
+  content.layer.setCornerRadius(15);
+  content.layer.setBackgroundColor($.NSColor.colorWithCalibratedRedGreenBlueAlpha(0.02, 0.24, 0.14, 0.94).CGColor);
+  content.layer.setBorderWidth(1);
+  content.layer.setBorderColor($.NSColor.colorWithCalibratedRedGreenBlueAlpha(0.58, 1.0, 0.35, 1.0).CGColor);
+  content.layer.setShadowColor($.NSColor.blackColor.CGColor);
+  content.layer.setShadowOpacity(0.32);
+  content.layer.setShadowRadius(8);
+  content.layer.setShadowOffset($.NSMakeSize(0, -2));
+  panel.setContentView(content);
+
+  const label = $.NSTextField.alloc.initWithFrame($.NSMakeRect(14, 7, minPanelWidth - 28, 20));
+  label.setBezeled(false);
+  label.setBordered(false);
+  label.setDrawsBackground(false);
+  label.setEditable(false);
+  label.setSelectable(false);
+  label.setTextColor($.NSColor.whiteColor);
+  label.setFont($.NSFont.systemFontOfSizeWeight(12, $.NSFontWeightSemibold));
+  content.addSubview(label);
+
+  function readState() {
+    try {
+      const raw = $.NSString.stringWithContentsOfFileEncodingError($(statePath), $.NSUTF8StringEncoding, null);
+      if (!raw) return null;
+      return JSON.parse(ObjC.unwrap(raw));
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function screenHeight() {
+    const screen = $.NSScreen.mainScreen;
+    if (!screen) return 0;
+    return screen.frame.size.height;
+  }
+
+  function activityLabel(kind) {
+    const normalized = String(kind || '').toLowerCase();
+    if (normalized === 'typing') return 'Typing';
+    if (normalized === 'hotkey') return 'Hotkey';
+    if (normalized === 'key') return 'Key';
+    return 'Action';
+  }
+
+  function truncate(text) {
+    const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+    if (normalized.length <= 120) return normalized;
+    return `${normalized.slice(0, 117)}...`;
+  }
+
+  function sync() {
+    const state = readState();
+    if (!state || state.enabled !== true) {
+      panel.orderOut(null);
+      return;
+    }
+
+    const activityText = truncate(state.activity_text);
+    const lastActivityAt = Number(state.last_activity_at || 0);
+    const idleMs = Number(state.activity_idle_hide_ms || 3500);
+    const show = activityText && lastActivityAt > 0 && (idleMs < 0 || (Date.now() - lastActivityAt) <= idleMs);
+    if (!show) {
+      panel.orderOut(null);
+      return;
+    }
+
+    const displayText = `${activityLabel(state.activity_kind)}: ${activityText}`;
+    const panelWidth = Math.min(maxPanelWidth, Math.max(minPanelWidth, 34 + displayText.length * 7));
+    const rect = state.target_rect && typeof state.target_rect === 'object' ? state.target_rect : null;
+    const x = rect && Number.isFinite(Number(rect.x)) ? Number(rect.x) + margin : margin;
+    const topY = rect && Number.isFinite(Number(rect.y)) ? Number(rect.y) : null;
+    const height = rect && Number.isFinite(Number(rect.height)) ? Number(rect.height) : null;
+    const y = topY !== null && height !== null
+      ? Math.max(margin, screenHeight() - (topY + height) + margin)
+      : margin;
+
+    content.setFrame($.NSMakeRect(0, 0, panelWidth, panelHeight));
+    label.setFrame($.NSMakeRect(14, 7, panelWidth - 28, 20));
+    label.setStringValue(displayText);
+    panel.setFrameDisplay($.NSMakeRect(x, y, panelWidth, panelHeight), true);
+    panel.orderFrontRegardless;
+  }
+
+  while (true) {
+    sync();
+    $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.08));
+  }
+}

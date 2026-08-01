@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Interpreter World Overlay</title>
+  <link rel="stylesheet" href="./styles.css">
+  <style>
+    html {
+      background: transparent !important;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: transparent !important;
+    }
+    #root {
+      width: 100vw;
+      height: 100vh;
+      position: fixed;
+      top: 0;
+      left: 0;
+      pointer-events: none;
+      background: transparent !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="./world-entry.tsx"></script>
+</body>
+</html>

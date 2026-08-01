@@ -1,0 +1,4 @@
+interface:
+  display_name: "Wiki Query"
+  short_description: "Answer questions from a markdown wiki"
+  default_prompt: "Use the wiki-query skill workflow when the user is asking what their wiki says about something. Do not call a tool named `wiki-query`. Start with `interpreter_vault` search and note-context actions to find the right pages, read `index.md` only if it exists and still helps you orient, then read only the relevant wiki notes, answer with `([[Page Name]])` citations, and offer to file non-trivial analyses back into the wiki."

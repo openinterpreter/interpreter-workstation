@@ -1,0 +1,64 @@
+interface:
+  display_name: "Browser Control"
+  short_description: "Advanced live-browser Playwright control"
+  default_prompt: >-
+    Use unified `builtin-interpreter` browser page tools first for simple
+    browser page inventory, inspect, trace, click, type, select, and scroll
+    work. Start from
+    `interpreter-app tools builtin-interpreter interpreter_whole_computer_state_get --json '{}'`,
+    then use `interpreter_browser_page_inspect` with an exact `tab_ref`, and
+    pass the exact `tab_ref`, `frame_id`, `ref_id`, and `target_identity` fields
+    returned by inventory/inspect to the matching browser page tool.
+
+    Use the browser-control skill workflow for advanced Playwright-in-tab work
+    after the simple browser page tools cannot express the task or after the
+    task already names an exact browser session or browser-control tab ref. Do
+    not call a tool named `browser-control`; `js_repl` is the `js_repl` tool on
+    the `builtin-js-repl` app tool server. Put browser-control JavaScript in the
+    `code` argument of
+    `interpreter-app tools builtin-js-repl js_repl --json ...` (prefer
+    `--stdin-arg code` for multi-line code; pass `timeout_ms` for
+    navigation-heavy actions, and after a timeout reread page state before
+    retrying because the action may still have completed); do not answer with a
+    visible JavaScript code block for the user to run.
+
+    In the desktop app, assume browser control is already managed by the app.
+    Call `interpreter-app tools builtin-js-repl js_repl` directly without
+    `interpreter-app tools list` discovery when you need Playwright. Do not use
+    web search or capability probing as a first step for browser-control work,
+    and do not use Interpreter workstation browser/email tabs or
+    `interpreter-app layout get|set` as evidence of the user's live browser
+    state. Use layout tools for files, workspace UI layout, and local app
+    previews, not as a browser-control substitute. Only open an external website
+    in an Interpreter in-app browser tab when the user explicitly asks to try
+    that route, and warn first that the in-app browser is a separate session
+    where they should not expect to be signed in.
+
+    Because `js_repl` persists across turns, keep bootstrap code idempotent and
+    store long-lived handles on `globalThis` instead of redeclaring top-level
+    `let` or `const` bindings. Keep the initial `js_repl` bootstrap short. Use
+    `await import("interpreter-browser-control")` and
+    `setupInterpreterBrowserControl({ globals: globalThis, sessionId: globalThis.selectedBrowserSessionId })`
+    to install `agent.browser`, `display`, `globalThis.ensurePage()`, raw
+    `globalThis.playwright`, raw `globalThis.chromium`, and the live
+    `globalThis.page`.
+
+    If the task already names the browser session or browser-control tab ref to
+    use for Playwright, set `globalThis.selectedBrowserSessionId` to that exact
+    stable key or tab ref, including refs shaped like
+    `<profile-key>:chrome-tab:<chrome-tab-id>`; when browser policy allows that
+    page, the runtime claims an observed tab for Playwright control and selects
+    the matching page. Use `browser_profile_policy_id` /
+    `extension_stable_key` or an exact `tab_ref` as the control identity;
+    `browser_profile_name` and `browser_profile_path` are display context, not
+    CDP session keys.
+
+    Otherwise let the helper inspect `http://127.0.0.1:19988/extensions/status`,
+    require a single live browser session, connect through the app-managed CDP
+    bridge, reuse the existing live page, and do not call `browser.close()` on
+    the user's live browser. For search, lookup, record-review, or form
+    workflows, reread the page after each submit/navigation before deciding the
+    result. Verify the intended field accepted the intended value, verify the
+    page is in the expected search/results/detail state, and distinguish no
+    matching record from a matching record whose requested content was not
+    found.

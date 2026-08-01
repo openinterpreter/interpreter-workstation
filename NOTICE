@@ -1,0 +1,18 @@
+Interpreter Workstation
+Copyright 2026 Open Interpreter contributors
+
+This product includes software developed by Open Interpreter contributors and
+third-party open-source components. Third-party components and pinned Git
+submodules retain their respective copyright and license notices.
+
+The browser extension in apps/interpreter-extension is derived from Playwriter.
+Its source history, upstream relationship, copyright notices, and license are
+preserved in that submodule.
+
+The computer-use implementation in submodules/interpreter-cua is derived from
+the CUA project maintained by trycua. Its source history, upstream relationship,
+copyright notices, and license are preserved in that submodule.
+
+Production packages and downloaded runtimes carry additional independent
+licenses. See docs/dependency-licensing.md and the generated release inventory;
+this NOTICE file is not an exhaustive third-party license report.

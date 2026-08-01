@@ -1,0 +1,4 @@
+interface:
+  display_name: "Month-End Close"
+  short_description: "Build accrual, roll-forward, and variance close packages"
+  default_prompt: "Use the month-end closer skill to run a period-end close package for an entity and period. Pull or request trial balance, GL detail, budget, and support; use the accrual schedule, roll-forward, and variance commentary skills for the close sections; use the xlsx author skill for workbook artifacts; and stage draft JEs for controller approval without posting."

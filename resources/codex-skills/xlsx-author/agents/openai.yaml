@@ -1,0 +1,4 @@
+interface:
+  display_name: "XLSX Author"
+  short_description: "Create workbook artifacts on disk"
+  default_prompt: "Use the xlsx author skill when a task needs a .xlsx file artifact. Build the workbook under ./out, use clear inputs/formulas/checks tabs, preserve financial-model conventions, and return the relative output path."

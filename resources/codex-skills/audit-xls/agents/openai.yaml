@@ -1,0 +1,4 @@
+interface:
+  display_name: "Spreadsheet Audit"
+  short_description: "Find formula and financial-model issues"
+  default_prompt: "Use the audit xls skill to audit a spreadsheet. Confirm the scope if needed, check formulas and model integrity, return a findings table with severity and suggested fixes, and do not modify the workbook unless asked."

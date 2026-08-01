@@ -1,0 +1,4 @@
+[test]
+# Limit test scanning to specific directories to avoid loading
+# files with Electron dependencies that fail in non-Electron environments
+root = "."

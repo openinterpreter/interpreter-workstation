@@ -1,0 +1,283 @@
+appId: interpreter
+productName: Interpreter
+protocols:
+  - name: Interpreter
+    schemes:
+      - workstation
+directories:
+  output: dist
+  buildResources: resources
+
+asar: true
+asarUnpack:
+  - "node_modules/@parcel/**"
+  - "node_modules/@vscode/ripgrep/**"
+  - "node_modules/@openinterpreter/**"
+  - "node_modules/@resvg/**"
+  - "node_modules/@napi-rs/**"
+  - "node_modules/@img/**"
+  - "node_modules/sharp/**"
+  - "node_modules/sherpa-onnx/**"
+  - "node_modules/onnxruntime-node/**"
+  - "**/*.node"
+  - "**/*.dylib"
+
+extraResources:
+  - from: resources/smart-turn
+    to: smart-turn
+  - from: resources/js-repl-runtime/package.json
+    to: js-repl-runtime/package.json
+  - from: resources/js-repl-runtime/node_modules
+    to: js-repl-runtime/node_modules
+    filter:
+      - "**/*"
+  - from: resources/js-repl-runtime/kernel
+    to: js-repl-runtime/kernel
+    filter:
+      - "**/*"
+  - from: resources/browser-extension-relay
+    to: browser-extension-relay
+    filter:
+      - "**/*"
+  - from: resources/browser-extension-relay/node_modules
+    to: browser-extension-relay/node_modules
+    filter:
+      - "**/*"
+  - from: resources/codex-skills
+    to: codex-skills
+    filter:
+      - "**/*"
+  - from: resources/templates
+    to: templates
+  - from: resources/icons/app.icns
+    to: icons/app.icns
+  - from: resources/icons/app.ico
+    to: icons/app.ico
+  - from: resources/icons/app.png
+    to: icons/app.png
+  - from: resources/icons/tray-iconTemplate.png
+    to: icons/tray-iconTemplate.png
+  - from: resources/icons/tray-iconTemplate@2x.png
+    to: icons/tray-iconTemplate@2x.png
+
+files:
+  - dist/**/*
+  - "!dist/mac/**"
+  - "!dist/mac-*/**"
+  - "!dist/win/**"
+  - "!dist/win-*/**"
+  - "!dist/linux/**"
+  - "!dist/linux-*/**"
+  - "!dist/*.dmg"
+  - "!dist/*.zip"
+  - "!dist/*.exe"
+  - "!dist/*.AppImage"
+  - dist-electron/**/*
+  - "!dist-electron/interpreter-overlay/**"
+  - "!dist-electron/cua-driver/**"
+  - resources/**
+  - "!resources/codex-skills/**"
+  - "!resources/browser-extension-relay/**"
+  - "!resources/browser-extension-relay.zip"
+  - "!resources/qwen-asr/**"
+  - "!resources/*.qcow2"
+  - build/**
+  - package.json
+  - product.json
+  - "!src/**"
+  - "!test/**"
+  - "!tests/**"
+
+# Register OS-level file associations so the app appears in "Open With"
+fileAssociations:
+  - ext: docx
+    name: Microsoft Word Document
+    description: Word Document
+    role: Editor
+  - ext: doc
+    name: Microsoft Word Document (Legacy)
+    description: Word 97-2003 Document
+    role: Editor
+  - ext: pdf
+    name: PDF Document
+    description: Portable Document Format
+    role: Editor
+  - ext: xlsx
+    name: Microsoft Excel Spreadsheet
+    description: Excel Workbook
+    role: Editor
+  - ext: md
+    name: Markdown Document
+    description: Markdown Text Document
+    role: Editor
+  - ext: markdown
+    name: Markdown Document
+    description: Markdown Text Document
+    role: Editor
+
+afterPack: ./scripts/electron-builder/afterPack.cjs
+#
+# IMPORTANT: DO NOT add an `afterSign` hook that rewrites files inside the
+# packaged `.app` bundle. Apple treats signed bundles as sealed resources:
+# https://developer.apple.com/library/archive/technotes/tn2206/_index.html
+#
+# Specifically, `Contents/Resources/browser-extension-relay/runtime-manifest.json`
+# looked tempting as a post-sign fix for relay staging drift, but mutating any
+# bundled resource after signing invalidates the app signature. In this repo,
+# that means a build can sign/notarize/staple the app and then quietly ship a
+# broken bundle if we rewrite files afterward.
+#
+# Relay startup must still execute from `userData`, not from the bundled app
+# location. The safe model is:
+# 1. Package a live relay tree in app resources.
+# 2. Treat the bundled tree as read-only after signing.
+# 3. Copy it into `userData`.
+# 4. Verify the staged tree against the bundled tree before execution.
+#
+# If relay integrity ever drifts again, fix the source of truth before signing
+# or compare staged bytes against the bundled tree. Do not patch the `.app`
+# after signing.
+
+mac:
+  category: public.app-category.productivity
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  icon: ./resources/icons/app.icns
+  extendInfo:
+    NSCameraUsageDescription: Interpreter uses camera access when you choose a camera as a video recording source.
+    NSMicrophoneUsageDescription: Interpreter uses microphone access when you start voice input, Push to Talk, Ambient speech-to-text, or connect a microphone as an audio recording source.
+    NSSpeechRecognitionUsageDescription: Interpreter uses speech recognition to detect Ambient voice phrases and transcribe voice input when you enable voice mode.
+    NSAudioCaptureUsageDescription: Interpreter uses audio capture to record and transcribe audio only when you start voice input or connect an audio source for recording.
+  entitlements: ./build/azure-pipelines/darwin/app-entitlements.plist
+  entitlementsInherit: ./build/azure-pipelines/darwin/app-entitlements.plist
+  # Community builds are unsigned by default. Distributions can supply their
+  # own signing and notarization configuration without forking the app.
+  sign: null
+  notarize: false
+  extraResources:
+    - from: resources/oix/darwin-${arch}
+      to: oix
+    - from: resources/pdfcpu/darwin-${arch}/pdfcpu
+      to: pdfcpu/pdfcpu
+    - from: resources/qwen-asr/darwin-${arch}/qwen_asr
+      to: qwen-asr/darwin-${arch}/qwen_asr
+    - from: resources/qwen-asr/darwin-${arch}/manifest.json
+      to: qwen-asr/darwin-${arch}/manifest.json
+    - from: dist-electron/cua-driver/cua-driver
+      to: cua-driver/cua-driver
+    - from: resources/cua-driver/tool-metadata.json
+      to: cua-driver/tool-metadata.json
+    - from: server/tools/builtin-tools/cua-driver/macos-agent-activity-overlay.jxa
+      to: cua-driver/macos-agent-activity-overlay.jxa
+    - from: dist-electron/interpreter-overlay/accessibility-tree
+      to: interpreter-overlay/accessibility-tree
+    - from: dist-electron/interpreter-overlay/ax-set-focused-text
+      to: interpreter-overlay/ax-set-focused-text
+    - from: dist-electron/interpreter-overlay/focus-window
+      to: interpreter-overlay/focus-window
+    - from: dist-electron/interpreter-overlay/keyboard-monitor
+      to: interpreter-overlay/keyboard-monitor
+    - from: dist-electron/interpreter-overlay/verified-point
+      to: interpreter-overlay/verified-point
+    - from: dist-electron/interpreter-overlay/progressive-blur
+      to: interpreter-overlay/progressive-blur
+    - from: dist-electron/interpreter-overlay/speech-recognizer
+      to: interpreter-overlay/speech-recognizer
+    - from: dist-electron/interpreter-overlay/window-tracker
+      to: interpreter-overlay/window-tracker
+    - from: dist-electron/interpreter-overlay/native/window_pin.node
+      to: interpreter-overlay/native/window_pin.node
+  signIgnore:
+    - ".*\\.png$"
+    - ".*\\.jpg$"
+    - ".*\\.jpeg$"
+    - ".*\\.gif$"
+    - ".*\\.ico$"
+    - ".*\\.svg$"
+    - ".*\\.ttf$"
+    - ".*\\.woff$"
+    - ".*\\.woff2$"
+    - ".*\\.eot$"
+    - ".*\\.html$"
+    - ".*\\.css$"
+    - ".*\\.json$"
+    - ".*\\.xml$"
+    - ".*\\.txt$"
+    - ".*\\.md$"
+    - ".*\\.lproj/.*"
+    - ".*\\.pak$"
+  artifactName: ${productName}-mac-${arch}-${buildVersion}.${ext}
+
+win:
+  icon: ./resources/icons/app.ico
+  artifactName: ${productName}-win-${arch}-${buildVersion}.${ext}
+  extraResources:
+    - from: resources/oix/win32-${arch}
+      to: oix
+    - from: resources/codex/win32-${arch}/codex-command-runner.exe
+      to: codex-command-runner.exe
+    - from: resources/codex/win32-${arch}/codex-windows-sandbox-setup.exe
+      to: codex-windows-sandbox-setup.exe
+    - from: resources/pdfcpu/win32-${arch}/pdfcpu.exe
+      to: pdfcpu/pdfcpu.exe
+    - from: server/tools/builtin-tools/cua-driver/windows-uia.ps1
+      to: cua-driver/windows-uia.ps1
+    - from: dist-electron/interpreter-overlay/native/window_pin.node
+      to: interpreter-overlay/native/window_pin.node
+
+nsis:
+  perMachine: true
+
+linux:
+  icon: ./resources/icons/app.png
+  artifactName: ${productName}-linux-${arch}-${buildVersion}.${ext}
+  category: Office
+  target:
+    - target: AppImage
+      arch: x64
+    - target: deb
+      arch: x64
+  extraResources:
+    - from: resources/oix/linux-${arch}
+      to: oix
+    - from: resources/pdfcpu/linux-${arch}/pdfcpu
+      to: pdfcpu/pdfcpu
+    - from: resources/qwen-asr/linux-${arch}/qwen_asr
+      to: qwen-asr/linux-${arch}/qwen_asr
+    - from: resources/qwen-asr/linux-${arch}/manifest.json
+      to: qwen-asr/linux-${arch}/manifest.json
+
+deb:
+  # Pinned AppArmor userns profile. app-builder-lib resolves appArmorProfile
+  # relative to the project root via path.resolve(projectDir, value) (see
+  # app-builder-lib FpmTarget getResource), NOT relative to buildResources, so
+  # the value must include the resources/ prefix or the .deb build fails with
+  # ENOENT before fpm runs.
+  # electron-builder installs it to /etc/apparmor.d via the .deb post-install
+  # hook so Chromium's renderer sandbox keeps working on Ubuntu 24.04, which
+  # restricts unprivileged user namespaces by default. AppImage has no
+  # post-install hook, so it disables the sandbox at runtime instead (see
+  # electron/main.ts APPIMAGE no-sandbox switch).
+  # Prior art: Signal-Desktop ships this same userns profile to /etc/apparmor.d
+  # (signalapp/Signal-Desktop patches/app-builder-lib.patch); VS Code uses SUID
+  # chrome-sandbox (microsoft/vscode resources/linux/rpm/code.spec.template).
+  # See resources/apparmor-profile.tpl for the profile body and full citations.
+  # appArmorProfile is a deb/target option (LinuxTargetSpecificOptions), not a
+  # valid key on the linux: root in electron-builder 26.x.
+  # https://github.com/openinterpreter/iworkstation/issues/1397
+  appArmorProfile: resources/apparmor-profile.tpl
+
+dmg:
+  artifactName: ${productName}-${arch}-${buildVersion}.${ext}
+  filesystem: APFS
+  background: dmg-background.png
+  iconSize: 112
+  iconTextSize: 13
+  contents:
+    - x: 186
+      y: 210
+      type: file
+    - x: 474
+      y: 210
+      type: link
+      path: /Applications

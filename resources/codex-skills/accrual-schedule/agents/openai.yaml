@@ -1,0 +1,4 @@
+interface:
+  display_name: "Accrual Schedule"
+  short_description: "Compute accruals and draft month-end JEs"
+  default_prompt: "Use the accrual schedule skill to build a period-end accrual schedule. Compute each accrual from policy and support, cite the support, subtract amounts already booked, draft the JE, and do not post anything."

@@ -1,0 +1,80 @@
+PDF FORM INFORMATION
+===================
+
+File: sample-form.pdf
+Location: tests/test-workspace/sample-form.pdf
+
+Form Type: IRS Form W-4 (Employee's Withholding Certificate)
+Version: 2025
+Source: https://www.irs.gov/pub/irs-pdf/fw4.pdf
+Downloaded: November 16, 2024
+File Size: 188 KB
+
+FORM FIELD TYPES PRESENT:
+------------------------
+✓ AcroForm structure (confirmed via PDF inspection)
+✓ Annotations layer (confirmed)
+✓ Text input fields (name, address, SSN, etc.)
+✓ Checkbox fields (filing status, multiple jobs, etc.)
+✓ Widget annotations (interactive form elements)
+
+EXPECTED FORM FIELDS:
+--------------------
+Based on IRS Form W-4 structure, this form should contain:
+
+1. Text Inputs:
+   - First name and middle initial
+   - Last name
+   - Address
+   - City or town, state, and ZIP code
+   - Social security number (SSN)
+   - Multiple numbered line items for tax calculations
+
+2. Checkboxes:
+   - Single or Married filing separately
+   - Married filing jointly
+   - Head of household
+   - Multiple jobs or spouse works checkbox
+   - Other dependent checkbox options
+
+3. Signature Fields:
+   - Employee's signature (may be a special field type)
+   - Date field
+
+PDF.JS RENDERING:
+----------------
+When this PDF is opened in the application's PDF viewer:
+- PDF.js will render the form pages as canvases
+- An annotation layer will be created on top
+- Interactive HTML form elements will be generated:
+  * <input type="text"> for text fields
+  * <input type="checkbox"> for checkboxes
+  * <textarea> for multi-line text areas
+- These elements will have the CSS class "annotationLayer"
+- Form fields can be filled using standard web interaction
+
+TESTING:
+--------
+The Playwright tests can interact with these fields using standard selectors:
+- .annotationLayer input[type="text"]
+- .annotationLayer input[type="checkbox"]
+- .annotationLayer textarea
+
+And standard Playwright methods:
+- fill() - to enter text
+- click() - to interact with elements
+- check() - to check checkboxes
+- inputValue() - to read text values
+- isChecked() - to verify checkbox state
+
+VERIFICATION:
+------------
+To verify the PDF has form fields, you can:
+
+1. Open in Adobe Reader/Acrobat - form fields should be visible and fillable
+2. Use PDF inspection tools - look for /AcroForm and /Annots in PDF structure
+3. Open in the application - PDF.js should render the annotation layer
+4. Run the Playwright tests - all form field tests should pass
+
+This is a production-quality government form, perfect for testing real-world
+PDF form filling capabilities.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Settings"
+  short_description: "Read settings, change settings, and inspect remaining balance"
+  default_prompt: "Inspect or change Interpreter settings, and tell me how much usage is left when it matters."

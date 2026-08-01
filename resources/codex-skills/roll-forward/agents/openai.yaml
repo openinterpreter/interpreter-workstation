@@ -1,0 +1,4 @@
+interface:
+  display_name: "Roll-Forward"
+  short_description: "Build GL-tied balance roll-forwards"
+  default_prompt: "Use the roll-forward skill to build a month-end roll-forward for a balance-sheet account. Tie beginning, activity, reversals, payments, adjustments, FX, and ending balance to GL or document support, then report the foot check."

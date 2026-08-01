@@ -1,0 +1,4 @@
+interface:
+  display_name: "Wiki Lint"
+  short_description: "Health-check a markdown wiki"
+  default_prompt: "Use the wiki-lint skill workflow when the user wants a wiki maintenance pass. Do not call a tool named `wiki-lint`. Start with `interpreter_vault` action=`lint`, then inspect only the highest-signal notes needed to explain orphan notes, dangling links, missing-page candidates, contradictions, or stale synthesis. Return a prioritized list. Do not auto-fix unless asked."

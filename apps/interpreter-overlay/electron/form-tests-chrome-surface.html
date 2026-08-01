@@ -1,0 +1,4574 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Form Benchmark</title>
+  <style>
+    :root {
+      --bg-top: #f5f5f5;
+      --bg-bottom: #f5f5f5;
+      --panel: rgba(255, 255, 255, 0.98);
+      --panel-strong: #ffffff;
+      --surface: #f8fafc;
+      --surface-strong: #eef3f9;
+      --line: rgba(15, 23, 42, 0.10);
+      --line-strong: rgba(15, 23, 42, 0.16);
+      --text: #172033;
+      --muted: #607089;
+      --danger: #b42318;
+      --shadow: 0 18px 34px rgba(15, 23, 42, 0.08);
+      --accent: #0f766e;
+      --accent-soft: rgba(15, 118, 110, 0.10);
+      --accent-strong: rgba(15, 118, 110, 0.18);
+      --font-ui: "Aptos", "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+    }
+
+    body {
+      background: linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+      color: var(--text);
+      font-family: var(--font-ui);
+    }
+
+    button,
+    input,
+    textarea,
+    select {
+      font: inherit;
+    }
+
+    .theme-teal,
+    .theme-cyan,
+    .theme-sky,
+    .theme-olive,
+    .theme-sage {
+      --accent: #0f766e;
+      --accent-soft: rgba(15, 118, 110, 0.10);
+      --accent-strong: rgba(15, 118, 110, 0.18);
+    }
+
+    .theme-blue,
+    .theme-indigo {
+      --accent: #2563eb;
+      --accent-soft: rgba(37, 99, 235, 0.10);
+      --accent-strong: rgba(37, 99, 235, 0.18);
+    }
+
+    .theme-amber,
+    .theme-stone {
+      --accent: #b45309;
+      --accent-soft: rgba(180, 83, 9, 0.10);
+      --accent-strong: rgba(180, 83, 9, 0.18);
+    }
+
+    .surface-card,
+    .section-card,
+    .success-message,
+    .validation-message {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+    }
+
+    .submit-row,
+    .field-row {
+      align-items: center;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .eyebrow,
+    .small-label,
+    .field-caption,
+    .meta-copy {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .eyebrow {
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .surface-card {
+      overflow: hidden;
+      margin: 12px auto;
+      max-width: 860px;
+      min-height: calc(100vh - 24px);
+      padding: 20px;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .surface-header {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .surface-title {
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      margin: 0;
+    }
+
+    .surface-copy {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      margin: 0;
+    }
+
+    .surface-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .meta-pill {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 6px 10px;
+    }
+
+    .surface-scroll {
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      gap: 14px;
+      min-height: 0;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .section-card {
+      background: transparent;
+      border: none;
+      border-radius: 0;
+      box-shadow: none;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 0;
+    }
+
+    .section-card + .section-card {
+      border-top: 1px solid var(--line);
+      padding-top: 12px;
+    }
+
+    .section-title {
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .fields-grid {
+      display: grid;
+      gap: 14px;
+      grid-template-columns: 1fr;
+    }
+
+    .fields-grid.two-column {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .form-field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .form-field.full-width {
+      grid-column: 1 / -1;
+    }
+
+    .form-field label {
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .required-indicator {
+      color: var(--danger);
+      font-weight: 800;
+    }
+
+    .form-field input,
+    .form-field textarea,
+    .form-field select,
+    .select-trigger {
+      background: var(--panel-strong);
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      color: var(--text);
+      min-height: 44px;
+      padding: 10px 12px;
+      width: 100%;
+    }
+
+    .form-field textarea {
+      min-height: 112px;
+      resize: vertical;
+    }
+
+    .custom-select {
+      position: relative;
+    }
+
+    .select-trigger {
+      align-items: center;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      text-align: left;
+    }
+
+    .select-trigger.placeholder {
+      color: var(--muted);
+    }
+
+    .select-menu {
+      background: var(--panel-strong);
+      border: 1px solid var(--line-strong);
+      border-radius: 14px;
+      box-shadow: 0 22px 34px rgba(15, 23, 42, 0.12);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      left: 0;
+      max-height: 220px;
+      overflow: auto;
+      padding: 6px;
+      position: absolute;
+      right: 0;
+      top: calc(100% + 6px);
+      z-index: 20;
+    }
+
+    .select-menu[hidden] {
+      display: none;
+    }
+
+    .select-option {
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      color: var(--text);
+      cursor: pointer;
+      min-height: 38px;
+      padding: 8px 10px;
+      text-align: left;
+    }
+
+    .select-option:hover,
+    .select-option.highlighted,
+    .select-option:focus {
+      background: var(--accent-soft);
+      border-color: var(--accent-strong);
+      outline: none;
+    }
+
+    .surface-checkout-shipping-ax-trap {
+      --bg-top: #f6f6f6;
+      --bg-bottom: #f6f6f6;
+      --panel: rgba(255, 255, 255, 0.98);
+      --panel-strong: #ffffff;
+      --surface: #f4f4f4;
+      --surface-strong: #efefef;
+      --line: rgba(68, 64, 60, 0.10);
+      --line-strong: rgba(68, 64, 60, 0.18);
+      --text: #1c1917;
+      --muted: #6b645c;
+      --accent: #111827;
+      --accent-soft: rgba(17, 24, 39, 0.06);
+      --accent-strong: rgba(17, 24, 39, 0.16);
+      --shadow: 0 12px 24px rgba(28, 25, 23, 0.04);
+      --font-ui: "Helvetica Neue", "Arial", sans-serif;
+    }
+
+    .surface-checkout-shipping-ax-trap .surface-card {
+      background: transparent;
+      border: none;
+      border-radius: 0;
+      box-shadow: none;
+      margin: 0 auto;
+      max-width: 1120px;
+      min-height: 100vh;
+      padding: 16px 18px 28px;
+    }
+
+    .benchmark-two-up {
+      align-items: start;
+      display: grid;
+      gap: 18px;
+      grid-template-columns: 380px minmax(0, 1fr);
+    }
+
+    .benchmark-source-pane {
+      background: #fff;
+      border: 1px solid rgba(68, 64, 60, 0.08);
+      min-width: 0;
+      padding: 10px 12px 14px;
+    }
+
+    .benchmark-source-pane .source-app-row {
+      align-items: baseline;
+      display: flex;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .benchmark-source-pane .source-app-name {
+      color: #1f2937;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .benchmark-source-pane .source-workspace {
+      color: #9a8f84;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: none;
+    }
+
+    .benchmark-source-card {
+      border: 1px solid rgba(68, 64, 60, 0.08);
+      border-radius: 10px;
+      padding: 10px 12px;
+    }
+
+    .benchmark-source-title {
+      color: #111827;
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 2px;
+    }
+
+    .benchmark-source-subtitle {
+      color: #8a8178;
+      font-size: 11px;
+      margin-bottom: 8px;
+    }
+
+    .benchmark-source-pill {
+      align-items: center;
+      background: #f3f4f6;
+      border-radius: 999px;
+      color: #6b7280;
+      display: inline-flex;
+      font-size: 10px;
+      font-weight: 600;
+      margin-bottom: 10px;
+      padding: 2px 8px;
+    }
+
+    .benchmark-source-section {
+      border: 1px solid rgba(68, 64, 60, 0.08);
+      border-radius: 10px;
+      margin-top: 10px;
+      padding: 10px 12px;
+    }
+
+    .benchmark-source-section-title {
+      color: #4b5563;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+    }
+
+    .benchmark-source-line {
+      color: #1f2937;
+      font-size: 13px;
+      line-height: 1.45;
+      margin-bottom: 6px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .benchmark-source-line:last-child {
+      margin-bottom: 0;
+    }
+
+    .checkout-site-header {
+      margin: -16px -18px 12px;
+    }
+
+    .checkout-brand-row {
+      align-items: center;
+      background: #fff;
+      border-bottom: 1px solid rgba(68, 64, 60, 0.08);
+      display: flex;
+      justify-content: space-between;
+      min-height: 34px;
+      padding: 0 44px;
+    }
+
+    .checkout-brand-mark {
+      color: #111;
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      line-height: 1;
+    }
+
+    .checkout-secure-status {
+      align-items: center;
+      color: #6aa84f;
+      display: inline-flex;
+      font-size: 13px;
+      font-weight: 600;
+      gap: 6px;
+      white-space: nowrap;
+    }
+
+    .checkout-secure-status::before {
+      align-items: center;
+      background: #6aa84f;
+      border-radius: 999px;
+      color: #fff;
+      content: "🔒";
+      display: inline-flex;
+      font-size: 9px;
+      height: 18px;
+      justify-content: center;
+      width: 18px;
+    }
+
+    .checkout-perks-strip {
+      align-items: center;
+      background: #f1f8eb;
+      color: #69a44b;
+      display: flex;
+      font-size: 10px;
+      gap: 14px;
+      min-height: 28px;
+      padding: 0 44px;
+    }
+
+    .checkout-perks-strip span {
+      white-space: nowrap;
+    }
+
+    .surface-checkout-shipping-ax-trap .surface-header {
+      border-bottom: 1px solid rgba(68, 64, 60, 0.08);
+      gap: 4px;
+      margin-bottom: 6px;
+      padding-bottom: 6px;
+    }
+
+    .checkout-progress {
+      color: #8a8178;
+      display: flex;
+      font-size: 11px;
+      gap: 10px;
+      justify-content: center;
+      margin-bottom: 4px;
+    }
+
+    .checkout-progress .current {
+      color: #4b5563;
+      font-weight: 700;
+    }
+
+    .checkout-layout {
+      display: grid;
+      gap: 20px;
+      grid-template-columns: minmax(0, 1fr) 332px;
+      align-items: start;
+    }
+
+    .checkout-main-column {
+      background: #fff;
+      border: 1px solid rgba(68, 64, 60, 0.08);
+      min-width: 0;
+      padding: 8px 12px 12px;
+    }
+
+    .checkout-sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .checkout-summary-card {
+      background: #fff;
+      border: 1px solid rgba(68, 64, 60, 0.08);
+      padding: 14px 14px 16px;
+    }
+
+    .checkout-summary-card h3 {
+      font-size: 18px;
+      font-weight: 700;
+      margin: 0 0 10px;
+    }
+
+    @media (max-width: 1180px) {
+      .benchmark-two-up {
+        grid-template-columns: 1fr;
+      }
+
+      .expense-layout {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .checkout-summary-row {
+      display: flex;
+      font-size: 14px;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .checkout-summary-row.muted {
+      color: #78716c;
+      font-size: 13px;
+    }
+
+    .checkout-summary-row.total {
+      color: #ef6a44;
+      font-size: 17px;
+      font-weight: 700;
+      margin-top: 10px;
+    }
+
+    .checkout-reward-card {
+      background: linear-gradient(180deg, #fff6eb 0%, #fff 100%);
+      border: 1px solid rgba(239, 106, 68, 0.14);
+    }
+
+    .checkout-reward-banner {
+      background: linear-gradient(135deg, rgba(255, 204, 142, 0.28), rgba(255, 232, 204, 0.64));
+      color: #9a5c24;
+      font-size: 13px;
+      line-height: 1.4;
+      padding: 12px;
+    }
+
+    .checkout-action-card {
+      background: #fff;
+      border: 1px solid rgba(68, 64, 60, 0.08);
+      padding: 14px 14px 16px;
+    }
+
+    .checkout-action-card h4 {
+      color: #292524;
+      font-size: 15px;
+      font-weight: 700;
+      margin: 0 0 10px;
+    }
+
+    .checkout-inline-fields {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: 1fr auto;
+    }
+
+    .checkout-inline-fields .ghost-input {
+      align-items: center;
+      background: #f6f6f6;
+      border: 1px solid rgba(68, 64, 60, 0.12);
+      color: #a8a29e;
+      display: inline-flex;
+      font-size: 13px;
+      min-height: 34px;
+      padding: 0 10px;
+    }
+
+    .checkout-inline-fields .ghost-button {
+      align-items: center;
+      background: #e7e5e4;
+      border: 1px solid rgba(68, 64, 60, 0.12);
+      color: #b0b0b0;
+      display: inline-flex;
+      font-size: 13px;
+      font-weight: 700;
+      justify-content: center;
+      min-height: 34px;
+      min-width: 78px;
+      padding: 0 14px;
+    }
+
+    .checkout-card-note {
+      color: #78716c;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .surface-checkout-shipping-ax-trap .surface-title {
+      font-size: 17px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .surface-checkout-shipping-ax-trap .surface-copy,
+    .surface-checkout-shipping-ax-trap .surface-meta,
+    .surface-checkout-shipping-ax-trap .section-title,
+    .surface-checkout-shipping-ax-trap .submit-row .small-label {
+      display: none;
+    }
+
+    .surface-checkout-shipping-ax-trap .form-field label {
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .surface-checkout-shipping-ax-trap .field-caption {
+      font-size: 12px;
+    }
+
+    .surface-checkout-shipping-ax-trap .fields-grid.two-column {
+      column-gap: 12px;
+      row-gap: 8px;
+    }
+
+    .surface-expense-report-js-lab .surface-card {
+      background:
+        radial-gradient(circle at top right, rgba(15, 23, 42, 0.08), transparent 28%),
+        linear-gradient(180deg, #f7fafc 0%, #eef3f8 100%);
+      border-radius: 28px;
+      box-shadow: 0 26px 72px rgba(15, 23, 42, 0.12);
+      padding: 18px;
+    }
+
+    .expense-shell-header {
+      align-items: center;
+      background: rgba(255, 255, 255, 0.86);
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      border-radius: 18px;
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 14px;
+      padding: 14px 16px;
+    }
+
+    .expense-shell-copy {
+      display: grid;
+      gap: 4px;
+    }
+
+    .expense-shell-kicker {
+      color: #64748b;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+
+    .expense-shell-title {
+      color: #0f172a;
+      font-size: 21px;
+      font-weight: 700;
+      letter-spacing: -0.05em;
+    }
+
+    .expense-shell-meta {
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .expense-chip {
+      background: rgba(15, 23, 42, 0.04);
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      border-radius: 999px;
+      color: #334155;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 5px 10px;
+    }
+
+    .expense-chip.accent {
+      background: rgba(14, 116, 144, 0.1);
+      border-color: rgba(14, 116, 144, 0.18);
+      color: #0f766e;
+    }
+
+    .expense-layout {
+      display: grid;
+      flex: 1;
+      gap: 18px;
+      grid-template-columns: minmax(0, 1fr) 292px;
+      align-items: start;
+      min-height: 0;
+    }
+
+    .expense-main-column {
+      background: rgba(255, 255, 255, 0.94);
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      border-radius: 22px;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      padding: 16px;
+    }
+
+    .expense-sidebar {
+      display: grid;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .surface-expense-report-js-lab .expense-main-column .surface-scroll {
+      flex: 1;
+      min-height: 0;
+    }
+
+    .expense-card {
+      background: rgba(255, 255, 255, 0.92);
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      border-radius: 18px;
+      display: grid;
+      gap: 12px;
+      padding: 14px;
+    }
+
+    .expense-card h3,
+    .expense-card h4 {
+      color: #0f172a;
+      font-size: 15px;
+      font-weight: 700;
+      margin: 0;
+    }
+
+    .expense-card p,
+    .expense-card li,
+    .expense-card span {
+      color: #475569;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .expense-card ul {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding-left: 16px;
+    }
+
+    .expense-summary-grid {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .expense-stat {
+      background: rgba(15, 23, 42, 0.03);
+      border: 1px solid rgba(15, 23, 42, 0.07);
+      border-radius: 14px;
+      display: grid;
+      gap: 4px;
+      padding: 10px;
+    }
+
+    .expense-stat strong {
+      color: #0f172a;
+      font-size: 18px;
+      letter-spacing: -0.04em;
+    }
+
+    .expense-upload-dock {
+      align-items: center;
+      background: linear-gradient(135deg, rgba(14, 116, 144, 0.08), rgba(14, 165, 233, 0.04));
+      border: 1px dashed rgba(14, 116, 144, 0.3);
+      border-radius: 16px;
+      color: #0f172a;
+      display: flex;
+      justify-content: center;
+      min-height: 84px;
+      text-align: center;
+    }
+
+    .surface-expense-report-js-lab .surface-header {
+      border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+      margin-bottom: 10px;
+      padding-bottom: 12px;
+    }
+
+    .surface-expense-report-js-lab .surface-title {
+      color: #0f172a;
+      font-size: 28px;
+    }
+
+    .surface-expense-report-js-lab .surface-copy {
+      color: #475569;
+    }
+
+    .surface-expense-report-js-lab .section-card,
+    .surface-expense-report-js-lab .validation-message,
+    .surface-expense-report-js-lab .success-message,
+    .surface-expense-report-js-lab .submit-row {
+      border-radius: 18px;
+    }
+
+    .surface-checkout-shipping-ax-trap .addr-field {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      min-width: 0;
+      position: relative;
+    }
+
+    .surface-checkout-shipping-ax-trap .addr-field.grid-col-12 {
+      grid-column: 1 / -1;
+    }
+
+    .surface-checkout-shipping-ax-trap .sui-popover__trigger,
+    .surface-checkout-shipping-ax-trap .sui-select__trigger {
+      width: 100%;
+    }
+
+    .surface-checkout-shipping-ax-trap .sui-input-titlewarp {
+      background: var(--panel-strong);
+      border: 1px solid var(--line-strong);
+      border-radius: 4px;
+      display: flex;
+      flex-direction: column;
+      min-height: 44px;
+      width: 100%;
+    }
+
+    .surface-checkout-shipping-ax-trap .sui-input-titlewarp__preblock {
+      align-items: stretch;
+      display: flex;
+      flex: 0 0 auto;
+    }
+
+    .surface-checkout-shipping-ax-trap .input-preblock-module,
+    .surface-checkout-shipping-ax-trap .exit-list__item {
+      align-items: center;
+      border-right: 1px solid var(--line);
+      display: inline-flex;
+      font-size: 13px;
+      min-width: 78px;
+      padding: 0 12px;
+      white-space: nowrap;
+    }
+
+    .surface-checkout-shipping-ax-trap .sui-input-title,
+    .surface-checkout-shipping-ax-trap .sui-textarea-title {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+    }
+
+    .surface-checkout-shipping-ax-trap .sui-input-title__bd,
+    .surface-checkout-shipping-ax-trap .sui-textarea-title {
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      width: 100%;
+    }
+
+    .surface-checkout-shipping-ax-trap .sui-input-title__name,
+    .surface-checkout-shipping-ax-trap .sui-textarea-title__name {
+      color: var(--text);
+      font-size: 11px;
+      font-weight: 500;
+      padding: 6px 8px 0;
+    }
+
+    .surface-checkout-shipping-ax-trap .sui-shell-field-root.compact-shell .sui-input-title__name {
+      display: none;
+    }
+
+    .surface-checkout-shipping-ax-trap .sui-input-title__inner,
+    .surface-checkout-shipping-ax-trap .sui-textarea-title__inner {
+      appearance: none;
+      background: transparent;
+      border: 0;
+      color: var(--text);
+      font-size: 14px;
+      min-height: 32px;
+      outline: none;
+      padding: 0 36px 8px 10px;
+      width: 100%;
+    }
+
+    .surface-checkout-shipping-ax-trap .sui-shell-field-root.is-open > .sui-input-titlewarp,
+    .surface-checkout-shipping-ax-trap .sui-address-finder-root.is-open .sui-input {
+      box-shadow: 0 0 0 1px rgba(20, 20, 18, 0.12);
+      min-height: 48px;
+    }
+
+    .surface-checkout-shipping-ax-trap .sui-shell-field-root.is-open.compact-shell > .sui-input-titlewarp {
+      min-height: 46px;
+    }
+
+    .surface-checkout-shipping-ax-trap .sui-shell-field-root.compact-shell .sui-input-title__inner {
+      min-height: 42px;
+      padding: 0 10px;
+    }
+
+    .surface-checkout-shipping-ax-trap .sui-shell-field-root.compact-shell .sui-input-title__bd {
+      min-height: 42px;
+    }
+
+    .surface-checkout-shipping-ax-trap textarea.sui-textarea-title__inner {
+      min-height: 38px;
+      resize: none;
+    }
+
+    .surface-checkout-shipping-ax-trap .sui-input-title__inner[readonly],
+    .surface-checkout-shipping-ax-trap .sui-textarea-title__inner[readonly] {
+      cursor: text;
+    }
+
+    .surface-checkout-shipping-ax-trap .sui-input-title__suffix {
+      align-items: center;
+      color: var(--muted);
+      display: inline-flex;
+      justify-content: center;
+      min-height: 42px;
+      position: absolute;
+      right: 10px;
+      top: 0;
+    }
+
+    .surface-checkout-shipping-ax-trap .sui-textarea-title__limit {
+      display: none;
+    }
+
+    .surface-checkout-shipping-ax-trap .sui-textarea-title__msg {
+      color: var(--danger);
+      display: none;
+      font-size: 11px;
+      line-height: 1.4;
+      padding: 0 10px 8px;
+    }
+
+    .surface-checkout-shipping-ax-trap .addr-search-content {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .surface-checkout-shipping-ax-trap .addr-search-content__title {
+      font-size: 11px;
+      font-weight: 700;
+      margin: 0;
+    }
+
+    .surface-checkout-shipping-ax-trap .addr-search-content__desc {
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.2;
+      margin: 0;
+    }
+
+    .surface-checkout-shipping-ax-trap .sui-input {
+      align-items: center;
+      background: var(--panel-strong);
+      border: 1px solid var(--line-strong);
+      border-radius: 4px;
+      display: flex;
+      min-height: 44px;
+      width: 100%;
+    }
+
+    .surface-checkout-shipping-ax-trap .sui-input__prefix,
+    .surface-checkout-shipping-ax-trap .sui-input__suffix {
+      color: var(--muted);
+      display: inline-flex;
+      flex: 0 0 auto;
+      padding: 0 12px;
+    }
+
+    .surface-checkout-shipping-ax-trap .sui-input__inner {
+      appearance: none;
+      background: transparent;
+      border: 0;
+      color: var(--text);
+      flex: 1 1 auto;
+      font-size: 14px;
+      min-height: 40px;
+      outline: none;
+      padding: 8px 0;
+      width: 100%;
+    }
+
+    .surface-checkout-shipping-ax-trap .addr-input__note {
+      color: var(--danger);
+      display: none;
+      font-size: 11px;
+      line-height: 1.4;
+      margin-top: 4px;
+    }
+
+    .surface-checkout-shipping-ax-trap .sui-select__sr-only {
+      height: 1px;
+      overflow: hidden;
+      position: absolute;
+      width: 1px;
+    }
+
+    .surface-checkout-shipping-ax-trap .form-field input,
+    .surface-checkout-shipping-ax-trap .form-field textarea,
+    .surface-checkout-shipping-ax-trap .form-field select,
+    .surface-checkout-shipping-ax-trap .select-trigger,
+    .surface-checkout-shipping-ax-trap .checkout-shell,
+    .surface-checkout-shipping-ax-trap .checkout-edit-input {
+      border-radius: 4px;
+      min-height: 44px;
+    }
+
+    .surface-checkout-shipping-ax-trap .sui-shell-field-root.is-invalid > .sui-input-titlewarp,
+    .surface-checkout-shipping-ax-trap .sui-shell-field-root.is-invalid > .sui-input-titlewarp.addr-input__title,
+    .surface-checkout-shipping-ax-trap .sui-shell-field-root.is-invalid > .sui-input-titlewarp > .sui-input-title__bd,
+    .surface-checkout-shipping-ax-trap .sui-shell-field-root.is-invalid > .sui-input-titlewarp textarea,
+    .surface-checkout-shipping-ax-trap .sui-shell-field-root.is-invalid > .sui-input-titlewarp input {
+      border-color: rgba(239, 68, 68, 0.55);
+      box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.25);
+    }
+
+    .checkout-address-root,
+    .checkout-combobox-root {
+      position: relative;
+    }
+
+    .checkout-shell {
+      align-items: center;
+      background: var(--panel-strong);
+      border: 1px solid var(--line-strong);
+      color: var(--text);
+      cursor: text;
+      display: flex;
+      gap: 12px;
+      justify-content: space-between;
+      padding: 10px 12px;
+      width: 100%;
+    }
+
+    .checkout-shell-value {
+      color: var(--text);
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+
+    .checkout-shell.placeholder .checkout-shell-value {
+      color: var(--muted);
+    }
+
+    .checkout-shell-caret {
+      color: var(--muted);
+      flex: 0 0 auto;
+      font-size: 11px;
+    }
+
+    .checkout-edit-input {
+      background: var(--panel-strong);
+      border: 1px solid var(--line-strong);
+      color: var(--text);
+      padding: 10px 12px;
+      width: 100%;
+    }
+
+    .checkout-popover {
+      background: var(--panel-strong);
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      box-shadow: 0 24px 40px rgba(28, 25, 23, 0.12);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      left: 0;
+      max-height: 220px;
+      overflow: auto;
+      padding: 6px;
+      position: absolute;
+      right: 0;
+      top: calc(100% + 6px);
+      z-index: 35;
+    }
+
+    .checkout-popover[hidden] {
+      display: none;
+    }
+
+    .checkout-option,
+    .checkout-autocomplete-option {
+      align-items: center;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 0;
+      color: var(--text);
+      cursor: pointer;
+      display: flex;
+      min-height: 38px;
+      padding: 10px 12px;
+      text-align: left;
+      width: 100%;
+    }
+
+    .checkout-option:hover,
+    .checkout-option.highlighted,
+    .checkout-option:focus,
+    .checkout-autocomplete-option:hover,
+    .checkout-autocomplete-option.highlighted,
+    .checkout-autocomplete-option:focus {
+      background: var(--accent-soft);
+      border-color: var(--accent-strong);
+      outline: none;
+    }
+
+    .checkout-empty-state {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      padding: 8px 10px;
+    }
+
+    .sui-shell-field-root,
+    .sui-address-finder-root {
+      position: relative;
+    }
+
+    .sui-address-finder-overlay {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      inset-inline: 0;
+      position: absolute;
+      top: calc(100% - 10px);
+      z-index: 96;
+    }
+
+    .sui-address-finder-overlay[hidden] {
+      display: none;
+    }
+
+    .sui-address-finder-overlay .sui-search-result {
+      background: rgba(255, 255, 255, 0.995);
+      border-color: rgba(68, 64, 60, 0.18);
+      box-shadow: 0 24px 48px rgba(28, 25, 23, 0.2);
+      margin-top: 0;
+      min-height: 328px;
+      position: static;
+      width: auto;
+      z-index: auto;
+    }
+
+    .sui-shell,
+    .sui-address-shell {
+      align-items: stretch;
+      background: var(--panel-strong);
+      border: 1px solid var(--line-strong);
+      border-radius: 2px;
+      display: flex;
+      min-height: 48px;
+      width: 100%;
+    }
+
+    .sui-shell.placeholder .sui-shell__display,
+    .sui-address-shell.placeholder .sui-shell__display {
+      color: var(--muted);
+    }
+
+    .sui-shell__preblock {
+      align-items: center;
+      border-right: 1px solid var(--line);
+      color: var(--text);
+      display: inline-flex;
+      flex: 0 0 auto;
+      font-size: 13px;
+      font-weight: 500;
+      min-width: 78px;
+      padding: 0 12px;
+      white-space: nowrap;
+    }
+
+    .sui-shell__prefix {
+      align-items: center;
+      color: var(--muted);
+      display: inline-flex;
+      flex: 0 0 auto;
+      font-size: 14px;
+      padding-left: 12px;
+    }
+
+    .sui-shell__display,
+    .sui-shell__live {
+      appearance: none;
+      background: transparent;
+      border: 0;
+      color: var(--text);
+      flex: 1 1 auto;
+      font-size: 14px;
+      min-height: 46px;
+      outline: none;
+      padding: 10px 12px;
+      width: 100%;
+    }
+
+    textarea.sui-shell__display,
+    textarea.sui-shell__live {
+      min-height: 58px;
+      resize: none;
+    }
+
+    .sui-shell__display[readonly] {
+      cursor: text;
+    }
+
+    .sui-shell__suffix {
+      align-items: center;
+      color: var(--muted);
+      display: inline-flex;
+      flex: 0 0 auto;
+      font-size: 12px;
+      padding: 0 12px;
+    }
+
+    .sui-search-result {
+      background: var(--panel-strong);
+      border: 1px solid rgba(68, 64, 60, 0.14);
+      border-radius: 2px;
+      box-shadow: 0 18px 34px rgba(28, 25, 23, 0.12);
+      margin-top: 6px;
+      overflow: hidden;
+      position: absolute;
+      width: 100%;
+      z-index: 42;
+    }
+
+    .sui-search-result__container {
+      max-height: 210px;
+      overflow: auto;
+    }
+
+    .sui-address-finder-overlay .sui-search-result__container {
+      max-height: 276px;
+      min-height: 252px;
+    }
+
+    .sui-address-finder-root.is-open,
+    .sui-shell-field-root.is-open {
+      z-index: 64;
+    }
+
+    .interactive-popover-blocker {
+      background: rgba(255, 255, 255, 0.04);
+      inset: 0;
+      pointer-events: none;
+      position: fixed;
+      z-index: 92;
+    }
+
+    .interactive-popover-blocker[hidden] {
+      display: none;
+    }
+
+    .sui-search-result[hidden] {
+      display: none;
+    }
+
+    .sui-search-result__container,
+    .sui-select__menu {
+      list-style: none;
+      margin: 0;
+      max-height: 220px;
+      overflow: auto;
+      padding: 6px;
+    }
+
+    .sui-select-option__group {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    .sui-select-option__group-title {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 6px 10px 4px;
+    }
+
+    .sui-select-option,
+    .sui-address-option {
+      align-items: center;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      color: var(--text);
+      cursor: pointer;
+      display: flex;
+      font-size: 13px;
+      gap: 8px;
+      min-height: 36px;
+      padding: 8px 10px;
+      text-align: left;
+      width: 100%;
+    }
+
+    .sui-select-option:hover,
+    .sui-select-option.highlighted,
+    .sui-address-option:hover,
+    .sui-address-option.highlighted {
+      background: var(--accent-soft);
+      border-color: var(--accent-strong);
+      outline: none;
+    }
+
+    .sui-search-result-footer {
+      align-items: center;
+      border-top: 1px solid var(--line);
+      display: flex;
+      gap: 8px;
+      justify-content: space-between;
+      padding: 10px 12px;
+    }
+
+    .sui-search-result-footer .tips {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .manual-btn {
+      background: transparent;
+      border: 0;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 0;
+      text-decoration: underline;
+    }
+
+    .radio-group,
+    .checkbox-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .radio-option,
+    .checkbox-option {
+      align-items: center;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      display: flex;
+      gap: 6px;
+      padding: 8px 12px;
+    }
+
+    .submit-row {
+      justify-content: space-between;
+      border-top: 1px solid var(--line);
+      padding-top: 12px;
+    }
+
+    .primary-button {
+      background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 86%, white 14%), color-mix(in srgb, var(--accent) 72%, black 28%));
+      border: none;
+      border-radius: 12px;
+      color: white;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 800;
+      min-height: 44px;
+      padding: 10px 16px;
+    }
+
+    .primary-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
+    .validation-message,
+    .success-message {
+      display: none;
+      padding: 12px 14px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .validation-message {
+      background: rgba(254, 242, 242, 0.98);
+      border-color: rgba(239, 68, 68, 0.18);
+      color: #991b1b;
+    }
+
+    .success-message {
+      background: #ecfdf5;
+      border-color: rgba(15, 118, 110, 0.18);
+      color: #065f46;
+    }
+
+    .surface-checkout-shipping-ax-trap .validation-message,
+    .surface-checkout-shipping-ax-trap .success-message {
+      border-radius: 2px;
+      box-shadow: none;
+    }
+
+    .surface-checkout-shipping-ax-trap .primary-button {
+      border-radius: 2px;
+      font-size: 14px;
+      min-height: 44px;
+    }
+
+    .surface-checkout-shipping-ax-trap .addr-search-content__title {
+      font-size: 14px;
+      font-weight: 500;
+      margin: 0 0 4px;
+    }
+
+    .surface-checkout-shipping-ax-trap .addr-search-content__desc {
+      color: #6b645c;
+      font-size: 12px;
+      margin: 0 0 6px;
+    }
+
+    .form-field.invalid label,
+    .form-field.invalid .field-caption {
+      color: #991b1b;
+    }
+
+    .form-field.invalid input,
+    .form-field.invalid textarea,
+    .form-field.invalid select,
+    .form-field.invalid .select-trigger,
+    .form-field.invalid .radio-option,
+    .form-field.invalid .checkbox-option {
+      border-color: rgba(239, 68, 68, 0.55);
+      box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.10);
+    }
+
+    .form-visual-probe {
+      background: #ffffff;
+      display: block;
+      object-fit: fill;
+      pointer-events: none;
+      position: fixed;
+      z-index: 2147483647;
+    }
+
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="interactive-popover-blocker" class="interactive-popover-blocker" hidden aria-hidden="true"></div>
+
+  <script>
+    const HARNESS_CONFIG = __FORM_TEST_CONFIG__;
+    const appRoot = document.getElementById('app');
+    const interactivePopoverBlocker = document.getElementById('interactive-popover-blocker');
+    const DEBUG_OPEN_FIELD = HARNESS_CONFIG.debugOpen || null;
+    let currentSessionId = null;
+    let currentStateRequestId = 0;
+    let currentRuntimeConfig = null;
+    let bootstrapPollTimer = null;
+    let stateHeartbeatTimer = null;
+    let customSelectState = new Map();
+    let checkoutComboboxState = new Map();
+    let checkoutAddressState = new Map();
+    let sheinShellFieldState = new Map();
+    let sheinAddressFinderState = new Map();
+    let currentVisualProbe = null;
+    let reportStateTimer = null;
+    let reportStateMicrotaskQueued = false;
+    let reportStateInFlight = false;
+    const FORM_DEBUG_EVENT_LIMIT = 1500;
+    let formDebugEventSeq = 0;
+    const formDebugEvents = [];
+    let lastReportedDebugEventSeq = 0;
+
+    function reportPageError(context, error) {
+      if (!HARNESS_CONFIG.reportStateUrl || !currentSessionId) {
+        return;
+      }
+      const payload = JSON.stringify({
+        sessionId: currentSessionId,
+        context,
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? String(error.stack || '') : '',
+      });
+      const errorUrl = HARNESS_CONFIG.reportStateUrl.replace(/\/session-state$/, '/session-state-error');
+      try {
+        if (navigator.sendBeacon) {
+          const ok = navigator.sendBeacon(errorUrl, new Blob([payload], { type: 'application/json' }));
+          if (ok) {
+            return;
+          }
+        }
+      } catch {}
+      void fetch(errorUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+        keepalive: true,
+      }).catch(() => {});
+    }
+
+    function syncInteractivePopoverBlocker() {
+      const sheinShellOpen = Array.from(sheinShellFieldState.entries()).some(([root, state]) => {
+        return root.classList.contains('is-open') || (!state.popover.hidden);
+      });
+      const sheinAddressOpen = Array.from(sheinAddressFinderState.entries()).some(([root, state]) => {
+        return root.classList.contains('is-open') || (!state.popover.hidden);
+      });
+      interactivePopoverBlocker.hidden = !(sheinShellOpen || sheinAddressOpen);
+    }
+
+    function syncVisualProbe(probe) {
+      currentVisualProbe = probe && probe.dataUrl && probe.bounds ? probe : null;
+      let image = document.getElementById('form-target-visual-probe');
+      if (!currentVisualProbe) {
+        image?.remove();
+        return;
+      }
+      if (!image) {
+        image = document.createElement('img');
+        image.id = 'form-target-visual-probe';
+        image.className = 'form-visual-probe';
+        image.alt = currentVisualProbe.label || 'target visual probe';
+        document.body.appendChild(image);
+      }
+      image.src = currentVisualProbe.dataUrl;
+      image.style.left = `${Math.round(currentVisualProbe.bounds.x)}px`;
+      image.style.top = `${Math.round(currentVisualProbe.bounds.y)}px`;
+      image.style.width = `${Math.round(currentVisualProbe.bounds.width)}px`;
+      image.style.height = `${Math.round(currentVisualProbe.bounds.height)}px`;
+    }
+
+    function getVisualProbeDebugState() {
+      const image = document.getElementById('form-target-visual-probe');
+      if (!(image instanceof HTMLElement) || !currentVisualProbe) {
+        return null;
+      }
+      const rect = image.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) {
+        return null;
+      }
+      const screenLeft = window.screenX + Math.round((window.outerWidth - window.innerWidth) / 2);
+      const screenTop = window.screenY + Math.round(window.outerHeight - window.innerHeight);
+      return {
+        id: currentVisualProbe.id || '',
+        viewportBounds: {
+          x: Math.round(rect.left),
+          y: Math.round(rect.top),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+        },
+        screenBounds: {
+          x: Math.round(screenLeft + rect.left),
+          y: Math.round(screenTop + rect.top),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+        },
+        devicePixelRatio: window.devicePixelRatio || 1,
+      };
+    }
+
+    function insertEditorBeforeReference(container, editor, reference) {
+      if (reference && reference.parentNode instanceof HTMLElement) {
+        reference.parentNode.insertBefore(editor, reference);
+        return;
+      }
+      container.appendChild(editor);
+    }
+
+    function createElement(tag, className, text) {
+      const element = document.createElement(tag);
+      if (className) {
+        element.className = className;
+      }
+      if (text !== undefined) {
+        element.textContent = text;
+      }
+      return element;
+    }
+
+    function truncateDebugText(value, maxLength = 140) {
+      const normalized = String(value ?? '').replace(/\s+/g, ' ').trim();
+      if (normalized.length <= maxLength) {
+        return normalized;
+      }
+      return `${normalized.slice(0, maxLength - 1)}…`;
+    }
+
+    function getClosestFormFieldId(node) {
+      if (!(node instanceof Element)) {
+        return null;
+      }
+      return node.closest('.form-field[data-form-field-id]')?.dataset.formFieldId || null;
+    }
+
+    function describeDebugElement(node) {
+      if (!(node instanceof Element)) {
+        return null;
+      }
+
+      const description = {
+        tag: node.tagName.toLowerCase(),
+      };
+
+      const fieldId = getClosestFormFieldId(node);
+      if (fieldId) {
+        description.fieldId = fieldId;
+      }
+
+      const role = node.getAttribute('role');
+      if (role) {
+        description.role = role;
+      }
+
+      if (node instanceof HTMLInputElement) {
+        description.inputType = node.type;
+        if (node.type !== 'hidden') {
+          description.value = truncateDebugText(node.value);
+        }
+        if (node.type === 'checkbox' || node.type === 'radio') {
+          description.checked = node.checked;
+        }
+      } else if (node instanceof HTMLTextAreaElement || node instanceof HTMLSelectElement) {
+        description.value = truncateDebugText(node.value);
+      } else if (node.getAttribute('value')) {
+        description.value = truncateDebugText(node.getAttribute('value'));
+      }
+
+      const ariaLabel = node.getAttribute('aria-label');
+      if (ariaLabel) {
+        description.ariaLabel = truncateDebugText(ariaLabel);
+      }
+
+      const title = node.getAttribute('title');
+      if (title && title !== ariaLabel) {
+        description.title = truncateDebugText(title);
+      }
+
+      if (node.id) {
+        description.id = node.id;
+      }
+
+      if (node.className && typeof node.className === 'string') {
+        description.className = truncateDebugText(node.className, 120);
+      }
+
+      const text = truncateDebugText(node.textContent || '', 90);
+      if (text) {
+        description.text = text;
+      }
+
+      const expanded = node.getAttribute('aria-expanded');
+      if (expanded != null) {
+        description.expanded = expanded;
+      }
+
+      return description;
+    }
+
+    function getSelectionSummary() {
+      const docSelection = document.getSelection();
+      if (!docSelection || docSelection.rangeCount === 0) {
+        return null;
+      }
+
+      const summary = {
+        isCollapsed: docSelection.isCollapsed,
+        text: truncateDebugText(docSelection.toString(), 160),
+      };
+
+      const anchorNode = docSelection.anchorNode instanceof Element
+        ? docSelection.anchorNode
+        : docSelection.anchorNode?.parentElement || null;
+      const focusNode = docSelection.focusNode instanceof Element
+        ? docSelection.focusNode
+        : docSelection.focusNode?.parentElement || null;
+
+      if (anchorNode) {
+        summary.anchor = describeDebugElement(anchorNode);
+      }
+      if (focusNode) {
+        summary.focus = describeDebugElement(focusNode);
+      }
+
+      return summary;
+    }
+
+    function collectVisibleFieldValues() {
+      const values = {};
+      appRoot.querySelectorAll('.form-field[data-form-field-id]').forEach((fieldRoot) => {
+        if (!(fieldRoot instanceof HTMLElement) || !isVisible(fieldRoot)) {
+          return;
+        }
+        const fieldId = fieldRoot.dataset.formFieldId;
+        if (!fieldId) {
+          return;
+        }
+        values[fieldId] = truncateDebugText(getFieldValue(fieldRoot), 120);
+      });
+      return values;
+    }
+
+    function collectOpenControlState() {
+      const openControls = [];
+
+      sheinShellFieldState.forEach((state, root) => {
+        if (root.classList.contains('is-open') || !state.popover.hidden) {
+          openControls.push({
+            kind: 'shein-shell',
+            fieldId: state.field.id,
+            highlightedValue: root.dataset.highlightedValue || '',
+            liveValue: truncateDebugText(state.liveInput?.value || ''),
+          });
+        }
+      });
+
+      sheinAddressFinderState.forEach((state, root) => {
+        if (root.classList.contains('is-open') || !state.popover.hidden) {
+          openControls.push({
+            kind: 'address-finder',
+            fieldId: state.field.id,
+            liveValue: truncateDebugText(state.liveInput?.value || ''),
+            options: Array.from(state.resultList.querySelectorAll('button')).slice(0, 5).map((button) => truncateDebugText(button.textContent || '')),
+          });
+        }
+      });
+
+      checkoutComboboxState.forEach((state, root) => {
+        if (root.classList.contains('editing') || !state.popover.hidden) {
+          openControls.push({
+            kind: 'checkout-combobox',
+            fieldId: state.field.id,
+            highlightedValue: root.dataset.highlightedValue || '',
+            liveValue: truncateDebugText(state.input?.value || ''),
+          });
+        }
+      });
+
+      checkoutAddressState.forEach((state) => {
+        if (!state.popover.hidden) {
+          openControls.push({
+            kind: 'checkout-address',
+            fieldId: state.field.id,
+            liveValue: truncateDebugText(state.input?.value || ''),
+            options: Array.from(state.popover.querySelectorAll('button')).slice(0, 5).map((button) => truncateDebugText(button.textContent || '')),
+          });
+        }
+      });
+
+      return openControls;
+    }
+
+    function recordDebugEvent(type, details = {}) {
+      const activeElement = describeDebugElement(document.activeElement);
+      const selection = getSelectionSummary();
+      const snapshot = {
+        seq: ++formDebugEventSeq,
+        timeMs: Math.round(performance.now()),
+        type,
+        activeElement,
+        selection,
+        openControls: collectOpenControlState(),
+        visibleValues: collectVisibleFieldValues(),
+      };
+
+      Object.entries(details).forEach(([key, value]) => {
+        if (value !== undefined) {
+          snapshot[key] = value;
+        }
+      });
+
+      formDebugEvents.push(snapshot);
+      if (formDebugEvents.length > FORM_DEBUG_EVENT_LIMIT) {
+        formDebugEvents.splice(0, formDebugEvents.length - FORM_DEBUG_EVENT_LIMIT);
+      }
+    }
+
+    function capturePageDebugState() {
+      return {
+        activeElement: describeDebugElement(document.activeElement),
+        selection: getSelectionSummary(),
+        openControls: collectOpenControlState(),
+        visibleValues: collectVisibleFieldValues(),
+        visualProbe: getVisualProbeDebugState(),
+        eventCount: formDebugEvents.length,
+        lastEventSeq: formDebugEventSeq,
+      };
+    }
+
+    function isVisible(element) {
+      if (!element) {
+        return false;
+      }
+
+      const rect = element.getBoundingClientRect();
+      if (rect.width <= 1 || rect.height <= 1) {
+        return false;
+      }
+
+      const visibleWidth = Math.max(0, Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0));
+      const visibleHeight = Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0));
+      const visibleArea = visibleWidth * visibleHeight;
+      const totalArea = rect.width * rect.height;
+      return totalArea > 0 && visibleArea / totalArea >= 0.6;
+    }
+
+    function normalizeInputType(type) {
+      switch (type) {
+        case 'textarea':
+        case 'radio':
+        case 'checkbox':
+        case 'select':
+          return type;
+        default:
+          return 'text';
+      }
+    }
+
+    function resolveFieldSemanticLabel(field, target, fallbackLabel) {
+      const targetKey = `ax${target.charAt(0).toUpperCase()}${target.slice(1)}Label`;
+      if (Object.prototype.hasOwnProperty.call(field, targetKey)) {
+        return field[targetKey];
+      }
+      if (Object.prototype.hasOwnProperty.call(field, 'axLabel')) {
+        return field.axLabel;
+      }
+      return fallbackLabel;
+    }
+
+    function applyFieldSemantics(element, field, labelText, target = 'field') {
+      const resolvedLabel = resolveFieldSemanticLabel(field, target, labelText);
+      if (resolvedLabel == null || resolvedLabel === false || resolvedLabel === '') {
+        element.removeAttribute('aria-label');
+        element.removeAttribute('title');
+      } else {
+        element.setAttribute('aria-label', String(resolvedLabel));
+        element.setAttribute('title', String(resolvedLabel));
+      }
+      element.dataset.required = field.required ? 'true' : 'false';
+      if ('required' in element) {
+        element.required = Boolean(field.required);
+      }
+      element.setAttribute('aria-required', field.required ? 'true' : 'false');
+      if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+        // Keep Chrome/browser autofill out of the benchmark so the page's own UI is the only thing in play.
+        element.autocomplete = 'off';
+        element.setAttribute('autocapitalize', 'off');
+        element.setAttribute('autocorrect', 'off');
+        element.spellcheck = false;
+        if (element instanceof HTMLInputElement && element.type === 'text') {
+          element.setAttribute('autocomplete', 'new-password');
+        }
+      }
+      if (field.validationMessage && field.axDescribeWithValidation) {
+        element.setAttribute('aria-describedby', `${field.id}-validation`);
+        element.setAttribute('aria-invalid', 'true');
+      }
+    }
+
+    function getFieldValue(field) {
+      const firstInput = field.querySelector('input, textarea, select');
+      if (!firstInput) {
+        return '';
+      }
+
+      if (firstInput instanceof HTMLInputElement && firstInput.type === 'radio') {
+        const checked = field.querySelector('input[type="radio"]:checked');
+        return checked ? checked.value : '';
+      }
+
+      if (firstInput instanceof HTMLInputElement && firstInput.type === 'checkbox') {
+        return Array.from(field.querySelectorAll('input[type="checkbox"]:checked')).map((input) => input.value);
+      }
+
+      return firstInput.value || '';
+    }
+
+    function markFieldValidity(field, isValid) {
+      field.classList.toggle('invalid', !isValid);
+    }
+
+    function validateRequiredFields(main) {
+      const fields = Array.from(main.querySelectorAll('.form-field[data-form-field-id]'));
+      const invalidFields = [];
+
+      fields.forEach((field) => {
+        if (field.dataset.required !== 'true') {
+          markFieldValidity(field, true);
+          return;
+        }
+
+        const value = getFieldValue(field);
+        const isValid = Array.isArray(value) ? value.length > 0 : String(value).trim().length > 0;
+        markFieldValidity(field, isValid);
+        if (!isValid) {
+          invalidFields.push(field);
+        }
+      });
+
+      const validationMessage = main.querySelector('[data-validation-message="true"]');
+      if (validationMessage) {
+        validationMessage.style.display = invalidFields.length > 0 ? 'block' : 'none';
+      }
+
+      if (invalidFields.length > 0) {
+        invalidFields[0].scrollIntoView({ block: 'center', behavior: 'instant' });
+      }
+
+      return invalidFields.length === 0;
+    }
+
+    function closeAllCustomSelects(exceptRoot) {
+      appRoot.querySelectorAll('.custom-select').forEach((root) => {
+        if (exceptRoot && root === exceptRoot) {
+          return;
+        }
+        const state = customSelectState.get(root);
+        if (!state) {
+          return;
+        }
+        state.trigger.setAttribute('aria-expanded', 'false');
+        state.menu.hidden = true;
+        delete root.dataset.highlightedValue;
+      });
+    }
+
+    function getCustomSelectOptions(root) {
+      return Array.from(root.querySelectorAll('.select-option'));
+    }
+
+    function setHighlightedCustomOption(root, option) {
+      getCustomSelectOptions(root).forEach((entry) => {
+        const active = entry === option;
+        entry.classList.toggle('highlighted', active);
+        entry.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      if (option) {
+        root.dataset.highlightedValue = option.dataset.selectValue || '';
+        option.scrollIntoView({ block: 'nearest' });
+      } else {
+        delete root.dataset.highlightedValue;
+      }
+    }
+
+    function selectCustomOption(root, optionText) {
+      const state = customSelectState.get(root);
+      if (!state) {
+        return false;
+      }
+      const option = getCustomSelectOptions(root).find((entry) => entry.dataset.selectValue === optionText);
+      if (!option) {
+        return false;
+      }
+      state.input.value = optionText;
+      state.trigger.classList.remove('placeholder');
+      state.valueLabel.textContent = optionText;
+      state.trigger.setAttribute('aria-label', `${state.fieldLabel}: ${optionText}`);
+      setHighlightedCustomOption(root, option);
+      closeAllInteractiveControls();
+      recordDebugEvent('custom-select-option-selected', {
+        fieldId: state.input?.dataset.fieldId || getClosestFormFieldId(state.trigger),
+        optionText,
+      });
+      scheduleTaskStateReport();
+      return true;
+    }
+
+    function getFieldConfig(fieldId) {
+      return (currentRuntimeConfig?.fields || []).find((field) => field.id === fieldId) || null;
+    }
+
+    function resolveSheinFieldOptions(field, filterText = '') {
+      const normalizedFilter = String(filterText || '').trim().toLowerCase();
+      const sections = [];
+      if (Array.isArray(field.menuSections) && field.menuSections.length > 0) {
+        field.menuSections.forEach((section) => {
+          const options = (section.options || []).filter((option) => {
+            if (!normalizedFilter) {
+              return true;
+            }
+            return String(option).toLowerCase().includes(normalizedFilter);
+          });
+          if (options.length > 0) {
+            sections.push({ title: section.title || '', options });
+          }
+        });
+        return sections;
+      }
+
+      const dynamicOptions = resolveDynamicOptions(field).filter((option) => {
+        if (!normalizedFilter) {
+          return true;
+        }
+        return String(option).toLowerCase().includes(normalizedFilter);
+      });
+      return dynamicOptions.length > 0 ? [{ title: '', options: dynamicOptions }] : [];
+    }
+
+    function setSheinDisplayValue(state, value) {
+      const normalized = String(value || '');
+      if (!state || !state.displayInput) {
+        return;
+      }
+      state.displayInput.value = normalized;
+      if (state.displayInput.tagName === 'TEXTAREA') {
+        state.displayInput.textContent = normalized;
+      }
+      state.shell.classList.toggle('placeholder', normalized.trim().length === 0);
+      state.shell.classList.toggle('has-committed-value', normalized.trim().length > 0);
+    }
+
+    function shouldShowSheinValidation(field, rawValue) {
+      if (!field || !field.validationMessage) {
+        return false;
+      }
+      const value = String(rawValue || '').trim();
+      if (!value) {
+        return false;
+      }
+
+      if (field.id === 'input-first-name' || field.id === 'input-last-name') {
+        return !/^[A-Za-z ]{2,34}$/.test(value);
+      }
+
+      if (field.id === 'input-phone-number') {
+        const digits = value.replace(/\D/g, '');
+        return digits.length !== 10;
+      }
+
+      if (field.id === 'input-address1') {
+        return value.length < 5 || value.length > 30 || value.includes('@');
+      }
+
+      return false;
+    }
+
+    function updateSheinShellValidation(root, rawValue) {
+      const state = sheinShellFieldState.get(root);
+      if (!state) {
+        return;
+      }
+      const note = root.querySelector('.addr-input__note, .sui-textarea-title__msg');
+      const invalid = shouldShowSheinValidation(state.field, rawValue);
+      root.classList.toggle('is-invalid', invalid);
+      if (note) {
+        note.style.display = invalid ? 'block' : 'none';
+      }
+      if (state.shell) {
+        if (invalid && state.field.axDescribeWithValidation) {
+          state.shell.setAttribute('aria-invalid', 'true');
+          state.shell.setAttribute('aria-describedby', `${state.field.id}-validation`);
+        } else {
+          state.shell.removeAttribute('aria-invalid');
+          state.shell.removeAttribute('aria-describedby');
+        }
+      }
+    }
+
+    function updateTextareaFieldValidation(fieldRoot, field, rawValue) {
+      const note = fieldRoot.querySelector('.sui-textarea-title__msg');
+      if (!note) {
+        return;
+      }
+      note.style.display = shouldShowSheinValidation(field, rawValue) ? 'block' : 'none';
+    }
+
+    function setFieldCommittedValue(fieldId, rawValue, options = {}) {
+      const field = getFieldConfig(fieldId);
+      const fieldRoot = appRoot.querySelector(`.form-field[data-form-field-id="${fieldId}"]`);
+      if (!field || !fieldRoot) {
+        return;
+      }
+      const normalized = String(rawValue ?? '');
+      const source = options.source || 'internal';
+
+      if (field.controlVariant === 'shein-shell-field' || field.controlVariant === 'shein-static-select') {
+        const root = fieldRoot.querySelector('.sui-shell-field-root');
+        const state = root ? sheinShellFieldState.get(root) : null;
+        if (state) {
+          const previousValue = state.hiddenInput.value || '';
+          state.hiddenInput.value = normalized;
+          setSheinDisplayValue(state, normalized);
+          updateSheinShellValidation(root, normalized);
+          if (previousValue !== normalized) {
+            recordDebugEvent('field-committed', {
+              fieldId,
+              previousValue: truncateDebugText(previousValue),
+              committedValue: truncateDebugText(normalized),
+              source,
+            });
+          }
+          if (!options.skipDependents && previousValue !== normalized) {
+            clearDependentCheckoutFields(fieldId);
+          }
+          return;
+        }
+      }
+
+      if (field.controlVariant === 'shein-address-finder') {
+        const root = fieldRoot.querySelector('.sui-address-finder-root');
+        const state = root ? sheinAddressFinderState.get(root) : null;
+        if (state) {
+          const previousValue = state.hiddenInput.value || '';
+          state.hiddenInput.value = normalized;
+          state.displayInput.value = normalized;
+          state.shell.classList.toggle('placeholder', normalized.trim().length === 0);
+          if (previousValue !== normalized) {
+            recordDebugEvent('field-committed', {
+              fieldId,
+              previousValue: truncateDebugText(previousValue),
+              committedValue: truncateDebugText(normalized),
+              source,
+            });
+          }
+          return;
+        }
+      }
+
+      const directInput = fieldRoot.querySelector('input, textarea, select');
+      if (directInput) {
+        const previousValue = directInput.value || '';
+        directInput.value = normalized;
+        if (field.type === 'textarea') {
+          updateTextareaFieldValidation(fieldRoot, field, normalized);
+        }
+        if (previousValue !== normalized) {
+          recordDebugEvent('field-committed', {
+            fieldId,
+            previousValue: truncateDebugText(previousValue),
+            committedValue: truncateDebugText(normalized),
+            source,
+          });
+        }
+      }
+    }
+
+    function renderSheinFieldMenu(root, filterText = '') {
+      const state = sheinShellFieldState.get(root);
+      if (!state || !state.popover) {
+        return;
+      }
+      const sections = resolveSheinFieldOptions(state.field, filterText);
+      state.popover.innerHTML = '';
+      if (sections.length === 0) {
+        if (state.field.commitMode === 'option-only') {
+          const dependencyHint = state.field.dependsOn && !getCommittedFieldValue(state.field.dependsOn)
+            ? 'Choose the previous field first.'
+            : 'No matching options.';
+          state.popover.appendChild(createElement('div', 'checkout-empty-state', dependencyHint));
+        }
+        delete root.dataset.highlightedValue;
+        return;
+      }
+      const menu = createElement('ul', 'sui-select__menu');
+      menu.setAttribute('role', 'listbox');
+      const currentHighlightedValue = root.dataset.highlightedValue || '';
+      const allOptionValues = sections.flatMap((section) => section.options.map(String));
+      const shouldResetHighlight = !allOptionValues.includes(currentHighlightedValue);
+      if (shouldResetHighlight) {
+        delete root.dataset.highlightedValue;
+      }
+      sections.forEach((section) => {
+        const group = createElement('ul', 'sui-select-option__group');
+        if (section.title) {
+          group.appendChild(createElement('li', 'sui-select-option__group-title', section.title));
+        }
+        section.options.forEach((optionText, optionIndex) => {
+          const li = document.createElement('li');
+          const option = createElement('button', 'sui-select-option', optionText);
+          option.type = 'button';
+          option.dataset.selectValue = optionText;
+          option.setAttribute('role', 'option');
+          if (!root.dataset.highlightedValue && optionIndex === 0) {
+            root.dataset.highlightedValue = optionText;
+            option.classList.add('highlighted');
+          } else if (root.dataset.highlightedValue === optionText) {
+            option.classList.add('highlighted');
+          }
+          option.addEventListener('mousedown', (event) => {
+            event.preventDefault();
+            commitSheinShellField(root, optionText);
+          });
+          option.addEventListener('click', (event) => {
+            event.preventDefault();
+            commitSheinShellField(root, optionText);
+          });
+          li.appendChild(option);
+          group.appendChild(li);
+        });
+        menu.appendChild(group);
+      });
+      state.popover.appendChild(menu);
+    }
+
+    function focusSheinFieldOption(root, direction) {
+      const options = Array.from(root.querySelectorAll('.sui-select-option'));
+      if (!options.length) {
+        return;
+      }
+      const currentValue = root.dataset.highlightedValue || '';
+      const currentIndex = Math.max(0, options.findIndex((entry) => entry.dataset.selectValue === currentValue));
+      const nextIndex = direction > 0
+        ? Math.min(options.length - 1, currentIndex + 1)
+        : Math.max(0, currentIndex - 1);
+      options.forEach((option, index) => {
+        option.classList.toggle('highlighted', index === nextIndex);
+      });
+      root.dataset.highlightedValue = options[nextIndex].dataset.selectValue || '';
+      options[nextIndex].scrollIntoView({ block: 'nearest' });
+    }
+
+    function moveCaretToEnd(input) {
+      if (!input || typeof input.focus !== 'function') {
+        return;
+      }
+      input.focus();
+      if (typeof input.value !== 'string') {
+        return;
+      }
+      const length = input.value.length;
+      if (typeof input.setSelectionRange === 'function') {
+        input.setSelectionRange(length, length);
+      }
+    }
+
+    function bindSheinShellLiveInput(root, state, liveInput) {
+      if (!liveInput || liveInput.dataset.sheinBound === 'true') {
+        return;
+      }
+      liveInput.dataset.sheinBound = 'true';
+      liveInput.addEventListener('input', () => {
+        updateSheinShellValidation(root, liveInput.value || '');
+        if (state.field.commitMode === 'option-only') {
+          renderSheinFieldMenu(root, liveInput.value || '');
+          state.popover.hidden = false;
+        }
+        scheduleTaskStateReport();
+      });
+      liveInput.addEventListener('keydown', (event) => {
+        if (state.field.commitMode === 'option-only' && event.key === 'ArrowDown') {
+          event.preventDefault();
+          focusSheinFieldOption(root, 1);
+          return;
+        }
+        if (state.field.commitMode === 'option-only' && event.key === 'ArrowUp') {
+          event.preventDefault();
+          focusSheinFieldOption(root, -1);
+          return;
+        }
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          commitSheinShellField(root, root.dataset.highlightedValue || null);
+          return;
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          closeSheinShellField(root);
+          state.shell.focus();
+        }
+      });
+      liveInput.addEventListener('blur', () => {
+        if (state.suppressBlurCommit) {
+          state.suppressBlurCommit = false;
+          return;
+        }
+        state.blurTimer = window.setTimeout(() => {
+          commitSheinShellField(root, null);
+        }, 120);
+      });
+    }
+
+    function closeSheinShellField(root) {
+      const state = sheinShellFieldState.get(root);
+      if (!state) {
+        return;
+      }
+      if (state.blurTimer) {
+        clearTimeout(state.blurTimer);
+        state.blurTimer = null;
+      }
+      state.popover.hidden = true;
+      state.shell.setAttribute('aria-expanded', 'false');
+      state.displayInput.hidden = false;
+      state.suppressBlurCommit = true;
+      if (state.liveInput === state.displayInput) {
+        state.displayInput.readOnly = true;
+        state.displayInput.setAttribute('readonly', '');
+        state.displayInput.setAttribute('aria-expanded', 'false');
+      } else if (state.liveInput && state.liveInput.isConnected) {
+        state.liveInput.remove();
+      }
+      state.liveInput = null;
+      root.classList.remove('is-open');
+      delete root.dataset.highlightedValue;
+      syncInteractivePopoverBlocker();
+      recordDebugEvent('shein-shell-close', {
+        fieldId: state.field.id,
+      });
+    }
+
+    function commitSheinShellField(root, optionText = null) {
+      const state = sheinShellFieldState.get(root);
+      if (!state) {
+        return false;
+      }
+      const liveValue = state.liveInput ? state.liveInput.value : '';
+      let nextValue = optionText == null ? liveValue : String(optionText);
+      if (state.field.commitMode === 'option-only') {
+        const validOptions = resolveSheinFieldOptions(state.field).flatMap((section) => section.options);
+        if (!validOptions.includes(nextValue)) {
+          if (validOptions.includes(liveValue)) {
+            nextValue = liveValue;
+          } else {
+            nextValue = state.hiddenInput.value || '';
+          }
+        }
+      }
+      setFieldCommittedValue(state.field.id, nextValue, { source: optionText == null ? 'shein-shell-live' : 'shein-shell-option' });
+      recordDebugEvent('shein-shell-commit', {
+        fieldId: state.field.id,
+        optionText: optionText == null ? null : String(optionText),
+        committedValue: truncateDebugText(nextValue),
+        previousValue: truncateDebugText(state.hiddenInput.value || ''),
+      });
+      closeSheinShellField(root);
+      scheduleTaskStateReport();
+      return true;
+    }
+
+    function openSheinShellField(root) {
+      const state = sheinShellFieldState.get(root);
+      if (!state || state.interactive === false) {
+        return;
+      }
+      if (root.classList.contains('is-open') && state.liveInput) {
+        moveCaretToEnd(state.liveInput);
+        return;
+      }
+      commitAllInteractiveControls();
+      state.shell.setAttribute('aria-expanded', 'true');
+      root.classList.add('is-open');
+      if (state.inlineEditor) {
+        state.liveInput = state.displayInput;
+        state.displayInput.hidden = false;
+        state.displayInput.readOnly = false;
+        state.displayInput.removeAttribute('readonly');
+        state.displayInput.setAttribute('aria-expanded', 'true');
+        bindSheinShellLiveInput(root, state, state.displayInput);
+      } else if (!state.liveInput || !state.liveInput.isConnected) {
+        const liveTag = state.field.liveTag === 'textarea' ? 'textarea' : 'input';
+        const liveInput = document.createElement(liveTag);
+        if (liveTag === 'input') {
+          liveInput.type = normalizeInputType(state.field.type);
+        } else {
+          liveInput.rows = state.field.rows || 3;
+        }
+        liveInput.className = liveTag === 'textarea'
+          ? 'sui-textarea-title__inner addr-input__title sui-shell__live'
+          : 'sui-input-title__inner sui-input-title__inner-border sui-input-title__inner-suffix addr-input__title sui-shell__live';
+        liveInput.value = state.hiddenInput.value || '';
+        liveInput.placeholder = root.classList.contains('compact-shell')
+          ? `${state.field.label}${state.field.required ? '*' : ''}`
+          : state.placeholder;
+        applyFieldSemantics(liveInput, state.field, state.field.label, 'live');
+        if (state.field.commitMode === 'option-only') {
+          liveInput.setAttribute('role', 'combobox');
+          liveInput.setAttribute('aria-autocomplete', 'list');
+          liveInput.setAttribute('aria-controls', state.field.ariaControls || 'associate-listbox');
+          liveInput.setAttribute('aria-expanded', 'true');
+        }
+        bindSheinShellLiveInput(root, state, liveInput);
+        state.liveInput = liveInput;
+      }
+      if (!state.inlineEditor) {
+        state.displayInput.hidden = true;
+        const shellSuffix = state.shell.querySelector('.sui-input-title__suffix, .sui-textarea-title__limit');
+        insertEditorBeforeReference(state.shell, state.liveInput, shellSuffix);
+      }
+      if (state.field.commitMode === 'option-only') {
+        renderSheinFieldMenu(root, state.liveInput.value || '');
+        state.popover.hidden = false;
+      } else {
+        state.popover.hidden = true;
+      }
+      syncInteractivePopoverBlocker();
+      recordDebugEvent('shein-shell-open', {
+        fieldId: state.field.id,
+        commitMode: state.field.commitMode || 'free-text',
+      });
+      requestAnimationFrame(() => {
+        moveCaretToEnd(state.liveInput);
+      });
+    }
+
+    function updateSheinAddressFinder(root, query) {
+      const state = sheinAddressFinderState.get(root);
+      if (!state) {
+        return;
+      }
+      const normalizedQuery = String(query || '').trim().toLowerCase();
+      const results = (state.field.autocompleteOptions || []).filter((option) => {
+        const label = typeof option === 'string' ? option : option.label;
+        if (!normalizedQuery) {
+          return true;
+        }
+        return String(label).toLowerCase().includes(normalizedQuery);
+      });
+      state.resultList.innerHTML = '';
+      if (results.length === 0) {
+        state.resultList.appendChild(createElement('li', 'checkout-empty-state', 'No addresses match the current query.'));
+        return;
+      }
+      results.forEach((option, index) => {
+        const label = typeof option === 'string' ? option : option.label;
+        const item = document.createElement('li');
+        const button = createElement('button', `sui-address-option${index === 0 ? ' highlighted' : ''}`, label);
+        button.type = 'button';
+        button.dataset.optionValue = label;
+        button.addEventListener('mousedown', (event) => {
+          event.preventDefault();
+          commitSheinAddressFinder(root, option);
+        });
+        button.addEventListener('click', (event) => {
+          event.preventDefault();
+          commitSheinAddressFinder(root, option);
+        });
+        item.appendChild(button);
+        state.resultList.appendChild(item);
+      });
+    }
+
+    function closeSheinAddressFinder(root) {
+      const state = sheinAddressFinderState.get(root);
+      if (!state) {
+        return;
+      }
+      if (state.blurTimer) {
+        clearTimeout(state.blurTimer);
+        state.blurTimer = null;
+      }
+      state.overlay.hidden = true;
+      state.popover.hidden = true;
+      state.shell.setAttribute('aria-expanded', 'false');
+      if (state.liveInput && state.liveInput.isConnected) {
+        state.draftValue = state.liveInput.value || '';
+      }
+      const displayValue = state.hiddenInput.value || state.draftValue || '';
+      state.displayInput.value = displayValue;
+      state.shell.classList.toggle('placeholder', String(displayValue).trim().length === 0);
+      state.displayInput.hidden = false;
+      if (state.liveInput && state.liveInput.isConnected) {
+        state.liveInput.remove();
+      }
+      root.classList.remove('is-open');
+      syncInteractivePopoverBlocker();
+      recordDebugEvent('address-finder-close', {
+        fieldId: state.field.id,
+      });
+    }
+
+    function commitSheinAddressFinder(root, option) {
+      const state = sheinAddressFinderState.get(root);
+      if (!state) {
+        return false;
+      }
+      const label = typeof option === 'string' ? option : option.label;
+      const previousValue = state.hiddenInput.value || '';
+      state.hiddenInput.value = label;
+      state.draftValue = label;
+      state.displayInput.value = label;
+      state.shell.classList.toggle('placeholder', String(label).trim().length === 0);
+      if (option && typeof option === 'object' && option.fills) {
+        Object.entries(option.fills).forEach(([fieldId, value]) => {
+          setFieldCommittedValue(fieldId, value, { source: 'address-finder-fill' });
+        });
+      }
+      recordDebugEvent('address-finder-commit', {
+        fieldId: state.field.id,
+        selectedValue: truncateDebugText(label),
+        previousValue: truncateDebugText(previousValue),
+        fills: option && typeof option === 'object' && option.fills ? option.fills : undefined,
+      });
+      closeSheinAddressFinder(root);
+      scheduleTaskStateReport();
+      return true;
+    }
+
+    function openSheinAddressFinder(root) {
+      const state = sheinAddressFinderState.get(root);
+      if (!state) {
+        return;
+      }
+      if (root.classList.contains('is-open') && state.liveInput) {
+        moveCaretToEnd(state.liveInput);
+        return;
+      }
+      commitAllInteractiveControls();
+      state.shell.setAttribute('aria-expanded', 'true');
+      root.classList.add('is-open');
+      if (!state.liveInput || !state.liveInput.isConnected) {
+        const liveInput = document.createElement('input');
+        liveInput.type = 'text';
+        liveInput.className = 'addr-search-content__core sui-input__inner sui-shell__live';
+        liveInput.value = state.hiddenInput.value || '';
+        liveInput.placeholder = state.field.placeholder || '';
+        liveInput.setAttribute('role', 'combobox');
+        liveInput.setAttribute('aria-autocomplete', 'list');
+        liveInput.setAttribute('aria-controls', state.field.ariaControls || 'associate-listbox');
+        liveInput.setAttribute('aria-expanded', 'true');
+        applyFieldSemantics(liveInput, state.field, state.field.label, 'live');
+        liveInput.addEventListener('input', () => {
+          state.draftValue = liveInput.value || '';
+          updateSheinAddressFinder(root, liveInput.value || '');
+          scheduleTaskStateReport();
+        });
+        liveInput.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter') {
+            const topResult = state.resultList.querySelector('.sui-address-option');
+            if (topResult) {
+              event.preventDefault();
+              const selected = (state.field.autocompleteOptions || []).find((option) => {
+                const label = typeof option === 'string' ? option : option.label;
+                return label === topResult.dataset.optionValue;
+              });
+              if (selected) {
+                commitSheinAddressFinder(root, selected);
+              }
+            }
+            return;
+          }
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            closeSheinAddressFinder(root);
+            state.shell.focus();
+          }
+        });
+        liveInput.addEventListener('blur', () => {
+          if (DEBUG_OPEN_FIELD === 'address-finder') {
+            return;
+          }
+          state.blurTimer = window.setTimeout(() => {
+            closeSheinAddressFinder(root);
+            scheduleTaskStateReport();
+          }, 120);
+        });
+        state.liveInput = liveInput;
+      }
+      if (state.draftValue && !state.hiddenInput.value) {
+        state.liveInput.value = state.draftValue;
+      }
+      state.displayInput.hidden = true;
+      const shellSuffix = state.shell.querySelector('.sui-input__suffix');
+      insertEditorBeforeReference(state.shell, state.liveInput, shellSuffix);
+      state.overlay.hidden = false;
+      state.overlay.replaceChildren(state.popover);
+      state.popover.hidden = false;
+      updateSheinAddressFinder(root, state.liveInput.value || '');
+      syncInteractivePopoverBlocker();
+      recordDebugEvent('address-finder-open', {
+        fieldId: state.field.id,
+      });
+      requestAnimationFrame(() => {
+        moveCaretToEnd(state.liveInput);
+      });
+    }
+
+    function closeAllInteractiveControls(exceptRoot = null) {
+      closeAllCustomSelects(exceptRoot);
+      checkoutComboboxState.forEach((state, root) => {
+        if (root !== exceptRoot) {
+          closeCheckoutCombobox(root);
+        }
+      });
+      checkoutAddressState.forEach((state, root) => {
+        if (root !== exceptRoot) {
+          closeCheckoutAutocomplete(root);
+        }
+      });
+      sheinShellFieldState.forEach((state, root) => {
+        if (root !== exceptRoot) {
+          closeSheinShellField(root);
+        }
+      });
+      sheinAddressFinderState.forEach((state, root) => {
+        if (root !== exceptRoot) {
+          closeSheinAddressFinder(root);
+        }
+      });
+    }
+
+    function commitAllInteractiveControls() {
+      closeAllCustomSelects();
+
+      checkoutComboboxState.forEach((state, root) => {
+        if (state.input && state.input.isConnected) {
+          const candidateValue = root.dataset.highlightedValue || state.input.value || state.hiddenInput.value || '';
+          if (!commitCheckoutCombobox(root, candidateValue)) {
+            closeCheckoutCombobox(root);
+          }
+          return;
+        }
+        closeCheckoutCombobox(root);
+      });
+
+      checkoutAddressState.forEach((state, root) => {
+        closeCheckoutAutocomplete(root);
+      });
+
+      sheinShellFieldState.forEach((state, root) => {
+        if (state.liveInput && state.liveInput.isConnected) {
+          if (state.field.commitMode !== 'option-only') {
+            const liveValue = String(state.liveInput.value || '');
+            state.hiddenInput.value = liveValue;
+            setSheinDisplayValue(state, liveValue);
+            closeSheinShellField(root);
+            scheduleTaskStateReport();
+            return;
+          }
+          commitSheinShellField(root, null);
+          return;
+        }
+        closeSheinShellField(root);
+      });
+
+      sheinAddressFinderState.forEach((state, root) => {
+        if (state.liveInput && state.liveInput.isConnected) {
+          closeSheinAddressFinder(root);
+          scheduleTaskStateReport();
+          return;
+        }
+        closeSheinAddressFinder(root);
+      });
+    }
+
+    function getCommittedFieldValue(fieldId) {
+      const fieldRoot = appRoot.querySelector(`.form-field[data-form-field-id="${fieldId}"]`);
+      if (!fieldRoot) {
+        return '';
+      }
+      const input = fieldRoot.querySelector(`input[type="hidden"][name="${fieldId}"], input[type="hidden"]#${fieldId}`);
+      if (input) {
+        return input.value || '';
+      }
+      return getFieldValue(fieldRoot);
+    }
+
+    function resolveDynamicOptions(field) {
+      if (Array.isArray(field.options) && field.options.length > 0) {
+        return field.options;
+      }
+      if (!field.optionGroups) {
+        return [];
+      }
+      const dependencyValue = getCommittedFieldValue(field.dependsOn);
+      return Array.isArray(field.optionGroups[dependencyValue]) ? field.optionGroups[dependencyValue] : [];
+    }
+
+    function clearDependentCheckoutFields(parentFieldId) {
+      checkoutComboboxState.forEach((state, root) => {
+        if (state.field.dependsOn !== parentFieldId) {
+          return;
+        }
+        state.hiddenInput.value = '';
+        state.displayValue.textContent = state.placeholder;
+        state.shell.classList.add('placeholder');
+        if (state.input && state.input.isConnected) {
+          state.input.value = '';
+          renderCheckoutComboboxOptions(root, '');
+        }
+        clearDependentCheckoutFields(state.field.id);
+      });
+      sheinShellFieldState.forEach((state, root) => {
+        if (state.field.dependsOn !== parentFieldId) {
+          return;
+        }
+        state.hiddenInput.value = '';
+        setSheinDisplayValue(state, '');
+        if (state.liveInput && state.liveInput.isConnected) {
+          state.liveInput.value = '';
+          renderSheinFieldMenu(root, '');
+        }
+        clearDependentCheckoutFields(state.field.id);
+      });
+    }
+
+    function updateCheckoutAddressSuggestions(root, query) {
+      const state = checkoutAddressState.get(root);
+      if (!state) {
+        return;
+      }
+      const normalizedQuery = String(query || '').trim().toLowerCase();
+      const options = (state.field.autocompleteOptions || []).filter((option) => {
+        if (!normalizedQuery) {
+          return true;
+        }
+        return option.toLowerCase().includes(normalizedQuery);
+      });
+      state.popover.innerHTML = '';
+      if (options.length === 0) {
+        state.popover.appendChild(createElement('div', 'checkout-empty-state', 'No suggestions match the current address text.'));
+        recordDebugEvent('checkout-address-suggestions', {
+          fieldId: state.field.id,
+          query: truncateDebugText(query),
+          optionCount: 0,
+        });
+        return;
+      }
+      options.forEach((optionText, index) => {
+        const option = createElement('button', `checkout-autocomplete-option${index === 0 ? ' highlighted' : ''}`, optionText);
+        option.type = 'button';
+        option.dataset.optionValue = optionText;
+        option.addEventListener('mousedown', (event) => {
+          event.preventDefault();
+          commitCheckoutAddress(root, optionText);
+        });
+        option.addEventListener('click', (event) => {
+          event.preventDefault();
+          commitCheckoutAddress(root, optionText);
+        });
+        state.popover.appendChild(option);
+      });
+      recordDebugEvent('checkout-address-suggestions', {
+        fieldId: state.field.id,
+        query: truncateDebugText(query),
+        optionCount: options.length,
+        options: options.slice(0, 5),
+      });
+    }
+
+    function openCheckoutAutocomplete(root) {
+      const state = checkoutAddressState.get(root);
+      if (!state) {
+        return;
+      }
+      closeAllInteractiveControls(root);
+      state.popover.hidden = false;
+      state.input.setAttribute('aria-expanded', 'true');
+      updateCheckoutAddressSuggestions(root, state.input.value || '');
+      recordDebugEvent('checkout-address-open', {
+        fieldId: state.field.id,
+      });
+    }
+
+    function closeCheckoutAutocomplete(root) {
+      const state = checkoutAddressState.get(root);
+      if (!state) {
+        return;
+      }
+      state.popover.hidden = true;
+      state.input.setAttribute('aria-expanded', 'false');
+      recordDebugEvent('checkout-address-close', {
+        fieldId: state.field.id,
+      });
+    }
+
+    function commitCheckoutAddress(root, value) {
+      const state = checkoutAddressState.get(root);
+      if (!state) {
+        return false;
+      }
+      state.input.value = value;
+      recordDebugEvent('checkout-address-commit', {
+        fieldId: state.field.id,
+        committedValue: truncateDebugText(value),
+      });
+      closeCheckoutAutocomplete(root);
+      scheduleTaskStateReport();
+      return true;
+    }
+
+    function renderCheckoutComboboxOptions(root, filterText = '') {
+      const state = checkoutComboboxState.get(root);
+      if (!state) {
+        return;
+      }
+      const normalizedFilter = String(filterText || '').trim().toLowerCase();
+      const options = resolveDynamicOptions(state.field).filter((optionText) => {
+        if (!normalizedFilter) {
+          return true;
+        }
+        return optionText.toLowerCase().includes(normalizedFilter);
+      });
+      state.popover.innerHTML = '';
+      if (options.length === 0) {
+        const emptyMessage = state.field.dependsOn && !getCommittedFieldValue(state.field.dependsOn)
+          ? 'Choose the previous field first.'
+          : 'No matching options.';
+        state.popover.appendChild(createElement('div', 'checkout-empty-state', emptyMessage));
+        delete root.dataset.highlightedValue;
+        return;
+      }
+      options.forEach((optionText, index) => {
+        const option = createElement('button', `checkout-option${index === 0 ? ' highlighted' : ''}`, optionText);
+        option.type = 'button';
+        option.dataset.selectValue = optionText;
+        option.setAttribute('role', 'option');
+        option.setAttribute('aria-selected', index === 0 ? 'true' : 'false');
+        option.addEventListener('mousedown', (event) => {
+          event.preventDefault();
+          commitCheckoutCombobox(root, optionText);
+        });
+        option.addEventListener('click', (event) => {
+          event.preventDefault();
+          commitCheckoutCombobox(root, optionText);
+        });
+        state.popover.appendChild(option);
+      });
+      root.dataset.highlightedValue = options[0];
+    }
+
+    function focusCheckoutComboboxOption(root, direction) {
+      const options = Array.from(root.querySelectorAll('.checkout-option'));
+      if (!options.length) {
+        return;
+      }
+      const currentValue = root.dataset.highlightedValue || '';
+      const currentIndex = Math.max(0, options.findIndex((entry) => entry.dataset.selectValue === currentValue));
+      const nextIndex = direction > 0
+        ? Math.min(options.length - 1, currentIndex + 1)
+        : Math.max(0, currentIndex - 1);
+      options.forEach((option, index) => {
+        const active = index === nextIndex;
+        option.classList.toggle('highlighted', active);
+        option.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      root.dataset.highlightedValue = options[nextIndex].dataset.selectValue || '';
+      options[nextIndex].scrollIntoView({ block: 'nearest' });
+    }
+
+    function closeCheckoutCombobox(root) {
+      const state = checkoutComboboxState.get(root);
+      if (!state) {
+        return;
+      }
+      if (state.blurTimer) {
+        clearTimeout(state.blurTimer);
+        state.blurTimer = null;
+      }
+      state.popover.hidden = true;
+      state.shell.hidden = false;
+      state.shell.setAttribute('aria-expanded', 'false');
+      root.classList.remove('editing');
+      if (state.input && state.input.isConnected) {
+        state.input.remove();
+      }
+      delete root.dataset.highlightedValue;
+      recordDebugEvent('checkout-combobox-close', {
+        fieldId: state.field.id,
+      });
+    }
+
+    function openCheckoutCombobox(root) {
+      const state = checkoutComboboxState.get(root);
+      if (!state) {
+        return;
+      }
+      if (root.classList.contains('editing') && state.input) {
+        state.input.focus();
+        return;
+      }
+      commitAllInteractiveControls();
+      root.classList.add('editing');
+      state.shell.hidden = true;
+      state.shell.setAttribute('aria-expanded', 'true');
+      if (!state.input || !state.input.isConnected) {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'checkout-edit-input';
+        input.value = state.hiddenInput.value || '';
+        input.placeholder = state.placeholder;
+        input.dataset.fieldId = state.field.id;
+        input.setAttribute('role', 'searchbox');
+        input.setAttribute('aria-autocomplete', 'list');
+        input.setAttribute('aria-expanded', 'true');
+        applyFieldSemantics(input, state.field, state.field.label, 'live');
+        input.addEventListener('input', () => {
+          renderCheckoutComboboxOptions(root, input.value || '');
+          scheduleTaskStateReport();
+        });
+        input.addEventListener('keydown', (event) => {
+          if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            focusCheckoutComboboxOption(root, 1);
+            return;
+          }
+          if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            focusCheckoutComboboxOption(root, -1);
+            return;
+          }
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            const activeValue = root.dataset.highlightedValue || '';
+            const fallbackValue = input.value || '';
+            commitCheckoutCombobox(root, activeValue || fallbackValue);
+            return;
+          }
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            closeCheckoutCombobox(root);
+            state.shell.focus();
+          }
+        });
+        input.addEventListener('blur', () => {
+          state.blurTimer = window.setTimeout(() => {
+            closeCheckoutCombobox(root);
+            scheduleTaskStateReport();
+          }, 120);
+        });
+        state.input = input;
+      }
+      root.insertBefore(state.input, state.popover);
+      state.popover.hidden = false;
+      renderCheckoutComboboxOptions(root, state.input.value || '');
+      recordDebugEvent('checkout-combobox-open', {
+        fieldId: state.field.id,
+      });
+      requestAnimationFrame(() => {
+        state.input.focus();
+        state.input.select();
+      });
+    }
+
+    function commitCheckoutCombobox(root, optionText) {
+      const state = checkoutComboboxState.get(root);
+      if (!state) {
+        return false;
+      }
+      const normalizedValue = String(optionText || '').trim();
+      const availableOptions = resolveDynamicOptions(state.field);
+      if (!normalizedValue || !availableOptions.includes(normalizedValue)) {
+        recordDebugEvent('checkout-combobox-commit-rejected', {
+          fieldId: state.field.id,
+          attemptedValue: truncateDebugText(optionText),
+          availableOptions: availableOptions.slice(0, 8),
+        });
+        return false;
+      }
+      const previousValue = state.hiddenInput.value || '';
+      state.hiddenInput.value = normalizedValue;
+      state.displayValue.textContent = normalizedValue;
+      state.shell.classList.remove('placeholder');
+      if (state.input && state.input.isConnected) {
+        state.input.value = normalizedValue;
+      }
+      closeCheckoutCombobox(root);
+      if (previousValue !== normalizedValue) {
+        clearDependentCheckoutFields(state.field.id);
+      }
+      recordDebugEvent('checkout-combobox-commit', {
+        fieldId: state.field.id,
+        previousValue: truncateDebugText(previousValue),
+        committedValue: truncateDebugText(normalizedValue),
+      });
+      scheduleTaskStateReport();
+      return true;
+    }
+
+    function captureTaskState(config) {
+      const values = {};
+      const visibleFieldIds = [];
+      const visibleRequiredFieldIds = [];
+      const fields = appRoot.querySelectorAll('.form-field[data-form-field-id]');
+
+      fields.forEach((field) => {
+        const fieldId = field.dataset.formFieldId;
+        if (!fieldId) {
+          return;
+        }
+
+        if (isVisible(field)) {
+          visibleFieldIds.push(fieldId);
+          if (field.dataset.required === 'true') {
+            visibleRequiredFieldIds.push(fieldId);
+          }
+        }
+
+        const shellRoot = field.querySelector('.sui-shell-field-root');
+        if (shellRoot) {
+          const state = sheinShellFieldState.get(shellRoot);
+          if (state) {
+            const inputFieldId = state.hiddenInput.getAttribute('name') || state.hiddenInput.id || fieldId;
+            if (!Object.prototype.hasOwnProperty.call(values, inputFieldId)) {
+              const liveValue = state.liveInput && state.liveInput.isConnected
+                ? state.liveInput.value || ''
+                : '';
+              values[inputFieldId] = liveValue || state.hiddenInput.value || '';
+            }
+            return;
+          }
+        }
+
+        const addressFinderRoot = field.querySelector('.sui-address-finder-root');
+        if (addressFinderRoot) {
+          const state = sheinAddressFinderState.get(addressFinderRoot);
+          if (state) {
+            const inputFieldId = state.hiddenInput.getAttribute('name') || state.hiddenInput.id || fieldId;
+            if (!Object.prototype.hasOwnProperty.call(values, inputFieldId)) {
+              const liveValue = state.liveInput && state.liveInput.isConnected
+                ? state.liveInput.value || ''
+                : '';
+              values[inputFieldId] = liveValue || state.hiddenInput.value || '';
+            }
+            return;
+          }
+        }
+
+        const firstInput = field.querySelector('input, textarea, select');
+        if (!firstInput) {
+          return;
+        }
+
+        const inputFieldId = firstInput.getAttribute('name') || firstInput.id;
+        if (!inputFieldId || Object.prototype.hasOwnProperty.call(values, inputFieldId)) {
+          return;
+        }
+
+        if (firstInput instanceof HTMLInputElement && firstInput.type === 'radio') {
+          const checked = field.querySelector('input[type="radio"]:checked');
+          values[inputFieldId] = checked ? checked.value : '';
+          return;
+        }
+
+        if (firstInput instanceof HTMLInputElement && firstInput.type === 'checkbox') {
+          values[inputFieldId] = Array.from(field.querySelectorAll('input[type="checkbox"]:checked')).map((input) => input.value);
+          return;
+        }
+
+        values[inputFieldId] = firstInput.value || '';
+      });
+
+      const submitButton = document.querySelector('#primary-action');
+      const successMessage = document.querySelector('[data-success-message="true"]');
+
+      return {
+        source: {
+          visibleFieldIds: Array.from(new Set(config.benchmarkSession?.inlineSourceFieldIds || [])),
+        },
+        form: {
+          values,
+          visibleFieldIds: Array.from(new Set(visibleFieldIds)),
+          visibleRequiredFieldIds: Array.from(new Set(visibleRequiredFieldIds)),
+          submitVisible: submitButton ? isVisible(submitButton) : false,
+          submitted: successMessage ? isVisible(successMessage) : false,
+        },
+        debug: capturePageDebugState(),
+      };
+    }
+
+    async function performTaskStateReport() {
+      if (!HARNESS_CONFIG.reportStateUrl || !currentRuntimeConfig || !currentSessionId) {
+        return;
+      }
+
+      if (reportStateInFlight) {
+        return;
+      }
+
+      reportStateInFlight = true;
+      try {
+        const pendingDebugEvents = formDebugEvents
+          .filter((event) => event.seq > lastReportedDebugEventSeq)
+          .slice(0, 200);
+        const payload = JSON.stringify({
+          sessionId: currentSessionId,
+          stateRequestId: currentStateRequestId,
+          taskState: captureTaskState(currentRuntimeConfig),
+          pageDebugSnapshot: capturePageDebugState(),
+          pageDebugEvents: pendingDebugEvents,
+        });
+        let delivered = false;
+        try {
+          if (navigator.sendBeacon) {
+            delivered = navigator.sendBeacon(
+              HARNESS_CONFIG.reportStateUrl,
+              new Blob([payload], { type: 'application/json' }),
+            );
+          }
+        } catch {}
+
+        if (!delivered) {
+          await fetch(HARNESS_CONFIG.reportStateUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: payload,
+          });
+        }
+
+        if (pendingDebugEvents.length > 0) {
+          lastReportedDebugEventSeq = pendingDebugEvents[pendingDebugEvents.length - 1].seq;
+        }
+      } catch (error) {
+        reportPageError('performTaskStateReport', error);
+      } finally {
+        reportStateInFlight = false;
+      }
+    }
+
+    function scheduleTaskStateReport(delayMs = 30) {
+      if (!HARNESS_CONFIG.reportStateUrl || !currentRuntimeConfig || !currentSessionId) {
+        return;
+      }
+
+      if (reportStateTimer !== null) {
+        clearTimeout(reportStateTimer);
+        reportStateTimer = null;
+      }
+
+      if (delayMs <= 0) {
+        if (reportStateMicrotaskQueued) {
+          return;
+        }
+        reportStateMicrotaskQueued = true;
+        queueMicrotask(() => {
+          reportStateMicrotaskQueued = false;
+          void performTaskStateReport();
+        });
+        return;
+      }
+
+      reportStateTimer = window.setTimeout(() => {
+        reportStateTimer = null;
+        void performTaskStateReport();
+      }, delayMs);
+    }
+
+    function scheduleTaskStateReportBurst() {
+      scheduleTaskStateReport(0);
+      window.setTimeout(() => scheduleTaskStateReport(0), 120);
+      window.setTimeout(() => scheduleTaskStateReport(0), 450);
+      window.setTimeout(() => scheduleTaskStateReport(0), 1200);
+    }
+
+    function renderField(field, selectVariant) {
+      const fieldDiv = createElement('div', 'form-field');
+      const useSheinCheckoutMarkup = currentRuntimeConfig?.surface?.family === 'checkout-shipping-ax-trap';
+      fieldDiv.dataset.formFieldId = field.id;
+      fieldDiv.dataset.required = field.required ? 'true' : 'false';
+      if (field.fullWidth || field.type === 'radio' || field.type === 'checkbox' || field.type === 'textarea') {
+        fieldDiv.classList.add('full-width');
+      }
+
+      if (useSheinCheckoutMarkup) {
+        fieldDiv.classList.add('addr-field', field.fullWidth || field.type === 'textarea' ? 'grid-col-12' : 'grid-col-6');
+        fieldDiv.dataset.fieldName = field.id.replace(/^input-/, '');
+        if (
+          field.controlVariant === 'shein-static-select'
+          || field.controlVariant === 'shein-address-finder'
+          || field.id === 'input-state'
+        ) {
+          fieldDiv.classList.add('addr-select-area');
+        } else {
+          fieldDiv.classList.add('addr-input');
+        }
+      } else {
+        const label = document.createElement('label');
+        label.htmlFor = field.id;
+        label.appendChild(document.createTextNode(field.label));
+        if (field.required) {
+          label.appendChild(document.createTextNode(' '));
+          label.appendChild(createElement('span', 'required-indicator', '*'));
+        }
+        fieldDiv.appendChild(label);
+
+        if (field.caption) {
+          fieldDiv.appendChild(createElement('div', 'field-caption', field.caption));
+        }
+      }
+
+      let inputEl;
+      if (field.controlVariant === 'shein-static-select') {
+        const root = createElement('div', 'sui-shell-field-root');
+        root.dataset.fieldId = field.id;
+        const useCompactShell = field.liveTag !== 'textarea';
+        if (useCompactShell) {
+          root.classList.add('compact-shell');
+        }
+
+        inputEl = document.createElement('input');
+        inputEl.type = 'hidden';
+        inputEl.id = field.id;
+        inputEl.name = field.id;
+        inputEl.dataset.fieldId = field.id;
+        applyFieldSemantics(inputEl, field, field.label, 'hidden');
+        root.appendChild(inputEl);
+
+        const shell = createElement('div', 'sui-select addr-select-area__core select-readonly');
+        const trigger = createElement('div', 'sui-select__trigger sui-select__trigger-readonly');
+        const titleWrap = createElement('div', 'sui-input-titlewarp');
+        titleWrap.setAttribute('role', 'combobox');
+        titleWrap.setAttribute('aria-haspopup', 'listbox');
+        titleWrap.setAttribute('aria-expanded', 'false');
+        titleWrap.setAttribute('aria-label', field.label);
+        const title = createElement('div', 'sui-input-title');
+        const titleBody = createElement('div', 'sui-input-title__bd');
+        const name = createElement('span', 'sui-input-title__name sui-input-title__name-top');
+        name.textContent = `${field.label}${field.required ? '*' : ''} `;
+        titleBody.appendChild(name);
+
+        const displayInput = document.createElement('input');
+        displayInput.className = 'sui-input-title__inner sui-input-title__inner-suffix sui-shell__display';
+        displayInput.type = 'text';
+        displayInput.readOnly = true;
+        displayInput.disabled = true;
+        displayInput.placeholder = field.placeholder || '';
+        displayInput.setAttribute('role', 'combobox');
+        displayInput.setAttribute('aria-haspopup', 'listbox');
+        displayInput.setAttribute('aria-expanded', 'false');
+        if (field.axMaskCommittedValue) {
+          displayInput.setAttribute('aria-hidden', 'true');
+          displayInput.tabIndex = -1;
+        }
+        titleBody.appendChild(displayInput);
+
+        const suffix = createElement('div', 'sui-input-title__suffix');
+        suffix.appendChild(createElement('span', 'sui-select__trigger-icon', '▾'));
+        titleBody.appendChild(suffix);
+        title.appendChild(titleBody);
+        titleWrap.appendChild(title);
+        trigger.appendChild(titleWrap);
+        shell.appendChild(trigger);
+        const srOnly = createElement('div', 'sui-select__sr-only');
+        srOnly.setAttribute('role', 'status');
+        srOnly.setAttribute('aria-live', 'polite');
+        srOnly.setAttribute('aria-atomic', 'true');
+        shell.appendChild(srOnly);
+        root.appendChild(shell);
+
+        sheinShellFieldState.set(root, {
+          field,
+          hiddenInput: inputEl,
+          shell: titleWrap,
+          displayInput,
+          popover: createElement('div', 'sui-search-result'),
+          placeholder: field.placeholder || '',
+          liveInput: null,
+          blurTimer: null,
+          interactive: false,
+        });
+
+        fieldDiv.appendChild(root);
+        return fieldDiv;
+      }
+
+      if (field.controlVariant === 'shein-shell-field') {
+        const root = createElement('div', 'sui-shell-field-root');
+        root.dataset.fieldId = field.id;
+        const useCompactShell = field.compactShell === true || field.liveTag !== 'textarea';
+        if (useCompactShell) {
+          root.classList.add('compact-shell');
+        }
+
+        inputEl = document.createElement('input');
+        inputEl.type = 'hidden';
+        inputEl.id = field.id;
+        inputEl.name = field.id;
+        inputEl.dataset.fieldId = field.id;
+        applyFieldSemantics(inputEl, field, field.label, 'hidden');
+        root.appendChild(inputEl);
+
+        const shell = createElement('div', 'sui-input-titlewarp addr-input__title placeholder');
+        shell.tabIndex = 0;
+        shell.setAttribute('role', 'combobox');
+        shell.setAttribute('aria-haspopup', field.commitMode === 'option-only' ? 'listbox' : 'dialog');
+        shell.setAttribute('aria-expanded', 'false');
+        const shellLabel = resolveFieldSemanticLabel(field, 'shell', field.label);
+        if (shellLabel != null && shellLabel !== false && shellLabel !== '') {
+          shell.setAttribute('aria-label', String(shellLabel));
+        }
+        shell.setAttribute('aria-autocomplete', 'list');
+        shell.setAttribute('aria-controls', field.ariaControls || 'associate-listbox');
+        if (field.prefixText) {
+          const preblockWrap = createElement('div', 'sui-input-titlewarp__preblock');
+          const preblockModule = createElement('div', 'input-preblock-module');
+          preblockModule.appendChild(createElement('span', 'exit-list__item', field.prefixText));
+          preblockWrap.appendChild(preblockModule);
+          shell.appendChild(preblockWrap);
+        }
+
+        const titleTag = field.liveTag === 'textarea' ? 'div' : 'div';
+        const title = createElement(titleTag, field.liveTag === 'textarea' ? 'sui-textarea-title' : 'sui-input-title');
+        const titleBody = field.liveTag === 'textarea'
+          ? title
+          : createElement('div', 'sui-input-title__bd');
+        if (field.liveTag !== 'textarea') {
+          title.appendChild(titleBody);
+        }
+
+        const name = createElement(
+          'span',
+          field.liveTag === 'textarea'
+            ? 'sui-textarea-title__name sui-textarea-title__name-top'
+            : 'sui-input-title__name',
+        );
+        name.textContent = `${field.label}${field.required ? '*' : ''} `;
+        titleBody.appendChild(name);
+
+        const displayTag = field.liveTag === 'textarea' ? 'textarea' : 'input';
+        const displayInput = document.createElement(displayTag);
+        displayInput.className = field.liveTag === 'textarea'
+          ? 'sui-textarea-title__inner addr-input__title sui-shell__display'
+          : 'sui-input-title__inner sui-input-title__inner-border sui-input-title__inner-suffix addr-input__title sui-shell__display';
+        if (displayTag === 'input') {
+          displayInput.type = 'text';
+        } else {
+          displayInput.rows = field.rows || 3;
+        }
+        displayInput.readOnly = true;
+        displayInput.placeholder = useCompactShell
+          ? `${field.label}${field.required ? '*' : ''}`
+          : (field.placeholder || '');
+        displayInput.setAttribute('role', 'combobox');
+        displayInput.setAttribute('aria-autocomplete', 'list');
+        displayInput.setAttribute('aria-controls', field.ariaControls || 'associate-listbox');
+        displayInput.setAttribute('aria-expanded', 'false');
+        applyFieldSemantics(displayInput, field, field.label, 'display');
+        if (field.axMaskCommittedValue) {
+          displayInput.setAttribute('aria-hidden', 'true');
+          displayInput.tabIndex = -1;
+        }
+        titleBody.appendChild(displayInput);
+
+        if (displayTag === 'textarea') {
+          titleBody.appendChild(createElement('span', 'sui-textarea-title__limit', field.maxLengthText || '0 / 30'));
+        } else if (field.commitMode === 'option-only') {
+          const suffix = createElement('div', 'sui-input-title__suffix');
+          suffix.appendChild(createElement('span', '', '▾'));
+          titleBody.appendChild(suffix);
+        }
+
+        shell.appendChild(title);
+        root.appendChild(shell);
+        if (field.validationMessage) {
+          const validation = createElement(
+            'div',
+            field.liveTag === 'textarea' ? 'sui-textarea-title__msg' : 'addr-input__note',
+            field.validationMessage,
+          );
+          validation.id = `${field.id}-validation`;
+          validation.setAttribute('role', 'alert');
+          validation.setAttribute('aria-live', 'polite');
+          validation.style.display = 'none';
+          root.appendChild(validation);
+        }
+
+        const popover = createElement('div', 'sui-search-result');
+        popover.hidden = true;
+        root.appendChild(popover);
+
+        sheinShellFieldState.set(root, {
+          field,
+          hiddenInput: inputEl,
+          shell,
+          displayInput,
+          popover,
+          placeholder: field.placeholder || '',
+        liveInput: null,
+        blurTimer: null,
+        interactive: true,
+        inlineEditor: field.liveTag !== 'textarea',
+        suppressBlurCommit: false,
+      });
+
+        updateSheinShellValidation(root, '');
+
+        const openRoot = () => openSheinShellField(root);
+        shell.addEventListener('click', (event) => {
+          event.preventDefault();
+          openRoot();
+        });
+        shell.addEventListener('focus', () => {
+          openRoot();
+        });
+        shell.addEventListener('keydown', (event) => {
+          if (event.target !== shell && event.target !== displayInput) {
+            return;
+          }
+          if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowDown') {
+            event.preventDefault();
+            openRoot();
+          }
+        });
+
+        fieldDiv.appendChild(root);
+        return fieldDiv;
+      }
+
+      if (field.controlVariant === 'shein-address-finder') {
+        const root = createElement('div', 'sui-address-finder-root');
+        root.dataset.fieldId = field.id;
+
+        inputEl = document.createElement('input');
+        inputEl.type = 'hidden';
+        inputEl.id = field.id;
+        inputEl.name = field.id;
+        inputEl.dataset.fieldId = field.id;
+        applyFieldSemantics(inputEl, field, field.label, 'hidden');
+        root.appendChild(inputEl);
+
+        const searchContent = createElement('div', 'addr-search-content');
+        searchContent.appendChild(createElement('p', 'addr-search-content__title', field.label));
+        if (field.caption) {
+          searchContent.appendChild(createElement('p', 'addr-search-content__desc', field.caption));
+        }
+
+        const shell = createElement('div', 'sui-input placeholder');
+        shell.tabIndex = 0;
+        shell.setAttribute('role', 'combobox');
+        shell.setAttribute('aria-autocomplete', 'list');
+        shell.setAttribute('aria-controls', field.ariaControls || 'associate-listbox');
+        shell.setAttribute('aria-expanded', 'false');
+        const shellLabel = resolveFieldSemanticLabel(field, 'shell', field.label);
+        if (shellLabel != null && shellLabel !== false && shellLabel !== '') {
+          shell.setAttribute('aria-label', String(shellLabel));
+        }
+
+        shell.appendChild(createElement('span', 'sui-input__prefix', '⌕'));
+        const displayInput = document.createElement('input');
+        displayInput.className = 'addr-search-content__core sui-input__inner sui-shell__display';
+        displayInput.type = 'text';
+        displayInput.readOnly = true;
+        displayInput.placeholder = field.placeholder || '';
+        displayInput.setAttribute('role', 'combobox');
+        displayInput.setAttribute('aria-autocomplete', 'list');
+        displayInput.setAttribute('aria-controls', field.ariaControls || 'associate-listbox');
+        displayInput.setAttribute('aria-expanded', 'false');
+        applyFieldSemantics(displayInput, field, field.label, 'display');
+        if (field.axMaskCommittedValue) {
+          displayInput.setAttribute('aria-hidden', 'true');
+          displayInput.tabIndex = -1;
+        }
+        shell.appendChild(displayInput);
+        shell.appendChild(createElement('span', 'sui-input__suffix', ''));
+        searchContent.appendChild(shell);
+        root.appendChild(searchContent);
+
+        const popover = createElement('div', 'sui-search-result');
+        popover.hidden = true;
+        const overlay = createElement('div', 'sui-address-finder-overlay');
+        overlay.hidden = true;
+        const resultList = createElement('ul', 'sui-search-result__container');
+        resultList.id = field.ariaControls || 'associate-listbox';
+        resultList.setAttribute('role', 'listbox');
+        popover.appendChild(resultList);
+        const footer = createElement('div', 'sui-search-result-footer');
+        footer.appendChild(createElement('span', 'tips', "Can't find the address?"));
+        const manualButton = createElement('button', 'manual-btn', 'Enter Address Manually');
+        manualButton.type = 'button';
+        footer.appendChild(manualButton);
+        popover.appendChild(footer);
+        overlay.appendChild(popover);
+        root.appendChild(overlay);
+
+        sheinAddressFinderState.set(root, {
+          field,
+          hiddenInput: inputEl,
+          shell,
+          displayInput,
+          overlay,
+          popover,
+          resultList,
+        liveInput: null,
+        blurTimer: null,
+        draftValue: '',
+      });
+
+        const openFinder = () => openSheinAddressFinder(root);
+        shell.addEventListener('click', (event) => {
+          event.preventDefault();
+          openFinder();
+        });
+        shell.addEventListener('focus', () => {
+          openFinder();
+        });
+        shell.addEventListener('keydown', (event) => {
+          if (event.target !== shell && event.target !== displayInput) {
+            return;
+          }
+          if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowDown') {
+            event.preventDefault();
+            openFinder();
+          }
+        });
+        popover.addEventListener('mousedown', (event) => {
+          if (event.target.closest('.sui-address-option, .manual-btn')) {
+            return;
+          }
+          event.preventDefault();
+          const state = sheinAddressFinderState.get(root);
+          if (state?.blurTimer) {
+            clearTimeout(state.blurTimer);
+            state.blurTimer = null;
+          }
+          requestAnimationFrame(() => {
+            state?.liveInput?.focus();
+          });
+        });
+        popover.addEventListener('click', (event) => {
+          if (event.target.closest('.sui-address-option, .manual-btn')) {
+            return;
+          }
+          event.preventDefault();
+          const state = sheinAddressFinderState.get(root);
+          requestAnimationFrame(() => {
+            state?.liveInput?.focus();
+          });
+        });
+        manualButton.addEventListener('click', (event) => {
+          event.preventDefault();
+          closeSheinAddressFinder(root);
+          const address1Root = appRoot.querySelector('.form-field[data-form-field-id="input-address1"] textarea, .form-field[data-form-field-id="input-address1"] input');
+          if (address1Root) {
+            address1Root.focus();
+          }
+        });
+
+        fieldDiv.appendChild(root);
+        return fieldDiv;
+      }
+
+      if (field.controlVariant === 'checkout-address-autocomplete') {
+        const root = createElement('div', 'checkout-address-root');
+        root.dataset.fieldId = field.id;
+
+        inputEl = document.createElement('input');
+        inputEl.type = 'text';
+        inputEl.id = field.id;
+        inputEl.name = field.id;
+        inputEl.dataset.fieldId = field.id;
+        inputEl.placeholder = field.placeholder || '';
+        inputEl.setAttribute('role', 'combobox');
+        inputEl.setAttribute('aria-autocomplete', 'list');
+        inputEl.setAttribute('aria-expanded', 'false');
+        applyFieldSemantics(inputEl, field, field.label, 'hidden');
+        root.appendChild(inputEl);
+
+        const popover = createElement('div', 'checkout-popover');
+        popover.hidden = true;
+        popover.setAttribute('role', 'listbox');
+        popover.setAttribute('aria-label', `${field.label} suggestions`);
+        root.appendChild(popover);
+
+        checkoutAddressState.set(root, { field, input: inputEl, popover });
+
+        inputEl.addEventListener('focus', () => {
+          openCheckoutAutocomplete(root);
+        });
+        inputEl.addEventListener('input', () => {
+          openCheckoutAutocomplete(root);
+          updateCheckoutAddressSuggestions(root, inputEl.value || '');
+        });
+        inputEl.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter') {
+            const topOption = popover.querySelector('.checkout-autocomplete-option');
+            if (topOption) {
+              event.preventDefault();
+              commitCheckoutAddress(root, topOption.dataset.optionValue || topOption.textContent || '');
+            }
+            return;
+          }
+          if (event.key === 'Escape') {
+            closeCheckoutAutocomplete(root);
+          }
+        });
+        inputEl.addEventListener('blur', () => {
+          window.setTimeout(() => {
+            closeCheckoutAutocomplete(root);
+          }, 120);
+        });
+
+        fieldDiv.appendChild(root);
+        return fieldDiv;
+      }
+
+      if (field.controlVariant === 'checkout-transient-combobox') {
+        const root = createElement('div', 'checkout-combobox-root');
+        root.dataset.fieldId = field.id;
+
+        inputEl = document.createElement('input');
+        inputEl.type = 'hidden';
+        inputEl.id = field.id;
+        inputEl.name = field.id;
+        inputEl.dataset.fieldId = field.id;
+        applyFieldSemantics(inputEl, field, field.label, 'hidden');
+        root.appendChild(inputEl);
+
+        const shell = createElement('div', 'checkout-shell placeholder');
+        shell.tabIndex = 0;
+        shell.setAttribute('role', 'combobox');
+        shell.setAttribute('aria-haspopup', 'listbox');
+        shell.setAttribute('aria-expanded', 'false');
+        shell.setAttribute('aria-label', field.label);
+
+        const displayValue = createElement('span', 'checkout-shell-value', field.placeholder || 'Select an option');
+        displayValue.setAttribute('aria-hidden', 'true');
+        const caret = createElement('span', 'checkout-shell-caret', '▾');
+        caret.setAttribute('aria-hidden', 'true');
+        shell.appendChild(displayValue);
+        shell.appendChild(caret);
+        root.appendChild(shell);
+
+        const popover = createElement('div', 'checkout-popover');
+        popover.hidden = true;
+        popover.setAttribute('role', 'listbox');
+        popover.setAttribute('aria-label', `${field.label} options`);
+        root.appendChild(popover);
+
+        checkoutComboboxState.set(root, {
+          field,
+          hiddenInput: inputEl,
+          shell,
+          displayValue,
+          popover,
+          placeholder: field.placeholder || 'Select an option',
+          input: null,
+          blurTimer: null,
+        });
+
+        const openRoot = () => {
+          openCheckoutCombobox(root);
+        };
+
+        shell.addEventListener('click', (event) => {
+          event.preventDefault();
+          openRoot();
+        });
+        shell.addEventListener('focus', () => {
+          openRoot();
+        });
+        shell.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowDown') {
+            event.preventDefault();
+            openRoot();
+          }
+        });
+
+        fieldDiv.appendChild(root);
+        return fieldDiv;
+      }
+
+      if (field.type === 'textarea') {
+        if (useSheinCheckoutMarkup) {
+          const wrapper = createElement('div', 'sui-popover__trigger addr-input__popover');
+          const titleWrap = createElement('div', 'sui-input-titlewarp addr-input__title');
+          const title = createElement('div', 'sui-textarea-title');
+          const name = createElement('span', 'sui-textarea-title__name sui-textarea-title__name-top');
+          name.textContent = `${field.label}${field.required ? '*' : ''} `;
+          title.appendChild(name);
+
+          inputEl = document.createElement('textarea');
+          inputEl.id = field.id;
+          inputEl.name = field.id;
+          inputEl.dataset.fieldId = field.id;
+          inputEl.className = 'sui-textarea-title__inner sui-textarea-title__inner-name addr-input__title';
+          inputEl.rows = field.rows || 3;
+          inputEl.maxLength = field.maxLength || 30;
+          applyFieldSemantics(inputEl, field, field.label, 'hidden');
+          inputEl.placeholder = field.placeholder || '';
+          inputEl.addEventListener('input', () => {
+            limit.textContent = `${inputEl.value.length} / ${inputEl.maxLength}`;
+            updateTextareaFieldValidation(fieldDiv, field, inputEl.value || '');
+          });
+          title.appendChild(inputEl);
+
+          const limit = createElement('span', 'sui-textarea-title__limit', `0 / ${inputEl.maxLength}`);
+          title.appendChild(limit);
+          const message = createElement('div', 'sui-textarea-title__msg');
+          message.id = `${field.id}-error`;
+          message.setAttribute('role', 'alert');
+          message.setAttribute('aria-live', 'polite');
+          message.textContent = field.validationMessage
+            || 'Address Line 1 should contain 5-30 letters, digits or spaces and cannot contain @.';
+          message.style.display = 'none';
+          title.appendChild(message);
+
+          titleWrap.appendChild(title);
+          wrapper.appendChild(titleWrap);
+          fieldDiv.appendChild(wrapper);
+        } else {
+          inputEl = document.createElement('textarea');
+          inputEl.id = field.id;
+          inputEl.name = field.id;
+          inputEl.dataset.fieldId = field.id;
+          applyFieldSemantics(inputEl, field, field.label, 'hidden');
+          inputEl.placeholder = field.placeholder || '';
+          fieldDiv.appendChild(inputEl);
+        }
+        return fieldDiv;
+      }
+
+      if (field.type === 'select' && selectVariant === 'web') {
+        const root = createElement('div', 'custom-select');
+        root.dataset.fieldId = field.id;
+
+        inputEl = document.createElement('input');
+        inputEl.type = 'hidden';
+        inputEl.id = field.id;
+        inputEl.name = field.id;
+        inputEl.dataset.fieldId = field.id;
+        applyFieldSemantics(inputEl, field, field.label, 'hidden');
+        root.appendChild(inputEl);
+
+        const trigger = createElement('button', 'select-trigger placeholder');
+        trigger.type = 'button';
+        trigger.setAttribute('aria-haspopup', 'listbox');
+        trigger.setAttribute('aria-expanded', 'false');
+        trigger.setAttribute('aria-label', field.label);
+
+        const valueLabel = createElement('span', '', 'Select an option');
+        const caret = createElement('span', '', '▾');
+        trigger.appendChild(valueLabel);
+        trigger.appendChild(caret);
+        root.appendChild(trigger);
+
+        const menu = createElement('div', 'select-menu');
+        menu.hidden = true;
+        menu.setAttribute('role', 'listbox');
+        menu.setAttribute('aria-label', `${field.label} options`);
+        (field.options || []).forEach((optionText) => {
+          const option = createElement('button', 'select-option', optionText);
+          option.type = 'button';
+          option.dataset.selectValue = optionText;
+          option.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            selectCustomOption(root, optionText);
+          });
+          menu.appendChild(option);
+        });
+        root.appendChild(menu);
+        customSelectState.set(root, {
+          trigger,
+          menu,
+          input: inputEl,
+          valueLabel,
+          fieldLabel: field.label,
+        });
+
+        trigger.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const willOpen = menu.hidden;
+          closeAllInteractiveControls(willOpen ? root : null);
+          if (!willOpen) {
+            return;
+          }
+          trigger.setAttribute('aria-expanded', 'true');
+          menu.hidden = false;
+          setHighlightedCustomOption(root, getCustomSelectOptions(root)[0] || null);
+        });
+
+        trigger.addEventListener('keydown', (event) => {
+          const options = getCustomSelectOptions(root);
+          if (!options.length) {
+            return;
+          }
+
+          const highlightedValue = root.dataset.highlightedValue || '';
+          const highlightedIndex = Math.max(0, options.findIndex((entry) => entry.dataset.selectValue === highlightedValue));
+
+          if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            if (menu.hidden) {
+              menu.hidden = false;
+              trigger.setAttribute('aria-expanded', 'true');
+            }
+            setHighlightedCustomOption(root, options[Math.min(options.length - 1, highlightedIndex + 1)]);
+            return;
+          }
+
+          if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            if (menu.hidden) {
+              menu.hidden = false;
+              trigger.setAttribute('aria-expanded', 'true');
+            }
+            setHighlightedCustomOption(root, options[Math.max(0, highlightedIndex - 1)]);
+            return;
+          }
+
+          if (event.key === 'Enter' && !menu.hidden) {
+            event.preventDefault();
+            const activeOption = options[Math.max(0, highlightedIndex)];
+            if (activeOption) {
+              selectCustomOption(root, activeOption.dataset.selectValue || '');
+            }
+            return;
+          }
+
+          if (event.key === 'Escape') {
+            closeAllInteractiveControls();
+          }
+        });
+
+        fieldDiv.appendChild(root);
+        return fieldDiv;
+      }
+
+      if (field.type === 'select') {
+        inputEl = document.createElement('select');
+        inputEl.id = field.id;
+        inputEl.name = field.id;
+        inputEl.dataset.fieldId = field.id;
+        applyFieldSemantics(inputEl, field, field.label, 'hidden');
+
+        const placeholder = document.createElement('option');
+        placeholder.value = '';
+        placeholder.textContent = 'Select an option';
+        placeholder.disabled = true;
+        placeholder.selected = true;
+        inputEl.appendChild(placeholder);
+
+        (field.options || []).forEach((optionText) => {
+          const option = document.createElement('option');
+          option.value = optionText;
+          option.textContent = optionText;
+          inputEl.appendChild(option);
+        });
+
+        fieldDiv.appendChild(inputEl);
+        return fieldDiv;
+      }
+
+      if (field.type === 'radio') {
+        const group = createElement('div', 'radio-group');
+        group.dataset.fieldId = field.id;
+        (field.options || []).forEach((optionText) => {
+          const option = createElement('div', 'radio-option');
+          const input = document.createElement('input');
+          input.type = 'radio';
+          input.name = field.id;
+          input.id = `${field.id}-${optionText.toLowerCase().replace(/\s+/g, '-')}`;
+          input.value = optionText;
+          applyFieldSemantics(input, field, `${field.label}: ${optionText}`, 'option');
+          const optionLabel = document.createElement('label');
+          optionLabel.htmlFor = input.id;
+          optionLabel.textContent = optionText;
+          option.addEventListener('click', (event) => {
+            if (event.target === option) {
+              input.click();
+            }
+          });
+          option.appendChild(input);
+          option.appendChild(optionLabel);
+          group.appendChild(option);
+        });
+        fieldDiv.appendChild(group);
+        return fieldDiv;
+      }
+
+      if (field.type === 'checkbox') {
+        const group = createElement('div', 'checkbox-group');
+        group.dataset.fieldId = field.id;
+        (field.options || []).forEach((optionText) => {
+          const option = createElement('div', 'checkbox-option');
+          const input = document.createElement('input');
+          input.type = 'checkbox';
+          input.name = field.id;
+          input.id = `${field.id}-${optionText.toLowerCase().replace(/\s+/g, '-')}`;
+          input.value = optionText;
+          applyFieldSemantics(input, field, `${field.label}: ${optionText}`, 'option');
+          const optionLabel = document.createElement('label');
+          optionLabel.htmlFor = input.id;
+          optionLabel.textContent = optionText;
+          option.addEventListener('click', (event) => {
+            if (event.target === option) {
+              input.click();
+            }
+          });
+          option.appendChild(input);
+          option.appendChild(optionLabel);
+          group.appendChild(option);
+        });
+        fieldDiv.appendChild(group);
+        return fieldDiv;
+      }
+
+      inputEl = document.createElement('input');
+      inputEl.type = normalizeInputType(field.type);
+      inputEl.id = field.id;
+      inputEl.name = field.id;
+      inputEl.dataset.fieldId = field.id;
+      applyFieldSemantics(inputEl, field, field.label, 'hidden');
+      inputEl.placeholder = field.placeholder || '';
+      fieldDiv.appendChild(inputEl);
+      return fieldDiv;
+    }
+
+    function groupFields(fields) {
+      const grouped = new Map();
+      fields.forEach((field) => {
+        const key = field.sectionTitle || 'Details';
+        if (!grouped.has(key)) {
+          grouped.set(key, []);
+        }
+        grouped.get(key).push(field);
+      });
+      return grouped;
+    }
+
+    function applyInitialValues(config) {
+      const initialValues = config.initialValues || {};
+      Object.entries(initialValues).forEach(([fieldId, rawValue]) => {
+        const field = (config.fields || []).find((entry) => entry.id === fieldId);
+        if (!field) {
+          return;
+        }
+
+        const fieldRoot = appRoot.querySelector(`.form-field[data-form-field-id="${fieldId}"]`);
+        if (!fieldRoot) {
+          return;
+        }
+
+        if (field.controlVariant === 'shein-shell-field' || field.controlVariant === 'shein-static-select' || field.controlVariant === 'shein-address-finder') {
+          setFieldCommittedValue(fieldId, String(rawValue), { skipDependents: true, source: 'bootstrap' });
+          return;
+        }
+
+        if (field.controlVariant === 'checkout-transient-combobox') {
+          const hiddenInput = fieldRoot.querySelector(`input[type="hidden"][name="${fieldId}"]`);
+          const root = fieldRoot.querySelector('.checkout-combobox-root');
+          const state = root ? checkoutComboboxState.get(root) : null;
+          if (hiddenInput && state) {
+            hiddenInput.value = String(rawValue);
+            state.displayValue.textContent = String(rawValue);
+            state.shell.classList.toggle('placeholder', String(rawValue).trim().length === 0);
+          }
+          return;
+        }
+
+        if (field.controlVariant === 'checkout-address-autocomplete') {
+          const input = fieldRoot.querySelector('input[type="text"]');
+          if (input) {
+            input.value = String(rawValue);
+          }
+          return;
+        }
+
+        if (field.type === 'select' && config.selectVariant === 'web') {
+          const selectRoot = fieldRoot.querySelector('.custom-select');
+          if (selectRoot) {
+            selectCustomOption(selectRoot, String(rawValue));
+          }
+          return;
+        }
+
+        if (field.type === 'select') {
+          const input = fieldRoot.querySelector('select');
+          if (input) {
+            input.value = String(rawValue);
+          }
+          return;
+        }
+
+        if (field.type === 'radio') {
+          const radio = fieldRoot.querySelector(`input[type="radio"][value="${String(rawValue).replace(/"/g, '&quot;')}"]`);
+          if (radio) {
+            radio.checked = true;
+          }
+          return;
+        }
+
+        if (field.type === 'checkbox') {
+          const values = Array.isArray(rawValue) ? rawValue.map(String) : [String(rawValue)];
+          fieldRoot.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+            input.checked = values.includes(input.value);
+          });
+          return;
+        }
+
+        const input = fieldRoot.querySelector('input, textarea');
+        if (input) {
+          input.value = String(rawValue);
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      });
+    }
+
+    function getBenchmarkSourceLines(documentConfig) {
+      if (!documentConfig) {
+        return [];
+      }
+
+      if (Array.isArray(documentConfig.summaryLines) && documentConfig.summaryLines.length > 0) {
+        return documentConfig.summaryLines.map((line) => String(line || '').trim()).filter(Boolean);
+      }
+
+      const lines = [];
+      (documentConfig.meta || []).forEach((item) => {
+        if (!item || !item.label) {
+          return;
+        }
+        lines.push(`${item.label}: ${item.value || ''}`.trim());
+      });
+      (documentConfig.sections || []).forEach((section) => {
+        (section.items || []).forEach((entry) => {
+          if (!entry) {
+            return;
+          }
+          if (entry.type === 'fact') {
+            lines.push(`${entry.label}: ${entry.value || ''}`.trim());
+            return;
+          }
+          if (entry.text) {
+            lines.push(String(entry.text).trim());
+          }
+        });
+      });
+      return lines.filter(Boolean);
+    }
+
+    function renderBenchmarkSourcePane(config) {
+      const sourceDocument = config.benchmarkSession?.sourceDocument;
+      if (!sourceDocument) {
+        return null;
+      }
+
+      const sourceSurface = config.benchmarkSession?.sourceSurface || {};
+      const pane = createElement('aside', 'benchmark-source-pane');
+      const appRow = createElement('div', 'source-app-row');
+      appRow.appendChild(createElement('div', 'source-app-name', sourceSurface.productName || 'Source'));
+      if (sourceSurface.workspaceLabel) {
+        appRow.appendChild(createElement('div', 'source-workspace', sourceSurface.workspaceLabel));
+      }
+      pane.appendChild(appRow);
+
+      const card = createElement('section', 'benchmark-source-card');
+      card.appendChild(createElement('div', 'benchmark-source-title', sourceDocument.title || 'Source document'));
+      if (sourceDocument.subtitle) {
+        card.appendChild(createElement('div', 'benchmark-source-subtitle', sourceDocument.subtitle));
+      }
+      if (sourceSurface.activeFilter) {
+        card.appendChild(createElement('div', 'benchmark-source-pill', sourceSurface.activeFilter));
+      }
+      pane.appendChild(card);
+
+      const details = createElement('section', 'benchmark-source-section');
+      details.appendChild(createElement('div', 'benchmark-source-section-title', 'Briefing'));
+      getBenchmarkSourceLines(sourceDocument).forEach((line) => {
+        details.appendChild(createElement('div', 'benchmark-source-line', line));
+      });
+      pane.appendChild(details);
+
+      return pane;
+    }
+
+    function renderSurface(config) {
+      document.body.className = [
+        `theme-${config.surface.accent || 'teal'}`,
+        `surface-${String(config.surface.family || 'default').replace(/[^a-z0-9-]+/gi, '-')}`,
+      ].join(' ');
+      document.title = `${config.title} | ${config.surface.productName}`;
+      const isCheckoutRegression = config.surface.family === 'checkout-shipping-ax-trap';
+      const isExpenseRegression = config.surface.family === 'expense-report-js-lab';
+
+      const main = createElement('main', 'surface-card');
+      main.setAttribute('aria-label', `${config.surface.productName} form`);
+
+      if (isCheckoutRegression) {
+        const siteHeader = createElement('div', 'checkout-site-header');
+        const brandRow = createElement('div', 'checkout-brand-row');
+        brandRow.appendChild(createElement('div', 'checkout-brand-mark', 'SHEIN'));
+        brandRow.appendChild(createElement('div', 'checkout-secure-status', 'Secure Checkout'));
+        siteHeader.appendChild(brandRow);
+        const perks = createElement('div', 'checkout-perks-strip');
+        ['✓ Free shipping', '· Free Returns on Select Items', '· $5 Credits if Late', '· No Hidden Fees'].forEach((copy) => {
+          perks.appendChild(createElement('span', '', copy));
+        });
+        siteHeader.appendChild(perks);
+        main.appendChild(siteHeader);
+
+        const progress = createElement('div', 'checkout-progress');
+        progress.appendChild(createElement('span', '', 'Cart'));
+        progress.appendChild(createElement('span', '', '>'));
+        progress.appendChild(createElement('span', 'current', 'Place Order'));
+        progress.appendChild(createElement('span', '', '>'));
+        progress.appendChild(createElement('span', '', 'Pay'));
+        progress.appendChild(createElement('span', '', '>'));
+        progress.appendChild(createElement('span', '', 'Order Complete'));
+        main.appendChild(progress);
+      }
+
+      if (isExpenseRegression) {
+        const shellHeader = createElement('div', 'expense-shell-header');
+        const shellCopy = createElement('div', 'expense-shell-copy');
+        shellCopy.appendChild(createElement('div', 'expense-shell-kicker', config.surface.workspaceLabel || 'Expense approvals'));
+        shellCopy.appendChild(createElement('div', 'expense-shell-title', config.surface.productName || 'Expense report'));
+        shellHeader.appendChild(shellCopy);
+
+        const shellMeta = createElement('div', 'expense-shell-meta');
+        shellMeta.appendChild(createElement('span', 'expense-chip accent', config.surface.status || 'Draft'));
+        shellMeta.appendChild(createElement('span', 'expense-chip', 'Auto-saved'));
+        shellMeta.appendChild(createElement('span', 'expense-chip', 'JS-heavy controls'));
+        shellHeader.appendChild(shellMeta);
+        main.appendChild(shellHeader);
+      }
+
+      const mainHeader = createElement('div', 'surface-header');
+      mainHeader.appendChild(createElement('h1', 'surface-title', isCheckoutRegression ? 'Shipping Address' : config.title));
+      if (!isCheckoutRegression) {
+        mainHeader.appendChild(createElement(
+          'p',
+          'surface-copy',
+          'Fill only what the pasted source supports.',
+        ));
+
+        const status = createElement('div', 'surface-meta');
+        status.appendChild(createElement('span', 'meta-pill', config.surface.productName || 'Form'));
+        if (config.hasSubmit) {
+          status.appendChild(createElement('span', 'meta-pill', config.submitButtonText || config.surface.primaryAction || 'Submit'));
+        }
+        mainHeader.appendChild(status);
+      }
+
+      const scroll = createElement('div', 'surface-scroll');
+      groupFields(config.fields).forEach((fields, sectionTitle) => {
+        const section = createElement('section', 'section-card');
+        section.appendChild(createElement('div', 'section-title', sectionTitle));
+        const grid = createElement('div', `fields-grid${config.twoColumn ? ' two-column' : ''}`);
+        fields.forEach((field) => {
+          grid.appendChild(renderField(field, config.selectVariant));
+        });
+        section.appendChild(grid);
+        scroll.appendChild(section);
+      });
+
+      if (config.hasSubmit) {
+        const validationMessage = createElement('div', 'validation-message', 'Complete the required visible fields before continuing.');
+        validationMessage.setAttribute('data-validation-message', 'true');
+        scroll.appendChild(validationMessage);
+
+        const successMessage = createElement('div', 'success-message', config.successMessage || 'Action completed successfully.');
+        successMessage.setAttribute('data-success-message', 'true');
+        scroll.appendChild(successMessage);
+
+        const submitRow = createElement('div', 'submit-row');
+        submitRow.appendChild(createElement('div', 'small-label', 'Submit once the visible required fields are correct.'));
+        const submitButton = createElement('button', 'primary-button', config.submitButtonText || config.surface.primaryAction || 'Save');
+        submitButton.id = 'primary-action';
+        submitButton.type = 'button';
+        submitButton.addEventListener('click', () => {
+          commitAllInteractiveControls();
+          if (!validateRequiredFields(main)) {
+            scheduleTaskStateReportBurst();
+            return;
+          }
+          validationMessage.style.display = 'none';
+          successMessage.style.display = 'block';
+          submitButton.disabled = true;
+          successMessage.scrollIntoView({ block: 'nearest' });
+          scheduleTaskStateReportBurst();
+        });
+        submitRow.appendChild(submitButton);
+        scroll.appendChild(submitRow);
+      }
+
+      if (isCheckoutRegression) {
+        const layout = createElement('div', 'checkout-layout');
+        const mainColumn = createElement('div', 'checkout-main-column');
+        mainColumn.appendChild(mainHeader);
+        mainColumn.appendChild(scroll);
+        layout.appendChild(mainColumn);
+        layout.appendChild(renderCheckoutRegressionSidebar());
+        main.appendChild(layout);
+      } else if (isExpenseRegression) {
+        const layout = createElement('div', 'expense-layout');
+        const mainColumn = createElement('div', 'expense-main-column');
+        mainColumn.appendChild(mainHeader);
+        mainColumn.appendChild(scroll);
+        layout.appendChild(mainColumn);
+        layout.appendChild(renderExpenseSidebar(config));
+        main.appendChild(layout);
+      } else {
+        main.appendChild(mainHeader);
+        main.appendChild(scroll);
+      }
+      return main;
+    }
+
+    function renderCheckoutRegressionSidebar() {
+      const sidebar = createElement('aside', 'checkout-sidebar');
+
+      const summary = createElement('section', 'checkout-summary-card');
+      summary.appendChild(createElement('h3', '', 'Order Summary'));
+      [
+        ['Retail Price:', '$92.16', 'muted'],
+        ['Shipping Fee:', 'FREE', 'muted'],
+        ['On-Time Delivery:', 'FREE', 'muted'],
+        ['Promotions', '-$44.17', 'muted'],
+        ['Sales Tax:', '$4.37', 'muted'],
+      ].forEach(([label, value, variant]) => {
+        const row = createElement('div', `checkout-summary-row ${variant}`);
+        row.appendChild(createElement('span', '', label));
+        row.appendChild(createElement('span', '', value));
+        summary.appendChild(row);
+      });
+      const total = createElement('div', 'checkout-summary-row total');
+      total.appendChild(createElement('span', '', 'Order Total:'));
+      total.appendChild(createElement('span', '', '$52.36'));
+      summary.appendChild(total);
+      sidebar.appendChild(summary);
+
+      const reward = createElement('section', 'checkout-summary-card checkout-reward-card');
+      reward.appendChild(createElement('h3', '', 'Reward 47 Points'));
+      reward.appendChild(createElement('div', 'checkout-summary-row muted', 'Save $3.45 on this order, including credits > >'));
+      reward.appendChild(createElement(
+        'div',
+        'checkout-reward-banner',
+        'Quarterly\n3%-10% Credit Reward\n3 Free Gifts\nExtra 5% OFF',
+      ));
+      sidebar.appendChild(reward);
+
+      const coupon = createElement('section', 'checkout-action-card');
+      coupon.appendChild(createElement('h4', '', 'Coupon Code'));
+      const couponFields = createElement('div', 'checkout-inline-fields');
+      couponFields.appendChild(createElement('div', 'ghost-input', ''));
+      couponFields.appendChild(createElement('div', 'ghost-button', 'APPLY'));
+      coupon.appendChild(couponFields);
+      sidebar.appendChild(coupon);
+
+      const gift = createElement('section', 'checkout-action-card');
+      gift.appendChild(createElement('h4', '', 'Gift Card'));
+      const giftFields = createElement('div', 'checkout-inline-fields');
+      giftFields.appendChild(createElement('div', 'ghost-input', '0000 0000 0000 0000'));
+      giftFields.appendChild(createElement('div', 'ghost-button', 'Link'));
+      gift.appendChild(giftFields);
+      gift.appendChild(createElement('div', 'checkout-card-note', 'Link this card to my account'));
+      sidebar.appendChild(gift);
+
+      return sidebar;
+    }
+
+    function renderExpenseSidebar(config) {
+      const sidebar = createElement('aside', 'expense-sidebar');
+
+      const scorecard = createElement('section', 'expense-card');
+      scorecard.appendChild(createElement('h3', '', 'Report Health'));
+      const summaryGrid = createElement('div', 'expense-summary-grid');
+      [
+        ['Fields', String((config.fields || []).length)],
+        ['Required', String((config.fields || []).filter((field) => field.required).length)],
+        ['Policy', 'Standard'],
+        ['Queue', 'North America'],
+      ].forEach(([label, value]) => {
+        const stat = createElement('div', 'expense-stat');
+        stat.appendChild(createElement('span', '', label));
+        stat.appendChild(createElement('strong', '', value));
+        summaryGrid.appendChild(stat);
+      });
+      scorecard.appendChild(summaryGrid);
+      sidebar.appendChild(scorecard);
+
+      const policy = createElement('section', 'expense-card');
+      policy.appendChild(createElement('h4', '', 'Review Notes'));
+      const notes = createElement('ul');
+      [
+        'Search-first comboboxes should stay blank until a committed option is selected.',
+        'Dependent fields open only after their parent control has a committed value.',
+        'Submitting should happen once every visible required field is valid.',
+      ].forEach((copy) => {
+        notes.appendChild(createElement('li', '', copy));
+      });
+      policy.appendChild(notes);
+      sidebar.appendChild(policy);
+
+      const upload = createElement('section', 'expense-card');
+      upload.appendChild(createElement('h4', '', 'Receipts'));
+      upload.appendChild(createElement('div', 'expense-upload-dock', 'Drop files here or keep moving with the draft fields first.'));
+      upload.appendChild(createElement('p', '', 'The upload area is intentionally non-interactive for this regression fixture so the grading path stays focused on the JS form controls.'));
+      sidebar.appendChild(upload);
+
+      return sidebar;
+    }
+
+    function renderStandbySurface() {
+      document.title = 'Form Benchmark';
+      appRoot.innerHTML = '';
+      const main = createElement('main', 'surface-card');
+      main.appendChild(createElement('h1', 'surface-title', 'Waiting for form test'));
+      main.appendChild(createElement('p', 'surface-copy', 'The next form will load here.'));
+      appRoot.appendChild(main);
+    }
+
+    function applyRuntimeConfig(config) {
+      currentRuntimeConfig = config;
+      customSelectState = new Map();
+      checkoutComboboxState = new Map();
+      checkoutAddressState = new Map();
+      sheinShellFieldState = new Map();
+      sheinAddressFinderState = new Map();
+      appRoot.innerHTML = '';
+      appRoot.appendChild(renderSurface(config));
+      applyInitialValues(config);
+      applyDebugOpenState();
+      scheduleTaskStateReport(0);
+    }
+
+    function applyDebugOpenState() {
+      const params = new URLSearchParams(window.location.search);
+      const debugOpen = params.get('debugOpen') || HARNESS_CONFIG.debugOpen;
+      if (!debugOpen) {
+        return;
+      }
+
+      window.setTimeout(() => {
+        if (debugOpen === 'address-finder') {
+          const root = appRoot.querySelector('.form-field[data-form-field-id="input-associated-address"] .sui-address-finder-root');
+          if (root) {
+            openSheinAddressFinder(root);
+            const state = sheinAddressFinderState.get(root);
+            if (state?.liveInput) {
+              state.liveInput.value = '2401 Peabody';
+              updateSheinAddressFinder(root, state.liveInput.value);
+            }
+          }
+          return;
+        }
+
+        const fieldRoot = appRoot.querySelector(`.form-field[data-form-field-id="${debugOpen}"]`);
+        if (!fieldRoot) {
+          return;
+        }
+        const sheinShellRoot = fieldRoot.querySelector('.sui-shell-field-root');
+        if (sheinShellRoot) {
+          openSheinShellField(sheinShellRoot);
+          return;
+        }
+        const addressFinderRoot = fieldRoot.querySelector('.sui-address-finder-root');
+        if (addressFinderRoot) {
+          openSheinAddressFinder(addressFinderRoot);
+        }
+      }, 80);
+    }
+
+    async function syncBootstrapState() {
+      if (!HARNESS_CONFIG.bootstrapStateUrl) {
+        return;
+      }
+
+      try {
+        const response = await fetch(HARNESS_CONFIG.bootstrapStateUrl, { cache: 'no-store' });
+        if (!response.ok) {
+          return;
+        }
+
+        const payload = await response.json();
+        syncVisualProbe(payload.visualProbe || null);
+        if (payload.closeRequested) {
+          try {
+            window.close();
+          } catch {}
+          window.setTimeout(() => {
+            if (!window.closed) {
+              window.location.replace('about:blank');
+            }
+          }, 150);
+          return;
+        }
+
+        if (!payload.sessionId || !payload.formConfig) {
+          if (currentSessionId !== null || currentRuntimeConfig !== null) {
+            currentSessionId = null;
+            currentStateRequestId = 0;
+            currentRuntimeConfig = null;
+            renderStandbySurface();
+          }
+          return;
+        }
+
+        if (payload.sessionId !== currentSessionId) {
+          currentSessionId = payload.sessionId;
+          currentStateRequestId = Number(payload.stateRequestId) || 0;
+          applyRuntimeConfig(payload.formConfig);
+          return;
+        }
+
+        const nextStateRequestId = Number(payload.stateRequestId) || 0;
+        if (nextStateRequestId !== currentStateRequestId) {
+          currentStateRequestId = nextStateRequestId;
+          scheduleTaskStateReport(0);
+        }
+      } catch {}
+    }
+
+    function startBootstrapPolling() {
+      if (bootstrapPollTimer !== null) {
+        clearInterval(bootstrapPollTimer);
+      }
+      bootstrapPollTimer = window.setInterval(() => {
+        void syncBootstrapState();
+      }, 250);
+    }
+
+    function startStateHeartbeat() {
+      if (stateHeartbeatTimer !== null) {
+        clearInterval(stateHeartbeatTimer);
+      }
+      stateHeartbeatTimer = window.setInterval(() => {
+        scheduleTaskStateReport(0);
+      }, 1000);
+    }
+
+    document.addEventListener('mousedown', (event) => {
+      recordDebugEvent('dom-mousedown', {
+        target: describeDebugElement(event.target),
+        x: Math.round(event.clientX || 0),
+        y: Math.round(event.clientY || 0),
+      });
+      if (
+        event.target === interactivePopoverBlocker
+        || interactivePopoverBlocker.contains(event.target)
+      ) {
+        commitAllInteractiveControls();
+        return;
+      }
+      if (
+        event.target.closest('.custom-select')
+        || event.target.closest('.select-menu')
+        || event.target.closest('.checkout-combobox-root')
+        || event.target.closest('.checkout-address-root')
+        || event.target.closest('.checkout-popover')
+        || event.target.closest('.sui-shell-field-root')
+        || event.target.closest('.sui-address-finder-root')
+        || event.target.closest('.sui-search-result')
+      ) {
+        return;
+      }
+      commitAllInteractiveControls();
+    }, true);
+
+    document.addEventListener('click', (event) => {
+      recordDebugEvent('dom-click', {
+        target: describeDebugElement(event.target),
+        x: Math.round(event.clientX || 0),
+        y: Math.round(event.clientY || 0),
+      });
+    }, true);
+
+    document.addEventListener('focusin', (event) => {
+      recordDebugEvent('dom-focusin', {
+        target: describeDebugElement(event.target),
+      });
+    }, true);
+
+    document.addEventListener('focusout', (event) => {
+      recordDebugEvent('dom-focusout', {
+        target: describeDebugElement(event.target),
+      });
+    }, true);
+
+    document.addEventListener('keydown', (event) => {
+      if (['Enter', 'Tab', 'Escape', 'ArrowDown', 'ArrowUp', 'Backspace'].includes(event.key) || event.metaKey || event.ctrlKey) {
+        recordDebugEvent('dom-keydown', {
+          key: event.key,
+          code: event.code,
+          ctrlKey: event.ctrlKey,
+          metaKey: event.metaKey,
+          shiftKey: event.shiftKey,
+          target: describeDebugElement(event.target),
+        });
+      }
+      if (event.key === 'Escape') {
+        closeAllInteractiveControls();
+      }
+    }, true);
+
+    document.addEventListener('selectionchange', () => {
+      recordDebugEvent('dom-selectionchange', {});
+    });
+
+    document.addEventListener('input', (event) => {
+      recordDebugEvent('dom-input', {
+        target: describeDebugElement(event.target),
+      });
+      scheduleTaskStateReport();
+    }, true);
+
+    document.addEventListener('change', (event) => {
+      recordDebugEvent('dom-change', {
+        target: describeDebugElement(event.target),
+      });
+      scheduleTaskStateReport();
+    }, true);
+
+    window.addEventListener('focus', () => {
+      recordDebugEvent('window-focus', {});
+      scheduleTaskStateReport(0);
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      recordDebugEvent('document-visibilitychange', {
+        visibilityState: document.visibilityState,
+      });
+      if (document.visibilityState === 'visible') {
+        scheduleTaskStateReport(0);
+      }
+    });
+
+    document.addEventListener('scroll', () => {
+      recordDebugEvent('document-scroll', {
+        scrollX: Math.round(window.scrollX),
+        scrollY: Math.round(window.scrollY),
+      });
+      scheduleTaskStateReport();
+    }, { passive: true });
+
+    window.addEventListener('resize', () => {
+      recordDebugEvent('window-resize', {
+        innerWidth: window.innerWidth,
+        innerHeight: window.innerHeight,
+      });
+      scheduleTaskStateReport();
+    });
+
+    window.addEventListener('focus', () => {
+      void syncBootstrapState();
+      scheduleTaskStateReport(0);
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      void syncBootstrapState();
+      scheduleTaskStateReport(0);
+    });
+
+    window.addEventListener('error', (event) => {
+      reportPageError('window.error', event.error || event.message || 'unknown error');
+    });
+
+    window.addEventListener('unhandledrejection', (event) => {
+      reportPageError('window.unhandledrejection', event.reason || 'unknown rejection');
+    });
+
+    if (HARNESS_CONFIG.formConfig) {
+      currentSessionId = HARNESS_CONFIG.sessionId || 'standalone';
+      currentStateRequestId = 1;
+      applyRuntimeConfig(HARNESS_CONFIG.formConfig);
+      startStateHeartbeat();
+    } else {
+      renderStandbySurface();
+      startBootstrapPolling();
+      startStateHeartbeat();
+      void syncBootstrapState();
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "name": "interpreter-js-repl-runtime",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "interpreter-browser-control": "file:./packages/browser-control",
+    "playwright-core": "1.56.1"
+  }
+}

@@ -1,0 +1,42 @@
+/* Center xterm content - unused pixel space distributed evenly */
+.xterm {
+  display: flex !important;
+  justify-content: center !important;
+}
+
+.xterm-screen {
+  margin: 0 auto !important;
+}
+
+/* Style xterm's custom scrollbar to mimic native macOS */
+
+/* Hidden by default */
+.xterm .xterm-scrollable-element > .scrollbar {
+  width: 8px !important;
+  opacity: 0 !important;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+
+/* Only show when scrolling (class added by JS) */
+.xterm.is-scrolling .xterm-scrollable-element > .scrollbar {
+  opacity: 1 !important;
+  pointer-events: auto;
+}
+
+/* Style the scrollbar thumb (slider) */
+.xterm .xterm-scrollable-element > .scrollbar > .slider {
+  background: rgba(128, 128, 128, 0.5) !important;
+  border-radius: 10px !important;
+  width: 6px !important;
+  left: 1px !important;
+}
+
+.xterm .xterm-scrollable-element > .scrollbar > .slider:hover {
+  background: rgba(128, 128, 128, 0.7) !important;
+}
+
+/* Hide the scrollbar shadow/arrows */
+.xterm .xterm-scrollable-element > .scrollbar > .scra {
+  display: none !important;
+}

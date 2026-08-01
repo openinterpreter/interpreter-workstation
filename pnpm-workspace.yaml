@@ -1,0 +1,11 @@
+packages:
+  - apps/server
+  - apps/web
+
+onlyBuiltDependencies:
+  - '@vscode/ripgrep'
+  - electron
+  - esbuild
+  - msw
+  - sharp
+  - '@parcel/watcher'

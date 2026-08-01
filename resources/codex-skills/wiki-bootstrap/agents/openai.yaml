@@ -1,0 +1,4 @@
+interface:
+  display_name: "Wiki Bootstrap"
+  short_description: "Initialize or restructure a markdown wiki"
+  default_prompt: "Use the wiki-bootstrap skill workflow when the user wants to initialize a wiki, convert an existing note folder into a more structured wiki, or set up the durable wiki workflow before the first ingest. Do not call a tool named `wiki-bootstrap`. Inspect the workspace first, use `interpreter_vault` snapshot to gauge the existing note graph, show the proposed structure before major moves, and only create the default `raw/`, `wiki/`, `index.md`, and `log.md` layout when the workspace is actually greenfield."

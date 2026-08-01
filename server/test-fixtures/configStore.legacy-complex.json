@@ -1,0 +1,268 @@
+{
+  "agents": {},
+  "mcpServers": {},
+  "builtinTools": {},
+  "authToken": "fixture-supabase-jwt-header.fixture-supabase-jwt-payload.fixture-supabase-jwt-signature",
+  "refreshToken": "fixture-refresh-token-random-string",
+  "theme": "system",
+  "userName": "TestUser",
+  "defaultProfileId": "onboarding:interpreter-smart",
+  "profiles": [
+    {
+      "id": "onboarding:interpreter-smart",
+      "name": "Interpreter Smart",
+      "provider": "hosted",
+      "providerId": "builtin:hosted",
+      "modelId": "interpreter-smart",
+      "helpDescription": "Routes to the smartest model for the best price.",
+      "isBuiltin": false,
+      "useResponsesApi": true
+    },
+    {
+      "id": "onboarding:interpreter-fast",
+      "name": "Interpreter Fast",
+      "provider": "hosted",
+      "providerId": "builtin:hosted",
+      "modelId": "interpreter-fast",
+      "helpDescription": "Routes to the fastest model for the best price.",
+      "isBuiltin": false,
+      "useResponsesApi": true
+    },
+    {
+      "id": "onboarding:hosted-openai-gpt-5-4",
+      "name": "GPT-5.4",
+      "provider": "hosted",
+      "providerId": "builtin:hosted",
+      "modelId": "openai/gpt-5.4",
+      "helpDescription": "Flagship reasoning model",
+      "isBuiltin": false
+    },
+    {
+      "id": "onboarding:hosted-openai-gpt-5-4-mini",
+      "name": "GPT-5.4-mini",
+      "provider": "hosted",
+      "providerId": "builtin:hosted",
+      "modelId": "openai/gpt-5.4-mini",
+      "helpDescription": "Inexpensive OpenAI model",
+      "isBuiltin": false
+    },
+    {
+      "id": "onboarding:hosted-anthropic-claude-opus-4-6",
+      "name": "Claude Opus 4.6",
+      "provider": "hosted",
+      "providerId": "builtin:hosted",
+      "modelId": "interpreter-smart",
+      "helpDescription": "Expensive reasoning model",
+      "isBuiltin": false
+    },
+    {
+      "id": "onboarding:hosted-anthropic-claude-sonnet-4-6",
+      "name": "Claude Sonnet 4.6",
+      "provider": "hosted",
+      "providerId": "builtin:hosted",
+      "modelId": "interpreter-smart",
+      "helpDescription": "General-purpose reasoning model",
+      "isBuiltin": false
+    },
+    {
+      "id": "onboarding:hosted-google-gemini-3-1-pro-preview",
+      "name": "Gemini 3.1 Pro",
+      "provider": "hosted",
+      "providerId": "builtin:hosted",
+      "modelId": "google/gemini-3.1-pro-preview",
+      "helpDescription": "Routes to Gemini 3.1 Pro.",
+      "isBuiltin": false
+    },
+    {
+      "id": "onboarding:hosted-qwen-qwen3-5-397b-a17b",
+      "name": "Qwen 3.5",
+      "provider": "hosted",
+      "providerId": "builtin:hosted",
+      "modelId": "qwen/qwen3.5-397b-a17b",
+      "helpDescription": "Routes to Qwen 3.5.",
+      "isBuiltin": false
+    },
+    {
+      "id": "custom:1775594793399",
+      "name": "Ollama Qwen",
+      "providerId": "builtin:local",
+      "provider": "local",
+      "modelId": "qwen3.5:4b",
+      "isBuiltin": false,
+      "baseURL": "http://localhost:11434/v1",
+      "codexProfileId": "ollama"
+    },
+    {
+      "id": "custom:1775594946915",
+      "name": "LmStudio Qwen",
+      "providerId": "builtin:local",
+      "provider": "local",
+      "modelId": "qwen/qwen3.5-4b",
+      "isBuiltin": false,
+      "baseURL": "http://localhost:1234/v1",
+      "codexProfileId": "lmstudio"
+    },
+    {
+      "id": "custom:1775596644345",
+      "name": "Groq Qwen3 32B",
+      "provider": "api",
+      "modelId": "qwen/qwen3-32b",
+      "isBuiltin": false,
+      "apiKey": "fixture-groq-api-key-random-string",
+      "baseURL": "https://api.groq.com/openai/v1",
+      "apiFormat": "openai",
+      "codexProfileId": "groq",
+      "useResponsesApi": true
+    },
+    {
+      "id": "custom:1775598584249",
+      "name": "o4-mini",
+      "provider": "api",
+      "modelId": "o4-mini",
+      "isBuiltin": false,
+      "apiKey": "fixture-openai-api-key-random-string",
+      "baseURL": "https://api.openai.com/v1",
+      "apiFormat": "openai",
+      "codexProfileId": "openai-api",
+      "useResponsesApi": true
+    },
+    {
+      "id": "custom:1775598597699",
+      "name": "Llama 4 Scout 17B",
+      "provider": "api",
+      "modelId": "meta-llama/llama-4-scout-17b-16e-instruct",
+      "isBuiltin": false,
+      "apiKey": "fixture-groq-api-key-random-string",
+      "baseURL": "https://api.groq.com/openai/v1",
+      "apiFormat": "openai",
+      "codexProfileId": "groq",
+      "useResponsesApi": true
+    },
+    {
+      "id": "custom:1775598607625",
+      "name": "Compound",
+      "provider": "api",
+      "modelId": "groq/compound",
+      "isBuiltin": false,
+      "apiKey": "fixture-groq-api-key-random-string",
+      "baseURL": "https://api.groq.com/openai/v1",
+      "apiFormat": "openai",
+      "codexProfileId": "groq",
+      "useResponsesApi": true
+    },
+    {
+      "id": "custom:1775598615411",
+      "name": "GPT-5.4 nano",
+      "provider": "api",
+      "modelId": "gpt-5.4-nano",
+      "isBuiltin": false,
+      "apiKey": "fixture-openai-api-key-random-string",
+      "baseURL": "https://api.openai.com/v1",
+      "apiFormat": "openai",
+      "codexProfileId": "openai-api",
+      "useResponsesApi": true
+    },
+    {
+      "id": "custom:1775599309928",
+      "name": "Google: Gemma 4 31B (free)",
+      "provider": "api",
+      "modelId": "google/gemma-4-31b-it:free",
+      "isBuiltin": false,
+      "apiKey": "fixture-openrouter-api-key-random-string",
+      "baseURL": "https://openrouter.ai/api/v1",
+      "apiFormat": "openai",
+      "codexProfileId": "openrouter",
+      "useResponsesApi": true
+    },
+    {
+      "id": "custom:1775599330800",
+      "name": "Qwen: Qwen3 30B A3B Thinking 2507",
+      "provider": "api",
+      "modelId": "qwen/qwen3-30b-a3b-thinking-2507",
+      "isBuiltin": false,
+      "apiKey": "fixture-openrouter-api-key-random-string",
+      "baseURL": "https://openrouter.ai/api/v1",
+      "apiFormat": "openai",
+      "codexProfileId": "openrouter",
+      "useResponsesApi": true
+    }
+  ],
+  "lastMigrationDeprecatedProfiles": [],
+  "lastMigrationVersion": 11,
+  "lastMigrationUnsupportedProfiles": [],
+  "configVersion": 11,
+  "lastMigrationBackupPath": "/Users/example/.interpreter/config.json.pre-migration-v11",
+  "filePermissions": {
+    "readOutsideWorkspace": "ask",
+    "editOpenFolder": true,
+    "approveCopy": true,
+    "approveMove": true
+  },
+  "globalDisabledTools": [],
+  "tts": {
+    "readAssistantMessages": false,
+    "modelId": "vits-piper-en_US-libritts_r-medium",
+    "voiceId": 0,
+    "speed": 1,
+    "pitch": 0,
+    "provider": "cpu",
+    "autotuneEnabled": false,
+    "voiceResetEnabled": false,
+    "voiceResetPhrase": "Forget everything you know"
+  },
+  "stt": {
+    "backend": "qwen",
+    "silenceTimeoutMs": 2000,
+    "fastSentenceSilenceTimeoutMs": 700,
+    "previewBeforeSendMs": 0,
+    "sendCommand": "make it so",
+    "newChatCommand": "new chat",
+    "voiceMode": "conversational",
+    "ambientTriggerPhrases": [
+      "Interpreter",
+      "Repertor"
+    ],
+    "ambientEndPhrases": [
+      "make it so",
+      "take it so"
+    ]
+  },
+  "providers": {
+    "builtin:hosted": {
+      "id": "builtin:hosted",
+      "name": "Hosted",
+      "type": "hosted",
+      "createdAt": 0,
+      "updatedAt": 0
+    },
+    "builtin:local": {
+      "id": "builtin:local",
+      "name": "Local (Ollama / LM Studio)",
+      "type": "local",
+      "createdAt": 0,
+      "updatedAt": 0
+    },
+    "builtin:openai-oauth": {
+      "id": "builtin:openai-oauth",
+      "name": "OpenAI (OAuth)",
+      "type": "openai-oauth",
+      "createdAt": 0,
+      "updatedAt": 0
+    },
+    "builtin:agent": {
+      "id": "builtin:agent",
+      "name": "CLI Agent",
+      "type": "agent",
+      "createdAt": 0,
+      "updatedAt": 0
+    }
+  },
+  "recentFolders": [
+    {
+      "path": "/private/tmp/iw/tests/test-workspace",
+      "name": "test-workspace",
+      "lastOpened": 1775603126889
+    }
+  ],
+  "appLaunchCount": 1
+}

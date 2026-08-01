@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "lib": ["ES2020"],
+    "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "resolveJsonModule": true,
+    "outDir": "dist-electron",
+    "rootDir": ".",
+    "sourceMap": true,
+    "incremental": true,
+    "tsBuildInfoFile": ".tsbuildinfo-electron"
+  },
+  "include": [
+    "electron/**/*",
+    "server/**/*",
+    "apps/interpreter-overlay/electron/**/*",
+    "apps/interpreter-overlay/runtime/**/*",
+    "apps/interpreter-overlay/shared/**/*",
+    "electron/types/**/*.d.ts"
+  ],
+  "exclude": ["**/__tests__/**", "**/*.spec.ts", "**/*.test.ts", "**/*.test.disabled.ts", "**/*.demo.ts", "server/services/sandbox/vendor/**"]
+}

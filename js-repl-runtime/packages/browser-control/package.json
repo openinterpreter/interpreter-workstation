@@ -1,0 +1,12 @@
+{
+  "name": "interpreter-browser-control",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.js"
+  },
+  "dependencies": {
+    "playwright-core": "1.56.1"
+  }
+}

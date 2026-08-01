@@ -1,0 +1,83 @@
+{
+	"nameShort": "Interpreter",
+	"nameLong": "Interpreter",
+	"applicationName": "interpreter",
+	"dataFolderName": ".interpreter",
+	"win32MutexName": "interpreter",
+	"licenseName": "Apache-2.0",
+	"licenseUrl": "https://github.com/openinterpreter/interpreter-workstation/blob/main/LICENSE",
+	"serverLicenseUrl": "https://github.com/openinterpreter/interpreter-workstation/blob/main/LICENSE",
+	"serverGreeting": [],
+	"serverLicense": [],
+	"serverLicensePrompt": "",
+	"serverApplicationName": "interpreter-server",
+	"serverDataFolderName": ".interpreter-server",
+	"tunnelApplicationName": "interpreter-tunnel",
+	"win32DirName": "Interpreter",
+	"win32NameVersion": "Interpreter",
+	"win32RegValueName": "Interpreter",
+	"win32x64AppId": "{{D77B7E06-80BA-4137-BCF4-654B95CCEBC5}",
+	"win32arm64AppId": "{{D1ACE434-89C5-48D1-88D3-E2991DF85475}",
+	"win32x64UserAppId": "{{CC6B787D-37A0-49E8-AE24-8559A032BE0C}",
+	"win32arm64UserAppId": "{{3AEBF0C8-F733-4AD4-BADE-FDB816D53D7B}",
+	"win32AppUserModelId": "Microsoft.Interpreter",
+	"win32ShellNameShort": "I&nterpreter",
+	"win32TunnelServiceMutex": "interpreter-tunnelservice",
+	"win32TunnelMutex": "interpreter-tunnel",
+	"darwinBundleIdentifier": "com.openinterpreter.interpreter",
+	"darwinProfileUUID": "47827DD9-4734-49A0-AF80-7E19B11495CC",
+	"darwinProfilePayloadUUID": "CF808BE7-53F3-46C6-A7E2-7EDB98A5E959",
+	"linuxIconName": "interpreter",
+	"licenseFileName": "LICENSE.txt",
+	"reportIssueUrl": "https://github.com/openinterpreter/interpreter-workstation/issues/new/choose",
+	"nodejsRepository": "https://nodejs.org",
+	"urlProtocol": "interpreter",
+	"distribution": {
+		"id": "community",
+		"hostedApiBaseUrl": "",
+		"auth": {
+			"provider": "none",
+			"url": "",
+			"anonKey": "",
+			"storageKey": "interpreter-auth-token"
+		},
+		"telemetry": {
+			"sentryDsn": "",
+			"eventsUrl": "",
+			"eventsAnonKey": ""
+		},
+		"newsletterUrl": "",
+		"interviewBookingUrl": "",
+		"billingApiBaseUrl": "",
+		"updates": {
+			"provider": "none",
+			"bucket": "",
+			"endpoint": "",
+			"path": "",
+			"internalPath": "",
+			"region": "",
+			"acl": ""
+		},
+		"documentEngine": {
+			"releaseRepository": "",
+			"installDirectoryName": "document-engine"
+		}
+	},
+    "webviewContentExternalBaseUrlTemplate": "",
+    "builtInExtensions": [],
+    "configurationDefaults": {
+        "workbench.startupEditor": "none",
+        "workbench.welcomePage.walkthroughs.openOnInstall": false,
+        "workbench.sideBar.visible": true,
+        "workbench.auxiliaryBar.visible": true,
+        "workbench.editorAssociations": [
+            {
+                "filenamePattern": "*.pdf",
+                "viewType": "pdf.preview"
+            }
+        ],
+        "update.mode": "none",
+        "extensions.autoUpdate": false,
+        "extensions.autoCheckUpdates": false
+    }
+}

@@ -1,0 +1,8 @@
+[submodule "apps/interpreter-extension"]
+	path = apps/interpreter-extension
+	url = https://github.com/openinterpreter/interpreter-extension.git
+	branch = main
+[submodule "submodules/interpreter-cua"]
+	path = submodules/interpreter-cua
+	url = https://github.com/openinterpreter/interpreter-cua.git
+	branch = main

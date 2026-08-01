@@ -1,0 +1,4 @@
+interface:
+  display_name: "Wiki Ingest"
+  short_description: "Ingest one source into a markdown wiki"
+  default_prompt: "Use the wiki-ingest skill workflow when the user wants to add one new source into an existing markdown wiki or established vault workflow. Do not call a tool named `wiki-ingest`. Start with `interpreter_vault` to inspect the current note graph. If there is not yet a real wiki workflow to ingest into, stop and use the wiki-bootstrap skill first. Otherwise read the source, create or update the source page, update every related entity/concept/synthesis page, add `[[wikilinks]]`, refresh `index.md`, append to `log.md`, and report what changed. Never modify `raw/`. Respect the existing vault structure if one already exists."

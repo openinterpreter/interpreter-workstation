@@ -1,0 +1,4 @@
+interface:
+  display_name: "Media Creation"
+  short_description: "Use hosted Media AI, recommend GPT Image 2 for image work, and explain cost before running"
+  default_prompt: "For image generation or editing, prefer GPT Image 2 when quality matters. Pick the endpoint, estimate the cost first, tell me what it should cost, then run it through hosted Media AI when appropriate."

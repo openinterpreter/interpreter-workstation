@@ -1,0 +1,4 @@
+interface:
+  display_name: "Computer Use"
+  short_description: "Drive native desktop UI with Interpreter Computer Use"
+  default_prompt: "Use the Computer Use workflow for native macOS desktop control, browser chrome, dialogs, menus, file choosers, hidden/background windows, or explicit CUA requests. Do not call a tool named `computer-use`. The desktop app exposes Computer Use through `interpreter-app tools builtin-cua-driver ...`; use `list_apps`, `launch_app`, `get_app_state`, `click`, `drag`, `press_key`, `scroll`, `set_value`, `type_text`, and `perform_secondary_action`. Start with `get_app_state` when the target app is known, or `list_apps` when unclear. Use returned element indexes only against the same state; after any UI-changing action, call `get_app_state` again. Use screenshot coordinates only when the target is visible but not exposed semantically. Prefer browser-control for shared browser-page content."

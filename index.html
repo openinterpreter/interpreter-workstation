@@ -1,0 +1,141 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Interpreter</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --startup-mark: #202123;
+        --startup-mark-base: color-mix(in srgb, var(--startup-mark) 12%, transparent);
+        --startup-mark-shimmer: color-mix(in srgb, white 52%, var(--startup-mark));
+      }
+
+      :root.dark {
+        --startup-mark: #f3f3ef;
+        --startup-mark-base: color-mix(in srgb, var(--startup-mark) 14%, transparent);
+        --startup-mark-shimmer: rgba(255, 255, 255, 0.56);
+      }
+
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        background: transparent;
+      }
+
+      #root {
+        width: 100%;
+        height: 100%;
+      }
+
+      .startup-splash {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        background: transparent;
+        opacity: 1;
+        pointer-events: none;
+        transition: opacity 420ms ease;
+        z-index: 2147483647;
+      }
+
+      .startup-splash[data-state="dismissed"] {
+        opacity: 0;
+      }
+
+      .startup-logo {
+        position: relative;
+        display: block;
+        width: 29px;
+        height: 123px;
+        color: var(--startup-mark);
+        filter: drop-shadow(0 14px 26px rgba(0, 0, 0, 0.08));
+      }
+
+      .startup-logo svg {
+        display: block;
+        width: 29px;
+        height: 123px;
+      }
+
+      .startup-logo-shimmer-band {
+        opacity: 0;
+        transform-box: view-box;
+        transform-origin: 14.5px 61.5px;
+        animation: startup-logo-shimmer 3.2s linear infinite;
+      }
+
+      @keyframes startup-logo-shimmer {
+        0% {
+          opacity: 0;
+          transform: translateX(-58px) rotate(-18deg);
+        }
+        3% {
+          opacity: 0;
+          transform: translateX(-58px) rotate(-18deg);
+        }
+        12% {
+          opacity: 0.24;
+        }
+        88% {
+          opacity: 0.24;
+        }
+        97% {
+          opacity: 0;
+          transform: translateX(58px) rotate(-18deg);
+        }
+        100% {
+          opacity: 0;
+          transform: translateX(58px) rotate(-18deg);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .startup-logo-shimmer-band {
+          display: none;
+        }
+      }
+    </style>
+    <script>
+      // Sync dark class BEFORE first paint to prevent flash of wrong theme.
+      // Electron sets nativeTheme.themeSource before creating the window,
+      // so prefers-color-scheme already reflects the correct value here.
+      if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        document.documentElement.classList.add('dark');
+      }
+    </script>
+  </head>
+  <body class="h-screen">
+    <div id="startup-splash" class="startup-splash" aria-hidden="true">
+      <div class="startup-logo">
+        <svg viewBox="0 0 29 123" role="img">
+          <defs>
+            <mask id="startup-logo-mask">
+              <rect width="29" height="123" fill="black"></rect>
+              <circle cx="14.5" cy="14.5" r="14.5" fill="white"></circle>
+              <rect x="0" y="41" width="29" height="82" rx="14.5" fill="white"></rect>
+            </mask>
+            <filter id="startup-logo-shimmer-blur" x="-220%" y="-80%" width="540%" height="260%" color-interpolation-filters="sRGB">
+              <feGaussianBlur stdDeviation="10"></feGaussianBlur>
+            </filter>
+          </defs>
+          <g fill="var(--startup-mark-base)">
+            <circle cx="14.5" cy="14.5" r="14.5"></circle>
+            <rect x="0" y="41" width="29" height="82" rx="14.5"></rect>
+          </g>
+          <g class="startup-logo-shimmer" mask="url(#startup-logo-mask)">
+            <g class="startup-logo-shimmer-band">
+              <rect x="-6" y="-120" width="40" height="360" rx="20" fill="var(--startup-mark-shimmer)" opacity="0.72" filter="url(#startup-logo-shimmer-blur)"></rect>
+            </g>
+          </g>
+        </svg>
+      </div>
+    </div>
+    <div id="root" class="h-full"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

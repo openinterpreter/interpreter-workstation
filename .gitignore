@@ -1,0 +1,127 @@
+# Dependencies
+node_modules
+.distribution-build.lock
+.pnpm-store/
+
+# Dev caches
+.cache/
+
+# Build outputs
+dist
+dist-electron
+dist-server
+build/*
+!build/azure-pipelines/
+release
+
+# Compiled JS in server tools (should only have .ts)
+server/tools/builtin-tools/**/*.js
+server/tools/builtin-tools/**/*.js.map
+
+# Logs
+*.log
+pnpm-debug.log*
+.pnpm-debug.log*
+logs/
+
+# Test artifacts (saved to test-runs/ per run)
+test-runs/
+form-tests/
+!form-tests/
+form-tests/*
+!form-tests/generated/
+!form-tests/manual-workbench.html
+!form-tests/scope-drag-region.cjs
+form-tests/generated/*
+!form-tests/generated/SUMMARY.md
+!form-tests/generated/test-900/
+!form-tests/generated/test-900/**
+browser-form-tests/
+!browser-form-tests/
+browser-form-tests/*
+!browser-form-tests/README.md
+!browser-form-tests/main.cjs
+overlay-debug/
+openai-reference-images/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Data
+/data
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Vite
+.vite
+apps/web/.vite
+vite.config.ts.timestamp-*.mjs
+
+# Reference projects
+agent-reference/
+pdf-reference/
+
+# Monocart cache
+monocart-report/
+oo-editors/converter/
+
+# Test working directory (fixtures are in tests/fixtures/test-workspace/)
+tests/test-workspace/
+tests/test-workspace*/
+.mcp.json
+.claude
+
+# Rust build artifacts
+apps/interpreter-cua/target/
+server/services/sandbox/target/
+server/services/sandbox/vendor/
+
+# Downloaded runtime binaries
+resources/codex/
+resources/oix/
+resources/qwen-asr/
+resources/pdfcpu/
+resources/nodejs/
+resources/js-repl-runtime/
+# Generated from apps/interpreter-extension. Never edit directly.
+resources/browser-extension-relay/
+apps/interpreter-extension/.deploy-runtime/
+ajv-generated/
+*.mov
+.build-lock
+*.tsbuildinfo
+.tsbuildinfo*
+./.claude/settings.json
+windows_debugging.txt
+.agents
+.platform-workspace/
+
+# Codex generated artifacts (regenerate locally)
+src/schemas/
+src/lib/validators/generated/
+server/handlers/codex-generated-types/
+server/handlers/codex/validators/generated/
+
+# Voice test temp artifacts
+tests/fixtures/audio/.tmp-realistic/
+__pycache__
+skills-lock.json
+.playwright-cli
+.codex/
+opencode.json
+dist-cross/
+.opencode
+
+# Local scenario runner output
+scenario-runs/
+
+# Editor recovery files
+*.swp

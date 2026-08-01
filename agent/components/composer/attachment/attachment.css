@@ -1,0 +1,149 @@
+/*
+ * Styles for composer attachment chips + hover-preview popover.
+ * Reusable across the desktop composer and the overlay input. The overlay uses
+ * image chips; the desktop composer primarily uses text chips and previews.
+ * Uses theme CSS vars where available, with explicit fallbacks so the overlay
+ * (which runs without the main app's theme tokens) renders reasonably.
+ */
+
+.composer-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px 2px 6px;
+  margin: 0 2px;
+  border-radius: var(--oa-radius-10, 10px);
+  border: var(--border-width) solid color-mix(in srgb, var(--oa-border, var(--border)) 68%, transparent);
+  background: color-mix(in srgb, var(--oa-bg-input, var(--background)) 90%, var(--oa-bg-subtle, var(--hover-bg)) 10%);
+  color: var(--oa-text, var(--foreground));
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+  font-size: 0.82em;
+  line-height: 1.2;
+  vertical-align: baseline;
+  white-space: nowrap;
+  max-width: 260px;
+  user-select: none;
+  cursor: default;
+  transition: background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease, color 150ms ease;
+}
+
+.composer-attachment-chip:hover {
+  background: color-mix(in srgb, var(--oa-bg-input, var(--background)) 82%, var(--oa-bg-subtle, var(--hover-bg)) 18%);
+  border-color: color-mix(in srgb, var(--oa-border-strong, var(--oa-border, var(--border))) 72%, transparent);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 0 0 1px color-mix(in srgb, var(--oa-text, var(--foreground)) 6%, transparent);
+}
+
+.composer-attachment-chip[data-attachment-kind='pasted-image'],
+.composer-attachment-chip[data-attachment-kind='file-image'] {
+  border-color: color-mix(in srgb, var(--oa-primary, var(--foreground)) 18%, var(--oa-border, var(--border)) 82%);
+  background: color-mix(in srgb, var(--oa-primary, var(--foreground)) 6%, var(--oa-bg-input, var(--background)) 94%);
+}
+
+.composer-attachment-chip__icon {
+  flex: 0 0 auto;
+  color: var(--oa-text-muted, var(--muted-foreground));
+  opacity: 0.9;
+}
+
+.composer-attachment-chip__label {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+
+.composer-attachment-chip__remove {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  margin-left: 2px;
+  border: 0;
+  border-radius: var(--oa-radius-6, 6px);
+  background: transparent;
+  color: var(--oa-text-muted, var(--muted-foreground));
+  opacity: 0.72;
+  cursor: default;
+  transition: background-color 150ms ease, color 150ms ease, opacity 150ms ease;
+}
+
+.composer-attachment-chip__remove:hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--oa-bg-subtle, var(--hover-bg)) 78%, transparent);
+  color: var(--oa-text-strong, var(--foreground));
+}
+
+/* Preview popover */
+.composer-attachment-preview {
+  padding: 10px;
+  border-radius: var(--oa-radius-lg, 16px);
+  background: color-mix(in srgb, var(--oa-bg-app, var(--popover)) 94%, var(--oa-bg-subtle, var(--muted)) 6%);
+  color: var(--oa-text, var(--popover-foreground));
+  border: var(--border-width) solid color-mix(in srgb, var(--oa-border, var(--border)) 76%, transparent);
+  box-shadow: var(--oa-shadow-md, 0 8px 30px rgba(0, 0, 0, 0.08));
+  backdrop-filter: blur(14px);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.composer-attachment-preview__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 2px 2px;
+  border-bottom: var(--border-width) solid color-mix(in srgb, var(--oa-border, var(--border)) 58%, transparent);
+}
+
+.composer-attachment-preview__title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  color: var(--oa-text-strong, var(--foreground));
+}
+
+.composer-attachment-preview__meta {
+  font-size: 11px;
+  color: var(--oa-text-muted, var(--muted-foreground));
+  flex: 0 0 auto;
+}
+
+.composer-attachment-preview__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 11px;
+  border-radius: var(--oa-radius-md, 12px);
+  border: var(--border-width) solid color-mix(in srgb, var(--oa-border, var(--border)) 54%, transparent);
+  background: color-mix(in srgb, var(--oa-bg-subtle, var(--muted)) 72%, transparent);
+  overflow: auto;
+  max-height: 300px;
+}
+
+.composer-attachment-preview__text {
+  margin: 0;
+  font-family: 'SF Mono', 'SFMono-Regular', ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--oa-text, var(--foreground));
+}
+
+.composer-attachment-preview__body img {
+  display: block;
+  max-width: 100%;
+  border-radius: var(--oa-radius-sm, 8px);
+  border: var(--border-width) solid color-mix(in srgb, var(--oa-border, var(--border)) 56%, transparent);
+  background: color-mix(in srgb, var(--oa-bg-input, var(--background)) 84%, transparent);
+}
