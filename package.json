@@ -192,7 +192,7 @@
     "builder-util-runtime": "9.7.0",
     "concurrently": "9.2.1",
     "cross-env": "10.1.0",
-    "electron": "42.3.0",
+    "electron": "42.5.1",
     "electron-builder": "26.15.0",
     "electron-builder-squirrel-windows": "26.15.0",
     "esbuild": "0.27.0",
@@ -258,7 +258,6 @@
     "@xterm/addon-fit": "0.11.0",
     "@xterm/addon-webgl": "0.19.0",
     "@xterm/xterm": "6.0.0",
-    "ai": "5.0.112",
     "ajv": "8.18.0",
     "ajv-formats": "^3.0.1",
     "class-variance-authority": "0.7.1",
@@ -343,6 +342,7 @@
       "exceljs>uuid": "11.1.1",
       "fast-uri@<3.1.5": "3.1.5",
       "hono@<4.12.34": "4.12.34",
+      "@jimp/core>file-type": "21.3.4",
       "js-yaml@<4": "3.15.0",
       "linkify-it@<5.0.2": "5.0.2",
       "path-to-regexp@<0.1.13": "0.1.13",
@@ -374,7 +374,8 @@
     ],
     "patchedDependencies": {
       "whatsapp-rust-bridge@0.6.0-alpha.42": "patches/whatsapp-rust-bridge@0.6.0-alpha.42.patch",
-      "@oxidezap/baileyrs@0.0.32": "patches/@oxidezap__baileyrs@0.0.32.patch"
+      "@oxidezap/baileyrs@0.0.32": "patches/@oxidezap__baileyrs@0.0.32.patch",
+      "@jimp/core@0.22.12": "patches/@jimp__core@0.22.12.patch"
     }
   }
 }

@@ -1,9 +1,6 @@
 // Utilities for creating subagent tools
 
-import { tool } from 'ai';
-import { z } from 'zod';
-import type { BuiltinToolDefinition, BuiltinToolContext } from '../../builtinTools';
-import { wrapToolForLargeOutput } from '../../../utils/wrapToolForLargeOutput';
+import type { BuiltinToolContext } from '../../builtinTools';
 import { getMaxSubagentDepthSync, getDefaultProfile, getFastProfile } from '../../../configStore';
 import type { AgentModelConfig } from '../../../../shared/types/model';
 import { profileToModelConfig } from '../../../../shared/types/profile';
@@ -251,83 +248,6 @@ export async function generateMultiFileDiffFeedback(
   }
 
   return feedbacks;
-}
-
-/**
- * Create an AI SDK tool from a BuiltinToolDefinition without path restrictions
- * Used for tools like browser controls that don't need file path scoping
- */
-export function createUnscopedTool(topLevelTool: BuiltinToolDefinition) {
-  const schemaFields: Record<string, any> = {};
-
-  for (const [key, value] of Object.entries(topLevelTool.inputSchema.properties)) {
-    if (value.type === 'string') {
-      const field = z.string().describe(value.description);
-      schemaFields[key] = topLevelTool.inputSchema.required?.includes(key) ? field : field.optional();
-    } else if (value.type === 'number') {
-      const field = z.number().describe(value.description);
-      schemaFields[key] = topLevelTool.inputSchema.required?.includes(key) ? field : field.optional();
-    } else if (value.type === 'boolean') {
-      const field = z.boolean().describe(value.description);
-      schemaFields[key] = topLevelTool.inputSchema.required?.includes(key) ? field : field.optional();
-    } else if (value.oneOf) {
-      // Handle oneOf schemas (e.g., sheet can be string or number)
-      const types = value.oneOf.map((o: any) => o.type);
-      let field;
-      if (types.includes('string') && types.includes('number')) {
-        field = z.union([z.string(), z.number()]).describe(value.description);
-      } else if (types.includes('string')) {
-        field = z.string().describe(value.description);
-      } else if (types.includes('number')) {
-        field = z.number().describe(value.description);
-      } else {
-        field = z.unknown().describe(value.description);
-      }
-      schemaFields[key] = topLevelTool.inputSchema.required?.includes(key) ? field : field.optional();
-    } else if (value.type === 'array') {
-      let arrayField;
-      if (value.items?.type === 'string') {
-        arrayField = z.array(z.string());
-      } else if (value.items?.type === 'number') {
-        arrayField = z.array(z.number());
-      } else if (value.items?.type === 'boolean') {
-        arrayField = z.array(z.boolean());
-      } else {
-        arrayField = z.array(z.unknown());
-      }
-      if (value.description) {
-        arrayField = arrayField.describe(value.description);
-      }
-      schemaFields[key] = topLevelTool.inputSchema.required?.includes(key) ? arrayField : arrayField.optional();
-    }
-  }
-
-  const executeFunc = async (args: any, context?: { toolCallId?: string; abortSignal?: AbortSignal; experimental_context?: any }) => {
-    // Call with isSubagent flag to indicate subagent context
-    // Pass through context for nested subagent support (toolCallPath, maxDepth)
-    const result = await topLevelTool.handler(args, {
-      isSubagent: true,
-      toolCallId: context?.toolCallId,
-      abortSignal: context?.abortSignal,
-      toolCallPath: context?.experimental_context?.toolCallPath,
-      maxDepth: context?.experimental_context?.maxDepth,
-      agentId: context?.experimental_context?.agentId,
-      modelConfig: context?.experimental_context?.modelConfig,
-      messageId: context?.experimental_context?.messageId
-    });
-    if (result.isError) {
-      throw new Error(result.content[0].text);
-    }
-    return result.content[0].text ?? '';
-  };
-
-  const inputSchema = z.object(schemaFields) as z.ZodObject<any>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return tool({
-    description: topLevelTool.description,
-    inputSchema,
-    execute: wrapToolForLargeOutput(topLevelTool.name, executeFunc)
-  } as any);
 }
 
 /**

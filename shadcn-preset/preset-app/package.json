@@ -33,6 +33,7 @@
   },
   "pnpm": {
     "overrides": {
+      "hono": "4.12.34",
       "postcss": "8.5.25",
       "sharp": "0.35.3"
     }
