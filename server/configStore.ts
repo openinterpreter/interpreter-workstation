@@ -94,6 +94,7 @@ import {
 import { getCodexClient } from './utils/codexServiceBridge';
 import { migrateLegacyMcpOAuthToCodex } from './utils/legacyMcpOAuthMigration';
 import { resolveInterpreterHome } from '../shared/interpreterHome';
+import type { DetectedNoteWorkspace } from './utils/noteWorkspaceScanner';
 
 // Re-export MCP types for convenience
 export type { McpServerConfig, McpServerConnectionFailure };
@@ -129,6 +130,7 @@ export interface AppConfig {
   primaryColor?: string; // Primary accent color (e.g., "blue", "purple")
   lastWorkspace?: string | null; // Last opened workspace path
   recentFolders?: RecentFolder[]; // Recent workspace folders
+  detectedNoteWorkspaces?: DetectedNoteWorkspace[]; // Results from the last user-requested note workspace scan
 
   // Auth tokens for CI/test bootstrapping
   // Primary auth is handled by Supabase localStorage in the frontend.
@@ -2089,6 +2091,25 @@ export async function addRecentFolder(folderPath: string): Promise<void> {
 export async function clearRecentFolders(): Promise<void> {
   const config = await loadConfig();
   config.recentFolders = [];
+  await saveConfig(config);
+}
+
+/**
+ * Return the last explicitly requested note-workspace scan without touching the filesystem.
+ */
+export async function getDetectedNoteWorkspaces(): Promise<DetectedNoteWorkspace[]> {
+  const config = await loadConfigForRead('detected note workspaces');
+  return config.detectedNoteWorkspaces || [];
+}
+
+/**
+ * Persist note-workspace scan results for the onboarding and workspace pickers.
+ */
+export async function setDetectedNoteWorkspaces(
+  workspaces: DetectedNoteWorkspace[],
+): Promise<void> {
+  const config = await loadConfig();
+  config.detectedNoteWorkspaces = workspaces;
   await saveConfig(config);
 }
 

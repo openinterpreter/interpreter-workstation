@@ -54,29 +54,6 @@ function buildWorkspaceConfirmationEvent(workspacePath: string): WorkspaceConfir
   };
 }
 
-function buildWorkspaceBlockedEvent(
-  workspacePath: string,
-  blockers: Array<{ workspacePath: string }>,
-): WorkspaceConfirmationRequestedEvent {
-  const blockerWorkspaces = Array.from(
-    new Set(blockers.map((blocker) => blocker.workspacePath)),
-  );
-
-  return {
-    requestId: randomUUID(),
-    workspacePath,
-    title: 'Workspace Is Locked',
-    message: 'Close or reset active Interpreter agent chats before changing workspaces.',
-    permissionNote: 'Current agent chats are still bound to:',
-    backupNote: 'This prevents the app from showing one workspace while the agent continues running commands in another.',
-    confirmLabel: 'OK',
-    cancelLabel: 'Cancel',
-    variant: 'notice',
-    detailItemsLabel: blockerWorkspaces.length === 1 ? 'Bound workspace' : 'Bound workspaces',
-    detailItems: blockerWorkspaces,
-  };
-}
-
 function getTargetWindow(windowId?: number | null): BrowserWindow | null {
   if (windowId) {
     const explicitWindow = BrowserWindow.fromId(windowId);
@@ -164,26 +141,6 @@ export async function setWorkspaceWithConfirmation(
   const targetWindowId = targetWindow?.id ?? null;
   const windowSessionKey = getWindowSessionKeyForWindowId(targetWindowId);
   const currentWindowWorkspace = getWindowSessionWorkspace({ windowId: targetWindowId });
-  const { agentTabManager } = await import('../../server/agentTabManager');
-  const blockers = agentTabManager.getWorkspaceSwitchBlockers({
-    windowSessionKey,
-    nextWorkspacePath: expandedPath,
-  });
-
-  if (blockers.length > 0) {
-    console.warn('[WorkspaceSwitch] blocked-active-agent-bindings', {
-      workspacePath: expandedPath,
-      windowId: targetWindowId,
-      blockerCount: blockers.length,
-      blockerWorkspaces: Array.from(new Set(blockers.map((blocker) => blocker.workspacePath))),
-    });
-    await requestWorkspaceScopedConfirmation(
-      buildWorkspaceBlockedEvent(expandedPath, blockers),
-      { windowId: targetWindowId },
-    );
-    return false;
-  }
-
   const confirmed = await requestWorkspaceScopedConfirmation(
     buildWorkspaceConfirmationEvent(expandedPath),
     { windowId: targetWindowId },

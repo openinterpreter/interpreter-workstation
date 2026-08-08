@@ -444,6 +444,9 @@ export function LayoutProvider({ children }: { children: React.ReactNode }) {
     const unsubscribe = workspaceIpc.onChanged(async (event: { workspacePath: string | null }) => {
       sawWorkspaceChangeEventRef.current = true;
       const previousWorkspacePath = workspacePathRef.current;
+      // Make the new default visible to tab creation immediately. The IPC
+      // response can resolve before React commits the corresponding state.
+      workspacePathRef.current = event.workspacePath;
       syncWindowWorkspaceIntoIdleAgentTabs(event.workspacePath, previousWorkspacePath);
       setWorkspacePath(event.workspacePath);
     });
@@ -459,6 +462,7 @@ export function LayoutProvider({ children }: { children: React.ReactNode }) {
       }
 
       const previousWorkspacePath = workspacePathRef.current;
+      workspacePathRef.current = workspace;
       syncWindowWorkspaceIntoIdleAgentTabs(workspace, previousWorkspacePath);
       setWorkspacePath(workspace);
     })
@@ -906,7 +910,7 @@ export function LayoutProvider({ children }: { children: React.ReactNode }) {
     stateRef,
     getActivePane,
     closeTab,
-    workspacePath,
+    workspacePathRef,
     getDefaultAgentModelConfig,
     getFastAgentModelConfig,
   });

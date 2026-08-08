@@ -4,13 +4,17 @@ import request from 'supertest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { registerWorkspaceCoreRoutes } from './workspace';
+import { registerWorkspaceCoreRoutes, registerWorkspacePickerRoutes } from './workspace';
 
 function createTestHarness() {
   const getWorkspaceHandlerMock = mock(async () => ({ workspace: null as string | null }));
   const setWorkspaceHandlerMock = mock(async (_workspacePath: string) => ({ success: true }));
   const getCurrentWorkspaceMock = mock(() => null as string | null);
   const writeFileTreeCacheMock = mock((_workspacePath: string, _files: unknown) => {});
+  const getRecentFoldersMock = mock(async () => [] as Array<{ path: string; name: string; lastOpened: number }>);
+  const getDetectedNoteWorkspacesMock = mock(async () => [] as Array<{ path: string; name: string; source: 'obsidian' }>);
+  const scanForNoteWorkspacesMock = mock(() => [] as Array<{ path: string; name: string; source: 'obsidian' }>);
+  const setDetectedNoteWorkspacesMock = mock(async (_workspaces: Array<{ path: string; name: string; source: 'obsidian' }>) => {});
   const app = express();
   const router = express.Router();
   app.use(express.json());
@@ -20,6 +24,12 @@ function createTestHarness() {
     setWorkspaceHandler: setWorkspaceHandlerMock,
     writeFileTreeCache: writeFileTreeCacheMock,
   });
+  registerWorkspacePickerRoutes(router, {
+    getRecentFolders: getRecentFoldersMock,
+    getDetectedNoteWorkspaces: getDetectedNoteWorkspacesMock,
+    scanForNoteWorkspaces: scanForNoteWorkspacesMock,
+    setDetectedNoteWorkspaces: setDetectedNoteWorkspacesMock,
+  });
   app.use('/', router);
   return {
     app,
@@ -27,6 +37,10 @@ function createTestHarness() {
     getWorkspaceHandlerMock,
     setWorkspaceHandlerMock,
     writeFileTreeCacheMock,
+    getRecentFoldersMock,
+    getDetectedNoteWorkspacesMock,
+    scanForNoteWorkspacesMock,
+    setDetectedNoteWorkspacesMock,
   };
 }
 
@@ -113,5 +127,66 @@ describe('workspace router with supertest', () => {
       workspacePath,
       expect.any(Array),
     );
+  });
+
+  test('GET /recent returns saved paths without probing or scanning them', async () => {
+    const { app, getRecentFoldersMock, scanForNoteWorkspacesMock } = createTestHarness();
+    getRecentFoldersMock.mockResolvedValue([{
+      path: '/protected/iCloud Drive/Notes',
+      name: 'Notes',
+      lastOpened: 123,
+    }]);
+
+    const response = await request(app).get('/recent');
+
+    expect(response.status).toBe(200);
+    expect(response.body.folders).toEqual([{
+      path: '/protected/iCloud Drive/Notes',
+      name: 'Notes',
+      lastOpened: 123,
+    }]);
+    expect(scanForNoteWorkspacesMock).not.toHaveBeenCalled();
+  });
+
+  test('GET /detect-note-workspaces returns only cached results', async () => {
+    const {
+      app,
+      getDetectedNoteWorkspacesMock,
+      scanForNoteWorkspacesMock,
+      setDetectedNoteWorkspacesMock,
+    } = createTestHarness();
+    getDetectedNoteWorkspacesMock.mockResolvedValue([{
+      path: '/saved/Notes',
+      name: 'Notes',
+      source: 'obsidian',
+    }]);
+
+    const response = await request(app).get('/detect-note-workspaces');
+
+    expect(response.status).toBe(200);
+    expect(response.body.workspaces).toEqual([{
+      path: '/saved/Notes',
+      name: 'Notes',
+      source: 'obsidian',
+    }]);
+    expect(scanForNoteWorkspacesMock).not.toHaveBeenCalled();
+    expect(setDetectedNoteWorkspacesMock).not.toHaveBeenCalled();
+  });
+
+  test('POST /detect-note-workspaces explicitly scans and saves results', async () => {
+    const { app, scanForNoteWorkspacesMock, setDetectedNoteWorkspacesMock } = createTestHarness();
+    const scanned = [{
+      path: '/found/Notes',
+      name: 'Notes',
+      source: 'obsidian' as const,
+    }];
+    scanForNoteWorkspacesMock.mockReturnValue(scanned);
+
+    const response = await request(app).post('/detect-note-workspaces');
+
+    expect(response.status).toBe(200);
+    expect(response.body.workspaces).toEqual(scanned);
+    expect(scanForNoteWorkspacesMock).toHaveBeenCalledTimes(1);
+    expect(setDetectedNoteWorkspacesMock).toHaveBeenCalledWith(scanned);
   });
 });

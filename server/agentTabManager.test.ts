@@ -206,37 +206,6 @@ describe('agentTabManager', () => {
     );
   });
 
-  test('reports window-scoped workspace switch blockers for bound agent runtimes', () => {
-    agentTabManager.bindThread({
-      agentId: 'agent-bound',
-      callerToken: 'agtok_bound',
-      threadId: 'thread-bound',
-      windowSessionKey: 'window-1',
-      workspacePath: '/tmp/workspace-a',
-    });
-    agentTabManager.bindThread({
-      agentId: 'agent-other-window',
-      callerToken: 'agtok_other',
-      threadId: 'thread-other',
-      windowSessionKey: 'window-2',
-      workspacePath: '/tmp/workspace-a',
-    });
-
-    assert.deepEqual(agentTabManager.getWorkspaceSwitchBlockers({
-      windowSessionKey: 'window-1',
-      nextWorkspacePath: '/tmp/workspace-b',
-    }), [{
-      agentId: 'agent-bound',
-      callerToken: 'agtok_bound',
-      threadId: 'thread-bound',
-      workspacePath: '/tmp/workspace-a',
-    }]);
-    assert.deepEqual(agentTabManager.getWorkspaceSwitchBlockers({
-      windowSessionKey: 'window-1',
-      nextWorkspacePath: '/tmp/workspace-a',
-    }), []);
-  });
-
   test('rejects rebinding a caller token to a different agent', () => {
     agentTabManager.registerAgentRuntime({
       agentId: 'agent-a',

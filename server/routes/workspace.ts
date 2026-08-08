@@ -14,7 +14,11 @@ import { writeFileTreeCache } from '../fileTreeCache';
 import { spawn } from 'node:child_process';
 import { resolveRipgrepBinaryPath } from '../utils/ripgrep';
 import * as rgPath from '@vscode/ripgrep';
-import { getRecentFolders } from '../configStore';
+import {
+  getDetectedNoteWorkspaces,
+  getRecentFolders,
+  setDetectedNoteWorkspaces,
+} from '../configStore';
 import { scanForNoteWorkspaces } from '../utils/noteWorkspaceScanner';
 import { detectWorkspaceType } from '../utils/workspaceTypeDetector';
 import { detectRunnableProject } from '../utils/runnableProjects';
@@ -42,6 +46,20 @@ const defaultWorkspaceCoreRouteDeps: WorkspaceCoreRouteDeps = {
   getWorkspaceHandler,
   setWorkspaceHandler,
   writeFileTreeCache,
+};
+
+type WorkspacePickerRouteDeps = {
+  getRecentFolders: typeof getRecentFolders;
+  getDetectedNoteWorkspaces: typeof getDetectedNoteWorkspaces;
+  scanForNoteWorkspaces: typeof scanForNoteWorkspaces;
+  setDetectedNoteWorkspaces: typeof setDetectedNoteWorkspaces;
+};
+
+const defaultWorkspacePickerRouteDeps: WorkspacePickerRouteDeps = {
+  getRecentFolders,
+  getDetectedNoteWorkspaces,
+  scanForNoteWorkspaces,
+  setDetectedNoteWorkspaces,
 };
 
 // Helper function to build file tree recursively
@@ -754,26 +772,46 @@ router.get("/resolve-wikilink", async (req: Request, res: Response) => {
 });
 
 // Returns the list of recent workspace folders (most recently opened first).
-router.get("/recent", async (_req: Request, res: Response) => {
-  try {
-    const folders = await getRecentFolders();
-    const filtered = folders.filter((folder) => existsSync(folder.path));
-    res.json({ folders: filtered });
-  } catch (error: any) {
-    res.status(500).json({ error: error?.message || "Failed to load recent folders" });
-  }
-});
+export function registerWorkspacePickerRoutes(
+  targetRouter: Router,
+  deps: WorkspacePickerRouteDeps = defaultWorkspacePickerRouteDeps,
+): void {
+  targetRouter.get("/recent", async (_req: Request, res: Response) => {
+    try {
+      const folders = await deps.getRecentFolders();
+      // Opening the picker must not probe saved paths. On macOS, even an
+      // existence check can trigger a protected-folder permission prompt.
+      res.json({ folders });
+    } catch (error: any) {
+      res.status(500).json({ error: error?.message || "Failed to load recent folders" });
+    }
+  });
 
-// Scans common filesystem roots for note workspaces that have app-specific
-// markers on disk (for example Obsidian, Logseq, Dendron, and Foam).
-router.get("/detect-note-workspaces", async (_req: Request, res: Response) => {
-  try {
-    const workspaces = scanForNoteWorkspaces();
-    res.json({ workspaces });
-  } catch (error: any) {
-    res.status(500).json({ error: error?.message || "Failed to scan for note workspaces" });
-  }
-});
+  // Returns the last user-requested scan. This route deliberately performs no
+  // filesystem reads so opening a workspace picker never triggers OS prompts.
+  targetRouter.get("/detect-note-workspaces", async (_req: Request, res: Response) => {
+    try {
+      const workspaces = await deps.getDetectedNoteWorkspaces();
+      res.json({ workspaces });
+    } catch (error: any) {
+      res.status(500).json({ error: error?.message || "Failed to load detected note workspaces" });
+    }
+  });
+
+  // Performs a broad scan only after an explicit user action in onboarding or
+  // the workspace picker, then saves the results for future picker opens.
+  targetRouter.post("/detect-note-workspaces", async (_req: Request, res: Response) => {
+    try {
+      const workspaces = deps.scanForNoteWorkspaces();
+      await deps.setDetectedNoteWorkspaces(workspaces);
+      res.json({ workspaces });
+    } catch (error: any) {
+      res.status(500).json({ error: error?.message || "Failed to scan for note workspaces" });
+    }
+  });
+}
+
+registerWorkspacePickerRoutes(router);
 
 // Classifies the current workspace (or a supplied path) as obsidian-vault,
 // wiki, markdown-heavy, or general. Used by the UI to pick context-aware

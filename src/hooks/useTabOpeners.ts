@@ -56,7 +56,7 @@ interface UseTabOpenersArgs {
   stateRef: React.MutableRefObject<LayoutState>;
   getActivePane: (paneId?: string) => string;
   closeTab: (tabId: string) => void;
-  workspacePath: string | null;
+  workspacePathRef: React.MutableRefObject<string | null>;
   getDefaultAgentModelConfig: () => AgentModelConfig;
   getFastAgentModelConfig: () => AgentModelConfig | null;
 }
@@ -66,7 +66,7 @@ export function useTabOpeners({
   stateRef,
   getActivePane,
   closeTab,
-  workspacePath,
+  workspacePathRef,
   getDefaultAgentModelConfig,
   getFastAgentModelConfig,
 }: UseTabOpenersArgs) {
@@ -207,7 +207,7 @@ export function useTabOpeners({
     trackNewChat();
     updateState(prev => {
       const newTab = createEmptyAgentTab(getDefaultAgentModelConfig(), {
-        workspacePath: workspacePath ?? undefined,
+        workspacePath: workspacePathRef.current ?? undefined,
       });
       newTabId = newTab.id;
       const targetPaneId = getActivePane(paneId);
@@ -223,7 +223,7 @@ export function useTabOpeners({
       focusComposer({ agentId: newTabId, delay: 0 });
     }
     return newTabId;
-  }, [getActivePane, getDefaultAgentModelConfig, updateState, workspacePath]);
+  }, [getActivePane, getDefaultAgentModelConfig, updateState, workspacePathRef]);
 
   const openSeededAgentTab = useCallback((
     initialMessage: string,
@@ -238,7 +238,7 @@ export function useTabOpeners({
       const newTab = createConfiguredAgentTab({
         label: tr('common.newAgent'),
         modelConfig,
-        workspacePath: workspacePath ?? undefined,
+        workspacePath: workspacePathRef.current ?? undefined,
         initialMessage,
         requestId: crypto.randomUUID(),
       });
@@ -253,7 +253,7 @@ export function useTabOpeners({
       };
     });
     return newTabId;
-  }, [getActivePane, getDefaultAgentModelConfig, getFastAgentModelConfig, updateState, workspacePath]);
+  }, [getActivePane, getDefaultAgentModelConfig, getFastAgentModelConfig, updateState, workspacePathRef]);
 
   const openBrowser = useCallback((url: string, paneId?: string, browserId?: string) => {
     updateState(prev => {
@@ -418,7 +418,7 @@ export function useTabOpeners({
           })
         : createEmptyAgentTab(
             extra?.modelConfig ?? getDefaultAgentModelConfig(),
-            { workspacePath: extra?.workspacePath ?? workspacePath ?? undefined },
+            { workspacePath: extra?.workspacePath ?? workspacePathRef.current ?? undefined },
           );
       newTabId = newTab.id;
 
@@ -444,7 +444,7 @@ export function useTabOpeners({
     if (newTabId && !extra?.terminalAgent) {
       focusComposer({ agentId: newTabId, delay: 0 });
     }
-  }, [getActivePane, getDefaultAgentModelConfig, updateState, workspacePath]);
+  }, [getActivePane, getDefaultAgentModelConfig, updateState, workspacePathRef]);
 
   const openAgentSessionTab = useCallback((options: {
     agentId?: string;
@@ -476,7 +476,7 @@ export function useTabOpeners({
         id: options.agentId,
         label: options.label ?? 'Agent',
         modelConfig: options.modelConfig ?? getDefaultAgentModelConfig(),
-        workspacePath: options.workspacePath ?? workspacePath ?? undefined,
+        workspacePath: options.workspacePath ?? workspacePathRef.current ?? undefined,
         systemPrompt: options.systemPrompt,
         startupId: options.startupId,
         requestId: options.startupId ? undefined : options.requestId,
@@ -515,7 +515,7 @@ export function useTabOpeners({
     }
 
     return nextAgentId;
-  }, [getActivePane, getDefaultAgentModelConfig, updateState, workspacePath]);
+  }, [getActivePane, getDefaultAgentModelConfig, updateState, workspacePathRef]);
 
   const morphNewTabToAgent = useCallback((
     oldTabId: string,
@@ -547,7 +547,7 @@ export function useTabOpeners({
       console.log('[useTabOpeners] morphNewTabToAgent creating agent tab', { oldTabId, paneId: pane.id });
       const newTab = createAgentTab(initialMessage, modelConfig, {
         morphTransition: true,
-        workspacePath: workspacePath ?? undefined,
+        workspacePath: workspacePathRef.current ?? undefined,
       });
 
       // Swap the tab in the pane's tabIds at the same index
@@ -569,7 +569,7 @@ export function useTabOpeners({
       console.log('[useTabOpeners] morphNewTabToAgent SUCCESS: swapped tab', { oldTabId, newTabId: newTab.id });
       return { ...prev, tree, tabs };
     });
-  }, [updateState, workspacePath]);
+  }, [updateState, workspacePathRef]);
 
   return {
     fetchThumbnailForTab,

@@ -9,7 +9,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { useTranslation } from 'react-i18next';
 import { PanelLeft, PanelRight } from 'lucide-react';
 import { useLayout } from '../../hooks/useLayout';
-import { getWorkspace, getRecentWorkspaces, detectNoteWorkspaces, type RecentWorkspaceFolder, type DetectedNoteWorkspace } from '../../api';
+import { detectNoteWorkspaces, getDetectedNoteWorkspaces, getWorkspace, getRecentWorkspaces, type RecentWorkspaceFolder, type DetectedNoteWorkspace } from '../../api';
 import { TooltipButton } from '../ui/tooltip-button';
 import { KeyboardShortcutHint } from '../ui/keyboard-shortcut-hint';
 import { ContextMenu } from '../ContextMenu';
@@ -42,6 +42,7 @@ export function CustomTitleBar() {
   const [workspaceMenuPos, setWorkspaceMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [recentFolders, setRecentFolders] = useState<RecentWorkspaceFolder[]>([]);
   const [noteWorkspaces, setNoteWorkspaces] = useState<DetectedNoteWorkspace[]>([]);
+  const [isScanningNoteWorkspaces, setIsScanningNoteWorkspaces] = useState(false);
   const [_isFullScreen, setIsFullScreen] = useState(false);
   const { isCommandHeld, activatedKey } = useCommandOverlay();
   const pendingApprovalsByAgent = usePendingApprovalsByAgent();
@@ -183,11 +184,26 @@ export function CustomTitleBar() {
   // Workspace context menu (custom HTML menu so it matches app popovers in all modes)
   const handleWorkspaceContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
-    // Lazily load recent folders and detected note workspaces each time the
-    // menu opens so the lists stay fresh without a long-lived subscription.
+    // Load persisted picker data only. Neither request probes the filesystem.
     getRecentWorkspaces().then((data) => setRecentFolders(data.folders)).catch(() => {});
-    detectNoteWorkspaces().then((data) => setNoteWorkspaces(data.workspaces)).catch(() => {});
+    getDetectedNoteWorkspaces().then((data) => setNoteWorkspaces(data.workspaces)).catch(() => {});
     setWorkspaceMenuPos({ x: e.clientX, y: e.clientY });
+  };
+
+  const handleScanNoteWorkspaces = async () => {
+    const reopenAt = workspaceMenuPos;
+    setIsScanningNoteWorkspaces(true);
+    try {
+      const data = await detectNoteWorkspaces();
+      setNoteWorkspaces(data.workspaces);
+      if (reopenAt) {
+        setWorkspaceMenuPos(reopenAt);
+      }
+    } catch (err) {
+      console.error('[CustomTitleBar] Failed to scan for note workspaces:', err);
+    } finally {
+      setIsScanningNoteWorkspaces(false);
+    }
   };
 
   const switchWorkspaceTo = async (path: string) => {
@@ -320,6 +336,10 @@ export function CustomTitleBar() {
     onSelectWorkspace: (path) => {
       void switchWorkspaceTo(path);
     },
+    onScanNoteWorkspaces: () => {
+      void handleScanNoteWorkspaces();
+    },
+    isScanningNoteWorkspaces,
   });
 
   const paddingStyle: React.CSSProperties = isMac

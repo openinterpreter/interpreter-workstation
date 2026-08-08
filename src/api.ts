@@ -245,6 +245,13 @@ export async function detectNoteWorkspaces(): Promise<{ workspaces: DetectedNote
   if (isMarketingDemoMode()) {
     return { workspaces: getMarketingDemoDetectedNoteWorkspaces() };
   }
+  return apiRequest('POST', '/api/workspace/detect-note-workspaces');
+}
+
+export async function getDetectedNoteWorkspaces(): Promise<{ workspaces: DetectedNoteWorkspace[] }> {
+  if (isMarketingDemoMode()) {
+    return { workspaces: getMarketingDemoDetectedNoteWorkspaces() };
+  }
   return apiRequest('GET', '/api/workspace/detect-note-workspaces');
 }
 

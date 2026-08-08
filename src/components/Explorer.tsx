@@ -14,13 +14,13 @@ import type { SearchItem } from '../hooks/useFileSearch';
 import { useContentSearch } from '../hooks/useContentSearch';
 import { useVaultSearch } from '../hooks/useVaultSearch';
 import type { WorkspaceContentMatch, RecentWorkspaceFolder, DetectedNoteWorkspace } from '../api';
-import { getRecentWorkspaces, detectNoteWorkspaces } from '../api';
+import { detectNoteWorkspaces, getDetectedNoteWorkspaces, getRecentWorkspaces } from '../api';
 import { ContextMenu } from './ContextMenu';
 import { useHelp } from '../contexts/HelpContext';
 import { WorkspaceLanding } from './WorkspaceLanding';
 import { useActiveFilePath } from '../contexts/LayoutContext';
 import { useLayoutActions } from '../hooks/useLayout';
-import { EXPLORER_ID, FILE_TREE_ID, EXPLORER_SEARCH_INPUT_ID } from '../../shared/element-ids';
+import { EXPLORER_ID, FILE_TREE_ID, EXPLORER_SEARCH_INPUT_ID, WORKSPACE_PICKER_BUTTON_ID } from '../../shared/element-ids';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { KeyboardShortcutHint } from './ui/keyboard-shortcut-hint';
@@ -156,6 +156,7 @@ function ExplorerContent({
   const suppressWorkspacePickerOpenRef = useRef(false);
   const [recentFolders, setRecentFolders] = useState<RecentWorkspaceFolder[]>([]);
   const [noteWorkspaces, setNoteWorkspaces] = useState<DetectedNoteWorkspace[]>([]);
+  const [isScanningNoteWorkspaces, setIsScanningNoteWorkspaces] = useState(false);
 
   // Search state for the search bar
   const [searchQuery, setSearchQuery] = useState('');
@@ -436,8 +437,24 @@ function ExplorerContent({
 
   const loadWorkspacePickerData = useCallback(() => {
     getRecentWorkspaces().then((data) => setRecentFolders(data.folders)).catch(() => {});
-    detectNoteWorkspaces().then((data) => setNoteWorkspaces(data.workspaces)).catch(() => {});
+    getDetectedNoteWorkspaces().then((data) => setNoteWorkspaces(data.workspaces)).catch(() => {});
   }, []);
+
+  const handleScanNoteWorkspaces = useCallback(async () => {
+    const reopenAt = pickerMenuPos;
+    setIsScanningNoteWorkspaces(true);
+    try {
+      const data = await detectNoteWorkspaces();
+      setNoteWorkspaces(data.workspaces);
+      if (reopenAt) {
+        setPickerMenuPos(reopenAt);
+      }
+    } catch (err) {
+      console.error('[Explorer] Failed to scan for note workspaces:', err);
+    } finally {
+      setIsScanningNoteWorkspaces(false);
+    }
+  }, [pickerMenuPos]);
 
   const openWorkspacePickerFromElement = useCallback((anchor: HTMLElement | null) => {
     if (!anchor) return;
@@ -1935,6 +1952,7 @@ function ExplorerContent({
             <TooltipTrigger asChild>
               <button
                 type="button"
+                data-testid={WORKSPACE_PICKER_BUTTON_ID}
                 className={`relative mx-1 flex items-center rounded-[12px] px-3 py-2 text-ui-sm transition-colors duration-150 ${isScrolled ? 'bg-transparent text-[#4b5563] dark:text-[#b4b4b4]' : 'bg-transparent text-[#6b7280] dark:text-[#b4b4b4]'} hover:bg-[var(--oa-button-hover-bg)] hover:text-[#202123] dark:hover:text-[#f5f5f5]`}
                 style={{
                   paddingLeft: '14px',
@@ -2098,6 +2116,10 @@ function ExplorerContent({
             onSelectWorkspace: (path) => {
               void switchWorkspaceTo(path);
             },
+            onScanNoteWorkspaces: () => {
+              void handleScanNoteWorkspaces();
+            },
+            isScanningNoteWorkspaces,
           })}
           onClose={() => setPickerMenuPos(null)}
         />

@@ -27,6 +27,8 @@ interface BuildWorkspacePickerMenuItemsOptions {
   onRevealWorkspace: (path: string) => void;
   onOpenFolder: () => void;
   onSelectWorkspace: (path: string) => void;
+  onScanNoteWorkspaces?: () => void;
+  isScanningNoteWorkspaces?: boolean;
 }
 
 const NOTE_WORKSPACE_SOURCE_ORDER: DetectedNoteWorkspaceSource[] = [
@@ -88,6 +90,8 @@ export function buildWorkspacePickerMenuItems({
   onRevealWorkspace,
   onOpenFolder,
   onSelectWorkspace,
+  onScanNoteWorkspaces,
+  isScanningNoteWorkspaces = false,
 }: BuildWorkspacePickerMenuItemsOptions): WorkspacePickerMenuItem[] {
   const items: WorkspacePickerMenuItem[] = [];
   const filteredRecentFolders = recentFolders
@@ -157,6 +161,20 @@ export function buildWorkspacePickerMenuItems({
   }
 
   if (filteredNoteWorkspaces.length > 0) {
+    pushSeparator(items);
+  }
+
+  if (onScanNoteWorkspaces) {
+    items.push({
+      label: isScanningNoteWorkspaces
+        ? 'Scanning for note workspaces…'
+        : noteWorkspaces.length > 0
+          ? 'Rescan for note workspaces…'
+          : 'Scan for note workspaces…',
+      icon: menuIcon(FolderSearch),
+      onClick: onScanNoteWorkspaces,
+      disabled: isScanningNoteWorkspaces,
+    });
     pushSeparator(items);
   }
 

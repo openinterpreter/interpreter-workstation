@@ -135,6 +135,12 @@ const RecentFolderSchema = z.object({
   lastOpened: z.number(),
 });
 
+const DetectedNoteWorkspaceSchema = z.object({
+  path: z.string(),
+  name: z.string(),
+  source: z.enum(['obsidian', 'logseq', 'dendron', 'foam']),
+});
+
 // Valid primary color options (from shared/types/colors.ts - single source of truth)
 const PrimaryColorSchema = z.enum(PRIMARY_COLOR_IDS);
 const LanguageSchema = z.enum(supportedLanguages);
@@ -250,6 +256,7 @@ export const AppConfigSchema = z.object({
   primaryColor: PrimaryColorSchema.optional(),
   lastWorkspace: z.string().nullable().optional(),
   recentFolders: z.array(RecentFolderSchema).optional(),
+  detectedNoteWorkspaces: z.array(DetectedNoteWorkspaceSchema).optional(),
   authToken: z.string().optional(),
   refreshToken: z.string().optional(),
   maxSteps: z.number().min(1).max(10000).optional(), // Reasonable upper bound to prevent runaway agents

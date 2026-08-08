@@ -16,6 +16,7 @@ const smokeSpecs = [
   "**/pane-system.spec.ts",
 ];
 const deterministicSpecs = [
+  "**/workspace-switching.spec.ts",
   "**/agent-file-drop.spec.ts",
   "**/agent-file-permissions.spec.ts",
   "**/markdown-autosave-no-diff.spec.ts",

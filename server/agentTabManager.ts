@@ -2,7 +2,6 @@
 // Manages in-memory agent tab creation requests for UI-based agent execution
 
 import { nanoid } from 'nanoid';
-import path from 'node:path';
 import { broadcastEvent } from './handlers/broadcast';
 import type { AgentModelConfig } from '../shared/types/model';
 import type { MessageSendSource } from '../shared/types/messageSendSource';
@@ -119,13 +118,6 @@ export interface AgentWindowSendRequest {
   message: string;
   workspacePath?: string | null;
   messageSource?: MessageSendSource | null;
-}
-
-export interface WorkspaceSwitchBlocker {
-  agentId: string;
-  callerToken: string;
-  threadId?: string;
-  workspacePath: string;
 }
 
 export interface BindAgentRuntimeOptions {
@@ -634,43 +626,6 @@ class AgentTabManager {
 
     broadcastEvent('workstation:close-tab', { id: binding.agentId }, scope);
     return binding;
-  }
-
-  getWorkspaceSwitchBlockers(scope: {
-    windowSessionKey?: string | null;
-    nextWorkspacePath: string;
-  }): WorkspaceSwitchBlocker[] {
-    const blockers = new Map<string, WorkspaceSwitchBlocker>();
-
-    const addBinding = (binding: AgentThreadBinding, threadId?: string) => {
-      if (!binding.workspacePath) {
-        return;
-      }
-      if ((binding.windowSessionKey ?? null) !== (scope.windowSessionKey ?? null)) {
-        return;
-      }
-      if (path.resolve(binding.workspacePath) === path.resolve(scope.nextWorkspacePath)) {
-        return;
-      }
-      if (!threadId && blockers.has(binding.callerToken)) {
-        return;
-      }
-      blockers.set(binding.callerToken, {
-        agentId: binding.agentId,
-        callerToken: binding.callerToken,
-        ...(threadId ? { threadId } : {}),
-        workspacePath: binding.workspacePath,
-      });
-    };
-
-    for (const [threadId, binding] of this.threadBindings.entries()) {
-      addBinding(binding, threadId);
-    }
-    for (const binding of this.callerTokenBindings.values()) {
-      addBinding(binding);
-    }
-
-    return Array.from(blockers.values());
   }
 
   disposeBinding(callerToken: string): void {
