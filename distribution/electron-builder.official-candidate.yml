@@ -1,0 +1,8 @@
+extends: ./electron-builder.yml
+
+# Exact official product identity and bundled service configuration, without
+# signing or notarization. This profile exists only for private prerelease
+# review; public releases use electron-builder.official.yml.
+mac:
+  sign: null
+  notarize: false

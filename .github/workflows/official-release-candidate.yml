@@ -1,0 +1,95 @@
+name: Official release candidate
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: official-release-candidate
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  macos-arm64:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-26
+    timeout-minutes: 120
+    environment: internal-release
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      GITHUB_TOKEN: ${{ github.token }}
+      PYTHON: /usr/bin/python3
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          token: ${{ secrets.WORKSTATION_SUBMODULE_TOKEN || github.token }}
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version: 1.2.20
+      - uses: dtolnay/rust-toolchain@stable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm run test:unit
+      - run: pnpm run release:licenses:check
+      - name: Build exact-identity unsigned official package
+        run: pnpm run package:official:candidate:mac-arm64
+      - name: Verify official identity, hosted profile, and packaged resources
+        run: pnpm run release:verify:official-candidate
+      - name: Write checksums and release notes
+        working-directory: dist
+        run: |
+          shasum -a 256 Interpreter-*.dmg Interpreter-*.zip > SHA256SUMS
+          cat > OFFICIAL_RELEASE_CANDIDATE.md <<EOF
+          Private test build of the user-facing Interpreter distribution.
+
+          Source: $GITHUB_REPOSITORY@$GITHUB_SHA
+
+          This uses the exact public Interpreter application identity and the
+          checked-in official hosted-services profile. It includes the bundled
+          OIX runtime and CLI, CUA driver, and packaged third-party notices.
+
+          This candidate is unsigned and unnotarized. It must not be published
+          through the production update channel or presented as a public release.
+          EOF
+      - name: Require a private source repository
+        if: ${{ !github.event.repository.private }}
+        run: |
+          echo "This private review workflow cannot publish artifacts from a public repository."
+          exit 1
+      - name: Upload private review artifact
+        if: github.event.repository.private
+        uses: actions/upload-artifact@v7
+        with:
+          name: interpreter-official-candidate-macos-arm64
+          path: |
+            dist/Interpreter-*.dmg
+            dist/Interpreter-*.zip
+            dist/SHA256SUMS
+            dist/OFFICIAL_RELEASE_CANDIDATE.md
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish private prerelease
+        if: github.event.repository.private
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          tag="candidate-v${version}-build.${GITHUB_RUN_NUMBER}"
+          gh release create "$tag" \
+            dist/Interpreter-*.dmg \
+            dist/Interpreter-*.zip \
+            dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Interpreter v${version} release candidate" \
+            --notes-file dist/OFFICIAL_RELEASE_CANDIDATE.md \
+            --prerelease
