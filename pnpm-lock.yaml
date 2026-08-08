@@ -17,8 +17,9 @@ overrides:
   fast-uri@<3.1.5: 3.1.5
   hono@<4.12.34: 4.12.34
   '@jimp/core>file-type': 21.3.4
-  js-yaml@<4: 3.15.0
+  js-yaml@<4: 3.15.1
   linkify-it@<5.0.2: 5.0.2
+  nanoid@<4: 3.3.17
   path-to-regexp@<0.1.13: 0.1.13
   picomatch@<3: 2.3.2
   picomatch@>=4 <5: 4.0.4
@@ -266,8 +267,8 @@ importers:
         specifier: 11.14.0
         version: 11.14.0
       nanoid:
-        specifier: 5.1.6
-        version: 5.1.6
+        specifier: 5.1.16
+        version: 5.1.16
       node-forge:
         specifier: 1.4.0
         version: 1.4.0
@@ -6172,8 +6173,8 @@ packages:
   js-tokens@4.0.0:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
 
-  js-yaml@3.15.0:
-    resolution: {integrity: sha512-ttBQIIQPDeLjpPOohtUdXuXUVoA2uIB6fEH9HyJ7234s5mBJ5wTx20njxplLZQgLaOfpmPQA7X2t5AX6tIPbog==}
+  js-yaml@3.15.1:
+    resolution: {integrity: sha512-S99WuO3HlhO3XN41EtYUNl9zzXjoJx7QvmipxsJVxtCBT0YHEFy+iOJhjSvrmV12nYhWpZaM8lPHkJm0yUMbag==}
     hasBin: true
 
   js-yaml@4.3.1:
@@ -6933,13 +6934,13 @@ packages:
     resolution: {integrity: sha512-WWdIxpyjEn+FhQJQQv9aQAYlHoNVdzIzUySNV1gHUPDSdZJ3yZn7pAAbQcV7B56Mvu881q9FZV+0Vx2xC44VWA==}
     engines: {node: ^18.17.0 || >=20.5.0}
 
-  nanoid@3.3.16:
-    resolution: {integrity: sha512-bzlKTyNJ7+LdGIIwy8ijFpIqEQIvafahV7eYykJ8Cvh42EdJeODoJ6gUJXpQJvej1BddH8OqTXZNE/KfbWAu8Q==}
+  nanoid@3.3.17:
+    resolution: {integrity: sha512-xQLf0A3HOMlgHq0n247/LRuAOYmB7dXJ/DvAxGvsSBij45XtBSmQycu+F8ODbHwns/XyFZagyL1+J0Offw1E0g==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
     hasBin: true
 
-  nanoid@5.1.6:
-    resolution: {integrity: sha512-c7+7RQ+dMB5dPwwCp4ee1/iV/q2P6aK1mTZcfr1BTuVlyW9hJYiMPybJCcnBlQtuSmTIWNeazm/zqNoZSSElBg==}
+  nanoid@5.1.16:
+    resolution: {integrity: sha512-kVrnsrJqMR8+oLJnGEmSWw9BivK5mt7H3FZatVRjrc5wGqFYuBxX1yG7+A7Gi5AefkX6t/oCkizcQgpu0cY1dQ==}
     engines: {node: ^18 || >=20}
     hasBin: true
 
@@ -14580,7 +14581,7 @@ snapshots:
 
   gray-matter@4.0.3:
     dependencies:
-      js-yaml: 3.15.0
+      js-yaml: 3.15.1
       kind-of: 6.0.3
       section-matter: 1.0.0
       strip-bom-string: 1.0.0
@@ -14945,7 +14946,7 @@ snapshots:
 
   js-tokens@4.0.0: {}
 
-  js-yaml@3.15.0:
+  js-yaml@3.15.1:
     dependencies:
       argparse: 1.0.10
       esprima: 4.0.1
@@ -15901,9 +15902,9 @@ snapshots:
 
   mute-stream@2.0.0: {}
 
-  nanoid@3.3.16: {}
+  nanoid@3.3.17: {}
 
-  nanoid@5.1.6: {}
+  nanoid@5.1.16: {}
 
   natural-compare@1.4.0: {}
 
@@ -16376,7 +16377,7 @@ snapshots:
 
   postcss@8.5.25:
     dependencies:
-      nanoid: 3.3.16
+      nanoid: 3.3.17
       picocolors: 1.1.1
       source-map-js: 1.2.1
 
