@@ -78,9 +78,10 @@ describe('resolveDarwinTccBundleIds', () => {
   test('includes packaged and known dev bundle identifiers', () => {
     expect(
       resolveDarwinTccBundleIds({
-        darwinBundleIdentifier: 'com.openinterpreter.interpreter',
+        darwinBundleIdentifier: 'interpreter',
       }),
     ).toEqual([
+      'interpreter',
       'com.openinterpreter.interpreter',
       'com.interpreter.dev',
       'com.openinterpreter.interpreter.dev',

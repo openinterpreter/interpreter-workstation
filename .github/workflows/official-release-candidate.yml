@@ -37,6 +37,8 @@ jobs:
           bun-version: 1.2.20
       - uses: dtolnay/rust-toolchain@stable
       - run: pnpm install --frozen-lockfile
+      - name: Set package version to the public release version
+        run: bun scripts/ci/set-version.ts --version "$(node -p "require('./package.json').publicVersion")"
       - run: pnpm typecheck
       - run: pnpm run test:unit
       - run: pnpm run release:licenses:check
@@ -82,7 +84,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version=$(node -p "require('./package.json').version")
+          version=$(node -p "require('./package.json').publicVersion")
           tag="candidate-v${version}-build.${GITHUB_RUN_NUMBER}"
           gh release create "$tag" \
             dist/Interpreter-*.dmg \

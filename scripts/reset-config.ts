@@ -323,6 +323,9 @@ export function resolveDarwinTccBundleIds(productConfig: ProductConfig | null): 
     candidates.add(productConfig.darwinBundleIdentifier.trim());
   }
 
+  // Preserve cleanup support for pre-OSS development builds that used this ID.
+  candidates.add('com.openinterpreter.interpreter');
+
   // Known local/dev bundle identifiers used by source-built Interpreter apps.
   candidates.add('com.interpreter.dev');
   candidates.add('com.openinterpreter.interpreter.dev');

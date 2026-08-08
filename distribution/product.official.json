@@ -5,7 +5,7 @@
     "auth": {
       "provider": "supabase",
       "url": "https://neyguovvcjxfzhqpkicj.supabase.co/",
-      "anonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJIUzI1NiIsInJlZiI6Im5leWd1b3Z2Y2p4ZnpocXBraWNqIiwicm9sZSI6ImFub24iLCJpYXQiOjE2OTcyNjM2MTIsImV4cCI6MjAxMjgzOTYxMn0.yIvfhbJ1FQ-q9VFIds8YvKJkMs-5vFiDgZPLcPGxeIw",
+      "anonKey": "sb_publishable_3zeX1uSC1M3C3pLuv7_F-Q_wNVRQfJU",
       "storageKey": "sb-workstation-auth-token"
     },
     "telemetry": {

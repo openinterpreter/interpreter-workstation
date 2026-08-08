@@ -10,6 +10,7 @@ const execFile = promisify(execFileCallback);
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 const CUA_DRIVER_BUNDLE_ID = 'com.trycua.driver';
 const INTERPRETER_BUNDLE_IDS = [
+  'interpreter',
   'com.openinterpreter.interpreter',
   'com.interpreter.dev',
   'com.openinterpreter.interpreter.dev',
