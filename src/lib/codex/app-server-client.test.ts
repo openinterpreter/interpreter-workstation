@@ -18,6 +18,8 @@ import {
   StdioJsonRpcTransport,
   type JsonRpcTransport,
   resolveDefaultCodexHome,
+  getInterpreterCliSandboxReadableRoots,
+  getInterpreterCliSandboxWritableRoots,
 } from "@/lib/codex/app-server-client";
 import type { AppServerNotification, ServerRequest } from "@/lib/codex/protocol";
 import {
@@ -563,6 +565,8 @@ describe("CodexAppServerClient", () => {
             ".": "write",
           },
           ":tmpdir": "write",
+          [getInterpreterCliSandboxReadableRoots()[0]!]: "read",
+          [getInterpreterCliSandboxWritableRoots()[0]!]: "write",
         },
         network: {
           enabled: false,
@@ -628,6 +632,8 @@ describe("CodexAppServerClient", () => {
       // codexMacosTempAccess is intentionally a macOS-only setting. Linux and
       // Windows retain the runtime's normal temporary-directory access.
       ...(process.platform === "darwin" ? {} : { ":tmpdir": "write" }),
+      [getInterpreterCliSandboxReadableRoots()[0]!]: "read",
+      [getInterpreterCliSandboxWritableRoots()[0]!]: "write",
     };
     assert.deepEqual(scopedThreadParams.config?.permissions, {
       "interpreter-workspace-scope": {

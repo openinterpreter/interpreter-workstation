@@ -958,6 +958,15 @@ export function getInterpreterCliSandboxReadableRoots(
   return [getInterpreterCliShellRuntimeDir(platform, isolatedHome)];
 }
 
+export function getInterpreterCliSandboxWritableRoots(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  homeDir = env.HOME ?? os.homedir(),
+): string[] {
+  return getInterpreterCliSandboxReadableRoots(platform, env, homeDir)
+    .map((runtimeDir) => path.join(runtimeDir, "bridge"));
+}
+
 function normalizeCaseInsensitive(value: string): string {
   return value.toLowerCase();
 }
@@ -2154,6 +2163,8 @@ export class CodexAppServerClient {
       networkAccess: runtimeAccess.networkAccess,
       allowTempAccess: process.platform === "darwin" ? runtimeAccess.macosTempAccess : true,
       cwd,
+      additionalReadableRoots: getInterpreterCliSandboxReadableRoots(),
+      additionalWritableRoots: getInterpreterCliSandboxWritableRoots(),
     });
     const nextConfig = withWorkspacePermissionConfig(config, workspacePermission);
 
@@ -2199,6 +2210,8 @@ export class CodexAppServerClient {
       networkAccess: runtimeAccess.networkAccess,
       allowTempAccess: process.platform === "darwin" ? runtimeAccess.macosTempAccess : true,
       cwd: params.cwd,
+      additionalReadableRoots: getInterpreterCliSandboxReadableRoots(),
+      additionalWritableRoots: getInterpreterCliSandboxWritableRoots(),
     });
     const config = withWorkspacePermissionConfig({
       include_apply_patch_tool: false,
@@ -2249,6 +2262,8 @@ export class CodexAppServerClient {
       networkAccess: runtimeAccess.networkAccess,
       allowTempAccess: process.platform === "darwin" ? runtimeAccess.macosTempAccess : true,
       cwd,
+      additionalReadableRoots: getInterpreterCliSandboxReadableRoots(),
+      additionalWritableRoots: getInterpreterCliSandboxWritableRoots(),
     });
     const nextConfig = withWorkspacePermissionConfig(config, workspacePermission);
 
@@ -2399,6 +2414,8 @@ export class CodexAppServerClient {
       networkAccess: runtimeAccess.networkAccess,
       allowTempAccess: process.platform === "darwin" ? runtimeAccess.macosTempAccess : true,
       cwd: params.cwd,
+      additionalReadableRoots: getInterpreterCliSandboxReadableRoots(),
+      additionalWritableRoots: getInterpreterCliSandboxWritableRoots(),
     });
     const sandboxPolicy = workspacePermission
       ? undefined

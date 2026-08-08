@@ -69,6 +69,8 @@ export function buildCodexWorkspacePermissionSelection(options: {
   networkAccess: boolean;
   allowTempAccess?: boolean | null;
   cwd?: string | null;
+  additionalReadableRoots?: string[];
+  additionalWritableRoots?: string[];
 }): CodexWorkspacePermissionSelection | null {
   if (options.readAccessMode !== 'workspace-only') {
     return null;
@@ -84,6 +86,20 @@ export function buildCodexWorkspacePermissionSelection(options: {
 
   if (options.allowTempAccess ?? true) {
     filesystem[':tmpdir'] = workspaceAccess;
+  }
+
+  for (const readableRoot of options.additionalReadableRoots ?? []) {
+    const normalizedRoot = readableRoot.trim();
+    if (normalizedRoot) {
+      filesystem[normalizedRoot] = 'read';
+    }
+  }
+
+  for (const writableRoot of options.additionalWritableRoots ?? []) {
+    const normalizedRoot = writableRoot.trim();
+    if (normalizedRoot) {
+      filesystem[normalizedRoot] = 'write';
+    }
   }
 
   return {

@@ -42,6 +42,8 @@ describe("OIX workspace-only permission profiles", () => {
       networkAccess: true,
       allowTempAccess: true,
       cwd: "/workspace/project",
+      additionalReadableRoots: ["/runtime/interpreter-cli", "  ", "/runtime/interpreter-cli"],
+      additionalWritableRoots: ["/runtime/interpreter-cli/bridge"],
     });
 
     expect(selection?.config).toEqual({
@@ -53,6 +55,8 @@ describe("OIX workspace-only permission profiles", () => {
               ".": "read",
             },
             ":tmpdir": "read",
+            "/runtime/interpreter-cli": "read",
+            "/runtime/interpreter-cli/bridge": "write",
           },
           network: {
             enabled: true,
