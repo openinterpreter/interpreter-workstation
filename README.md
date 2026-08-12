@@ -1,13 +1,20 @@
 # Interpreter Workstation
 
-Interpreter is an open-source desktop agent for knowledge work. It puts the
-Open Interpreter runtime behind a native desktop interface, then adds local
-tools for files, browsers, voice, and computer use.
+**The open-source alternative to Claude Cowork and ChatGPT for work.**
 
-The community build works without an Interpreter account. You can connect your
-own supported model provider, use a local model, and choose where the agent is
-allowed to work. Organizations can build a configured distribution from the
-same source without maintaining a private fork.
+Interpreter Workstation is a desktop agent that works with you across files,
+documents, spreadsheets, PDFs, the browser, and your computer. Built on
+[Open Interpreter](https://github.com/openinterpreter/openinterpreter), it can
+use your choice of supported cloud provider or local model, and it does not
+require an Interpreter account.
+
+[![Watch the Interpreter Workstation launch film](docs/assets/interpreter-workstation-hero.jpg)](docs/assets/interpreter-workstation-hero.mp4)
+
+[Watch the 95-second launch film →](docs/assets/interpreter-workstation-hero.mp4)
+
+Bring your own model, keep work local when you choose, and control which files
+and applications each agent may access. Organizations can build a configured
+distribution from the same source without maintaining a private fork.
 
 ## Architecture
 
