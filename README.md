@@ -128,8 +128,10 @@ Do not put credentials in product overlays or commit local `.env` files.
 ## License
 
 Interpreter Workstation is licensed under the [Apache License 2.0](LICENSE).
-Official-release provenance and use of project marks are described in
-[TRADEMARKS.md](TRADEMARKS.md).
+Project-authored documentation is available under
+[CC BY 4.0](LICENSE-DOCUMENTATION.md). See [GOVERNANCE.md](GOVERNANCE.md) for
+the one-open-client and no-relicense commitments. Official-release provenance
+and use of project marks are described in [TRADEMARKS.md](TRADEMARKS.md).
 Pinned dependencies and submodules retain their own licenses and notices. Read
 [Dependency licensing](docs/dependency-licensing.md) and the reviewed
 [third-party notices](licenses/THIRD_PARTY_NOTICES.md) before distributing a
