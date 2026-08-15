@@ -30,7 +30,9 @@ Signed-off-by: Your Name <your-email@example.com>
 Git can add the line for you with `git commit -s`. By signing off, you certify
 that you have the right to submit the contribution under this repository's
 Apache 2.0 license. The project does not ask contributors to assign copyright
-or grant a separate right to relicense their work.
+or grant a separate right to relicense their work. Pull requests are checked
+automatically and cannot merge while any non-merge commit lacks a valid
+`Signed-off-by` trailer.
 
 Do not submit credentials, proprietary SDKs, paid license files, customer data,
 or code you do not have the right to contribute.

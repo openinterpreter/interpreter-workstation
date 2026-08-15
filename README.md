@@ -1,12 +1,16 @@
 # Interpreter Workstation
 
-**The open-source alternative to Claude Cowork and ChatGPT for work.**
+**An open, neutral AI workspace for your computer.**
 
 Interpreter Workstation is a desktop agent that works with you across files,
 documents, spreadsheets, PDFs, the browser, and your computer. Built on
 [Open Interpreter](https://github.com/openinterpreter/openinterpreter), it can
 use your choice of supported cloud provider or local model, and it does not
 require an Interpreter account.
+
+It is a self-hostable alternative to proprietary work agents such as Claude
+Cowork and ChatGPT, without making another vendor's product the definition of
+what this project can become.
 
 [![Watch the Interpreter Workstation launch film](docs/assets/interpreter-workstation-hero.jpg)](docs/assets/interpreter-workstation-hero.mp4)
 
@@ -105,6 +109,8 @@ node scripts/with-distribution-config.mjs ./path/to/product.overlay.json -- pnpm
 
 See [Distribution builds](docs/distributions.md) for the schema, security
 boundary, privacy contract, and community/official/internal packaging model.
+See [Official releases](docs/releases.md) for the signing, approval,
+provenance, checksum, SBOM, and verification contract.
 
 ## Document workflows
 

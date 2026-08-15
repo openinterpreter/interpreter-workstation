@@ -1,0 +1,307 @@
+name: Official release
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type release to build and publish the public production release
+        required: true
+        type: string
+
+concurrency:
+  group: official-production-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  authorize:
+    name: Authorize release
+    if: >-
+      github.actor == 'KillianLucas' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.confirm == 'release'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - id: release
+        name: Validate the immutable release identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./package.json').publicVersion")
+          tag="v${version}"
+          node -e "const value=process.argv[1]; if (!/^0\\.2\\.[0-9]+$/.test(value)) throw new Error('Unexpected public release version: '+value)" "$version"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists. Bump publicVersion before releasing."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  verify:
+    name: Verify release source
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version: 1.2.20
+      - uses: dtolnay/rust-toolchain@stable
+      - run: pnpm install --frozen-lockfile
+      - name: Set the public package version
+        run: bun scripts/ci/set-version.ts --version "${{ needs.authorize.outputs.version }}"
+      - run: pnpm typecheck
+      - run: pnpm run test:unit
+      - run: node --test scripts/electron-builder/sign-windows.test.cjs
+      - run: pnpm run release:licenses:check
+
+  build:
+    name: Build ${{ matrix.id }}
+    needs: [authorize, verify]
+    environment: production-release
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: macos-arm64
+            runner: macos-26
+            os: macos
+            arch: arm64
+          - id: macos-x64
+            runner: macos-15-intel
+            os: macos
+            arch: x64
+          - id: windows-x64
+            runner: windows-2025
+            os: windows
+            arch: x64
+          - id: linux-x64
+            runner: ubuntu-24.04
+            os: linux
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      NODE_OPTIONS: --max-old-space-size=8192
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version: 1.2.20
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Use a Visual Studio 2026-compatible node-gyp
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          npm install --global node-gyp@12.3.0
+          "npm_config_node_gyp=$(npm root --global)\node-gyp\bin\node-gyp.js" >> $env:GITHUB_ENV
+      - name: Install Azure Key Vault signing tool
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: dotnet tool install --global AzureSignTool --version 7.0.1
+      - name: Install Linux package dependencies
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev \
+            libopenblas-dev
+      - run: pnpm install --frozen-lockfile
+      - name: Set the public package version
+        run: bun scripts/ci/set-version.ts --version "${{ needs.authorize.outputs.version }}"
+      - name: Build signed and notarized macOS package
+        if: matrix.os == 'macos'
+        env:
+          PYTHON: /usr/bin/python3
+          CSC_LINK: ${{ secrets.APPLE_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ""
+          CSC_NAME: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: pnpm run package:official -- --mac dmg zip --${{ matrix.arch }} --publish never
+      - name: Build signed Windows package
+        if: matrix.os == 'windows'
+        env:
+          AZURE_KEY_VAULT_URI: ${{ secrets.AZURE_KEY_VAULT_URI }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_CERT_NAME: ${{ secrets.AZURE_CERT_NAME }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: pnpm run package:official -- --win nsis zip --x64 --publish never
+      - name: Build Linux package
+        if: matrix.os == 'linux'
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: pnpm run package:official -- --linux AppImage deb --x64 --publish never
+      - name: Verify official profile and package resources
+        if: matrix.id == 'macos-arm64'
+        run: pnpm run release:verify:official-candidate
+      - name: Verify Apple signature, notarization, and stapling
+        if: matrix.os == 'macos'
+        run: |
+          app=$(find dist -maxdepth 3 -type d -name Interpreter.app -print -quit)
+          test -n "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+          xcrun stapler validate "$app"
+      - name: Verify Microsoft Authenticode signatures
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          $files = @(
+            Get-ChildItem dist -Recurse -File -Filter Interpreter.exe
+            Get-ChildItem dist -File -Filter 'Interpreter-win-x64-*.exe'
+          )
+          if ($files.Count -lt 2) { throw "Expected signed app and installer executables" }
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature $file.FullName
+            if ($signature.Status -ne 'Valid') {
+              throw "Invalid Authenticode signature for $($file.FullName): $($signature.Status)"
+            }
+            Write-Host "Verified $($file.Name): $($signature.SignerCertificate.Subject)"
+          }
+      - name: Verify Linux release artifacts
+        if: matrix.os == 'linux'
+        run: |
+          test -s dist/Interpreter-linux-x64-${{ needs.authorize.outputs.version }}.AppImage
+          test -s dist/Interpreter-linux-x64-${{ needs.authorize.outputs.version }}.deb
+      - name: Upload immutable build output
+        uses: actions/upload-artifact@v7
+        with:
+          name: official-${{ matrix.id }}
+          path: |
+            dist/Interpreter-*
+            dist/latest*.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Attest and publish
+    needs: [authorize, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: production-release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      RELEASE_VERSION: ${{ needs.authorize.outputs.version }}
+      RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: us-west-1
+      AWS_ENDPOINT_URL: https://neyguovvcjxfzhqpkicj.storage.supabase.co/storage/v1/s3
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: official-*
+          path: release-parts
+      - uses: astral-sh/setup-uv@v7
+      - name: Assemble the cross-platform release
+        run: |
+          mkdir release
+          find release-parts -type f ! -name 'latest-mac.yml' -exec cp {} release/ \;
+          uv run scripts/ci/merge-mac-yml.py \
+            release-parts/official-macos-arm64/latest-mac.yml \
+            release-parts/official-macos-x64/latest-mac.yml \
+            release/latest-mac.yml
+          {
+            printf '# Interpreter Workstation v%s\n\n' "$RELEASE_VERSION"
+            printf 'Official Interpreter build from [%s@%s](%s/%s/commit/%s).\n\n' \
+              "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_SHA"
+            cat <<'EOF'
+          This release is built from the public repository, uses the checked-in official distribution profile, includes the checksummed OIX runtime named in `RELEASE-MANIFEST.json`, and is published through the protected production release environment.
+
+          Verify file hashes with `SHA256SUMS` and GitHub build provenance with:
+
+          ```sh
+          gh attestation verify <downloaded-file> --repo openinterpreter/interpreter-workstation
+          ```
+          EOF
+          } > release/RELEASE_NOTES.md
+      - name: Generate SPDX software bill of materials
+        uses: anchore/sbom-action@v0.24.0
+        with:
+          path: .
+          format: spdx-json
+          output-file: release/SBOM.spdx.json
+          upload-artifact: false
+      - name: Write checksums and reproducibility manifest
+        run: node scripts/ci/write-release-metadata.mjs release
+      - name: Attest build provenance
+        uses: actions/attest@v4.2.2
+        with:
+          subject-checksums: release/SHA256SUMS
+      - name: Attest the release SBOM
+        uses: actions/attest@v4.2.2
+        with:
+          subject-checksums: release/SHA256SUMS
+          sbom-path: release/SBOM.spdx.json
+      - name: Create a private draft and upload GitHub release assets
+        run: |
+          gh release create "$RELEASE_TAG" release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Interpreter Workstation v${RELEASE_VERSION}" \
+            --notes-file release/RELEASE_NOTES.md \
+            --draft
+      - name: Upload immutable payloads to the public Supabase bucket
+        run: |
+          mapfile -d '' payloads < <(find release -maxdepth 1 -type f ! -name 'latest*.yml' -print0 | sort -z)
+          bash scripts/ci/upload_and_verify.sh \
+            --bucket workstationupdater \
+            --prefix releases \
+            --endpoint-url "$AWS_ENDPOINT_URL" \
+            --region "$AWS_REGION" \
+            "${payloads[@]}"
+      - name: Publish auto-update manifests last
+        run: |
+          mapfile -d '' manifests < <(find release -maxdepth 1 -type f -name 'latest*.yml' -print0 | sort -z)
+          bash scripts/ci/upload_and_verify.sh \
+            --bucket workstationupdater \
+            --prefix releases \
+            --endpoint-url "$AWS_ENDPOINT_URL" \
+            --region "$AWS_REGION" \
+            --concurrency 1 \
+            "${manifests[@]}"
+      - name: Publish the GitHub release
+        run: gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest

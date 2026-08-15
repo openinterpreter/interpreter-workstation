@@ -2,7 +2,7 @@
   "name": "interpreter",
   "version": "0.1.24",
   "internalVersion": "0.2.171",
-  "publicVersion": "0.2.183",
+  "publicVersion": "0.2.184",
   "private": true,
   "license": "Apache-2.0",
   "repository": {

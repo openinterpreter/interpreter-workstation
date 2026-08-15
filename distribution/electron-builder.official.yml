@@ -4,6 +4,12 @@ mac:
   sign: ./scripts/electron-builder/sign-mac.cjs
   notarize: true
 
+win:
+  signtoolOptions:
+    sign: ./scripts/electron-builder/sign-windows.cjs
+    signingHashAlgorithms:
+      - sha256
+
 publish:
   - provider: s3
     bucket: workstationupdater

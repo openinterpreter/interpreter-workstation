@@ -41,6 +41,13 @@ pnpm run build:official
 pnpm run package:official
 ```
 
+The official binary is not defined merely by running that command locally. An
+official release is a build of protected `main` produced by the checked-in
+`Official release` workflow, approved through the `production-release`
+environment, signed and notarized with project credentials, accompanied by
+checksums and an SPDX SBOM, and covered by GitHub artifact attestations. See
+[Official releases](releases.md).
+
 ### Internal build
 
 The internal profile uses the same official client configuration and source,
@@ -53,13 +60,9 @@ pnpm run package:internal:mac-arm64
 pnpm run release:verify:internal
 ```
 
-The `Internal release` GitHub workflow runs only from `main` under the protected
-`internal-release` environment. While this repository is private it uploads an
-Actions artifact and creates a private prerelease here. After this repository
-becomes public, the workflow requires `INTERNAL_RELEASE_REPOSITORY` to name a
-separate private artifact repository and publishes directly there with the
-scoped `INTERNAL_RELEASE_TOKEN`; it does not upload the binary to the public
-workflow run.
+The `Internal release` workflow produces an unsigned review build under the
+protected `internal-release` environment. It is never an official release and
+must not publish to the production update channel.
 
 ## Secret boundary
 
