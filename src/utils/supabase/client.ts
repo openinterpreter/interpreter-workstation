@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { distributionProductConfig } from '../../../shared/productConfig';
+import { distributionProductConfig, hasHostedAccountProvider } from '../../../shared/productConfig';
 
 // =============================================================================
 // NOTE(victor): OAUTH REDIRECT URLs - AUTH WILL BREAK IF THESE ARE NOT CONFIGURED
@@ -19,7 +19,12 @@ import { distributionProductConfig } from '../../../shared/productConfig';
 // =============================================================================
 
 const authConfig = distributionProductConfig.auth;
-const SUPABASE_URL = authConfig.url || 'http://127.0.0.1:1';
+export const HOSTED_AUTH_ENABLED = hasHostedAccountProvider();
+// Supabase requires a syntactically valid URL even when the distribution has
+// no hosted account provider. Keep the inert fallback on a safe closed
+// loopback port; AuthProvider never initializes or refreshes a session in this
+// mode.
+const SUPABASE_URL = authConfig.url || 'http://127.0.0.1:65535';
 const SUPABASE_ANON_KEY = authConfig.anonKey || 'hosted-auth-disabled';
 
 // Custom storage key for auth token
@@ -40,11 +45,11 @@ export const supabase = createClient(
   SUPABASE_ANON_KEY,
   {
     auth: {
-      persistSession: true,
+      persistSession: HOSTED_AUTH_ENABLED,
       storage: typeof window !== 'undefined' ? window.localStorage : undefined,
       storageKey: AUTH_STORAGE_KEY,
-      autoRefreshToken: true,
-      detectSessionInUrl: true,
+      autoRefreshToken: HOSTED_AUTH_ENABLED,
+      detectSessionInUrl: HOSTED_AUTH_ENABLED,
       lock: noopLock,
     }
   }

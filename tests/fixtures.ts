@@ -220,6 +220,11 @@ export const test = base.extend<{}, { electronApp: ElectronApplication }>({
       errorHandler = (msg: any) => {
         const text = msg.text();
         const type = msg.type();
+        const location = msg.location?.();
+        const source = location?.url
+          ? ` [source: ${location.url}${Number.isInteger(location.lineNumber) ? `:${location.lineNumber + 1}` : ''}]`
+          : '';
+        const diagnostic = `${text}${source}`;
         // DO NOT console.log here - it would duplicate logs captured by preload IPC
 
         // Collect console errors
@@ -243,11 +248,11 @@ export const test = base.extend<{}, { electronApp: ElectronApplication }>({
             text.includes('Potential permissions policy violation: display-capture is not allowed')
           ) return;
 
-          consoleErrors.push(text);
+          consoleErrors.push(diagnostic);
           // Only fail test immediately if setup is complete
           // During setup, transient network errors are expected (reload, etc.)
           if (setupComplete) {
-            throw new Error(`Console error detected: ${text}`);
+            throw new Error(`Console error detected: ${diagnostic}`);
           }
         }
       };

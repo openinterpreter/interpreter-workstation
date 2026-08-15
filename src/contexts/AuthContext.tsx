@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 import { User, Session } from '@supabase/supabase-js';
-import { supabase, AUTH_STORAGE_KEY } from '../utils/supabase/client';
+import { supabase, AUTH_STORAGE_KEY, HOSTED_AUTH_ENABLED } from '../utils/supabase/client';
 import { apiRequest } from '@/ipc';
 import { trackSignIn, trackSignOut } from '@/utils/telemetry';
 import { isMarketingDemoMode } from '../demo/marketingDemo';
@@ -117,7 +117,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, [showToast, t]);
 
   useEffect(() => {
-    if (marketingDemoMode) {
+    if (marketingDemoMode || !HOSTED_AUTH_ENABLED) {
       setUser(null);
       setSession(null);
       setLoading(false);
@@ -308,7 +308,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, [marketingDemoMode, showDiskSpaceFullToast]);
 
   const signOut = async () => {
-    if (marketingDemoMode) {
+    if (marketingDemoMode || !HOSTED_AUTH_ENABLED) {
       setSession(null);
       setUser(null);
       setLoading(false);
