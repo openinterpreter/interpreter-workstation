@@ -42,6 +42,9 @@ try {
       ...process.env,
       INTERPRETER_DISTRIBUTION_ID: merged.distribution?.id ?? 'custom',
     },
+    // Package-manager shims such as pnpm are .cmd files on Windows. Node does
+    // not resolve them through CreateProcess unless the platform shell is used.
+    shell: process.platform === 'win32',
     stdio: 'inherit',
   });
   if (result.error) {
