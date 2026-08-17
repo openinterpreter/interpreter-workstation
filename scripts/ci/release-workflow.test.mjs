@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const workflow = await readFile('.github/workflows/release.yml', 'utf8');
+const electronBuilderConfig = await readFile('electron-builder.yml', 'utf8');
 
 function section(start, end) {
   const startIndex = workflow.indexOf(start);
@@ -51,4 +52,8 @@ test('installed clients discover a release only after GitHub publication', () =>
 
   assert.ok(payloads >= 0 && github > payloads && manifests > github);
   assert.equal(publish.indexOf('Publish the GitHub release', github + 1), -1);
+});
+
+test('release packaging does not rebuild N-API native dependencies', () => {
+  assert.match(electronBuilderConfig, /^npmRebuild: false$/m);
 });
