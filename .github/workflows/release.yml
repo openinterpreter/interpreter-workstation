@@ -202,8 +202,10 @@ jobs:
       - name: Verify Linux release artifacts
         if: matrix.os == 'linux'
         run: |
-          test -s dist/Interpreter-linux-x64-${{ needs.authorize.outputs.version }}.AppImage
-          test -s dist/Interpreter-linux-x64-${{ needs.authorize.outputs.version }}.deb
+          # electron-builder uses each package format's native architecture
+          # spelling even though the build matrix uses the Node.js `x64` name.
+          test -s dist/Interpreter-linux-x86_64-${{ needs.authorize.outputs.version }}.AppImage
+          test -s dist/Interpreter-linux-amd64-${{ needs.authorize.outputs.version }}.deb
       - name: Upload immutable build output
         uses: actions/upload-artifact@v7
         with:

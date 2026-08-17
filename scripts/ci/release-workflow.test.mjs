@@ -57,3 +57,15 @@ test('installed clients discover a release only after GitHub publication', () =>
 test('release packaging does not rebuild N-API native dependencies', () => {
   assert.match(electronBuilderConfig, /^npmRebuild: false$/m);
 });
+
+test('Linux release verification follows electron-builder architecture names', () => {
+  const build = section('  build:', '  publish:');
+  const linuxVerification = build.slice(
+    build.indexOf('      - name: Verify Linux release artifacts'),
+    build.indexOf('      - name: Upload immutable build output'),
+  );
+
+  assert.match(linuxVerification, /Interpreter-linux-x86_64-\$\{\{ needs\.authorize\.outputs\.version \}\}\.AppImage/);
+  assert.match(linuxVerification, /Interpreter-linux-amd64-\$\{\{ needs\.authorize\.outputs\.version \}\}\.deb/);
+  assert.doesNotMatch(linuxVerification, /Interpreter-linux-x64-/);
+});
