@@ -16,8 +16,9 @@ An official Interpreter Workstation release must satisfy every condition below:
 - Linux packages come from the same workflow run and source commit;
 - `SHA256SUMS`, `RELEASE-MANIFEST.json`, and `SBOM.spdx.json` are published;
 - GitHub records both build-provenance and SBOM attestations for the artifacts;
-- binaries reach the public release bucket before auto-update manifests are
-  published, so clients never discover a partial release.
+- binaries reach the public release bucket and the GitHub release becomes
+  public before auto-update manifests are published, so clients never discover
+  a partial or hidden release.
 
 A local package, a pull-request artifact, or an internal candidate is useful
 for review but is not an official build.
@@ -25,7 +26,8 @@ for review but is not an official build.
 ## Release authority
 
 The `Official release` workflow is manual, accepts only the protected `main`
-branch, and hard-gates the initiating GitHub actor. Signing and storage
+branch, and hard-gates the initiating GitHub actor to the dedicated
+`interpreterwork` automation identity. Signing and storage
 credentials live only in the `production-release` GitHub Environment. The
 environment requires explicit approval from the project owner before jobs can
 use those credentials or publish a release.
@@ -34,6 +36,10 @@ The workflow deliberately separates source verification, platform packaging,
 and final publication. GitHub Actions logs may identify certificates, files,
 and public service coordinates; they must never print private keys, passwords,
 client secrets, or storage write credentials.
+
+Storage credentials are scoped to the upload steps, and the workflow publishes
+the auto-update manifests only after the immutable payloads and GitHub release
+are public. Those manifests are the final commit point for installed clients.
 
 ## Release procedure
 
