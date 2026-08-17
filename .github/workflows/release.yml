@@ -19,7 +19,7 @@ jobs:
   authorize:
     name: Authorize release
     if: >-
-      github.actor == 'KillianLucas' &&
+      github.actor == 'interpreterwork' &&
       github.ref == 'refs/heads/main' &&
       inputs.confirm == 'release'
     runs-on: ubuntu-latest
@@ -50,8 +50,6 @@ jobs:
     needs: authorize
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    env:
-      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -68,9 +66,14 @@ jobs:
           bun-version: 1.2.20
       - uses: dtolnay/rust-toolchain@stable
       - run: pnpm install --frozen-lockfile
+        env:
+          # @vscode/ripgrep downloads through the GitHub API. Scope this
+          # read-only token to dependency installation instead of the job.
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Set the public package version
         run: bun scripts/ci/set-version.ts --version "${{ needs.authorize.outputs.version }}"
       - run: pnpm typecheck
+      - run: node --test scripts/ci/release-workflow.test.mjs
       - run: pnpm run test:unit
       - run: node --test scripts/electron-builder/sign-windows.test.cjs
       - run: pnpm run release:licenses:check
@@ -102,7 +105,6 @@ jobs:
             arch: x64
     runs-on: ${{ matrix.runner }}
     env:
-      GITHUB_TOKEN: ${{ github.token }}
       NODE_OPTIONS: --max-old-space-size=8192
     steps:
       - uses: actions/checkout@v7
@@ -137,6 +139,10 @@ jobs:
             libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev \
             libopenblas-dev
       - run: pnpm install --frozen-lockfile
+        env:
+          # @vscode/ripgrep downloads through the GitHub API. Scope this
+          # read-only token to dependency installation instead of the job.
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Set the public package version
         run: bun scripts/ci/set-version.ts --version "${{ needs.authorize.outputs.version }}"
       - name: Build signed and notarized macOS package
@@ -222,11 +228,8 @@ jobs:
     env:
       RELEASE_VERSION: ${{ needs.authorize.outputs.version }}
       RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_REGION: us-west-1
       AWS_ENDPOINT_URL: https://neyguovvcjxfzhqpkicj.storage.supabase.co/storage/v1/s3
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -277,6 +280,8 @@ jobs:
           subject-checksums: release/SHA256SUMS
           sbom-path: release/SBOM.spdx.json
       - name: Create a private draft and upload GitHub release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$RELEASE_TAG" release/* \
             --repo "$GITHUB_REPOSITORY" \
@@ -285,6 +290,9 @@ jobs:
             --notes-file release/RELEASE_NOTES.md \
             --draft
       - name: Upload immutable payloads to the public Supabase bucket
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           mapfile -d '' payloads < <(find release -maxdepth 1 -type f ! -name 'latest*.yml' -print0 | sort -z)
           bash scripts/ci/upload_and_verify.sh \
@@ -293,7 +301,14 @@ jobs:
             --endpoint-url "$AWS_ENDPOINT_URL" \
             --region "$AWS_REGION" \
             "${payloads[@]}"
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
       - name: Publish auto-update manifests last
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           mapfile -d '' manifests < <(find release -maxdepth 1 -type f -name 'latest*.yml' -print0 | sort -z)
           bash scripts/ci/upload_and_verify.sh \
@@ -303,5 +318,3 @@ jobs:
             --region "$AWS_REGION" \
             --concurrency 1 \
             "${manifests[@]}"
-      - name: Publish the GitHub release
-        run: gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
