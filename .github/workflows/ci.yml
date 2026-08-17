@@ -168,4 +168,7 @@ jobs:
       - run: pnpm run download:qwen-asr -- --current-platform
       - run: pnpm run build:js-repl-runtime
       - run: pnpm run build
-      - run: pnpm run package:smoke
+      # Exercise the distribution wrapper on every supported runner. This is
+      # especially important on Windows, where package-manager shims require
+      # platform-shell resolution.
+      - run: pnpm run package:smoke:official
