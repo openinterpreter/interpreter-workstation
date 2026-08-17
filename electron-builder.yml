@@ -9,6 +9,12 @@ directories:
   buildResources: resources
 
 asar: true
+# Native dependencies in this app use N-API or are built and staged explicitly
+# before packaging. Rebuilding every native package here is both unnecessary and
+# brittle on hosted Windows runners (electron-builder's node-gyp discovery does
+# not yet recognize Visual Studio 2026). Keep release packaging aligned with the
+# cross-platform package-smoke contract instead.
+npmRebuild: false
 asarUnpack:
   # Keep LGPL-covered shared libraries replaceable in the installed app.
   - "node_modules/@img/sharp-libvips-*/**"
