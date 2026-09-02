@@ -60,6 +60,7 @@ import pdfRouter from "./routes/pdf";
 import ipcRouter from "./routes/ipc";
 import mcpRouter from "./routes/mcp";
 import interpreterCliRouter from "./routes/interpreterCli";
+import publicThreadRouter from "./routes/publicThread";
 import { addClient, removeClient, broadcast } from "./utils/sse";
 import { IPC_CHANNELS } from '../electron/ipc/registry';
 import { broadcastEvent } from './handlers/broadcast';
@@ -264,6 +265,7 @@ app.use('/api/inbox', inboxRouter);
 app.use('/api/pdf', pdfRouter); // Direct PDF API (no IPC events) for UI use
 app.use('/api/ipc', ipcRouter); // Browser mode IPC-equivalent endpoints
 app.use('/api/interpreter-cli', interpreterCliRouter);
+app.use('/api/public-thread', publicThreadRouter);
 if (ENABLE_EXTERNAL_MCP_HTTP) {
   app.use('/mcp', mcpRouter); // MCP server endpoint (Streamable HTTP)
 } else {

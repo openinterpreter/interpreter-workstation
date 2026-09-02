@@ -308,6 +308,9 @@ export type CodexClient = {
   threadList(params?: v2.ThreadListParams): Promise<v2.ThreadListResponse>;
   threadRead(params: v2.ThreadReadParams): Promise<v2.ThreadReadResponse>;
   threadSetName(params: v2.ThreadSetNameParams): Promise<v2.ThreadSetNameResponse>;
+  threadGoalSet(params: v2.ThreadGoalSetParams): Promise<v2.ThreadGoalSetResponse>;
+  threadGoalGet(params: v2.ThreadGoalGetParams): Promise<v2.ThreadGoalGetResponse>;
+  threadGoalClear(params: v2.ThreadGoalClearParams): Promise<v2.ThreadGoalClearResponse>;
   threadArchive(params: v2.ThreadArchiveParams): Promise<v2.ThreadArchiveResponse>;
   threadUnarchive(params: v2.ThreadUnarchiveParams): Promise<v2.ThreadUnarchiveResponse>;
   onAuthInvalidated(handler: (reason: string) => void): () => void;
@@ -796,6 +799,24 @@ export class CodexService {
 
   async setThreadName(threadId: string, name: string): Promise<void> {
     await this.client.threadSetName({ threadId, name });
+  }
+
+  async getThreadGoal(threadId: string): Promise<v2.ThreadGoal | null> {
+    const result = await this.client.threadGoalGet({ threadId });
+    return result.goal;
+  }
+
+  async setThreadGoal(
+    threadId: string,
+    update: Omit<v2.ThreadGoalSetParams, 'threadId'>,
+  ): Promise<v2.ThreadGoal> {
+    const result = await this.client.threadGoalSet({ threadId, ...update });
+    return result.goal;
+  }
+
+  async clearThreadGoal(threadId: string): Promise<boolean> {
+    const result = await this.client.threadGoalClear({ threadId });
+    return result.cleared;
   }
 
   async archiveThread(threadId: string): Promise<void> {

@@ -23,6 +23,9 @@ export const CLIENT_METHOD = {
   threadStart: "thread/start",
   threadResume: "thread/resume",
   threadSetName: "thread/name/set",
+  threadGoalSet: "thread/goal/set",
+  threadGoalGet: "thread/goal/get",
+  threadGoalClear: "thread/goal/clear",
   threadArchive: "thread/archive",
   threadUnarchive: "thread/unarchive",
   threadBackgroundTerminalsClean: "thread/backgroundTerminals/clean",
@@ -145,6 +148,18 @@ export type RequestMap = {
   [CLIENT_METHOD.threadSetName]: {
     params: v2.ThreadSetNameParams;
     result: v2.ThreadSetNameResponse;
+  };
+  [CLIENT_METHOD.threadGoalSet]: {
+    params: v2.ThreadGoalSetParams;
+    result: v2.ThreadGoalSetResponse;
+  };
+  [CLIENT_METHOD.threadGoalGet]: {
+    params: v2.ThreadGoalGetParams;
+    result: v2.ThreadGoalGetResponse;
+  };
+  [CLIENT_METHOD.threadGoalClear]: {
+    params: v2.ThreadGoalClearParams;
+    result: v2.ThreadGoalClearResponse;
   };
   [CLIENT_METHOD.threadArchive]: {
     params: v2.ThreadArchiveParams;

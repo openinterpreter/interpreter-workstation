@@ -20,6 +20,7 @@ import {
 import { agentTabs, getApiUrl, tts as ttsIpc } from '../../src/ipc';
 import { useAgentNotifications } from '../hooks/useAgentNotifications';
 import { ThreadMessages } from './prompt-kit/thread-messages';
+import { ThreadGoalBar } from './ThreadGoalBar';
 import { computeUnreadCount } from '../../shared/utils/agentAttention';
 import { removeAgentActivity, updateAgentActivity } from '../../src/stores/agentActivityStore';
 import {
@@ -349,6 +350,9 @@ function AgentThreadWithRuntime({
     messages,
     streamingMessage,
     historyLoaded,
+    hasOlderHistory,
+    loadingOlderHistory,
+    loadOlderHistory,
     isStreaming,
     error,
     errorDetails,
@@ -1246,6 +1250,7 @@ function AgentThreadWithRuntime({
       }}
       data-agent-id={agentId}
     >
+      {threadId ? <ThreadGoalBar threadId={threadId} /> : null}
       <ThreadMessages
         agentId={agentId}
         messages={messages}
@@ -1256,6 +1261,9 @@ function AgentThreadWithRuntime({
         errorEndpointBaseUrl={errorEndpointBaseUrl}
         retrying={retrying}
         historyLoaded={historyLoaded}
+        hasOlderHistory={hasOlderHistory}
+        loadingOlderHistory={loadingOlderHistory}
+        onLoadOlderHistory={loadOlderHistory}
         activeThreadId={threadId}
         onStopBackgroundProcess={stopBackgroundProcess}
         isEditorPane={isEditorPane}

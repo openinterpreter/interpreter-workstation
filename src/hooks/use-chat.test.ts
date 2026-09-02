@@ -19,10 +19,39 @@ import {
   hasRuntimeRestartContinuation,
   rememberRuntimeRestartContinuation,
   runtimeRestartContinuationStorageKey,
+  mergeChatHistory,
   type ChatMessage,
   type ChatMessagePart,
   type ToolCallInfo,
 } from "./use-chat";
+
+describe("mergeChatHistory", () => {
+  const message = (id: string, content: string): ChatMessage => ({
+    id,
+    role: "assistant",
+    parts: [{ kind: "text", content }],
+  });
+
+  test("prepends unseen older messages and preserves chronological order", () => {
+    const merged = mergeChatHistory(
+      [message("m3", "three"), message("m4", "four")],
+      [message("m1", "one"), message("m2", "two"), message("m3", "three")],
+      "older",
+    );
+    assert.deepEqual(merged.map((entry) => entry.id), ["m1", "m2", "m3", "m4"]);
+  });
+
+  test("updates overlapping live messages and appends new messages", () => {
+    const merged = mergeChatHistory(
+      [message("m1", "partial")],
+      [message("m1", "complete"), message("m2", "next")],
+      "newer",
+    );
+    assert.deepEqual(merged.map((entry) => entry.id), ["m1", "m2"]);
+    assert.equal(merged[0]?.parts[0]?.kind, "text");
+    assert.equal((merged[0]?.parts[0] as { content: string }).content, "complete");
+  });
+});
 
 function reasoning(id: string, state: ToolCallInfo["state"]): ToolCallInfo {
   return { id, type: "reasoning", label: "Thinking", state };

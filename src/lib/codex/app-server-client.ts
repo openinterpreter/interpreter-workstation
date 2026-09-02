@@ -2308,6 +2308,18 @@ export class CodexAppServerClient {
     return this.rpcRequest(CLIENT_METHOD.threadSetName, params);
   }
 
+  async threadGoalSet(params: v2.ThreadGoalSetParams): Promise<v2.ThreadGoalSetResponse> {
+    return this.rpcRequest(CLIENT_METHOD.threadGoalSet, params);
+  }
+
+  async threadGoalGet(params: v2.ThreadGoalGetParams): Promise<v2.ThreadGoalGetResponse> {
+    return this.rpcRequest(CLIENT_METHOD.threadGoalGet, params);
+  }
+
+  async threadGoalClear(params: v2.ThreadGoalClearParams): Promise<v2.ThreadGoalClearResponse> {
+    return this.rpcRequest(CLIENT_METHOD.threadGoalClear, params);
+  }
+
   async threadArchive(params: v2.ThreadArchiveParams): Promise<v2.ThreadArchiveResponse> {
     return this.rpcRequest(CLIENT_METHOD.threadArchive, params);
   }

@@ -112,6 +112,10 @@ import {
   normalizeHeadlessTaskWorkspace,
 } from '../utils/headlessTaskWorkspace';
 import type { v2 } from '../handlers/codex-generated-types/index';
+import {
+  paginateThreadTurns,
+  parseThreadHistoryLimit,
+} from '../utils/threadHistoryPagination';
 
 const router = Router();
 
@@ -612,10 +616,95 @@ router.get('/threads/:threadId', async (req: Request, res: Response) => {
   try {
     let thread = await getCodexService().readThread(req.params.threadId);
     thread = enrichThreadWithReasoning(thread);
-    res.json({ thread });
+    const limit = parseThreadHistoryLimit(req.query.limit);
+    if (limit === null) {
+      res.json({ thread });
+      return;
+    }
+
+    const before = typeof req.query.before === 'string'
+      ? req.query.before
+      : undefined;
+    const page = paginateThreadTurns(thread.turns, { limit, before });
+    res.json({
+      thread: { ...thread, turns: page.turns },
+      historyPage: {
+        nextCursor: page.nextCursor,
+        hasMore: page.hasMore,
+      },
+    });
   } catch (error) {
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to read thread.',
+    });
+  }
+});
+
+router.get('/threads/:threadId/goal', async (req: Request, res: Response) => {
+  try {
+    const goal = await getCodexService().getThreadGoal(req.params.threadId);
+    res.json({ goal });
+  } catch (error) {
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to read thread goal.',
+    });
+  }
+});
+
+router.put('/threads/:threadId/goal', async (req: Request, res: Response) => {
+  const objective = typeof req.body?.objective === 'string'
+    ? req.body.objective.trim()
+    : undefined;
+  const status = req.body?.status;
+  const allowedStatuses: v2.ThreadGoalStatus[] = [
+    'active',
+    'paused',
+    'blocked',
+    'usageLimited',
+    'budgetLimited',
+    'complete',
+  ];
+
+  if (objective !== undefined && objective.length === 0) {
+    return res.status(400).json({ error: 'Goal objective cannot be empty.' });
+  }
+  if (status !== undefined && !allowedStatuses.includes(status)) {
+    return res.status(400).json({ error: 'Invalid goal status.' });
+  }
+  if (objective === undefined && status === undefined && !('tokenBudget' in (req.body ?? {}))) {
+    return res.status(400).json({ error: 'Goal objective, status, or tokenBudget is required.' });
+  }
+
+  const tokenBudget = req.body?.tokenBudget;
+  if (
+    tokenBudget !== undefined
+    && tokenBudget !== null
+    && (!Number.isSafeInteger(tokenBudget) || tokenBudget <= 0)
+  ) {
+    return res.status(400).json({ error: 'tokenBudget must be a positive integer or null.' });
+  }
+
+  try {
+    const goal = await getCodexService().setThreadGoal(req.params.threadId, {
+      ...(objective !== undefined ? { objective } : {}),
+      ...(status !== undefined ? { status } : {}),
+      ...('tokenBudget' in (req.body ?? {}) ? { tokenBudget } : {}),
+    });
+    return res.json({ goal });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to update thread goal.',
+    });
+  }
+});
+
+router.delete('/threads/:threadId/goal', async (req: Request, res: Response) => {
+  try {
+    const cleared = await getCodexService().clearThreadGoal(req.params.threadId);
+    res.json({ cleared });
+  } catch (error) {
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to clear thread goal.',
     });
   }
 });
@@ -707,7 +796,10 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
   res.flushHeaders();
 
   res.on('close', () => {
-    abortController.abort();
+    // The renderer is an observer of the turn, not its owner. Closing a tab,
+    // reloading the window, or losing the network connection must not interrupt
+    // work that OIX is already performing. Explicit stop requests still abort
+    // through /chat/stop and the running-agent registry.
     streamClosed = true;
   });
 
@@ -716,7 +808,6 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
     const wrote = writeCodexSse(res, event, payload);
     if (!wrote) {
       streamClosed = true;
-      abortController.abort();
     }
   };
 
