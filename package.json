@@ -341,6 +341,7 @@
       "brace-expansion@<2": "1.1.18",
       "brace-expansion@>=2 <3": "2.1.4",
       "brace-expansion@>=5 <6": "5.0.9",
+      "browserslist": "4.28.7",
       "exceljs>uuid": "11.1.1",
       "fast-uri@<3.1.5": "3.1.5",
       "hono@<4.12.34": "4.12.34",
