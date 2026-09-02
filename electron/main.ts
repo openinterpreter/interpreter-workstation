@@ -38,6 +38,7 @@ import {
   waitForMainWindowLoadRecovery,
 } from './utils/mainWindowLoad';
 import { getGpuStartupPolicy, getMacWindowAppearance } from './utils/macWindowAppearance';
+import { PLAYWRIGHT_ELECTRON_DESKTOP_CAPTURABLE_ENV } from './utils/testElectronLaunchPolicy';
 import { initializeCreatedWindow } from './utils/windowInitialization';
 import {
   classifyExternalOpenPath,
@@ -323,6 +324,8 @@ const gpuStartupPolicy = getGpuStartupPolicy({
   forceGpuFeaturesEnv: process.env.INTERPRETER_FORCE_GPU_FEATURES,
   disableForcedGpuFeaturesEnv: process.env.INTERPRETER_DISABLE_FORCED_GPU_FEATURES,
   machineRunDirEnv: process.env.INTERPRETER_MACHINE_RUN_DIR,
+  playwrightElectronDesktopCapturableEnv:
+    process.env[PLAYWRIGHT_ELECTRON_DESKTOP_CAPTURABLE_ENV],
 });
 
 for (const commandLineSwitch of gpuStartupPolicy.commandLineSwitches) {
