@@ -180,6 +180,62 @@ describe('getGpuStartupPolicy', () => {
     });
   });
 
+  test('keeps the default Windows GPU safety policy unless desktop capture explicitly opts in', () => {
+    expect(getGpuStartupPolicy({
+      platform: 'win32',
+      disableMacTransparencyEnv: undefined,
+      forceMacTransparencyEnv: undefined,
+      forceGpuFeaturesEnv: undefined,
+      disableForcedGpuFeaturesEnv: undefined,
+      playwrightElectronDesktopCapturableEnv: undefined,
+    })).toEqual({
+      commandLineSwitches: ['disable-gpu', 'disable-software-rasterizer'],
+      disableHardwareAcceleration: true,
+    });
+
+    expect(getGpuStartupPolicy({
+      platform: 'win32',
+      disableMacTransparencyEnv: undefined,
+      forceMacTransparencyEnv: undefined,
+      forceGpuFeaturesEnv: undefined,
+      disableForcedGpuFeaturesEnv: undefined,
+      playwrightElectronDesktopCapturableEnv: '1',
+    })).toEqual({
+      commandLineSwitches: [],
+      disableHardwareAcceleration: false,
+    });
+  });
+
+  test('limits the desktop-capturable opt-in to Windows', () => {
+    expect(getGpuStartupPolicy({
+      platform: 'linux',
+      disableMacTransparencyEnv: undefined,
+      forceMacTransparencyEnv: undefined,
+      forceGpuFeaturesEnv: undefined,
+      disableForcedGpuFeaturesEnv: undefined,
+      playwrightElectronDesktopCapturableEnv: '1',
+    })).toEqual({
+      commandLineSwitches: ['disable-gpu', 'disable-software-rasterizer'],
+      disableHardwareAcceleration: true,
+    });
+
+    expect(getGpuStartupPolicy({
+      platform: 'darwin',
+      disableMacTransparencyEnv: undefined,
+      forceMacTransparencyEnv: undefined,
+      forceGpuFeaturesEnv: undefined,
+      disableForcedGpuFeaturesEnv: undefined,
+      playwrightElectronDesktopCapturableEnv: '1',
+    })).toEqual({
+      commandLineSwitches: [
+        'enable-webgl',
+        'ignore-gpu-blocklist',
+        'enable-webgl2-compute-context',
+      ],
+      disableHardwareAcceleration: false,
+    });
+  });
+
   test('keeps the Linux GPU fallback path disabled when GPU forcing env is stale', () => {
     expect(getGpuStartupPolicy({
       platform: 'linux',

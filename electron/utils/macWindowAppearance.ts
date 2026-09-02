@@ -15,6 +15,7 @@ type GpuFeatureInput = {
   forceGpuFeaturesEnv?: string;
   disableForcedGpuFeaturesEnv?: string;
   machineRunDirEnv?: string;
+  playwrightElectronDesktopCapturableEnv?: string;
 };
 
 type GpuStartupPolicy = {
@@ -64,6 +65,16 @@ export function shouldEnableGpuFeatures(input: GpuFeatureInput): boolean {
 }
 
 export function getGpuStartupPolicy(input: GpuFeatureInput): GpuStartupPolicy {
+  if (
+    input.platform === 'win32'
+    && input.playwrightElectronDesktopCapturableEnv === '1'
+  ) {
+    return {
+      commandLineSwitches: [],
+      disableHardwareAcceleration: false,
+    };
+  }
+
   if (shouldEnableGpuFeatures(input)) {
     return {
       commandLineSwitches: [

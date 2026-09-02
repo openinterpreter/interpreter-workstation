@@ -5,6 +5,10 @@ import { execFileSync, execSync } from "child_process";
 import { getTestRunDir } from "./test-recorder";
 import { getTestConfig } from "./test-config";
 import fs from "fs";
+import {
+  buildTestElectronLaunchArgs,
+  PLAYWRIGHT_ELECTRON_DESKTOP_CAPTURABLE_ENV,
+} from "../electron/utils/testElectronLaunchPolicy";
 
 /**
  * Global Electron instance manager
@@ -218,16 +222,16 @@ class ElectronInstanceManager {
     const moonshineInstallRoot =
       process.env.TEST_MOONSHINE_INSTALL_ROOT?.trim();
     const ttsInstallRoot = process.env.TEST_TTS_INSTALL_ROOT?.trim();
+    const desktopCapturable =
+      process.env[PLAYWRIGHT_ELECTRON_DESKTOP_CAPTURABLE_ENV] === "1";
     const testRunIdFlag = `${this.TEST_RUN_ID_FLAG_PREFIX}${path.basename(getTestRunDir())}`;
     const args = [
       getTestConfig().electronMainPath,
       testRunIdFlag,
-      "--no-sandbox",
-      "--disable-gpu",
-      "--disable-dev-shm-usage",
-      "--disable-software-rasterizer",
-      "--disable-setuid-sandbox",
-      "--disable-extensions",
+      ...buildTestElectronLaunchArgs({
+        platform: process.platform,
+        desktopCapturable,
+      }),
     ];
 
     if (fakeAudioPath) {
@@ -252,6 +256,7 @@ class ElectronInstanceManager {
       formTestsDebugPort: process.env.FORM_TESTS_DEBUG_PORT || null,
       overlayDebugPort: process.env.INTERPRETER_OVERLAY_DEBUG_PORT || null,
       overlayDebugToken: process.env.INTERPRETER_OVERLAY_DEBUG_TOKEN || null,
+      desktopCapturable,
       disableAdvancedVoiceCreateCall:
         process.env.INTERPRETER_OVERLAY_DISABLE_ADVANCED_VOICE_CREATE_CALL || null,
     });
