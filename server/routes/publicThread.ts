@@ -9,6 +9,7 @@ import {
   buildPublicThreadSnapshot,
   matchesPublicThreadToken,
 } from '../utils/publicThreadSnapshot';
+import { resolvePublicThreadId } from '../utils/publicThreadConfig';
 
 const router = Router();
 
@@ -18,7 +19,7 @@ function bearerToken(request: Request): string | undefined {
 }
 
 router.get('/snapshot', async (req: Request, res: Response) => {
-  const threadId = process.env.INTERPRETER_PUBLIC_THREAD_ID?.trim();
+  const threadId = resolvePublicThreadId();
   const expectedToken = process.env.INTERPRETER_PUBLIC_THREAD_TOKEN?.trim();
   if (!threadId || !expectedToken) {
     return res.status(503).json({ error: 'Public thread viewing is not configured.' });

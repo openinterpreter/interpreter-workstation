@@ -2,10 +2,12 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import type { v2 } from '../handlers/codex-generated-types';
 import type {
   PublicThreadMessage,
+  PublicThreadMessagePart,
   PublicThreadSnapshot,
 } from '../../shared/types/publicThread';
-import { mapThreadToChatMessages } from '../../src/lib/codex/thread-history-mapper';
-import { isHiddenRuntimeContinuationMessage } from '../../src/hooks/use-chat';
+
+const RUNTIME_RESTART_CONTINUE_MESSAGE =
+  'Continue the previous task now that Interpreter restarted. Continue from where you left off and verify the MCP/tool changes are available.';
 
 const SECRET_MARKERS = [
   /\bBearer\s+[A-Za-z0-9._~-]+/giu,
@@ -29,25 +31,92 @@ export function sanitizePublicThreadText(value: string, limit = 100_000): string
   return sanitized;
 }
 
+function toolState(status: string): 'loading' | 'complete' | 'error' {
+  if (status === 'inProgress') return 'loading';
+  if (status === 'completed') return 'complete';
+  return 'error';
+}
+
+function publicToolPart(item: v2.ThreadItem): PublicThreadMessagePart | null {
+  switch (item.type) {
+    case 'commandExecution':
+      return { kind: 'tool', id: item.id, label: 'Command', state: toolState(item.status) };
+    case 'fileChange':
+      return { kind: 'tool', id: item.id, label: 'File update', state: toolState(item.status) };
+    case 'mcpToolCall':
+      return { kind: 'tool', id: item.id, label: sanitizePublicThreadText(item.tool, 200), state: toolState(item.status) };
+    case 'dynamicToolCall':
+      return { kind: 'tool', id: item.id, label: sanitizePublicThreadText(item.tool, 200), state: toolState(item.status) };
+    case 'collabAgentToolCall':
+      return { kind: 'tool', id: item.id, label: 'Agent collaboration', state: toolState(item.status) };
+    case 'webSearch':
+      return { kind: 'tool', id: item.id, label: 'Web search', state: 'complete' };
+    case 'imageView':
+      return { kind: 'tool', id: item.id, label: 'View image', state: 'complete' };
+    case 'sleep':
+      return { kind: 'tool', id: item.id, label: 'Wait', state: 'complete' };
+    case 'imageGeneration':
+      return { kind: 'tool', id: item.id, label: 'Generate image', state: 'complete' };
+    default:
+      return null;
+  }
+}
+
+function publicUserText(item: Extract<v2.ThreadItem, { type: 'userMessage' }>): string {
+  return item.content
+    .filter((input): input is Extract<(typeof item.content)[number], { type: 'text' }> => input.type === 'text')
+    .map((input) => input.text)
+    .join('');
+}
+
 export function threadToPublicMessages(thread: v2.Thread): PublicThreadMessage[] {
-  return mapThreadToChatMessages(thread)
-    .filter((message) => !isHiddenRuntimeContinuationMessage(message))
-    .map((message): PublicThreadMessage => ({
-      id: message.id,
-      role: message.role,
-      parts: message.parts.flatMap((part) => {
-        if (part.kind === 'text') {
-          return [{ kind: 'text' as const, content: sanitizePublicThreadText(part.content) }];
+  const messages: PublicThreadMessage[] = [];
+  const usedIds = new Set<string>();
+  const uniqueId = (candidate: string) => {
+    let id = candidate;
+    let suffix = 1;
+    while (usedIds.has(id)) {
+      id = `${candidate}-${suffix}`;
+      suffix += 1;
+    }
+    usedIds.add(id);
+    return id;
+  };
+
+  for (const turn of thread.turns) {
+    let assistant: PublicThreadMessage | null = null;
+    const flushAssistant = () => {
+      if (assistant && assistant.parts.length > 0) messages.push(assistant);
+      assistant = null;
+    };
+
+    for (const item of turn.items) {
+      if (item.type === 'userMessage') {
+        flushAssistant();
+        const text = publicUserText(item);
+        if (text.trim() && text.trim() !== RUNTIME_RESTART_CONTINUE_MESSAGE) {
+          messages.push({
+            id: uniqueId(item.id),
+            role: 'user',
+            parts: [{ kind: 'text', content: sanitizePublicThreadText(text) }],
+          });
         }
-        if (part.toolCall.type === 'reasoning') return [];
-        return [{
-          kind: 'tool' as const,
-          id: part.toolCall.id,
-          label: sanitizePublicThreadText(part.toolCall.label, 500),
-          state: part.toolCall.state,
-        }];
-      }),
-    }));
+        continue;
+      }
+
+      const part = item.type === 'agentMessage'
+        ? { kind: 'text' as const, content: sanitizePublicThreadText(item.text) }
+        : publicToolPart(item);
+      if (!part) continue;
+      if (!assistant) {
+        assistant = { id: uniqueId(item.id), role: 'assistant', parts: [] };
+      }
+      assistant.parts.push(part);
+    }
+    flushAssistant();
+  }
+
+  return messages;
 }
 
 export function buildPublicThreadSnapshot(options: {
@@ -82,7 +151,7 @@ export function buildPublicThreadSnapshot(options: {
       nextCursor: options.nextCursor,
       hasMore: options.hasMore,
     },
-    eventCursor: `${thread.updatedAt}:${thread.turns.at(-1)?.id ?? 'empty'}`,
+    eventCursor: `${thread.updatedAt}:${thread.turns[thread.turns.length - 1]?.id ?? 'empty'}`,
     updatedAt: thread.updatedAt * 1000,
   };
 }

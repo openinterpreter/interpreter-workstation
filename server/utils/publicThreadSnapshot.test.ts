@@ -31,6 +31,12 @@ describe('public thread snapshots', () => {
         items: [
           { id: 'user-1', type: 'userMessage', content: [{ type: 'text', text: 'keep going' }] },
           { id: 'reason-1', type: 'reasoning', summary: ['private chain'], content: null },
+          {
+            id: 'command-1',
+            type: 'commandExecution',
+            command: 'curl -H "Authorization: Bearer secret-value" https://private.invalid',
+            status: 'completed',
+          },
           { id: 'agent-1', type: 'agentMessage', text: 'Public result' },
         ],
       }],
@@ -45,6 +51,9 @@ describe('public thread snapshots', () => {
 
     expect(snapshot.status).toBe('working');
     expect(JSON.stringify(snapshot)).not.toContain('private chain');
+    expect(JSON.stringify(snapshot)).not.toContain('secret-value');
+    expect(JSON.stringify(snapshot)).not.toContain('private.invalid');
+    expect(JSON.stringify(snapshot)).toContain('Command');
     expect(JSON.stringify(snapshot)).toContain('Public result');
   });
 });
