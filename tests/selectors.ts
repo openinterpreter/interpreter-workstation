@@ -69,6 +69,14 @@ export const sel = Object.assign(selStatic, {
   activeComposer: () => `${ELEMENT_IDS.editorAgentSurfaceAnySelector}:visible ${selStatic('mainComposerInput')}`,
   activeSettings: () => `${ELEMENT_IDS.editorAgentSurfaceAnySelector}:visible ${selStatic('agentSettingsButton')}`,
 
+  // === OFFICE VIEWER STATE ===
+  officeViewerState: (state: 'loading' | 'ready' | 'error') =>
+    `${selStatic('officeExtensionViewer')}[data-office-viewer-state="${state}"]`,
+  officeViewerReady: () => `${selStatic('officeExtensionViewer')}[data-office-viewer-ready="true"]`,
+  officeViewerError: () => `${selStatic('officeExtensionViewer')}[data-office-viewer-error="true"]`,
+  officeReadOnlyPreviewState: (state: 'loading' | 'ready' | 'error') =>
+    `${selStatic('officeReadOnlyPreview')}[data-office-viewer-state="${state}"]`,
+
   // === CONVERSATION HISTORY ===
   conversationItem: (conversationId: string) => `[data-testid="${ELEMENT_IDS.conversationItem(conversationId)}"]`,
 

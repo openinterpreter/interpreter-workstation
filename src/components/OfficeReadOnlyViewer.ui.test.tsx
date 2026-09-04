@@ -1,13 +1,16 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
+import { OFFICE_EXTENSION_VIEWER_ID } from '../../shared/element-ids';
 import { OfficeReadOnlyViewer } from './OfficeReadOnlyViewer';
 
 type MockFileViewerProps = {
   file: File;
+  onStateChange?: (state: MockViewerState) => void;
   options?: {
     rendererMode?: string;
     styleIsolation?: string;
+    renderers?: Array<{ id: string }>;
     toolbar?: {
       download?: boolean;
       exportHtml?: boolean;
@@ -16,6 +19,12 @@ type MockFileViewerProps = {
       permissions?: Record<string, boolean>;
     };
   };
+};
+
+type MockViewerState = {
+  loading: boolean;
+  ready: boolean;
+  error: unknown | null;
 };
 
 const mocks = vi.hoisted(() => ({
@@ -87,6 +96,39 @@ describe('OfficeReadOnlyViewer', () => {
         },
       },
     });
+    expect(mocks.viewerProps?.options?.renderers?.map((renderer) => renderer.id)).toEqual([
+      'file-viewer-renderer-word',
+      'file-viewer-renderer-spreadsheet',
+      'file-viewer-renderer-presentation-pptx',
+    ]);
+  });
+
+  test('exposes stable readiness and error signals from the renderer', async () => {
+    mocks.readBinary.mockResolvedValue({ buffer: new Uint8Array([1, 2, 3]).buffer });
+
+    render(<OfficeReadOnlyViewer filePath="/workspace/report.docx" />);
+
+    await screen.findByText('report.docx');
+    const viewer = screen.getByTestId(OFFICE_EXTENSION_VIEWER_ID);
+    expect(viewer).toHaveAttribute('data-office-viewer-state', 'loading');
+    expect(viewer).toHaveAttribute('data-office-viewer-ready', 'false');
+
+    await act(async () => {
+      mocks.viewerProps?.onStateChange?.({ loading: false, ready: true, error: null });
+    });
+
+    expect(screen.getByTestId(OFFICE_EXTENSION_VIEWER_ID)).toHaveAttribute('data-office-viewer-state', 'ready');
+    expect(screen.getByTestId(OFFICE_EXTENSION_VIEWER_ID)).toHaveAttribute('data-office-viewer-ready', 'true');
+
+    await act(async () => {
+      mocks.viewerProps?.onStateChange?.({ loading: false, ready: false, error: new Error('invalid package') });
+    });
+
+    const errorViewer = screen.getByTestId(OFFICE_EXTENSION_VIEWER_ID);
+    expect(errorViewer).toHaveAttribute('data-office-viewer-state', 'error');
+    expect(errorViewer).toHaveAttribute('data-office-viewer-error', 'true');
+    expect(errorViewer).toHaveAttribute('data-office-viewer-ready', 'false');
+    expect(screen.getByText('invalid package')).toBeInTheDocument();
   });
 
   test('offers the optional editor install action without hiding the preview', async () => {

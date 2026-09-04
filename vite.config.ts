@@ -28,10 +28,9 @@ export default defineConfig(() => {
       tailwindcss(),
       // Self-host File Viewer workers, fonts, and vendor assets in Electron.
       fileViewerRenderers({
-        // Keep the offline asset plan aligned with the Office formats routed by
-        // EditorArea. The preset's broad PDF plan currently references an
-        // optional CJK fallback that is not distributed by its dependency.
-        formats: ['docx', 'doc', 'odt', 'rtf', 'xlsx', 'xls', 'xlsm', 'ods', 'csv', 'pptx', 'ppt', 'odp'],
+        // Keep the offline asset plan limited to the explicitly installed OSS
+        // renderers. Binary .ppt uses a separate runtime and is not included.
+        formats: ['docx', 'xlsx', 'pptx'],
         copyAssets: true,
       }),
       sentryVitePlugin({

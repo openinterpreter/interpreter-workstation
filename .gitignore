@@ -116,4 +116,7 @@ scenario-runs/
 
 # Editor recovery files
 *.swp
+# File Viewer renderer assets copied by Vite during local builds.
 public/file-viewer/
+public/vendor/
+public/flyfish-viewer-*.json
