@@ -33,6 +33,7 @@
   },
   "pnpm": {
     "overrides": {
+      "fast-uri": "3.1.7",
       "hono": "4.12.34",
       "nanoid@<4": "3.3.18",
       "postcss": "8.5.25",
