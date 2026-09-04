@@ -202,6 +202,7 @@ export const IMAGE_VIEWER_ID = 'image-viewer' as const;
 export const VIDEO_VIEWER_ID = 'video-viewer' as const;
 export const HTML_VIEWER_ID = 'html-viewer' as const;
 export const OFFICE_EXTENSION_VIEWER_ID = 'office-extension-viewer' as const;
+export const OFFICE_READ_ONLY_PREVIEW_ID = 'office-read-only-preview' as const;
 export const REMOTION_VIEWER_ID = 'remotion-viewer' as const;
 export const MOVIE_VIEWER_ID = 'movie-viewer' as const;
 export const MOVIE_PREVIEW_PLAYER_ID = 'movie-preview-player' as const;
@@ -437,6 +438,7 @@ export const ELEMENT_IDS = {
   videoViewer: VIDEO_VIEWER_ID,
   htmlViewer: HTML_VIEWER_ID,
   officeExtensionViewer: OFFICE_EXTENSION_VIEWER_ID,
+  officeReadOnlyPreview: OFFICE_READ_ONLY_PREVIEW_ID,
   remotionViewer: REMOTION_VIEWER_ID,
   movieViewer: MOVIE_VIEWER_ID,
   moviePreviewPlayer: MOVIE_PREVIEW_PLAYER_ID,

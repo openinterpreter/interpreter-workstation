@@ -30,10 +30,6 @@ vi.mock('../utils/nativeDropTargets', () => ({
   setNativeDropTargetBounds: ipcMocks.setNativeDropTargetBounds,
 }));
 
-vi.mock('../utils/feedback', () => ({
-  openFeedbackPopover: vi.fn(),
-}));
-
 vi.mock('../hooks/useFileRefresh', () => ({
   useFileRefresh: vi.fn((_filePath: string, handlers: (() => void) | { onAgentRefresh?: () => void; onExternalRefresh?: () => void }) => {
     refreshMocks.trigger = typeof handlers === 'function'
@@ -42,12 +38,13 @@ vi.mock('../hooks/useFileRefresh', () => ({
   }),
 }));
 
-type InstallProgressEvent = {
-  stage: 'downloading' | 'extracting' | 'configuring' | 'complete' | 'error';
-  bytesDownloaded?: number;
-  totalBytes?: number;
-  error?: string;
-};
+vi.mock('./OfficeReadOnlyViewer', () => ({
+  OfficeReadOnlyViewer: ({ filePath, editingUnavailable }: { filePath: string; editingUnavailable?: boolean }) => (
+    <div data-testid={OFFICE_EXTENSION_VIEWER_ID} data-editing-unavailable={String(Boolean(editingUnavailable))}>
+      {filePath}
+    </div>
+  ),
+}));
 
 function createSelectionMessage(filePath = '/workspace/report.xlsx') {
   return {
@@ -108,48 +105,46 @@ describe('OfficeExtensionViewer', () => {
     );
   });
 
-  test('rechecks installation and opens the viewer after a background install completes', async () => {
-    const checkInstalled = vi.fn()
-      .mockResolvedValueOnce({ installed: false })
-      .mockResolvedValueOnce({ installed: true });
-    const ensureRunning = vi.fn().mockResolvedValue({ success: true });
-    const install = vi.fn().mockResolvedValue({ success: true });
-    let progressListener: ((event: InstallProgressEvent) => void) | null = null;
+  test('falls back to the local read-only preview when oo-editors is not installed', async () => {
+    const checkInstalled = vi.fn().mockResolvedValue({ installed: false });
 
     Object.defineProperty(window, 'electron', {
       configurable: true,
       value: {
         officeExtension: {
           checkInstalled,
-          ensureRunning,
-          install,
-          onInstallProgress: vi.fn((listener: (event: InstallProgressEvent) => void) => {
-            progressListener = listener;
-            return () => {
-              progressListener = null;
-            };
-          }),
+          ensureRunning: vi.fn(),
+          install: vi.fn(),
+          onInstallProgress: vi.fn(() => () => {}),
         },
       },
     });
 
     render(<OfficeExtensionViewer filePath="/workspace/report.docx" />);
 
-    expect(await screen.findByText('Compatible document engine required')).toBeInTheDocument();
+    expect(await screen.findByTestId(OFFICE_EXTENSION_VIEWER_ID)).toHaveAttribute('data-editing-unavailable', 'true');
     expect(checkInstalled).toHaveBeenCalledTimes(1);
-    expect(ensureRunning).not.toHaveBeenCalled();
+  });
 
-    await act(async () => {
-      progressListener?.({ stage: 'complete' });
+  test('uses the local read-only preview on Linux without contacting oo-editors', async () => {
+    ipcMocks.getRuntimeSystemInfo.mockReturnValueOnce({ platform: 'linux' });
+    const checkInstalled = vi.fn();
+    Object.defineProperty(window, 'electron', {
+      configurable: true,
+      value: {
+        officeExtension: {
+          checkInstalled,
+          ensureRunning: vi.fn(),
+          install: vi.fn(),
+          onInstallProgress: vi.fn(() => () => {}),
+        },
+      },
     });
 
-    await waitFor(() => {
-      expect(checkInstalled).toHaveBeenCalledTimes(2);
-    });
-    await waitFor(() => {
-      expect(ensureRunning).toHaveBeenCalledTimes(1);
-    });
-    expect(await screen.findByTestId(OFFICE_EXTENSION_VIEWER_ID)).toBeInTheDocument();
+    render(<OfficeExtensionViewer filePath="/workspace/report.xlsx" />);
+
+    expect(await screen.findByTestId(OFFICE_EXTENSION_VIEWER_ID)).toHaveTextContent('/workspace/report.xlsx');
+    expect(checkInstalled).not.toHaveBeenCalled();
   });
 
   test('remounts the visible office iframe with a cache-busted URL after a file refresh event', async () => {

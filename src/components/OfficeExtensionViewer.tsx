@@ -5,11 +5,10 @@ import { clearNativeDropTargetBounds, setNativeDropTargetBounds } from '../utils
 import { getRuntimeSystemInfo, pathBasename, theme as themeIpc } from '@/ipc';
 import { buildOfficeExtensionOpenUrl } from '@/lib/officeExtensionUrl';
 import { mapOfficeExtensionSelectionMessage } from '@/lib/officeExtensionSelection';
-import { openFeedbackPopover } from '../utils/feedback';
 import { useFileRefresh } from '../hooks/useFileRefresh';
-import { Button } from './ui/button';
 import type { ThemeChangedEvent } from '../../electron/ipc/registry';
 import { isOfficeExtensionSupportedPlatform } from '../../shared/constants/interpreter-overlay-platform';
+import { OfficeReadOnlyViewer } from './OfficeReadOnlyViewer';
 
 interface OfficeExtensionViewerProps {
   filePath: string;
@@ -302,6 +301,17 @@ export function OfficeExtensionViewer({ filePath, refreshKey = 0 }: OfficeExtens
     };
   }, []);
 
+  if (viewerState.status === 'checking') {
+    return (
+      <div className="w-full h-full flex items-center justify-center text-muted-foreground">
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-4 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin" />
+          Checking installation...
+        </div>
+      </div>
+    );
+  }
+
   const handleInstall = async () => {
     if (!window.electron?.officeExtension?.install) return;
 
@@ -321,61 +331,12 @@ export function OfficeExtensionViewer({ filePath, refreshKey = 0 }: OfficeExtens
     }
   };
 
-  const handleRetry = () => {
-    setViewerState({ status: 'checking' });
-    setInstallationCheckKey(key => key + 1);
-  };
-
-  if (viewerState.status === 'checking') {
-    return (
-      <div className="w-full h-full flex items-center justify-center text-muted-foreground">
-        <div className="flex items-center gap-2">
-          <div className="w-4 h-4 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin" />
-          Checking installation...
-        </div>
-      </div>
-    );
-  }
-
   if (viewerState.status === 'not-installed') {
-    return (
-      <div className="w-full h-full flex items-center justify-center px-6">
-        <div
-          className="w-full max-w-md rounded-2xl bg-muted/50 px-6 py-7 text-center"
-          style={{ border: 'var(--border-width) solid var(--border)' }}
-        >
-          <p className="mb-2 text-ui-base text-foreground">Compatible document engine required</p>
-          <p className="mb-5 text-ui-sm text-muted-foreground">
-            Workstation does not bundle a document editor. You can optionally install oo-editors, a separate AGPL-3.0 compatible engine, to open and edit this file here.
-          </p>
-          <Button
-            onClick={handleInstall}
-            variant="default"
-            size="sm"
-          >
-            Install oo-editors
-          </Button>
-        </div>
-      </div>
-    );
+    return <OfficeReadOnlyViewer filePath={filePath} refreshKey={refreshKey} editingUnavailable onInstallEditor={handleInstall} />;
   }
 
   if (viewerState.status === 'unsupported-platform') {
-    return (
-      <div className="w-full h-full flex flex-col items-center justify-center gap-4 text-muted-foreground">
-        <div className="text-center">
-          <p className="text-foreground mb-2">Office documents are not supported on this platform yet</p>
-          <p className="text-sm">Interpreter currently supports Office document editing on macOS and Windows.</p>
-        </div>
-        <Button
-          onClick={() => openFeedbackPopover()}
-          variant="outline"
-          size="sm"
-        >
-          Report bug
-        </Button>
-      </div>
-    );
+    return <OfficeReadOnlyViewer filePath={filePath} refreshKey={refreshKey} />;
   }
 
   if (viewerState.status === 'downloading') {
@@ -437,28 +398,7 @@ export function OfficeExtensionViewer({ filePath, refreshKey = 0 }: OfficeExtens
   }
 
   if (viewerState.status === 'error') {
-    return (
-      <div className="w-full h-full flex flex-col items-center justify-center">
-        <div className="text-center space-y-3">
-          <div className="text-muted-foreground">Unable to load this file</div>
-          <div className="max-w-md text-ui-sm text-muted-foreground">{viewerState.message}</div>
-          <div className="flex items-center justify-center gap-2">
-            <button
-              onClick={handleRetry}
-              className="px-3 py-1.5 text-ui-base rounded-control bg-muted hover:bg-muted/80 text-foreground transition-colors"
-            >
-              Try again
-            </button>
-            <button
-              onClick={() => openFeedbackPopover()}
-              className="px-3 py-1.5 text-ui-base rounded-control bg-muted hover:bg-muted/80 text-foreground transition-colors"
-            >
-              Report bug
-            </button>
-          </div>
-        </div>
-      </div>
-    );
+    return <OfficeReadOnlyViewer filePath={filePath} refreshKey={refreshKey} editingUnavailable />;
   }
 
   return (

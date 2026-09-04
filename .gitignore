@@ -116,3 +116,4 @@ scenario-runs/
 
 # Editor recovery files
 *.swp
+public/file-viewer/

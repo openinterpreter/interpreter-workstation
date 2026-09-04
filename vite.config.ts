@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { sentryVitePlugin } from "@sentry/vite-plugin";
+import { fileViewerRenderers } from '@file-viewer/vite-plugin';
 import path from "node:path";
 
 const reactCompilerPanicThreshold = process.env.REACT_COMPILER_PANIC_THRESHOLD ?? 'none';
@@ -25,6 +26,14 @@ export default defineConfig(() => {
         },
       }),
       tailwindcss(),
+      // Self-host File Viewer workers, fonts, and vendor assets in Electron.
+      fileViewerRenderers({
+        // Keep the offline asset plan aligned with the Office formats routed by
+        // EditorArea. The preset's broad PDF plan currently references an
+        // optional CJK fallback that is not distributed by its dependency.
+        formats: ['docx', 'doc', 'odt', 'rtf', 'xlsx', 'xls', 'xlsm', 'ods', 'csv', 'pptx', 'ppt', 'odp'],
+        copyAssets: true,
+      }),
       sentryVitePlugin({
         org: 'open-interpreter',
         project: 'electron',

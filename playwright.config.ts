@@ -21,6 +21,7 @@ const deterministicSpecs = [
   "**/agent-file-permissions.spec.ts",
   "**/markdown-autosave-no-diff.spec.ts",
   "**/pdf-annotation-interactions.spec.ts",
+  "**/office-preview.spec.ts",
   "**/reasoning-profile-switch.spec.ts",
 ];
 const externalSpecs = [
