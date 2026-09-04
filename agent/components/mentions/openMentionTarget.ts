@@ -1,3 +1,6 @@
+import { isAbsolutePath, pathJoin, pathNormalize } from '../../../src/ipc';
+import { getWorkspacePathSnapshot } from '../../../src/stores/workspaceStore';
+
 type MentionTarget = {
   path: string;
   itemType: 'file' | 'directory';
@@ -14,6 +17,7 @@ type MentionWindowingApi = {
 type MentionOpenDeps = {
   windowingApi?: MentionWindowingApi;
   scheduleScroll?: (detail: { path: string; fragment?: string; lineStart?: number; lineEnd?: number }) => void;
+  workspacePath?: string | null;
 };
 
 function getWindowingApi(): MentionWindowingApi | undefined {
@@ -43,16 +47,23 @@ export function openMentionTarget(
     return;
   }
 
+  const workspacePath = deps.workspacePath === undefined
+    ? getWorkspacePathSnapshot()
+    : deps.workspacePath;
+  const resolvedPath = !isAbsolutePath(target.path) && workspacePath
+    ? pathNormalize(pathJoin(workspacePath, target.path))
+    : target.path;
+
   if (target.itemType === 'directory') {
-    windowingApi.openFolder?.(target.path);
+    windowingApi.openFolder?.(resolvedPath);
     return;
   }
 
-  windowingApi.openFile?.(target.path);
+  windowingApi.openFile?.(resolvedPath);
 
   if (target.fragment || target.lineStart != null) {
     (deps.scheduleScroll ?? defaultScheduleScroll)({
-      path: target.path,
+      path: resolvedPath,
       fragment: target.fragment,
       lineStart: target.lineStart,
       lineEnd: target.lineEnd,

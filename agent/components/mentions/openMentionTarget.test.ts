@@ -50,4 +50,20 @@ describe('openMentionTarget', () => {
       fragment: undefined,
     });
   });
+
+  test('resolves relative response links against the active workspace', () => {
+    const calls: string[] = [];
+
+    openMentionTarget(
+      { path: 'reports/summary.docx', itemType: 'file' },
+      {
+        workspacePath: '/tmp/project',
+        windowingApi: {
+          openFile: (path) => calls.push(path),
+        },
+      },
+    );
+
+    assert.deepEqual(calls, ['/tmp/project/reports/summary.docx']);
+  });
 });
