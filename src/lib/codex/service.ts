@@ -151,7 +151,7 @@ type RunTurnOptions = {
   baseInstructions?: string;
   developerInstructions?: string;
   config?: Record<string, JsonValue> | null;
-  effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | null;
+  effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
   summary?: "auto" | "concise" | "detailed" | "none" | null;
   idleTimeoutMs?: number | null;
   onEvent: (event: StreamEvent) => void;
@@ -241,7 +241,7 @@ export type CodexClient = {
     sandboxPolicy?: v2.SandboxPolicy;
     cwd?: string;
     model?: string;
-    effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | null;
+    effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
     summary?: "auto" | "concise" | "detailed" | "none" | null;
   }): Promise<v2.Turn>;
   steerTurn(params: {

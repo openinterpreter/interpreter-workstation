@@ -75,6 +75,21 @@ describe('getReasoningCapabilityForModelConfig', () => {
     });
   });
 
+  test('supports literal max reasoning for GPT-5.6 Luna over the OpenAI API', () => {
+    const capability = getReasoningCapabilityForModelConfig({
+      provider: 'api',
+      baseURL: 'https://api.openai.com/v1',
+      modelId: 'gpt-5.6-luna',
+    });
+
+    expect(capability).toEqual({
+      supportedEfforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+      defaultEffort: 'medium',
+      source: 'generic',
+    });
+    expect(resolveReasoningEffort(capability, 'max')).toBe('max');
+  });
+
   test('uses OpenRouter catalog metadata for OpenRouter API profiles', () => {
     const capability = getReasoningCapabilityForModelConfig(
       {
@@ -115,7 +130,7 @@ describe('getReasoningCapabilityForModelConfig', () => {
     });
 
     expect(capability).toEqual({
-      supportedEfforts: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'],
+      supportedEfforts: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
       source: 'generic',
     });
   });

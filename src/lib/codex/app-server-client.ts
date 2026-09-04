@@ -2401,7 +2401,7 @@ export class CodexAppServerClient {
     sandboxPolicy?: v2.SandboxPolicy;
     cwd?: string;
     model?: string;
-    effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | null;
+    effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
     summary?: "auto" | "concise" | "detailed" | "none" | null;
   }) {
     const input = buildUserInput(params);

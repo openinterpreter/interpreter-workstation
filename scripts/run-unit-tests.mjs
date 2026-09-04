@@ -172,6 +172,9 @@ async function main() {
     // NOTE(victor): exercise the real move instead of collapsing old/new paths.
     INTERPRETER_USER_DATA_DIR: join(testHome, 'interpreter-user-data'),
   };
+  // INTERPRETER_HOME takes precedence over HOME; omit any inherited value so
+  // the unit suite remains inside the temporary test home.
+  delete env.INTERPRETER_HOME;
   let exitCode = 0;
   try {
     for (const [index, batch] of testBatches.entries()) {

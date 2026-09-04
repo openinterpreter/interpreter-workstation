@@ -27,7 +27,7 @@ export interface RunCodexSubagentOptions {
   parentOwner?: AgentPermissionOwnerReference;
   sandboxPolicy?: v2.SandboxPolicy;
   threadConfig?: Record<string, any>;
-  reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+  reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   reasoningSummary?: 'auto' | 'concise' | 'detailed' | 'none';
   session?: CodexSubagentSession;
   onEvent?: (event: StreamEvent) => void;
@@ -45,7 +45,7 @@ export interface CodexSubagentSession {
   dispose: () => void;
 }
 
-type CodexReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+type CodexReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 function createAgentRuntimeId(prefix: string): string {
   return `${prefix}-${nanoid()}`;

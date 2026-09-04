@@ -61,6 +61,14 @@ function capabilityFromOpenAiApiModel(modelId: string): ReasoningCapability | nu
     };
   }
 
+  if (normalizedModelId === 'gpt-5.6-luna' || /^gpt-5\.6-luna-\d{4}-\d{2}-\d{2}$/.test(normalizedModelId)) {
+    return {
+      supportedEfforts: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+      defaultEffort: 'medium',
+      source: 'generic',
+    };
+  }
+
   if (normalizedModelId === 'gpt-5.4-pro' || /^gpt-5\.4-pro-\d{4}-\d{2}-\d{2}$/.test(normalizedModelId)) {
     return {
       supportedEfforts: ['medium', 'high', 'xhigh'],

@@ -1,4 +1,4 @@
-export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export const REASONING_EFFORT_ORDER: ReasoningEffort[] = [
   'none',
@@ -7,6 +7,7 @@ export const REASONING_EFFORT_ORDER: ReasoningEffort[] = [
   'medium',
   'high',
   'xhigh',
+  'max',
 ];
 
 export const GENERIC_REASONING_EFFORTS: ReasoningEffort[] = [
@@ -34,6 +35,8 @@ export function reasoningEffortLabel(effort: ReasoningEffort): string {
     case 'high':
       return 'High';
     case 'xhigh':
+      return 'Extra high';
+    case 'max':
       return 'Max';
   }
 }
