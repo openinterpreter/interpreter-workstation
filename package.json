@@ -239,7 +239,7 @@
     "@supabase/supabase-js": "2.87.1",
     "@tailwindcss/vite": "4.3.3",
     "@tanstack/react-virtual": "3.13.12",
-    "@tiptap/core": "3.29.2",
+    "@tiptap/core": "3.30.4",
     "@tiptap/extension-code-block-lowlight": "3.29.2",
     "@tiptap/extension-hard-break": "3.29.2",
     "@tiptap/extension-highlight": "3.29.2",
