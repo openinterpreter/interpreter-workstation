@@ -114,10 +114,16 @@ provenance, checksum, SBOM, and verification contract.
 
 ## Document workflows
 
-Interpreter's primary document workflow is code execution plus skills. A
-compatible external document engine can optionally provide rich embedded
-editing and format conversion. It is not bundled with the community source.
-See [Document engines](docs/document-engine.md).
+Interpreter's primary document workflow is code execution plus skills. Community
+builds also include open-source, embedded read-only viewers for DOCX, XLSX, and
+PPTX files. They read local files through the app's permissioned file boundary
+and render them locally; no hosted account, proprietary office suite, or
+separate document service is required for viewing.
+
+Rich embedded editing and format conversion remain optional. A compatible
+document engine can be installed and configured independently when those
+capabilities are needed; it is not bundled with the community source. See
+[Document engines](docs/document-engine.md).
 
 ## Enterprise deployment
 
