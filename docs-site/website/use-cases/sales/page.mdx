@@ -1,0 +1,76 @@
+import { UseCaseCard, UseCaseGrid } from "@/components/docs/use-case-card";
+import { BrandIconRow } from "@/components/docs/brand-icon";
+
+# Sales and customer success
+
+Interpreter sits next to account executives, sales ops, BDRs, and CS managers and does the quiet work between meetings &mdash; updating the CRM from notes, prepping account briefs, drafting follow-ups in your voice, and filling research spreadsheets from outside sources. You watch it work; you approve before anything leaves the building.
+
+<BrandIconRow names={["salesforce", "hubspot", "gmail", "slack", "linkedin", "excel", "notion"]} />
+
+## Example workflows
+
+<UseCaseGrid>
+  <UseCaseCard
+    title="Update CRM records from call notes"
+    description="Point Interpreter at a folder of call notes or transcripts and have it open each account in the CRM, update next steps, stage, contacts, and recent activity, and queue any uncertain edits for your review."
+    apps={["salesforce", "hubspot", "notion"]}
+    prompt="Read every file in ~/calls/this-week and update the matching account in Salesforce with next steps, contacts mentioned, and any new stage. Stop and ask before changing stage on closed deals."
+  />
+  <UseCaseCard
+    title="Weekly pipeline report"
+    description="Pull the open pipeline, compare it to last week's snapshot, and produce a report with stage progression, at-risk flags, and accounts that have gone quiet. Drops into a Sheet or Notion page you already use."
+    apps={["salesforce", "hubspot", "google-sheets", "excel"]}
+    prompt="Build this week's pipeline report. Compare against last Friday's snapshot, flag any deal that slipped a stage or hasn't had activity in 14 days, and write it to the Pipeline tab."
+  />
+  <UseCaseCard
+    title="Personalized follow-up emails"
+    description="For each account in a list, read the last touchpoint &mdash; call notes, email thread, CRM activity &mdash; and draft a follow-up email in your voice. Stages them as drafts; nothing sends without your click."
+    apps={["gmail", "outlook", "salesforce", "hubspot"]}
+    prompt="For every account I met with this week, draft a follow-up email in my voice referencing the specific thing they said. Save as Gmail drafts. Do not send."
+  />
+  <UseCaseCard
+    title="Account brief before a call"
+    description="Before a meeting, Interpreter pulls the contact's LinkedIn, recent company news, prior emails and calls, and any open opportunities, then writes a one-page brief to your notes."
+    apps={["linkedin", "salesforce", "gmail", "notion"]}
+    prompt="I have a call with Priya at Northwind at 2pm. Build me a one-page brief with her background, what we last talked about, and anything notable about the company in the last 90 days."
+  />
+  <UseCaseCard
+    title="Triage the prospecting inbox"
+    description="Rank unread replies by intent, draft responses in your voice for the ones worth pursuing, and group the rest by reason. You scan the queue, approve, and move on."
+    apps={["gmail", "outlook", "hubspot", "salesforce"]}
+    prompt="Go through my unread prospecting replies. Rank by buying intent, draft responses in my voice for the top ones, and group the no-thanks replies so I can bulk-archive."
+  />
+  <UseCaseCard
+    title="Competitive battlecard from lost-deal notes"
+    description="Read the last N closed-lost deal notes, cluster the reasons, and build a battlecard with competitor patterns, objections raised, and the language that worked when reps did win."
+    apps={["salesforce", "hubspot", "word", "notion"]}
+    prompt="Read the closed-lost deals from the last quarter. Build a battlecard for Acme: top objections, where we lost on price vs. fit, and what won deals against them."
+  />
+  <UseCaseCard
+    title="Fill a research spreadsheet from external sources"
+    description="Give Interpreter a list of target companies and the fields you need &mdash; revenue, headcount, funding, fit signals &mdash; and it fills the sheet from external data sources connected via MCP."
+    apps={["excel", "google-sheets", "linkedin"]}
+    prompt="For each company in the Targets tab, fill in revenue range, headcount, latest round, and any expansion signal in the last 6 months. Use the connected data sources. Leave a note in column N if you couldn't confirm."
+  />
+  <UseCaseCard
+    title="QBR slide deck from CRM and notes"
+    description="Pulls deal-level data, expansion signals, and milestones from the CRM and account notes, then builds a QBR deck against your template. You edit the narrative; the data comes in clean."
+    apps={["salesforce", "hubspot", "powerpoint", "google-docs"]}
+    prompt="Build a QBR deck for the Northwind account using my template. Pull ARR, product usage, support history, and the last six months of touchpoints from Salesforce and our Notion notes."
+  />
+</UseCaseGrid>
+
+## Where to be careful
+
+- **Pause before sending external email.** Drafts are fine; sending is not automatic. Keep the agent on draft-only for outbound until you trust the voice match.
+- **Don't update closed-won or closed-lost without review.** These records get audited. Have Interpreter flag any change to a closed deal for your approval.
+- **Flag tone changes before they go out.** If a draft sounds off-brand or too aggressive, have the agent show you a diff against your usual style before sending.
+- **Treat compensation-relevant fields as no-write.** Stage, amount, and close date drive commissions. Make these read-only in your profile and require explicit approval to change.
+
+## Related how-tos
+
+- [Email and messaging](/docs/desktop/email-and-messaging)
+- [Spreadsheets and PDFs](/docs/desktop/spreadsheets-and-pdfs)
+- [MCP servers](/docs/desktop/mcp-servers)
+- [Approvals](/docs/desktop/approvals)
+- [Workspaces](/docs/desktop/workspaces)

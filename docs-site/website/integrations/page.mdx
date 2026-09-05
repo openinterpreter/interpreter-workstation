@@ -1,0 +1,40 @@
+# Integrations
+
+Interpreter ships with a set of built-in integrations for the systems most knowledge workers already use. Turn them on in Settings, and the agent gains the matching tools.
+
+## What's available
+
+- email (Nylas)
+- Telegram
+- WhatsApp
+- image generation
+- screenshot
+- slide generation
+- video editing
+
+Each one is configured in Settings under Integrations. You connect once, then the agent can use those tools across any agent and **profile**.
+
+## How they show up to the agent
+
+When you turn an integration on, the agent gains a related set of tools. Connecting email exposes things like `send_email`, `draft_email`, and `search_email`. Connecting Telegram exposes `send_telegram_message`. The tools go through your **approvals** policy like everything else, so sending a message or writing to an outside system can pause for review.
+
+## Email (Nylas)
+
+Email is connected through Nylas. Sign in with your provider (Google, Microsoft, or IMAP) through the OAuth flow in Settings. Once connected, the agent can draft replies, send follow-ups, triage threads, and pull context from past mail when you ask. Keep approvals on for sending until you're sure of the workflow.
+
+## Messaging (Telegram, WhatsApp)
+
+Connect your account in Settings. The agent can then send messages on your behalf. This is most useful for status pings, scheduled updates, and pulling context out of a chat you don't want to scroll yourself. Approvals matter here — outbound messages are usually a good thing to pause on.
+
+## Media (image gen, slide gen, video editing, screenshot)
+
+These integrations matter when a workflow's output is visual. Generate a chart for a report, build a deck from a spreadsheet, cut a clip from a long recording, or capture the current screen as a reference for a later step.
+
+## Pattern
+
+Most people wire one integration at a time. Connect it, prove a workflow end-to-end, then add the next. Don't turn everything on at once — you'll spend more time tuning approvals than building real workflows.
+
+## See also
+
+- [MCP servers](/docs/desktop/mcp-servers) for anything outside the bundled list.
+- [Email and messaging](/docs/desktop/email-and-messaging) for the typical workflow pattern.

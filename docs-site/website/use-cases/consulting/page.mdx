@@ -1,0 +1,82 @@
+import { UseCaseCard, UseCaseGrid } from "@/components/docs/use-case-card";
+import { BrandIconRow } from "@/components/docs/brand-icon";
+
+# Consulting and analysts
+
+Interpreter is the closest thing to a junior consultant on your desktop. Hand it a folder of raw data, transcripts, and PDFs and it will build the workbook, the dashboard, the memo, and the deck &mdash; with the source row visible behind every number. Use it for the work that usually eats a weekend: modeling, synthesis, packaging.
+
+<BrandIconRow names={["excel", "powerpoint", "pdf", "google-sheets", "notion", "word", "dropbox"]} />
+
+## Example workflows
+
+<UseCaseGrid>
+  <UseCaseCard
+    title="Interactive sales-forecast workbook"
+    description="Build a multi-tab Excel model from raw sales data: pivots, VLOOKUPs, conditional formatting, scenario inputs on a Drivers tab, and an Outputs tab that flows from them. Assumptions are listed and labeled so a reviewer can challenge each one."
+    apps={["excel", "google-sheets"]}
+    prompt="From sales-2024.csv, build forecast-2025.xlsx with a Drivers tab (price, volume growth, churn), a Forecast tab, and a Scenarios tab (base / upside / downside). Use formulas, not hardcoded numbers."
+  />
+  <UseCaseCard
+    title="Interactive HTML dashboard from a CSV"
+    description="Generate a single-file HTML dashboard with filters, charts, and a drilldown table. Share it via Slack or Drive &mdash; no server, no login, just open the file. The data is embedded so a reviewer can re-cut it on their own."
+    apps={["google-sheets", "dropbox"]}
+    prompt="Build an HTML dashboard from pipeline.csv with filters for region and segment, a revenue chart by month, and a drilldown table at the bottom. Save it as pipeline-dashboard.html."
+  />
+  <UseCaseCard
+    title="PDF executive summary from raw inputs"
+    description="Read a folder of source data and analyst notes and produce a polished PDF executive summary &mdash; cover page, key findings, supporting charts, and a methodology appendix. The PDF cites the source file behind every chart."
+    apps={["pdf", "word", "excel"]}
+    prompt="Read everything in /Q1-Inputs and produce q1-executive-summary.pdf. Cover, three key findings, supporting charts, and an appendix listing the source file for every number."
+  />
+  <UseCaseCard
+    title="SKU margin and pricing analysis"
+    description="Pull cost, price, and volume per SKU, compute contribution margin, segment by product line, and produce a pricing recommendation memo with the SKUs that should move flagged in priority order."
+    apps={["excel", "word"]}
+    prompt="From skus.csv and cogs.csv, build margin-analysis.xlsx with contribution margin per SKU and a Recommendations tab listing the top 15 candidates for a price change."
+  />
+  <UseCaseCard
+    title="Strategy memo from interview transcripts"
+    description="Read 30 customer-interview transcripts, surface recurring themes with frequency counts, and write a strategy memo with verbatim quotes attributed to the source transcript and timestamp."
+    apps={["word", "notion", "pdf"]}
+    prompt="Synthesize the transcripts in /Customer-Interviews into a strategy memo. Group findings into 5-7 themes. Every claim needs a quote and a transcript reference."
+  />
+  <UseCaseCard
+    title="Competitive landscape doc"
+    description="Open each competitor's site, pull positioning, pricing, product breadth, and recent announcements, and assemble a side-by-side comparison doc with screenshots and source URLs."
+    apps={["word", "notion", "pdf"]}
+    prompt="Build a competitive landscape doc covering these 8 companies: [list]. For each, capture positioning, pricing tiers, product list, and latest news. Include source URLs and screenshots."
+  />
+  <UseCaseCard
+    title="Board-ready slide deck"
+    description="Build a PowerPoint deck from the underlying workbook: executive summary, three findings with supporting charts, a recommendations slide, and an appendix. Charts pull from the source workbook so updates flow."
+    apps={["powerpoint", "excel"]}
+    prompt="Generate board-deck-q1.pptx from forecast-2025.xlsx and the executive-summary memo. 12-15 slides. Executive summary, findings, recommendations, appendix."
+  />
+  <UseCaseCard
+    title="Quarterly cash-flow forecast with sensitivities"
+    description="Forecast cash by week across the quarter, layer in collections and payables timing, run upside and downside sensitivities, and flag the liquidity low point with the dates and drivers behind it."
+    apps={["excel", "google-sheets"]}
+    prompt="Forecast cash by week for Q3 in cash-forecast.xlsx. Add upside and downside sensitivity tabs. Flag the lowest cash week and list the drivers."
+  />
+  <UseCaseCard
+    title="Survey data to themes-and-evidence report"
+    description="Clean a messy survey export, code the open-text responses into themes, and produce a report that pairs each theme with verbatim evidence and the per-segment breakdown."
+    apps={["excel", "word", "pdf"]}
+    prompt="Clean survey-export.csv and code the open-text column. Produce themes-report.docx grouping responses into themes, with verbatim quotes and per-segment counts under each."
+  />
+</UseCaseGrid>
+
+## Where to be careful
+
+- Stop before sending any client-facing deliverable. Read the deck and the memo yourself &mdash; numbers, framing, and the recommendations slide especially.
+- Demand the source row for every number. Ask the agent to leave a Sources tab or footnote behind every chart so you can trace each figure back to the input file.
+- Keep working files in one folder. Have the agent stage everything inside a single project folder &mdash; inputs, drafts, intermediate workbooks, final artifacts &mdash; so review and version control are obvious.
+- Mark assumptions explicitly. For forecast or hypothesis-driven work, ask the agent to list every assumption on a Drivers tab or an assumptions section, named and labeled, so a reviewer can challenge each one.
+- Spot-check the model before the meeting. Recompute one row by hand and compare. A workbook that looks polished but quietly miscounts a join is the most expensive artifact you can ship.
+
+## Related how-tos
+
+- [Document review](/docs/desktop/document-review) &mdash; for interview-synthesis and competitive-research workflows that start from a folder of source material.
+- [Research and notes](/docs/desktop/research-and-notes) &mdash; gathering and citing sources across web, PDFs, and internal docs.
+- [Workspaces](/docs/desktop/workspaces) &mdash; the single-folder pattern that keeps a project reviewable.
+- [Subagents](/docs/desktop/subagents) &mdash; for splitting a deck-plus-workbook-plus-memo build into parallel passes.

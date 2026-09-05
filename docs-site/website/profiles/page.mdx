@@ -1,0 +1,50 @@
+# Profiles
+
+A profile is a saved combination of provider, model, and credentials. You can save several profiles and switch between them per agent, so the right model is doing the right kind of work.
+
+## What a profile contains
+
+Three things:
+
+- the **provider** (where the model runs)
+- the **model** identifier
+- the **credentials** or base URL needed to reach it
+
+Save as many as you want. Each agent picks one active profile, and you can change it mid-session.
+
+## Supported providers
+
+- **OpenAI**. Hosted, the fastest path to a working setup. Sign in and you are running.
+- **OpenRouter**. One key, many models, including Anthropic, Kimi, Qwen, and DeepSeek. Good for trying different frontier models without juggling accounts.
+- **Ollama**. Local models running on your own machine. No data leaves your computer.
+- **LM Studio**. Local, with a GUI for managing model downloads and serving them.
+- **NVIDIA NIM**. Hosted inference on NVIDIA's stack.
+- **Custom OpenAI-compatible endpoint**. Point Interpreter at any base URL that speaks the OpenAI Responses API. Useful for self-hosted gateways and internal model servers.
+
+## Picking a profile
+
+Match the model to the task:
+
+- **Frontier hosted models** for judgment-heavy work: planning, multi-step reasoning, unfamiliar apps, anything where being wrong is costly.
+- **Smaller hosted or local models** for repeatable extraction: pulling fields from a known form, classifying rows, renaming files by pattern.
+- **Local models** for sensitive workspaces or offline work. If the data should not leave your machine, the model should not either.
+
+You do not have to pick once. Run a hard task on a smart profile, then swap to a faster one for the cleanup pass.
+
+## Switching mid-session
+
+Supported. The active profile is shown in the sidebar next to the agent. Change it and the next turn uses the new profile. Earlier transcript context carries forward.
+
+A common pattern is to start an agent on a smart profile to plan and confirm the approach, then switch to a fast profile to execute the repetitive work.
+
+## Where API keys live
+
+API keys are stored locally in your Interpreter config. They are sent only to the provider you chose, over the request that uses them. They are never sent to Interpreter's servers, and they are never sent to a different provider.
+
+If you want zero outbound traffic, use a local profile (Ollama or LM Studio) and an [offline-friendly workspace](/docs/desktop/privacy).
+
+## Tip: keep a fast profile and a smart profile
+
+Save two profiles you trust: one fast, one smart. Default to fast. Switch to smart when the task gets ambiguous or the stakes go up. This single habit gets you most of the value of multi-model setups without the configuration overhead.
+
+See [Models](/docs/desktop/models) for setup details, and [Privacy](/docs/desktop/privacy) for where data goes for each provider.

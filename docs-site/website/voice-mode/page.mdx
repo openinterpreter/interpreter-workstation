@@ -1,0 +1,37 @@
+# Voice mode
+
+Voice mode is hands-free instructions. Speak, and Interpreter transcribes locally and acts on what you said.
+
+## How transcription works
+
+Transcription runs on your machine. On macOS and Linux, Interpreter uses qwen-asr. On Windows, it uses Moonshine. The model auto-installs the first time you launch the app, so you do not need to do anything to set it up.
+
+No audio leaves your computer. The recording is transcribed locally and discarded.
+
+## When voice is great
+
+Voice is built for the moments where typing slows you down:
+
+- long sessions where you are mostly reviewing output and giving follow-ups
+- kitchen-table, operator-style tasks where you are walking the agent through real work
+- talking to the agent while you are reading something, watching it work, or stepping through results
+
+It is also useful for longer, more natural instructions that would take a while to type.
+
+## How to use it
+
+Tap the mic in the sidebar, speak, and the agent receives your transcribed message as if you had typed it. Tap again to stop. Your transcribed text shows up in the conversation before the agent responds, so you can confirm it captured what you meant.
+
+## Tips for good results
+
+Speak in complete instructions. Voice tends to work best when you give the agent a clear ask up front and the constraints right after, for example: "read every PDF in this folder, extract vendor and total, and put it in a spreadsheet."
+
+Short utterances also work — "do that for the next one" — but the agent does best with a clear instruction at the top of a turn rather than fragments stitched together.
+
+## Privacy
+
+Only transcription runs locally. The transcribed text is sent to whatever model is set in your active profile, with the same handling as instructions you typed. If you need the whole loop to stay local, pick a local model in your profile.
+
+## Languages
+
+Voice mode is primarily English at launch. Other languages may transcribe but are not the supported path yet.

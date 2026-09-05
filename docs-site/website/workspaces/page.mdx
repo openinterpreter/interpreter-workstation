@@ -1,0 +1,41 @@
+# Workspaces
+
+A workspace is the root folder an agent has access to. You set it per agent, and it bounds what the agent can read and write on your real machine.
+
+## What a workspace is
+
+Each agent in Interpreter is pinned to a single folder. That folder is the workspace. When the agent reads a file, writes a draft, runs a command, or saves output, it does so inside the workspace. Relative paths resolve against the workspace root. Absolute paths outside the workspace are rejected unless you have explicitly granted broader access.
+
+Set the workspace when you create an agent, and change it anytime from the agent's settings.
+
+## Why workspaces matter
+
+Workspaces are the primary way you bound risk. An agent with a tightly scoped workspace cannot wander into unrelated folders, touch personal files, or write to system locations by accident. Combined with [approvals](/docs/desktop/approvals), the workspace is the difference between a helpful assistant and an unbounded process running on your computer.
+
+A narrow workspace also makes the agent faster and more accurate. There is less context to scan, fewer ambiguous filenames, and the model stays focused on the task.
+
+## How to pick a good workspace
+
+Narrow beats broad. Always.
+
+- A single project folder is better than `~/Documents`.
+- A single client's folder is better than the whole drive.
+- A scratch folder for one task is better than your downloads.
+- If you only need one file, drop it (or a copy) in a fresh folder and point the agent there.
+
+Resist the urge to set the workspace to your home directory "just in case". You will regret it the first time the agent decides to reorganize something.
+
+## Multiple agents, multiple workspaces
+
+Every pinned agent has its own workspace. Use this to keep work streams separate: client A's folder for one agent, client B's for another, a research scratchpad for a third. Each agent's reach stops at its own root.
+
+[Subagents](/docs/desktop/subagents) inherit a scope from their parent. A subagent can only see a subset of the parent's workspace, never more. This is enforced per agent, not inferred from whatever window happens to be focused.
+
+## Reading files outside the workspace
+
+By default, the agent cannot. If you want it to read or write somewhere else, you have two clean options:
+
+- Drag the file into the workspace. Simple, deliberate, reversible.
+- Grant broader file access in Settings. Use sparingly, and prefer per-folder permissions over blanket access.
+
+Whatever you grant globally is the outer ceiling. The workspace narrows access below that ceiling. Keep the ceiling low and the workspace narrow, and you can let Interpreter move quickly without worrying about what it might touch.

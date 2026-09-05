@@ -1,0 +1,39 @@
+# Install
+
+Interpreter is a desktop app. Download it, point it at a folder, pick a model, and it can start driving your real apps.
+
+## Download
+
+Grab the build for your OS from [the download page](/download).
+
+- macOS (Apple Silicon and Intel)
+- Windows
+- Linux
+
+Open the installer and launch the app. There is no account to create.
+
+## First launch
+
+The app walks you through three things in order:
+
+- **Pick a workspace folder.** This is the only directory Interpreter can read or write in by default. Use a real working folder, not your home directory. You can change it later or add more folders from settings.
+- **Pick a profile.** A profile is a provider plus a model plus credentials. Choose one of the built-in providers (OpenAI, OpenRouter, Ollama, LM Studio, NVIDIA, or any OpenAI-compatible endpoint) and paste in a key or base URL. See [Connect a model](/docs/desktop/models).
+- **Grant OS permissions.** Interpreter controls real desktop apps, so the OS will prompt for it.
+
+## OS permissions
+
+Be honest with the prompts. The agent cannot click, type, or read on-screen state without them.
+
+- **macOS:** grant Accessibility and Screen Recording in System Settings. Restart the app after granting.
+- **Windows:** approve the UAC prompt on first launch. Some apps require running Interpreter as the same user that owns them.
+- **Linux:** depends on your desktop environment; the app will print what it needs.
+
+If you skip a permission, the overlay will tell you which one is missing the first time it tries to use it.
+
+## Voice mode
+
+Voice mode auto-installs a local speech-to-text model the first time you launch the app. You do not need to install anything by hand. It runs offline once installed.
+
+## What to try first
+
+Open the app, point it at a folder with a few real files, and run through [Your first task](/docs/desktop/get-started). Pick something boring you already do by hand.

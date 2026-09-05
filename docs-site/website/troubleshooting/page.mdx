@@ -1,0 +1,43 @@
+# Troubleshooting
+
+Most desktop workflow problems come from missing context, an unclear output format, an action waiting on review, or a permission the OS hasn't granted yet. Work through the specific case below before changing models or rewriting your instruction from scratch.
+
+## The agent picked the wrong field
+
+Add an explicit field mapping in your instruction. Show the source label and the destination label, one per line. "Customer name → Account holder. Order ID → Reference." The agent stops guessing once you write the mapping down.
+
+## The output is inconsistent across runs
+
+Tighten the instruction with the exact output format. For sheets, name the columns. For documents, give a template with the headings and the order you want. If two runs disagree, the format wasn't specified tightly enough.
+
+## The agent stops with an approval and nothing happens
+
+Check the approvals queue in the sidebar. Sensitive actions pause there until you approve or reject. Nothing else moves while an approval is pending.
+
+## It can't open or read a file
+
+Check the **workspace** scope. The agent only sees files inside its workspace. If the file is outside, either move it in or grant broader file access in Settings. Don't paste file contents into the instruction as a workaround — fix the scope instead.
+
+## The browser session got logged out
+
+Re-sign-in yourself, then resume. The agent can use a session you logged into, but it should never hold your credentials. Do not paste passwords or recovery codes into instructions.
+
+## It froze on a desktop app
+
+The OS Accessibility permission is almost always the cause. Interpreter asks for it at first launch — if you declined, the agent can see the screen but cannot click or type into other apps. macOS will say so explicitly in System Settings → Privacy & Security → Accessibility. Grant it, then restart the agent.
+
+## A model said it can't do something it actually can
+
+Switch **profile** to a stronger model with `/model` or the profile picker, and retry. Smaller models sometimes refuse computer use, multi-step planning, or long-context tasks they're capable of in principle but unreliable at in practice.
+
+## Voice mode mis-transcribes a word
+
+The speech model is local. Speak the corrected word back in the next utterance — "I meant Acme, not Ackney" — and the agent will correct it. You don't need to restart the session.
+
+## Workflow is too big for one prompt
+
+Split it. Extract first, review the extraction, then write. For parallel batches — same workflow over many rows or many files — use **subagents** so the work runs in parallel and each piece stays small enough to be reliable.
+
+## Still stuck
+
+Open feedback from the sidebar. The session log attached to feedback includes the agent transcript and the tool calls, which is usually enough to diagnose the failure.

@@ -1,0 +1,82 @@
+import { UseCaseCard, UseCaseGrid } from "@/components/docs/use-case-card";
+import { BrandIconRow } from "@/components/docs/brand-icon";
+
+# Operations and admin
+
+Operations work is mostly the work between apps &mdash; receipts that need to become an expense report, a Downloads folder that has stopped being a folder, an inventory CSV that needs eyes on it before Monday. Interpreter sits on your desktop, opens the same apps you would have opened, and gets through the queue while you watch. Hand it the messy pile and review the artifact at the end.
+
+<BrandIconRow names={["excel", "pdf", "quickbooks", "google-drive", "slack", "outlook", "dropbox"]} />
+
+## Example workflows
+
+<UseCaseGrid>
+  <UseCaseCard
+    title="Organize a messy Downloads folder"
+    description="Read each file, classify it by content (receipts, contracts, screenshots, statements, photos), and sort into named subfolders. Nothing is deleted &mdash; unknowns land in a review folder for you to look at."
+    apps={["google-drive", "dropbox", "pdf"]}
+    prompt="Sort everything in ~/Downloads into subfolders by content type. Don't delete anything. Put anything you're unsure about in a 'review' subfolder."
+  />
+  <UseCaseCard
+    title="Batch rename a folder of files"
+    description="Apply a consistent date-and-topic naming pattern across a folder &mdash; reading each file when needed to pick the right slug. The original names are kept in a rename log so you can roll back."
+    apps={["google-drive", "dropbox"]}
+    prompt="Rename every file in /Vendor-Invoices-Q4 to YYYY-MM-DD_vendor_invoice-number.pdf. Save the old-to-new mapping as rename-log.csv in the same folder."
+  />
+  <UseCaseCard
+    title="Receipts folder to expense report"
+    description="Open each receipt image or PDF, pull vendor, date, total, tax, and category, and build a formatted expense workbook with a totals row and a per-category summary. Originals stay untouched."
+    apps={["excel", "pdf", "quickbooks"]}
+    prompt="Process every receipt in ~/Receipts/March into expenses-march.xlsx. Columns: date, vendor, category, amount, tax, file name. Add a per-category subtotal at the bottom."
+  />
+  <UseCaseCard
+    title="Equipment intake log from ID-plate photos"
+    description="Read each photo of an asset ID plate, extract model, serial, manufacturer, and install date, and add a row to the equipment workbook &mdash; matching against the existing asset list to avoid duplicates."
+    apps={["excel", "pdf"]}
+    prompt="For each photo in /Asset-Plates, read the ID plate and add a row to equipment-log.xlsx. Flag any serial that already appears in the workbook."
+  />
+  <UseCaseCard
+    title="Inventory health pass on a CSV"
+    description="Categorize SKUs, compute weeks-of-supply against recent sell-through, and produce a prioritized restock list with the rows that need action highlighted. The source CSV is not modified."
+    apps={["excel", "google-sheets"]}
+    prompt="Open inventory.csv and create inventory-health.xlsx. Add weeks-of-supply per SKU, flag anything under 4 weeks, and give me a sorted restock sheet."
+  />
+  <UseCaseCard
+    title="Coordinate a new-hire onboarding"
+    description="Update the onboarding tracker, draft team-by-team welcome emails, prep day-one calendar invites, and assemble the first-week reading list. Everything is staged as drafts for your review before anything sends."
+    apps={["outlook", "google-calendar", "slack", "excel"]}
+    prompt="New hire Maya Chen starts Monday on the Ops team. Update the onboarding tracker, draft welcome emails to her team and managers, and prep day-one calendar invites. Leave everything in drafts."
+  />
+  <UseCaseCard
+    title="Support inbox triage"
+    description="Read a backlog of customer-support emails, group by issue type, rank by urgency, and produce a prioritized queue with a suggested draft reply per thread. Drafts are saved &mdash; nothing is sent."
+    apps={["outlook", "gmail"]}
+    prompt="Triage the last 80 unread support emails. Group by issue type, rank by urgency, and save a draft reply for each in the Drafts folder."
+  />
+  <UseCaseCard
+    title="Monthly schedule memo from the roster"
+    description="Read the master roster, build next month's coverage schedule against PTO and shift constraints, and produce a memo with the schedule table, swap requests, and gaps that still need filling."
+    apps={["excel", "word", "google-docs"]}
+    prompt="Build the May schedule memo from roster.xlsx and pto-requests.xlsx. Flag any shift that still needs coverage."
+  />
+  <UseCaseCard
+    title="Quarterly compliance log from incident PDFs"
+    description="Read each incident-report PDF in the folder, extract date, location, category, and resolution, and assemble a quarterly compliance log with a summary section flagging recurring issues."
+    apps={["pdf", "excel", "word"]}
+    prompt="Read every PDF in /Incidents/Q1 and build compliance-log-q1.xlsx with date, location, category, resolution, and a summary tab calling out repeat patterns."
+  />
+</UseCaseGrid>
+
+## Where to be careful
+
+- Pause before any external email actually sends. Have the agent stage drafts and review the recipient list yourself, especially for vendor or HR correspondence.
+- Pause before submitting any web form to a vendor portal, payroll system, or system of record. Confirm the values in the live UI before clicking the submit button.
+- Never delete files. Have the agent move anything ambiguous into a `review/` subfolder and only purge after you have checked it.
+- Confirm the workspace folder is the right one before a batch rename or batch move. Once 400 files are renamed, undoing it by hand is its own afternoon.
+- For anything that writes to QuickBooks, Xero, or your CRM, run one record end-to-end first, eyeball the result in the source system, and only then unleash the batch.
+
+## Related how-tos
+
+- [Forms from documents](/docs/desktop/forms-from-documents) &mdash; the pattern behind receipts-to-expense-report and intake-log workflows.
+- [Email and messaging](/docs/desktop/email-and-messaging) &mdash; how Interpreter handles drafts, recipients, and the send-vs-stage decision.
+- [Workspaces](/docs/desktop/workspaces) &mdash; scoping the agent to a single folder before a batch run.
+- [Approvals](/docs/desktop/approvals) &mdash; the guardrail you want on before any "ship it" step.

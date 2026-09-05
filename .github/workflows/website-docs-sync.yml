@@ -1,0 +1,21 @@
+name: Sync website docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs-site/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch website sync
+        env:
+          GH_TOKEN: ${{ secrets.WEBSITE_DOCS_SYNC_TOKEN }}
+        run: |
+          gh api repos/openinterpreter/website/dispatches --method POST --field event_type=workstation_docs_changed

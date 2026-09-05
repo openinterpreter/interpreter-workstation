@@ -1,0 +1,43 @@
+# FAQ
+
+Short, honest answers to the questions people actually ask before installing Interpreter.
+
+## Where does my data go?
+
+Your **workspace** files stay local on your machine. Instructions and the context the agent needs to act on them go to whichever model your active **profile** is set to. Nothing else leaves your computer unless you've configured an integration that explicitly sends data somewhere (email, Telegram, an MCP server, and so on).
+
+## Can I use local models only?
+
+Yes. Set up a profile that points at Ollama or LM Studio and use that as your active profile. Voice transcription is already local — the speech model runs on your machine and never leaves it.
+
+## Does it work offline?
+
+With a local profile, yes, for tasks that don't need the internet. The agent can still read your files, operate local apps, and run shell commands. Voice transcription works offline too. Anything that requires a website, an API, or a hosted model will fail until you're online again.
+
+## Is my code or my files sent anywhere?
+
+Only to the model provider in your active profile, and only the parts of a file the agent actually needs to follow your instruction. If you want zero data leaving your machine, switch to a local profile.
+
+## What platforms are supported?
+
+macOS (Intel and Apple Silicon), Windows, and Linux.
+
+## How is this different from a chat app?
+
+Interpreter operates your computer, your apps, and your files. A chat app answers questions. Interpreter clicks, types, opens files, runs scripts, fills forms, and uses your installed apps to actually do the work.
+
+## How is this different from the terminal/CLI Interpreter?
+
+The CLI is built for coding agents inside a terminal project — it lives in your repo and edits code. The desktop app is built for cross-app knowledge work — spreadsheets, PDFs, email, browsers, and the apps you already use. Different UI, different use cases. Many people run both.
+
+## Can I run multiple agents at once?
+
+Yes. Pin multiple agents in the sidebar. Each agent has its own **workspace** and its own **profile**, so they can work on different tasks with different models in parallel.
+
+## What's the difference between skills and MCP servers?
+
+**Skills** are bundled prompts that teach the agent a domain — how to fill a specific kind of form, how to write a particular report, how to operate a particular app. **MCP servers** are external programs that give the agent new tools to call. Skills change what the agent knows; MCP servers change what the agent can do.
+
+## How do I stop it doing something?
+
+Press the stop button in the sidebar, or close the agent entirely. Pending approvals are cancelled and the current tool call is interrupted. If you want the agent to pause more often before acting, tighten your **approvals** policy in Settings.

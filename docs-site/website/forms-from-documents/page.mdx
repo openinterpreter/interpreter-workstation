@@ -1,0 +1,45 @@
+# Forms from documents
+
+Interpreter reads a source document and fills a target form field by field. Use this when you would otherwise re-key data from a PDF, DOCX, or email into a W-4, tax form, intake form, web portal, or internal admin tool.
+
+## Why this is painful manually
+
+Re-keying from one document into another is slow and error-prone. Fields get transposed, names get truncated, SSNs get a digit wrong. A single mismatched filing status can mean a corrected return later. Interpreter does the boring transfer step, but only when you spell out the mapping.
+
+## Set up the workspace
+
+- Put the source document and the blank target form in the same workspace folder.
+- Open the target form in its real application (Acrobat, the web portal, the admin tool).
+- Confirm Interpreter has read access to the folder and the target window.
+
+## Worked example
+
+> I am a payroll admin. Read the offer letter at `~/Desktop/offer-jane.pdf`. Open the blank W-4 in `~/Desktop/w4-blank.pdf`. Fill in name, address, SSN, filing status, and dependents from the offer letter. Stop before saving so I can review.
+
+Interpreter parses the offer letter, opens the W-4 in your PDF viewer, and types each field in order. It pauses at the save dialog so you can verify every cell before committing.
+
+## Spell out the field mapping
+
+Be explicit. Interpreter is at its best when the mapping is named, not inferred.
+
+- `offer letter "Full legal name" → W-4 "Name"`
+- `offer letter "Home address" → W-4 lines 1b and 1c`
+- `offer letter "Annual base salary" → W-4 line 4a`
+- `offer letter "Dependents listed in benefits section" → W-4 step 3`
+
+If a field is missing from the source, tell Interpreter to leave it blank and flag it in a note, not guess.
+
+## Require approvals at the right points
+
+- Before signing the form
+- Before clicking Submit on a web portal
+- Before sending the completed form to a downstream recipient
+- Before overwriting an existing filled copy
+
+These pauses are the difference between a useful agent and a costly one. Set them in the instruction, not after the fact.
+
+## Scale to a batch
+
+Once one form is right, run the same instruction over a folder of source documents. Interpreter loops the same field mapping across each source, producing one filled form per input. Spot-check the first three before approving the rest.
+
+Stop before submitting on behalf of anyone other than yourself. Cross-link: `/docs/desktop/approvals`.

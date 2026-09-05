@@ -1,0 +1,75 @@
+import { UseCaseCard, UseCaseGrid } from "@/components/docs/use-case-card";
+import { BrandIconRow } from "@/components/docs/brand-icon";
+
+# Finance
+
+Accountants, controllers, FP&A analysts, and bookkeepers use Interpreter for the spreadsheet-and-PDF grind: categorizing transactions, building variance workbooks, reconciling statements, modeling valuations, and assembling close memos. Interpreter drives Excel and your ledger the way you do, shows the source row behind every number, and pauses before anything posts.
+
+<BrandIconRow names={["excel", "quickbooks", "xero", "stripe", "pdf", "google-sheets", "gmail"]} />
+
+## Example workflows
+
+<UseCaseGrid>
+  <UseCaseCard
+    title="Categorize corporate-card transactions"
+    description="Walk a CSV of card transactions, assign each to a GL account using your expense policy, and flag exceptions (missing receipt, out-of-policy vendor, over threshold) for review."
+    apps={["excel", "quickbooks", "pdf"]}
+    prompt="Read transactions/q4-amex.csv, categorize every row against policy/expense-policy.md, write the categorized file to categorized.xlsx, put exceptions on a separate tab, and stop before pushing anything to QuickBooks."
+  />
+  <UseCaseCard
+    title="Build a variance workbook"
+    description="Combine plan, actuals, and close notes into a variance workbook with line-by-line deltas, percent variance, and a commentary column drafted from the close notes."
+    apps={["excel", "google-sheets"]}
+    prompt="Read plan/q4-plan.xlsx, actuals/q4-actuals.xlsx, and notes/close-notes.md, build variance.xlsx with plan, actual, $ delta, % variance, and a drafted commentary column per line item."
+  />
+  <UseCaseCard
+    title="Run a DCF valuation"
+    description="Take a set of financial inputs and build an editable DCF workbook with revenue projections, FCF, WACC, terminal value, and a sensitivity table."
+    apps={["excel", "pdf"]}
+    prompt="Read inputs/target-financials.xlsx, build dcf-model.xlsx with five-year FCF projections, WACC inputs, terminal value, and a sensitivity table on growth and discount rate, and leave every assumption editable on the inputs tab."
+  />
+  <UseCaseCard
+    title="Forecast quarterly cash flow"
+    description="Project weekly cash inflows and outflows from AR, AP, payroll, and recurring items, and flag the low point in the quarter."
+    apps={["excel", "quickbooks", "xero"]}
+    prompt="Read ar-aging.xlsx, ap-aging.xlsx, and payroll-schedule.xlsx, build cash-forecast.xlsx with weekly inflows and outflows for the next 13 weeks, and highlight the lowest projected balance."
+  />
+  <UseCaseCard
+    title="Reconcile a bank statement against the GL"
+    description="Match bank-statement lines to GL entries, flag unmatched items, and produce a reconciliation worksheet ready for review."
+    apps={["pdf", "excel", "quickbooks"]}
+    prompt="Read statements/oct-bank-statement.pdf and gl/oct-gl-export.csv, match transactions, write reconciliation.xlsx with matched, outstanding, and unidentified tabs, and stop before any adjusting entries are posted."
+  />
+  <UseCaseCard
+    title="Draft a month-end close memo"
+    description="Pull together raw close notes, open items, and variance highlights into a structured close memo for the controller."
+    apps={["excel", "word", "gmail"]}
+    prompt="Read close/oct-notes.md, open-items.xlsx, and variance.xlsx, draft close-memo.docx with executive summary, material variances, open items, and next-month risks, and stop before sending."
+  />
+  <UseCaseCard
+    title="Process receipts into an expense report"
+    description="Read a folder of receipt PDFs and images, extract vendor, date, amount, and category, and build a complete expense report with totals."
+    apps={["pdf", "excel"]}
+    prompt="Read receipts/london-trip/, extract vendor, date, amount, and policy category from each receipt, build expense-report.xlsx with a totals row, and flag any receipt where the amount or date could not be read."
+  />
+  <UseCaseCard
+    title="Build a sales-by-region dashboard"
+    description="Cross-tabulate a sales export by region and product line, build pivot summaries, and produce an interactive dashboard tab."
+    apps={["excel", "google-sheets", "stripe"]}
+    prompt="Read sales/2024-export.csv, build sales-dashboard.xlsx with pivot tables by region and product line, add quarter-over-quarter charts, and put filter controls on the summary tab."
+  />
+</UseCaseGrid>
+
+## Where to be careful
+
+- Never let the agent push journal entries to the ledger without explicit review. Categorization happens in a working file; posting is a human step.
+- Pause for approval before any close memo, variance commentary, or forecast leaves your machine.
+- Every categorized line, reconciled match, and forecast number must trace back to the source row in the input file.
+- Tax classifications, accrual judgments, and impairment calls are decisions, not extractions. Interpreter prepares the worksheet; you make the call.
+
+## Related how-tos
+
+- [Spreadsheets and data](/docs/desktop/spreadsheets-and-pdfs)
+- [Document review](/docs/desktop/document-review)
+- [Forms from documents](/docs/desktop/forms-from-documents)
+- [Approvals and stops](/docs/desktop/approvals)

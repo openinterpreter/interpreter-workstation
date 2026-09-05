@@ -1,0 +1,67 @@
+import { IndustryCard, IndustryGrid } from "@/components/docs/use-case-card";
+import { BrandIconRow } from "@/components/docs/brand-icon";
+
+# Use cases
+
+Interpreter is a desktop agent for the work that lives between apps &mdash; reading source documents, filling forms, cleaning spreadsheets, drafting follow-ups, pulling research, updating records, building models, summarizing meetings. It opens the apps you already use and gets work done on your computer while you watch.
+
+Pick the closest industry below to see real workflows people run today. None of these are demos &mdash; each is a workflow that an Interpreter agent can do end-to-end with your supervision.
+
+<BrandIconRow names={["excel", "word", "pdf", "google-sheets", "gmail", "slack", "quickbooks", "salesforce", "notion", "pubmed", "airtable", "powerpoint"]} />
+
+<IndustryGrid>
+  <IndustryCard
+    href="/docs/desktop/use-cases/legal"
+    title="Legal"
+    description="Redline NDAs, draft memos and wills, run clause-by-clause comparisons against precedent, summarize discovery, prep filings."
+    apps={["word", "pdf", "outlook", "google-drive"]}
+  />
+  <IndustryCard
+    href="/docs/desktop/use-cases/finance"
+    title="Finance and accounting"
+    description="Categorize transactions, run variance and DCF workbooks, forecast cash, reconcile reports, draft month-end memos."
+    apps={["excel", "quickbooks", "xero", "stripe", "pdf"]}
+  />
+  <IndustryCard
+    href="/docs/desktop/use-cases/sales"
+    title="Sales and customer success"
+    description="Update CRM records from notes and calls, build pipeline reports, draft personalized follow-ups, prep account briefs."
+    apps={["salesforce", "hubspot", "gmail", "slack", "linkedin"]}
+  />
+  <IndustryCard
+    href="/docs/desktop/use-cases/healthcare"
+    title="Healthcare"
+    description="Draft prescribing guidelines, build intake packets, summarize patient notes, prep prior auths, run literature reviews."
+    apps={["word", "pdf", "pubmed", "excel"]}
+  />
+  <IndustryCard
+    href="/docs/desktop/use-cases/research"
+    title="Research and analysis"
+    description="Surface themes across a folder of papers, validate claims with citations, build literature reviews, transcribe and analyze interviews."
+    apps={["pubmed", "pdf", "word", "notion", "google-docs"]}
+  />
+  <IndustryCard
+    href="/docs/desktop/use-cases/real-estate"
+    title="Real estate"
+    description="Build comps and lease-rate analyses, fill rental applications from profiles, draft listings, run market surveys."
+    apps={["excel", "pdf", "word", "google-sheets"]}
+  />
+  <IndustryCard
+    href="/docs/desktop/use-cases/operations"
+    title="Operations and admin"
+    description="Process receipts, organize file mountains, build schedules, log equipment, run batch renames, ship monthly reports."
+    apps={["excel", "pdf", "quickbooks", "google-drive", "slack"]}
+  />
+  <IndustryCard
+    href="/docs/desktop/use-cases/consulting"
+    title="Consulting and analysts"
+    description="Build interactive dashboards from raw data, model forecasts, generate slide decks, package analysis into reviewable artifacts."
+    apps={["excel", "powerpoint", "pdf", "google-sheets", "notion"]}
+  />
+</IndustryGrid>
+
+## Don't see your industry?
+
+These are not the limits. If the work involves reading source material and producing artifacts &mdash; documents, sheets, forms, presentations, messages &mdash; Interpreter is probably useful for it. The closest workflow above will point at the patterns to start with.
+
+Want help mapping your workflow? [Email us](mailto:killian@openinterpreter.com) &mdash; we read every message and will draft a starter agent with you.

@@ -1,0 +1,76 @@
+import { UseCaseCard, UseCaseGrid } from "@/components/docs/use-case-card";
+import { BrandIconRow } from "@/components/docs/brand-icon";
+
+# Research and analysis
+
+Interpreter is built for the part of research that doesn't fit in a chat window &mdash; reading across hundreds of PDFs, validating claims against the underlying sources, pulling related literature, and turning interview transcripts into structured findings. It works on the files in your folders and writes back to your notes with citations you can audit.
+
+<BrandIconRow names={["pubmed", "pdf", "word", "notion", "google-docs", "dropbox", "excel"]} />
+
+## Example workflows
+
+<UseCaseGrid>
+  <UseCaseCard
+    title="Surface themes across a folder"
+    description="Ask questions of a folder of PDFs, Word docs, and markdown notes. Interpreter reads each file, clusters recurring themes, surfaces connections you'd miss, and cites the file and page for every claim."
+    apps={["pdf", "word", "dropbox", "notion"]}
+    prompt="Read every paper and note in ~/research/automation-2024. What are the recurring themes about failure modes, and which files contradict each other? Cite file and page for each point."
+  />
+  <UseCaseCard
+    title="Find related literature with an agree/disagree split"
+    description="Hand Interpreter a claim or a draft paragraph and it pulls related literature from PubMed and your local library, then splits results into papers that agree, papers that disagree, and papers that complicate the picture."
+    apps={["pubmed", "pdf", "notion"]}
+    prompt="For the claim in section 3.2, find 10 related papers via PubMed. Split into agree, disagree, and mixed. Note the methodology and sample size for each."
+  />
+  <UseCaseCard
+    title="Validate a draft's claims against sources"
+    description="Read your draft alongside the source folder. For each citation, confirm the source actually supports the claim. Flag anything unsupported, mischaracterized, or where a stronger source exists."
+    apps={["word", "pdf", "google-docs"]}
+    prompt="Read my draft at ~/papers/draft-v3.docx. For every cited claim, open the source PDF and confirm it supports the claim. Flag anything weak or unsupported in the margins."
+  />
+  <UseCaseCard
+    title="Literature review from a folder of papers"
+    description="Builds a structured literature review with sections, citations, and a summary table of methods and findings. Writes into your existing Word or Docs template, not into the chat."
+    apps={["pdf", "word", "google-docs", "pubmed"]}
+    prompt="Build a literature review of the 40 papers in ~/research/policy-review using my template at ~/templates/lit-review.docx. Include a methods table and full citations."
+  />
+  <UseCaseCard
+    title="Interview transcripts to themes and quotes"
+    description="Reads a folder of interview transcripts, codes recurring themes, and produces a synthesis with supporting quotes and exact line references. Useful for qualitative research and journalism."
+    apps={["word", "dropbox", "notion"]}
+    prompt="Synthesize the 22 transcripts in ~/interviews into themes. For each theme, pull 3-5 supporting quotes with the file name and line number."
+  />
+  <UseCaseCard
+    title="YouTube transcript to structured notes"
+    description="Pulls a transcript from a video, extracts the substantive arguments, evidence cited, and open questions, and writes structured notes into your research notebook."
+    apps={["notion", "word", "google-docs"]}
+    prompt="Pull the transcript from this YouTube lecture and write structured notes into my research notebook: main arguments, evidence cited, open questions, and timestamps for the key moments."
+  />
+  <UseCaseCard
+    title="Chart from data, embedded in Word"
+    description="Generates a chart from underlying data, embeds it into your Word document at the right spot, and writes the figure caption with the data source."
+    apps={["excel", "word", "google-docs"]}
+    prompt="Make a chart of the trend from ~/data/survey-2024.csv showing change by region. Embed it in my Word draft at the figure 4 placeholder and write the caption."
+  />
+  <UseCaseCard
+    title="Research spreadsheet from a stack of PDFs"
+    description="Reads each paper in a folder and fills a spreadsheet with structured fields you specify &mdash; sample size, intervention, outcome measure, effect size &mdash; with one row per paper and a link back to the source."
+    apps={["pdf", "excel", "google-sheets"]}
+    prompt="For each paper in ~/research/rct-folder, fill the columns in extraction.xlsx: sample size, intervention, primary outcome, effect size, follow-up length. Link the source file in column A."
+  />
+</UseCaseGrid>
+
+## Where to be careful
+
+- **Always cite the source.** Require file plus page, line, or section for every claim. The agent should never invent a citation; if a source can't be found, it should say so.
+- **Have findings written into your notes, not just chat.** Chat history is volatile. Tell Interpreter to write into your research notebook or doc so the work is auditable later.
+- **Scope the workspace to the research folder.** For long sessions, point the agent at the project folder only. It shouldn't be able to read the rest of your drive.
+- **Spot-check the synthesis.** Sampling-based reviews are powerful but lossy. Pick three claims at random and verify against the cited source before treating the synthesis as final.
+
+## Related how-tos
+
+- [Research and notes](/docs/desktop/research-and-notes)
+- [Document review](/docs/desktop/document-review)
+- [Spreadsheets and PDFs](/docs/desktop/spreadsheets-and-pdfs)
+- [MCP servers](/docs/desktop/mcp-servers)
+- [Workspaces](/docs/desktop/workspaces)
