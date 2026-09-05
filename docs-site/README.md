@@ -8,4 +8,4 @@ directory dispatches the website documentation workflow. The website checks out
 the exact pushed revision, regenerates its desktop docs, commits the generated
 result, and deploys through its normal Vercel integration.
 
-Do not edit the generated desktop documentation in the website repository.
+Review and edit these source pages here, not the generated copies in the website repository.
