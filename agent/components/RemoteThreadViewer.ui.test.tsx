@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { PublicThreadSnapshot } from '../../shared/types/publicThread';
+import { resolvePublicArtifactLinks } from './RemoteThreadViewer';
 
 vi.mock('./prompt-kit/thread-messages', () => ({
   ThreadMessages: ({ hasOlderHistory }: { hasOlderHistory: boolean }) => (
@@ -30,6 +31,13 @@ function snapshot(nextCursor: string | null): PublicThreadSnapshot {
 }
 
 describe('RemoteThreadViewer history gestures', () => {
+  test('resolves endpoint-relative public file links', () => {
+    expect(resolvePublicArtifactLinks(
+      '[English PDF](file?path=papers%2F00295%2Fenglish.pdf)',
+      'https://example.com/publication',
+    )).toBe('[English PDF](https://example.com/publication/file?path=papers%2F00295%2Fenglish.pdf)');
+  });
+
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(snapshot('cursor-two'))))

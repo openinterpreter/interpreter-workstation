@@ -97,6 +97,7 @@ router.get('/snapshot', async (req: Request, res: Response) => {
       title: process.env.INTERPRETER_PUBLIC_THREAD_TITLE?.trim() || thread.name || 'Live agent',
       nextCursor: null,
       hasMore: false,
+      publicWorkspaceRoot: process.env.INTERPRETER_PUBLIC_WORKSPACE_ROOT?.trim(),
     });
     const page = paginateThreadTurns(fullSnapshot.messages, { limit, before });
     const snapshot = {

@@ -16,10 +16,28 @@ const SECRET_MARKERS = [
   /\b(?:sk|ghp|github_pat)_[A-Za-z0-9_-]{12,}\b/gu,
 ];
 
-const PRIVATE_MARKDOWN_PATH_LINK = /\[([^\]\r\n]{1,500})\]\((?:file:\/{2,3}|\/(?:workspace|Users|home|root|private|tmp|var|etc|opt|srv|mnt|Volumes)(?:\/[^)\r\n]*)?|[A-Za-z]:[\\/][^)\r\n]+)\)/gu;
+const PRIVATE_MARKDOWN_PATH_LINK = /\[([^\]\r\n]{1,500})\]\(((?:file:\/{2,3}|\/(?:workspace|Users|home|root|private|tmp|var|etc|opt|srv|mnt|Volumes)(?:\/[^)\r\n]*)?|[A-Za-z]:[\\/][^)\r\n]+))\)/gu;
 const PRIVATE_POSIX_PATH = /(?<![A-Za-z0-9:/])\/(?:workspace|Users|home|root|private|tmp|var|etc|opt|srv|mnt|Volumes)(?:\/[^\s<>"'`)\]}]*)?/gu;
 const PRIVATE_WINDOWS_PATH = /\b[A-Za-z]:[\\/](?:Users|workspace|home|private|tmp|var|etc|opt|srv|mnt)[\\/][^\s<>"'`)\]}]*/gu;
 const INTERNAL_CITATION_MARKER = /\s*cite[^\r\n]+/gu;
+
+function publicWorkspaceHref(target: string, publicWorkspaceRoot?: string): string | null {
+  if (!publicWorkspaceRoot) return null;
+  let decoded = target.replace(/^file:\/{2,3}/iu, '/');
+  try {
+    decoded = decodeURIComponent(decoded);
+  } catch {
+    return null;
+  }
+  const normalizedTarget = decoded.replace(/\\/gu, '/').replace(/\/+$/u, '');
+  const normalizedRoot = publicWorkspaceRoot.replace(/\\/gu, '/').replace(/\/+$/u, '');
+  if (!normalizedRoot || !normalizedTarget.startsWith(`${normalizedRoot}/`)) return null;
+  const relativePath = normalizedTarget.slice(normalizedRoot.length + 1);
+  if (!relativePath || relativePath.split('/').some((segment) => !segment || segment === '.' || segment === '..')) {
+    return null;
+  }
+  return `file?path=${encodeURIComponent(relativePath)}`;
+}
 
 export function matchesPublicThreadToken(actual: string | undefined, expected: string): boolean {
   if (!actual || !expected) return false;
@@ -28,9 +46,16 @@ export function matchesPublicThreadToken(actual: string | undefined, expected: s
   return timingSafeEqual(actualHash, expectedHash);
 }
 
-export function sanitizePublicThreadText(value: string, limit = 100_000): string {
+export function sanitizePublicThreadText(
+  value: string,
+  limit = 100_000,
+  publicWorkspaceRoot?: string,
+): string {
   let sanitized = value.slice(0, limit);
-  sanitized = sanitized.replace(PRIVATE_MARKDOWN_PATH_LINK, '$1 (saved in the workspace)');
+  sanitized = sanitized.replace(PRIVATE_MARKDOWN_PATH_LINK, (_match, label: string, target: string) => {
+    const href = publicWorkspaceHref(target, publicWorkspaceRoot);
+    return href ? `[${label}](${href})` : `${label} (saved in the workspace)`;
+  });
   sanitized = sanitized.replace(PRIVATE_POSIX_PATH, '[private path omitted]');
   sanitized = sanitized.replace(PRIVATE_WINDOWS_PATH, '[private path omitted]');
   sanitized = sanitized.replace(INTERNAL_CITATION_MARKER, ' [source citation]');
@@ -97,7 +122,10 @@ function publicUserText(item: Extract<v2.ThreadItem, { type: 'userMessage' }>): 
     .join('');
 }
 
-export function threadToPublicMessages(thread: v2.Thread): PublicThreadMessage[] {
+export function threadToPublicMessages(
+  thread: v2.Thread,
+  publicWorkspaceRoot?: string,
+): PublicThreadMessage[] {
   const messages: PublicThreadMessage[] = [];
   const usedIds = new Set<string>();
   const uniqueId = (candidate: string) => {
@@ -126,14 +154,14 @@ export function threadToPublicMessages(thread: v2.Thread): PublicThreadMessage[]
           messages.push({
             id: uniqueId(item.id),
             role: 'user',
-            parts: [{ kind: 'text', content: sanitizePublicThreadText(text) }],
+            parts: [{ kind: 'text', content: sanitizePublicThreadText(text, 100_000, publicWorkspaceRoot) }],
           });
         }
         continue;
       }
 
       const part = item.type === 'agentMessage'
-        ? { kind: 'text' as const, content: sanitizePublicThreadText(item.text) }
+        ? { kind: 'text' as const, content: sanitizePublicThreadText(item.text, 100_000, publicWorkspaceRoot) }
         : publicToolPart(item);
       if (!part) continue;
       if (!assistant) {
@@ -153,6 +181,7 @@ export function buildPublicThreadSnapshot(options: {
   title: string;
   nextCursor: string | null;
   hasMore: boolean;
+  publicWorkspaceRoot?: string;
 }): PublicThreadSnapshot {
   const { thread, goal } = options;
   const goalPaused = goal?.status === 'paused';
@@ -174,7 +203,7 @@ export function buildPublicThreadSnapshot(options: {
           updatedAt: goal.updatedAt,
         }
       : null,
-    messages: threadToPublicMessages(thread),
+    messages: threadToPublicMessages(thread, options.publicWorkspaceRoot),
     page: {
       nextCursor: options.nextCursor,
       hasMore: options.hasMore,
