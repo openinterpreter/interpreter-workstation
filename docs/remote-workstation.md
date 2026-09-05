@@ -157,6 +157,11 @@ The browser-facing relay exposes exactly three reads:
 The relay adds the private bearer token upstream. Never place that token in the
 query string, browser bundle, iframe attributes, or browser storage.
 
+To render this publication in an independent interface instead of the shared
+Workstation shell, use the versioned [publication API contract](publication-api.md).
+It documents message schemas, pagination, polling, files, errors, compatibility,
+and includes a framework-free client.
+
 Configure the private sidecar:
 
 ```bash

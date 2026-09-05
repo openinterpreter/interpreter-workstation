@@ -36,6 +36,9 @@ distribution from the same source without maintaining a private fork.
   read-only mode](docs/remote-workstation.md).
 - Native OIX [Goals](docs/goals.md) let a thread pursue a durable objective
   across long execution and context compaction.
+- A custom read-only frontend can use the versioned
+  [publication API](docs/publication-api.md) to render one sanitized conversation,
+  its Goal, and selected files without adopting the Workstation shell.
 - The browser extension and computer-use driver are pinned Git submodules so a
   desktop release is reproducible while their independent release histories are
   preserved.

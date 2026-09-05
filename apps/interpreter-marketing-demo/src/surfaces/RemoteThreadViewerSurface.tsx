@@ -8,6 +8,11 @@ import '../../../../src/index.css';
 const READY_EVENT_TYPE = 'interpreter-marketing-demo-ready';
 const params = new URLSearchParams(window.location.search);
 const endpoint = params.get('endpoint')?.trim();
+const requestedPageSize = Number(params.get('pageSize'));
+const pageSize = Number.isInteger(requestedPageSize)
+  ? Math.min(Math.max(requestedPageSize, 1), 100)
+  : 10;
+const embedded = params.get('embedded') === '1';
 
 if (!endpoint) {
   throw new Error('Remote thread viewer requires an endpoint query parameter.');
@@ -24,7 +29,14 @@ function RemoteThreadSurface() {
     window.parent?.postMessage({ type: READY_EVENT_TYPE }, '*');
   }, []);
 
-  return <RemoteThreadViewer endpoint={endpoint} pageSize={10} onReady={notifyReady} />;
+  return (
+    <RemoteThreadViewer
+      endpoint={endpoint}
+      pageSize={pageSize}
+      embedded={embedded}
+      onReady={notifyReady}
+    />
+  );
 }
 
 createRoot(rootElement).render(

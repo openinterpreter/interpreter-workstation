@@ -71,6 +71,12 @@ The goal is to make the workspace feel plausible and internally consistent, not 
 
 The hosted demo now supports multiple seeded workspaces behind one renderer.
 
+It also exposes the maintained read-only conversation component as
+`?surface=remote-thread&endpoint=<encoded-publication-endpoint>`. Add
+`pageSize=10` to select the history batch size and `embedded=1` to omit the
+component header. The endpoint must implement the Workstation
+[publication API](../../docs/publication-api.md).
+
 The website passes:
 
 - `?useCase=<id>` to choose the seeded workspace, tabs, sidebar transcript, and scripted prompt set
