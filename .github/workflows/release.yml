@@ -38,9 +38,14 @@ jobs:
           version=$(node -p "require('./package.json').publicVersion")
           tag="v${version}"
           node -e "const value=process.argv[1]; if (!/^0\\.2\\.[0-9]+$/.test(value)) throw new Error('Unexpected public release version: '+value)" "$version"
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $tag already exists. Bump publicVersion before releasing."
-            exit 1
+          if release=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,targetCommitish 2>/dev/null); then
+            draft=$(node -e "const value=JSON.parse(process.argv[1]); process.stdout.write(String(value.isDraft))" "$release")
+            target=$(node -e "const value=JSON.parse(process.argv[1]); process.stdout.write(value.targetCommitish)" "$release")
+            if [[ "$target" != "$GITHUB_SHA" ]]; then
+              echo "Release $tag belongs to another commit. Bump publicVersion before releasing."
+              exit 1
+            fi
+            echo "Reusing release $tag for an exact-commit retry (draft=$draft)."
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -281,16 +286,20 @@ jobs:
         with:
           subject-checksums: release/SHA256SUMS
           sbom-path: release/SBOM.spdx.json
-      - name: Create a private draft and upload GitHub release assets
+      - name: Create or update the private GitHub release draft
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$RELEASE_TAG" release/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "Interpreter Workstation v${RELEASE_VERSION}" \
-            --notes-file release/RELEASE_NOTES.md \
-            --draft
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$RELEASE_TAG" release/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Interpreter Workstation v${RELEASE_VERSION}" \
+              --notes-file release/RELEASE_NOTES.md \
+              --draft
+          fi
       - name: Upload immutable payloads to the public Supabase bucket
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -307,6 +316,32 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+      - name: Publish stable website download aliases
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          mkdir release-aliases
+          aliases=(
+            "Interpreter-arm64-${RELEASE_VERSION}.dmg:Interpreter-arm64.dmg"
+            "Interpreter-x64-${RELEASE_VERSION}.dmg:Interpreter-x64.dmg"
+            "Interpreter-win-x64-${RELEASE_VERSION}.exe:Interpreter-x64.exe"
+            "Interpreter-linux-x86_64-${RELEASE_VERSION}.AppImage:Interpreter-latest.AppImage"
+            "Interpreter-linux-amd64-${RELEASE_VERSION}.deb:Interpreter-linux-amd64.deb"
+          )
+          for mapping in "${aliases[@]}"; do
+            source="release/${mapping%%:*}"
+            target="release-aliases/${mapping#*:}"
+            test -s "$source"
+            ln "$source" "$target"
+          done
+          bash scripts/ci/upload_and_verify.sh \
+            --bucket workstationupdater \
+            --prefix releases \
+            --endpoint-url "$AWS_ENDPOINT_URL" \
+            --region "$AWS_REGION" \
+            --concurrency 1 \
+            release-aliases/*
       - name: Publish auto-update manifests last
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -320,3 +355,7 @@ jobs:
             --region "$AWS_REGION" \
             --concurrency 1 \
             "${manifests[@]}"
+      - name: Verify the published release end to end
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/verify-published-release.mjs "$RELEASE_VERSION" "https://auth.openinterpreter.com/storage/v1/object/public/workstationupdater/releases" "$GITHUB_REPOSITORY"

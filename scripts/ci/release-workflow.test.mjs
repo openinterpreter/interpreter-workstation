@@ -29,9 +29,9 @@ test('publishing authority is not exposed at job scope', () => {
   assert.doesNotMatch(jobEnvironment, /\$\{\{ secrets\./);
   assert.doesNotMatch(jobEnvironment, /GH_TOKEN:/);
 
-  assert.equal((publish.match(/AWS_ACCESS_KEY_ID:/g) ?? []).length, 2);
-  assert.equal((publish.match(/AWS_SECRET_ACCESS_KEY:/g) ?? []).length, 2);
-  assert.equal((publish.match(/GH_TOKEN:/g) ?? []).length, 2);
+  assert.equal((publish.match(/AWS_ACCESS_KEY_ID:/g) ?? []).length, 3);
+  assert.equal((publish.match(/AWS_SECRET_ACCESS_KEY:/g) ?? []).length, 3);
+  assert.equal((publish.match(/GH_TOKEN:/g) ?? []).length, 3);
 });
 
 test('the GitHub read token is scoped to dependency installation', () => {
@@ -48,10 +48,30 @@ test('installed clients discover a release only after GitHub publication', () =>
   const publish = section('  publish:');
   const payloads = publish.indexOf('Upload immutable payloads to the public Supabase bucket');
   const github = publish.indexOf('Publish the GitHub release');
+  const aliases = publish.indexOf('Publish stable website download aliases');
   const manifests = publish.indexOf('Publish auto-update manifests last');
+  const endToEnd = publish.indexOf('Verify the published release end to end');
 
-  assert.ok(payloads >= 0 && github > payloads && manifests > github);
+  assert.ok(payloads >= 0 && github > payloads && aliases > github && manifests > aliases && endToEnd > manifests);
   assert.equal(publish.indexOf('Publish the GitHub release', github + 1), -1);
+  for (const filename of [
+    'Interpreter-arm64.dmg',
+    'Interpreter-x64.dmg',
+    'Interpreter-x64.exe',
+    'Interpreter-latest.AppImage',
+    'Interpreter-linux-amd64.deb',
+  ]) {
+    assert.match(publish, new RegExp(filename.replaceAll('.', '\\.')));
+  }
+});
+
+test('a failed publication can reuse only its exact commit', () => {
+  const authorize = section('  authorize:', '  verify:');
+  const publish = section('  publish:');
+  assert.match(authorize, /--json isDraft,targetCommitish/);
+  assert.match(authorize, /"\$target" != "\$GITHUB_SHA"/);
+  assert.doesNotMatch(authorize, /"\$draft" != "true"/);
+  assert.match(publish, /gh release upload "\$RELEASE_TAG" release\/\* --repo "\$GITHUB_REPOSITORY" --clobber/);
 });
 
 test('release packaging does not rebuild N-API native dependencies', () => {
