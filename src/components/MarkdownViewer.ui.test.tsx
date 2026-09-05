@@ -12,6 +12,7 @@ const apiMocks = vi.hoisted(() => ({
 }));
 
 const ipcMocks = vi.hoisted(() => ({
+  showContextMenu: vi.fn(),
   getNoteContext: vi.fn(async () => ({
     workspacePath: '/workspace',
     builtAt: 0,
@@ -21,6 +22,10 @@ const ipcMocks = vi.hoisted(() => ({
   })),
   getReviewMarkdownEdits: vi.fn(async () => ({ enabled: true })),
   onReviewMarkdownEditsChanged: vi.fn(() => () => {}),
+}));
+
+const connectionMocks = vi.hoisted(() => ({
+  readOnly: false,
 }));
 
 const parserMocks = vi.hoisted(() => ({
@@ -52,7 +57,7 @@ vi.mock('../api', () => apiMocks);
 vi.mock('../utils/markdown-parser', () => parserMocks);
 
 vi.mock('@/ipc', () => ({
-  showContextMenu: vi.fn(),
+  showContextMenu: ipcMocks.showContextMenu,
   getFileUrl: vi.fn((filePath: string) => `file://${filePath}`),
   pathBasename: vi.fn((filePath: string) => filePath.split('/').pop() ?? filePath),
   pathDirname: vi.fn((filePath: string) => filePath.slice(0, filePath.lastIndexOf('/')) || '/'),
@@ -66,6 +71,10 @@ vi.mock('@/ipc', () => ({
   vault: {
     getNoteContext: ipcMocks.getNoteContext,
   },
+}));
+
+vi.mock('../remote/workstationConnection', () => ({
+  isWorkstationReadOnly: () => connectionMocks.readOnly,
 }));
 
 vi.mock('react-i18next', () => ({
@@ -129,6 +138,7 @@ describe('MarkdownViewer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     refreshMocks.reset();
+    connectionMocks.readOnly = false;
   });
 
   test('renders markdown content without waiting for note context indexing', async () => {
@@ -170,5 +180,23 @@ describe('MarkdownViewer', () => {
     });
 
     expect((screen.getByPlaceholderText('markdown.placeholder') as HTMLTextAreaElement).value).toBe(editedMarkdown);
+  });
+
+  test('renders markdown and frontmatter without editing controls in read-only mode', async () => {
+    connectionMocks.readOnly = true;
+    apiMocks.readFile.mockResolvedValue({
+      content: '---\ntitle: Remote note\ntags:\n  - science\n---\n\n# Read only',
+    });
+
+    render(<MarkdownViewer filePath="/workspace/remote-note.md" />);
+
+    const document = await screen.findByTestId('markdown-content');
+    expect(screen.getByText('Remote note')).toBeInTheDocument();
+    expect(screen.getByText('science')).toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /markdown\.bold/ })).not.toBeInTheDocument();
+
+    fireEvent.contextMenu(document);
+    expect(ipcMocks.showContextMenu).not.toHaveBeenCalled();
   });
 });

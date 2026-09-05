@@ -1,6 +1,7 @@
 import * as ReactModule from 'react';
 import * as ReactJsxDevRuntimeModule from 'react/jsx-dev-runtime';
 import * as ReactJsxRuntimeModule from 'react/jsx-runtime';
+import { canUseHostNativeFileManager } from '../remote/workstationConnection';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Camera,
@@ -2339,8 +2340,10 @@ export function MovieViewer({ filePath, refreshKey = 0 }: MovieViewerProps) {
     );
     const items: ContextMenuItem[] = [
       { label: 'Reveal in Explorer', action: 'reveal-in-explorer', disabled: !canRevealInExplorer },
-      { label: 'Reveal in Finder', action: 'reveal-in-finder' },
     ];
+    if (canUseHostNativeFileManager()) {
+      items.push({ label: 'Reveal in Finder', action: 'reveal-in-finder' });
+    }
 
     const action = await showContextMenu(items, 'movie_viewer');
     if (action === 'reveal-in-explorer' && canRevealInExplorer) {

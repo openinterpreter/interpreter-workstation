@@ -30,6 +30,8 @@ import {
 import { taskStore } from '../tools/builtin-tools/tasks/taskStore';
 import { buildAgentTurnErrorTrace } from '../utils/agentTurnErrorTrace';
 import {
+  forkAgentTaskThread,
+  resumeAgentTaskThread,
   startAgentTask,
   type AgentTaskMode,
   type AgentTaskProgressEvent,
@@ -112,6 +114,10 @@ import {
   normalizeHeadlessTaskWorkspace,
 } from '../utils/headlessTaskWorkspace';
 import type { v2 } from '../handlers/codex-generated-types/index';
+import {
+  paginateThreadTurns,
+  parseThreadHistoryLimit,
+} from '../utils/threadHistoryPagination';
 
 const router = Router();
 
@@ -160,6 +166,11 @@ function parseProgrammaticTaskDefaultProfileConfig(
     modelId,
     providerId: typeof value.providerId === 'string' ? value.providerId : undefined,
     apiKey: typeof value.apiKey === 'string' ? value.apiKey : undefined,
+    environmentKey:
+      typeof value.environmentKey === 'string'
+      && /^[A-Za-z_][A-Za-z0-9_]*$/.test(value.environmentKey.trim())
+        ? value.environmentKey.trim()
+        : undefined,
     baseURL: typeof value.baseURL === 'string' ? value.baseURL : undefined,
     apiFormat,
     wireApi,
@@ -240,6 +251,7 @@ router.post('/tasks', async (req: Request, res: Response) => {
       message,
       system,
       timeoutMs,
+      idleTimeoutMs,
       workspace,
       threadId,
       mode,
@@ -287,6 +299,7 @@ router.post('/tasks', async (req: Request, res: Response) => {
       message,
       system,
       timeoutMs,
+      idleTimeoutMs,
       workspace,
       modelConfig,
       threadId,
@@ -311,6 +324,7 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
     message,
     system,
     timeoutMs,
+    idleTimeoutMs,
     workspace,
     threadId,
     mode,
@@ -353,7 +367,7 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
   res.flushHeaders();
 
   let streamClosed = false;
-  req.on('close', () => {
+  res.on('close', () => {
     streamClosed = true;
   });
 
@@ -373,6 +387,7 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
       message,
       system,
       timeoutMs,
+      idleTimeoutMs,
       workspace,
       modelConfig,
       threadId,
@@ -541,10 +556,11 @@ async function applyProgrammaticTaskRuntimeConfigFromBody(
   });
 }
 
-function parseProgrammaticTaskBody(body: Record<string, unknown>) {
+export function parseProgrammaticTaskBody(body: Record<string, unknown>) {
   const message = typeof body.message === 'string' ? body.message.trim() : '';
   const system = typeof body.system === 'string' ? body.system : undefined;
   const timeoutMs = typeof body.timeoutMs === 'number' ? body.timeoutMs : undefined;
+  const idleTimeoutMs = typeof body.idleTimeoutMs === 'number' ? body.idleTimeoutMs : undefined;
   const workspace = normalizeHeadlessTaskWorkspace(
     typeof body.workspace === 'string' ? body.workspace : undefined,
   );
@@ -563,6 +579,7 @@ function parseProgrammaticTaskBody(body: Record<string, unknown>) {
     message,
     system,
     timeoutMs,
+    idleTimeoutMs,
     workspace,
     threadId,
     mode,
@@ -608,14 +625,191 @@ router.get('/threads', async (req: Request, res: Response) => {
   }
 });
 
+router.post('/threads/:threadId/resume', async (req: Request, res: Response) => {
+  const threadId = req.params.threadId.trim();
+  if (!threadId) {
+    return res.status(400).json({ error: 'threadId is required.' });
+  }
+
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const workspace = normalizeHeadlessTaskWorkspace(
+      typeof body.workspace === 'string' ? body.workspace : undefined,
+    );
+    const workspaceError = getProgrammaticTaskWorkspaceError('headless', workspace);
+    if (workspaceError) {
+      return res.status(400).json({ error: workspaceError });
+    }
+    const runtimeConfig = isRecord(body.runtimeConfig) ? body.runtimeConfig : undefined;
+    const modelConfig = body.modelConfig && typeof body.modelConfig === 'object'
+      ? body.modelConfig as AgentModelConfig
+      : undefined;
+
+    await applyProgrammaticTaskRuntimeConfigFromBody(runtimeConfig);
+    const result = await resumeAgentTaskThread({
+      threadId,
+      workspace,
+      modelConfig,
+    });
+    return res.json({ resumed: true, ...result });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to resume thread.',
+    });
+  }
+});
+
+router.post('/threads/:threadId/fork', async (req: Request, res: Response) => {
+  const threadId = req.params.threadId.trim();
+  if (!threadId) {
+    return res.status(400).json({ error: 'threadId is required.' });
+  }
+
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const lastTurnId = typeof body.lastTurnId === 'string'
+      ? body.lastTurnId.trim()
+      : '';
+    if (!lastTurnId) {
+      return res.status(400).json({ error: 'lastTurnId is required.' });
+    }
+    const workspace = normalizeHeadlessTaskWorkspace(
+      typeof body.workspace === 'string' ? body.workspace : undefined,
+    );
+    const workspaceError = getProgrammaticTaskWorkspaceError('headless', workspace);
+    if (workspaceError) {
+      return res.status(400).json({ error: workspaceError });
+    }
+    const runtimeConfig = isRecord(body.runtimeConfig) ? body.runtimeConfig : undefined;
+    const modelConfig = body.modelConfig && typeof body.modelConfig === 'object'
+      ? body.modelConfig as AgentModelConfig
+      : undefined;
+
+    await applyProgrammaticTaskRuntimeConfigFromBody(runtimeConfig);
+    const result = await forkAgentTaskThread({
+      threadId,
+      lastTurnId,
+      workspace,
+      modelConfig,
+    });
+    return res.json({ forked: true, sourceThreadId: threadId, ...result });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to fork thread.',
+    });
+  }
+});
+
 router.get('/threads/:threadId', async (req: Request, res: Response) => {
   try {
     let thread = await getCodexService().readThread(req.params.threadId);
     thread = enrichThreadWithReasoning(thread);
-    res.json({ thread });
+    const limit = parseThreadHistoryLimit(req.query.limit);
+    if (limit === null) {
+      res.json({ thread });
+      return;
+    }
+
+    const before = typeof req.query.before === 'string'
+      ? req.query.before
+      : undefined;
+    const page = paginateThreadTurns(thread.turns, { limit, before });
+    res.json({
+      thread: { ...thread, turns: page.turns },
+      historyPage: {
+        nextCursor: page.nextCursor,
+        hasMore: page.hasMore,
+      },
+    });
   } catch (error) {
+    if (req.query.bestEffort === '1' || req.query.bestEffort === 'true') {
+      // A resumed conversation polls while runtimes and profiles may be
+      // restarting. Treat that passive refresh as optional: the already
+      // rendered transcript remains authoritative and a later poll retries.
+      // Interactive/initial reads deliberately retain their normal 500.
+      console.warn(
+        '[Agent API] Best-effort thread refresh unavailable; keeping existing history.',
+        error instanceof Error ? error.message : error,
+      );
+      res.json({ thread: null, available: false });
+      return;
+    }
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to read thread.',
+    });
+  }
+});
+
+router.get('/threads/:threadId/goal', async (req: Request, res: Response) => {
+  try {
+    const goal = await getCodexService().getThreadGoal(req.params.threadId);
+    res.json({ goal });
+  } catch (error) {
+    // Goals are an optional OIX capability. Older or deterministic test
+    // backends may not implement the RPC yet; keep ordinary thread viewing
+    // compatible while leaving goal mutations explicit and fail-closed.
+    console.warn(
+      '[Agent API] Goal read unavailable; returning no goal.',
+      error instanceof Error ? error.message : error,
+    );
+    res.json({ goal: null, available: false });
+  }
+});
+
+router.put('/threads/:threadId/goal', async (req: Request, res: Response) => {
+  const objective = typeof req.body?.objective === 'string'
+    ? req.body.objective.trim()
+    : undefined;
+  const status = req.body?.status;
+  const allowedStatuses: v2.ThreadGoalStatus[] = [
+    'active',
+    'paused',
+    'blocked',
+    'usageLimited',
+    'budgetLimited',
+    'complete',
+  ];
+
+  if (objective !== undefined && objective.length === 0) {
+    return res.status(400).json({ error: 'Goal objective cannot be empty.' });
+  }
+  if (status !== undefined && !allowedStatuses.includes(status)) {
+    return res.status(400).json({ error: 'Invalid goal status.' });
+  }
+  if (objective === undefined && status === undefined && !('tokenBudget' in (req.body ?? {}))) {
+    return res.status(400).json({ error: 'Goal objective, status, or tokenBudget is required.' });
+  }
+
+  const tokenBudget = req.body?.tokenBudget;
+  if (
+    tokenBudget !== undefined
+    && tokenBudget !== null
+    && (!Number.isSafeInteger(tokenBudget) || tokenBudget <= 0)
+  ) {
+    return res.status(400).json({ error: 'tokenBudget must be a positive integer or null.' });
+  }
+
+  try {
+    const goal = await getCodexService().setThreadGoal(req.params.threadId, {
+      ...(objective !== undefined ? { objective } : {}),
+      ...(status !== undefined ? { status } : {}),
+      ...('tokenBudget' in (req.body ?? {}) ? { tokenBudget } : {}),
+    });
+    return res.json({ goal });
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to update thread goal.',
+    });
+  }
+});
+
+router.delete('/threads/:threadId/goal', async (req: Request, res: Response) => {
+  try {
+    const cleared = await getCodexService().clearThreadGoal(req.params.threadId);
+    res.json({ cleared });
+  } catch (error) {
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to clear thread goal.',
     });
   }
 });
@@ -707,7 +901,10 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
   res.flushHeaders();
 
   res.on('close', () => {
-    abortController.abort();
+    // The renderer is an observer of the turn, not its owner. Closing a tab,
+    // reloading the window, or losing the network connection must not interrupt
+    // work that OIX is already performing. Explicit stop requests still abort
+    // through /chat/stop and the running-agent registry.
     streamClosed = true;
   });
 
@@ -716,7 +913,6 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
     const wrote = writeCodexSse(res, event, payload);
     if (!wrote) {
       streamClosed = true;
-      abortController.abort();
     }
   };
 

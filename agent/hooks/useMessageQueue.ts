@@ -8,6 +8,7 @@
 import { useState, useCallback } from 'react';
 import { useAgentError } from '../contexts/AgentErrorContext';
 import { tr } from '../../src/i18n';
+import { getApiUrl } from '../../src/ipc';
 
 interface UseMessageQueueOptions {
   agentId: string;
@@ -19,7 +20,7 @@ interface AddToQueueResult {
   error?: string;
 }
 
-export function useMessageQueue({ agentId, serverPort }: UseMessageQueueOptions) {
+export function useMessageQueue({ agentId, serverPort: _serverPort }: UseMessageQueueOptions) {
   const [queuedText, setQueuedText] = useState<string | null>(null);
   const { showError } = useAgentError();
 
@@ -33,8 +34,9 @@ export function useMessageQueue({ agentId, serverPort }: UseMessageQueueOptions)
 
     // Sync to backend
     try {
-      const response = await fetch(`http://localhost:${serverPort}/api/agent/queue`, {
+      const response = await fetch(await getApiUrl('/api/agent/queue'), {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ agentId, message: text }),
       });
@@ -59,7 +61,7 @@ export function useMessageQueue({ agentId, serverPort }: UseMessageQueueOptions)
 
       return { success: false, error: tr('composer.queue.failed') };
     }
-  }, [agentId, serverPort, showError]);
+  }, [agentId, showError]);
 
   // Edit: clear queue and return text for composer
   const editQueue = useCallback(async (): Promise<string | null> => {
@@ -68,28 +70,30 @@ export function useMessageQueue({ agentId, serverPort }: UseMessageQueueOptions)
 
     // Clear backend
     try {
-      await fetch(`http://localhost:${serverPort}/api/agent/queue/${agentId}`, {
+      await fetch(await getApiUrl(`/api/agent/queue/${encodeURIComponent(agentId)}`), {
         method: 'DELETE',
+        credentials: 'include',
       });
     } catch {
       // Silently fail - local state already cleared
     }
 
     return text;
-  }, [queuedText, agentId, serverPort]);
+  }, [queuedText, agentId]);
 
   // Clear queue without returning text
   const clearQueue = useCallback(async () => {
     setQueuedText(null);
 
     try {
-      await fetch(`http://localhost:${serverPort}/api/agent/queue/${agentId}`, {
+      await fetch(await getApiUrl(`/api/agent/queue/${encodeURIComponent(agentId)}`), {
         method: 'DELETE',
+        credentials: 'include',
       });
     } catch {
       // Silently fail - local state already cleared
     }
-  }, [agentId, serverPort]);
+  }, [agentId]);
 
   return {
     queuedText,

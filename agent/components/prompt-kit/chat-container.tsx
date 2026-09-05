@@ -7,7 +7,7 @@ import {
   type CSSProperties,
   type HTMLAttributes,
 } from 'react';
-import { useStickToBottom } from 'use-stick-to-bottom';
+import { useStickToBottom, type Animation } from 'use-stick-to-bottom';
 import { Button } from '../../../src/components/ui/button';
 import { cn } from '../../../src/lib/utils';
 
@@ -23,13 +23,18 @@ function useChatScrollContext(): ChatScrollContextValue {
   return context;
 }
 
+type ChatContainerRootProps = HTMLAttributes<HTMLDivElement> & {
+  resizeBehavior?: Animation;
+};
+
 export function ChatContainerRoot({
   children,
   className,
+  resizeBehavior = 'smooth',
   ...props
-}: HTMLAttributes<HTMLDivElement>) {
+}: ChatContainerRootProps) {
   const instance = useStickToBottom({
-    resize: 'smooth',
+    resize: resizeBehavior,
     initial: 'instant',
   });
 

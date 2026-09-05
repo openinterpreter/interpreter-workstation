@@ -28,7 +28,7 @@ export function NylasUI({ serverId: _serverId }: NylasUIProps) {
   async function checkStatus() {
     try {
       const baseUrl = await getNylasBaseUrl();
-      const response = await fetch(`${baseUrl}/setup/status`);
+      const response = await fetch(`${baseUrl}/setup/status`, { credentials: 'include' });
       const data = await response.json();
       setConfigured(data.configured);
       setEmail(data.email ?? null); // Use ?? for truly optional field
@@ -44,7 +44,8 @@ export function NylasUI({ serverId: _serverId }: NylasUIProps) {
 
       const baseUrl = await getNylasBaseUrl();
       const response = await fetch(`${baseUrl}/setup`, {
-        method: 'POST'
+        method: 'POST',
+        credentials: 'include',
       });
 
       if (!response.ok) {
@@ -62,7 +63,7 @@ export function NylasUI({ serverId: _serverId }: NylasUIProps) {
 
       // Poll for completion
       const pollInterval = setInterval(async () => {
-        const statusResponse = await fetch(`${baseUrl}/setup/status`);
+        const statusResponse = await fetch(`${baseUrl}/setup/status`, { credentials: 'include' });
         const status = await statusResponse.json();
 
         if (status.configured) {
@@ -93,7 +94,8 @@ export function NylasUI({ serverId: _serverId }: NylasUIProps) {
 
       const baseUrl = await getNylasBaseUrl();
       const response = await fetch(`${baseUrl}/disconnect`, {
-        method: 'POST'
+        method: 'POST',
+        credentials: 'include',
       });
 
       if (!response.ok) {

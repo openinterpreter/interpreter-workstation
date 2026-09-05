@@ -244,6 +244,17 @@ describe('useChat telemetry', () => {
         'Historical question',
         'Historical answer',
       ]);
+      expect(result.current.error).toBeNull();
+    });
+
+    await waitFor(() => {
+      expect(
+        vi.mocked(fetch).mock.calls.some(([input]) =>
+          String(input).includes(
+            `/api/agent/threads/${threadId}?limit=24&bestEffort=1`,
+          ),
+        ),
+      ).toBe(true);
     });
 
     act(() => {

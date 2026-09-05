@@ -44,6 +44,12 @@ Task options:
   --quiet-startup                  Suppress banners/API help for machine-driven runs
   --dev-auto-approve-tools         Dev only: auto-approve app-tool approvals for manual CLI testing
 
+Workstation host options:
+  --host <address>                 Bind the browser host (default: 127.0.0.1)
+  --access <mode>                  Browser access: read-only | read-write
+  --auth <mode>                    Browser authentication: none | password
+  Set INTERPRETER_WORKSTATION_PASSWORD when --auth password is used.
+
 Config options (writes the real app config before starting the task):
   Only passed flags override the existing app config for the run.
   --approval-policy <policy>       Override Codex approval policy: never | on-failure | on-request | untrusted

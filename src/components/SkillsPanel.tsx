@@ -17,6 +17,7 @@ import {
   SIDEBAR_FOOTER_LEADING_SLOT_CLASSNAME,
 } from './sidebarFooterButtonStyles';
 import { getSidebarFooterMotion, SIDEBAR_FOOTER_PANEL_STYLE } from './sidebarFooterMotion';
+import { canUseHostNativeFileManager } from '../remote/workstationConnection';
 
 interface SkillsPanelProps {
   isOpen: boolean;
@@ -86,9 +87,11 @@ function SkillRow({
       { label: 'Run Skill', action: 'run' },
       { label: 'Edit with Agent', action: 'edit-with-agent' },
       { label: 'Open Skill File', action: 'open-skill-file' },
-      { label: 'Show in Finder', action: 'show-in-finder' },
       { label: 'Copy Path', action: 'copy-path' },
     ];
+    if (canUseHostNativeFileManager()) {
+      items.splice(items.length - 1, 0, { label: 'Show in Finder', action: 'show-in-finder' });
+    }
     if (canOpenFolder) {
       items.splice(2, 0, { label: 'Open Folder', action: 'open-folder' });
     }

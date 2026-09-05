@@ -701,6 +701,9 @@ interface ConversationHistoryPanelProps {
   onClose?: () => void;
   onOpenConversation?: (conversation: ConversationPreview) => void;
   onLoadingChange?: (loading: boolean) => void;
+  externalConversations?: ReadonlyArray<ConversationPreview>;
+  readOnly?: boolean;
+  indicatorToneOverride?: AgentIndicatorTone;
 }
 
 export function ConversationHistoryPanel({
@@ -710,6 +713,9 @@ export function ConversationHistoryPanel({
   onClose,
   onOpenConversation,
   onLoadingChange,
+  externalConversations,
+  readOnly = false,
+  indicatorToneOverride,
 }: ConversationHistoryPanelProps) {
   "use no memo";
 
@@ -725,8 +731,10 @@ export function ConversationHistoryPanel({
   } = useLayout();
   const activityMap = useAgentActivityMap();
   const pendingApprovalsByAgent = usePendingApprovalsByAgent();
-  const [conversationList, setConversationList] = useState<ConversationPreview[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [conversationList, setConversationList] = useState<ConversationPreview[]>(
+    () => externalConversations ? [...externalConversations] : [],
+  );
+  const [loading, setLoading] = useState(externalConversations === undefined);
   const [searchQuery, setSearchQuery] = useState('');
   const [visibleHistoricalLimit, setVisibleHistoricalLimit] = useState<number>(DEFAULT_VISIBLE_HISTORICAL_COUNT);
   const [keyboardSelectedIndex, setKeyboardSelectedIndex] = useState<number>(-1);
@@ -746,6 +754,11 @@ export function ConversationHistoryPanel({
   const deferredSearchQuery = useDeferredValue(searchQuery);
 
   const loadConversations = useCallback(async (options: { showLoading?: boolean } = {}) => {
+    if (externalConversations) {
+      setConversationList([...externalConversations]);
+      setLoading(false);
+      return;
+    }
     const showLoading = options.showLoading ?? true;
     if (showLoading) {
       setLoading(true);
@@ -754,6 +767,7 @@ export function ConversationHistoryPanel({
       const loadThreadPreviews = async (archived: boolean): Promise<ConversationPreview[]> => {
         const response = await fetch(
           await getApiUrl(archived ? '/api/agent/threads?archived=1' : '/api/agent/threads'),
+          { credentials: 'include' },
         );
         if (!response.ok) {
           throw new Error(`Failed to load thread list (${response.status})`);
@@ -795,7 +809,7 @@ export function ConversationHistoryPanel({
         setLoading(false);
       }
     }
-  }, [showArchived, t]);
+  }, [externalConversations, showArchived, t]);
 
   useEffect(() => {
     onLoadingChange?.(loading);
@@ -828,6 +842,11 @@ export function ConversationHistoryPanel({
   const searchTerms = useMemo(() => tokenizeSearchQuery(deferredSearchQuery), [deferredSearchQuery]);
 
   const activeConversations = useMemo(() => {
+    // A controlled list is authoritative for remote/read-only hosts. Their
+    // browser-local tabs can use synthetic thread markers, so merging those
+    // tabs back into the supplied list would show the same remote thread twice.
+    if (externalConversations) return [];
+
     const defaultAgentLabel = t('common.newAgent');
     const previews: ConversationPreview[] = [];
 
@@ -872,7 +891,7 @@ export function ConversationHistoryPanel({
     }
 
     return previews.sort((a, b) => timestampFromIso(b.updatedAt) - timestampFromIso(a.updatedAt));
-  }, [activityMap, state.sidebarPane, state.tabs, state.tree, t]);
+  }, [activityMap, externalConversations, state.sidebarPane, state.tabs, state.tree, t]);
 
   const mergedConversations = useMemo(() => {
     const historicalByThreadId = new Map<string, ConversationPreview>();
@@ -1216,6 +1235,7 @@ export function ConversationHistoryPanel({
   ) => {
     event.preventDefault();
     event.stopPropagation();
+    if (readOnly) return;
 
     const items = conv
       ? [
@@ -1329,6 +1349,7 @@ export function ConversationHistoryPanel({
     showArchived,
     t,
     visibleConversations.length,
+    readOnly,
   ]);
 
   const handleKeyboardNavigate = useCallback((dir: 'up' | 'down' | 'enter' | 'escape') => {
@@ -1373,6 +1394,7 @@ export function ConversationHistoryPanel({
   const useCardStyle = !fillHeight;
 
   const getConvIndicatorTone = useCallback((conv: ConversationPreview): AgentIndicatorTone => {
+    if (indicatorToneOverride) return indicatorToneOverride;
     if (!conv.isOpen) return 'idle';
     const activity = activityMap.get(conv.agentId);
     return getAgentIndicatorTone({
@@ -1380,7 +1402,7 @@ export function ConversationHistoryPanel({
       isRunning: activity?.isRunning ?? false,
       unreadCount: activity?.unreadCount ?? 0,
     });
-  }, [activityMap, pendingApprovalsByAgent]);
+  }, [activityMap, indicatorToneOverride, pendingApprovalsByAgent]);
 
   return (
     <div className={fillHeight ? 'h-full flex flex-col' : 'flex flex-col'}>
@@ -1420,7 +1442,7 @@ export function ConversationHistoryPanel({
       {useCardStyle ? (
         /* Card-style layout for embedded contexts (new tab page) */
         <>
-          <div className="mb-3">
+          {!readOnly ? <div className="mb-3">
             <ArchivedHistoryFilter
               showArchived={showArchived}
               onHide={() => setShowArchived(false)}
@@ -1433,13 +1455,13 @@ export function ConversationHistoryPanel({
               onEnter={() => handleKeyboardNavigate('enter')}
               onEscape={() => handleKeyboardNavigate('escape')}
             />
-          </div>
+          </div> : null}
 
           <div
             className="flex flex-col gap-0 mx-auto"
             style={{ width: 'calc(100% - 3rem)' }}
             data-testid={CONVERSATION_HISTORY_LIST_ID}
-            onContextMenu={(event) => {
+            onContextMenu={readOnly ? undefined : (event) => {
               void openConversationContextMenu(event);
             }}
           >
@@ -1481,7 +1503,7 @@ export function ConversationHistoryPanel({
                         conv={conv}
                         searchTerms={searchTerms}
                         onSelect={() => handleSelect(conv)}
-                        onContextMenu={(event) => {
+                        onContextMenu={readOnly ? undefined : (event) => {
                           void openConversationContextMenu(event, conv);
                         }}
                         isRenaming={renamingConversationId === conv.conversationId}
@@ -1546,7 +1568,7 @@ export function ConversationHistoryPanel({
             ) : (
               <div
                 data-testid={CONVERSATION_HISTORY_LIST_ID}
-                onContextMenu={(event) => {
+                onContextMenu={readOnly ? undefined : (event) => {
                   void openConversationContextMenu(event);
                 }}
               >
@@ -1556,7 +1578,7 @@ export function ConversationHistoryPanel({
                     conv={conv}
                     searchTerms={searchTerms}
                     onSelect={() => handleSelect(conv)}
-                    onContextMenu={(event) => {
+                    onContextMenu={readOnly ? undefined : (event) => {
                       void openConversationContextMenu(event, conv);
                     }}
                     isRenaming={renamingConversationId === conv.conversationId}
@@ -1597,7 +1619,7 @@ export function ConversationHistoryPanel({
         </>
       )}
 
-      <AlertDialog open={isDeleteAllDialogOpen} onOpenChange={(open) => {
+      {!readOnly ? <AlertDialog open={isDeleteAllDialogOpen} onOpenChange={(open) => {
         if (!isDeletingAll) {
           setIsDeleteAllDialogOpen(open);
         }
@@ -1627,7 +1649,7 @@ export function ConversationHistoryPanel({
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
-      </AlertDialog>
+      </AlertDialog> : null}
     </div>
   );
 }

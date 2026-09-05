@@ -36,6 +36,9 @@ import { getRuntimeSystemInfo, showContextMenu, showItemInFolder, type ContextMe
 import { getDragRegionStyle } from '../../utils/titlebarLayout';
 import { getRevealInFileManagerLabel } from '../../utils/workspacePickerMenu';
 import { shouldHideSingleAgentTabBar } from './editorAgentState';
+import { isRemoteWorkstationMode } from '../../remote/remoteWorkstation';
+import { isWorkstationReadOnly } from '../../remote/workstationConnection';
+import { canUseHostNativeFileManager } from '../../remote/workstationConnection';
 
 // Find the top-left pane (always follow first child)
 function getTopLeftPaneId(node: TreeNode): string {
@@ -393,10 +396,18 @@ function PaneTabBar({ pane, tabs, isActivePane: _isActivePane, isTopLeft, isTopR
   const dragRegionStyle = getDragRegionStyle(getRuntimeSystemInfo().platform);
   const isWindowTopTabBar = isTopLeft || isTopRight;
   const tabBarDragRegionStyle = isWindowTopTabBar ? dragRegionStyle : 'no-drag';
+  const remoteWorkstationMode = isRemoteWorkstationMode();
+  const readOnlyWorkstation = isWorkstationReadOnly();
+  const canUseNativeFileManager = canUseHostNativeFileManager();
+  const newTabLabel = readOnlyWorkstation ? t('menu.file.newTab') : t('help.tabs.newAgent.title');
+  const newTabDescription = readOnlyWorkstation
+    ? 'Open an empty tab to browse active conversations.'
+    : t('help.tabs.newAgent.description');
 
   const handleContextMenu = useCallback(async (e: React.MouseEvent, tabId: string) => {
     e.preventDefault();
     e.stopPropagation();
+    if (readOnlyWorkstation) return;
 
     const tab = tabs[tabId];
     if (!tab) return;
@@ -418,7 +429,9 @@ function PaneTabBar({ pane, tabs, isActivePane: _isActivePane, isTopLeft, isTopR
         items.push({ label: '', action: '', separator: true });
       }
       items.push({ label: 'Copy Path', action: 'copy-path' });
-      items.push({ label: getRevealInFileManagerLabel(getRuntimeSystemInfo().platform), action: 'reveal' });
+      if (canUseNativeFileManager) {
+        items.push({ label: getRevealInFileManagerLabel(getRuntimeSystemInfo().platform), action: 'reveal' });
+      }
     }
 
     if (items.length === 0) return;
@@ -436,7 +449,7 @@ function PaneTabBar({ pane, tabs, isActivePane: _isActivePane, isTopLeft, isTopR
     } else if (action === 'reveal' && tab.path) {
       await showItemInFolder(tab.path);
     }
-  }, [isSinglePane, onCloseTab, onSplitDown, onSplitRight, pane.tabIds.length, tabs]);
+  }, [canUseNativeFileManager, isSinglePane, onCloseTab, onSplitDown, onSplitRight, pane.tabIds.length, readOnlyWorkstation, tabs]);
 
   const getTabIcon = (tab: Tab, indicatorTone?: ReturnType<typeof getAgentIndicatorTone>) => {
     if (tab.thumbnail) return <img src={tab.thumbnail} alt="" className="size-3.5 rounded-[2px] object-cover" />;
@@ -550,6 +563,11 @@ function PaneTabBar({ pane, tabs, isActivePane: _isActivePane, isTopLeft, isTopR
       {pane.tabIds.map((tabId, index) => {
         const tab = tabs[tabId]; if (!tab) return null;
         const isActive = pane.activeTabId === tabId;
+        const isRemoteEmptyTab = readOnlyWorkstation
+          && isAgentTab(tab)
+          && !tab.agent.session.codexThreadId
+          && !tab.agent.session.initialMessage;
+        const tabLabel = isRemoteEmptyTab ? t('menu.file.newTab') : tab.label;
         const canCloseTab = !(isSinglePane && pane.tabIds.length === 1 && isNewTabLike(tab));
         const activity = tab.type === 'agent' ? agentActivityById.get(tabId) : undefined;
         const agentIndicatorTone = tab.type === 'agent'
@@ -565,9 +583,9 @@ function PaneTabBar({ pane, tabs, isActivePane: _isActivePane, isTopLeft, isTopR
           <div key={tabId}
             className={`content-tab group select-none relative ${isActive ? 'content-tab-active' : ''} ${index === 0 ? 'content-tab-first' : ''} ${index === 0 && isTopLeft ? 'content-tab-topleft' : ''} ${index === pane.tabIds.length - 1 ? 'content-tab-last' : ''}`}
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-            data-testid={`pane-tab-${pane.id}-${tabId}`} data-tab-id={tabId} data-tab-path={tab.path || undefined} data-tab-label={tab.label} data-tab-type={tab.type} data-active={isActive} role="tab" aria-selected={isActive} draggable
-            data-help-title={tab.label}
-            data-help-description={getTabHelpDescription(tab)}
+            data-testid={`pane-tab-${pane.id}-${tabId}`} data-tab-id={tabId} data-tab-path={tab.path || undefined} data-tab-label={tabLabel} data-tab-type={tab.type} data-active={isActive} role="tab" aria-selected={isActive} draggable={!remoteWorkstationMode}
+            data-help-title={tabLabel}
+            data-help-description={isRemoteEmptyTab ? t('help.tabs.newTab.description') : getTabHelpDescription(tab)}
             onClick={(e) => { e.stopPropagation(); onActivatePane(); onActivateTab(tabId); }}
             onMouseDown={(e) => {
               if (e.button !== 1 || !canCloseTab) return;
@@ -576,8 +594,8 @@ function PaneTabBar({ pane, tabs, isActivePane: _isActivePane, isTopLeft, isTopR
               onCloseTab(tabId);
             }}
             onContextMenu={(e) => handleContextMenu(e, tabId)}
-            onDragStart={(e) => handleTabDragStart(e, tab, pane.id, index)}
-            onDragEnd={(e) => handleTabDragEnd(e, tabId)}
+            onDragStart={(e) => { if (!remoteWorkstationMode) handleTabDragStart(e, tab, pane.id, index); }}
+            onDragEnd={(e) => { if (!remoteWorkstationMode) handleTabDragEnd(e, tabId); }}
             onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'move'; const rect = (e.currentTarget as HTMLElement).getBoundingClientRect(); setDropIndicator({ tabId, side: e.clientX < rect.left + rect.width / 2 ? 'left' : 'right' }); }}
             onDragLeave={() => setDropIndicator(prev => prev?.tabId === tabId ? null : prev)}
             onDrop={(e) => { e.preventDefault(); e.stopPropagation(); setDropIndicator(null); const draggedTabId = e.dataTransfer.getData('text/plain'); if (!draggedTabId || draggedTabId === tabId) return; const rect = (e.currentTarget as HTMLElement).getBoundingClientRect(); const insertAfter = e.clientX >= rect.left + rect.width / 2; const targetIndex = pane.tabIds.indexOf(tabId); const insertIndex = insertAfter ? targetIndex + 1 : targetIndex; const dragData = resolvePaneTabDragData(e.dataTransfer); const sourcePaneId = dragData?.sourcePaneId ?? null; const sidebarMeta = dragData?.sidebarMeta; if (onTabDrop) onTabDrop(draggedTabId, sourcePaneId, pane.id, 'center', insertIndex, sidebarMeta, dragData); }}>
@@ -604,18 +622,19 @@ function PaneTabBar({ pane, tabs, isActivePane: _isActivePane, isTopLeft, isTopR
                 })()}
               </span>
               <div className="flex-1 min-w-0 overflow-hidden text-ui-sm" style={{ maskImage: 'linear-gradient(to right, black 70%, transparent 100%)', WebkitMaskImage: 'linear-gradient(to right, black 70%, transparent 100%)' }}>
-                <span className="whitespace-nowrap">{tab.label}</span>
+                <span className="whitespace-nowrap">{tabLabel}</span>
               </div>
               {canCloseTab && (
-                <span
+                <button
+                  type="button"
                   onClick={(e) => { e.stopPropagation(); onCloseTab(tabId); }}
                   className="tab-close-btn size-4 flex items-center justify-center flex-shrink-0 text-muted-foreground hover:text-foreground rounded-sm hover:bg-hover"
-                  aria-label={t('help.tabs.close.title', { label: tab.label })}
-                  data-help-title={t('help.tabs.close.title', { label: tab.label })}
+                  aria-label={t('help.tabs.close.title', { label: tabLabel })}
+                  data-help-title={t('help.tabs.close.title', { label: tabLabel })}
                   data-help-description={t('help.tabs.close.description')}
                 >
                   <X className="size-3" />
-                </span>
+                </button>
               )}
             </div>
             {showLeft && <div className="absolute left-0 top-1 bottom-1 w-0.5 bg-primary rounded-full z-50 pointer-events-none" />}
@@ -628,8 +647,8 @@ function PaneTabBar({ pane, tabs, isActivePane: _isActivePane, isTopLeft, isTopR
         style={{ marginLeft: 'var(--unit-padding)', WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <TooltipWrapper
-          tooltip={t('help.tabs.newAgent.title')}
-          helpDescription={t('help.tabs.newAgent.description')}
+          tooltip={newTabLabel}
+          helpDescription={newTabDescription}
           shortcut={formatPrimaryShortcut('T')}
           tooltipSide="right"
           tooltipSideOffset={1}
@@ -637,7 +656,7 @@ function PaneTabBar({ pane, tabs, isActivePane: _isActivePane, isTopLeft, isTopR
           <button
             className="oa-hover-chip new-tab-button flex h-[var(--unit-element-height)] items-center justify-center px-[var(--unit-padding-small)] text-muted-foreground hover:text-foreground"
             onClick={(e) => { e.stopPropagation(); onNewTab(); }}
-            aria-label={t('help.tabs.newAgent.title')}
+            aria-label={newTabLabel}
             data-testid={NEW_TAB_BUTTON_ID(pane.id)}
           >
             <span className="relative flex items-center justify-center px-[var(--unit-padding-small)]">
@@ -671,7 +690,8 @@ type TreeNodeRendererProps = {
 function PaneNodeRenderer({ node, tabs, activePaneId, topLeftPaneId, topRightPaneId, isSinglePane, leftSidebarOpen, globalTabNumbers, pendingApprovalsByAgent, agentActivityById, onActivatePane, onActivateTab, onCloseTab, onNewTab, onSplitRight, onSplitDown, onPaneRectChange, onTabDrop, onDetachTab, onTopRightPaddingRef }: TreeNodeRendererProps & { node: Pane }) {
   const isActivePane = activePaneId === node.id;
   const isTopLeft = node.id === topLeftPaneId;
-  const hideTabBar = shouldHideSingleAgentTabBar({ pane: node, tabs, isSinglePane });
+  const hideTabBar = !isRemoteWorkstationMode()
+    && shouldHideSingleAgentTabBar({ pane: node, tabs, isSinglePane });
   const isFirstTabActive = node.tabIds.length > 0 && node.activeTabId === node.tabIds[0];
   const firstTabAtEdge = isFirstTabActive && !(isTopLeft && !leftSidebarOpen);
   const flushLeadingEdge = isSinglePane && isTopLeft && leftSidebarOpen && isFirstTabActive;

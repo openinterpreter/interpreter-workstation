@@ -13,6 +13,7 @@ import { OFFICE_EDITOR_EXTENSIONS } from '../../shared/utils/converterFormats';
 import { Suspense, lazy, useEffect } from 'react';
 import { isUnpackagedElectron, pathBasename } from '../ipc';
 import { trackFileOpened } from '../utils/telemetry';
+import { isRemoteWorkstationMode } from '../remote/remoteWorkstation';
 
 const viteEnv = (import.meta as ImportMeta & {
   env?: {
@@ -77,6 +78,8 @@ export function EditorArea({ filePath, refreshKey, pdfPage }: EditorAreaProps) {
     type = 'html';
   } else if (plainTextExtensions.includes(extension || '')) {
     type = 'plaintext';
+  } else if (isRemoteWorkstationMode() && extension === 'csv') {
+    type = 'code';
   } else if (OFFICE_EDITOR_EXTENSIONS.has(extension || '')) {
     type = 'office';
   } else if (automationExtensions.includes(extension || '')) {

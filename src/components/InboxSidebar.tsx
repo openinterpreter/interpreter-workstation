@@ -55,7 +55,7 @@ export function InboxSidebar() {
   const fetchStatus = useCallback(async () => {
     try {
       const baseUrl = await getBaseUrl();
-      const response = await fetch(`${baseUrl}/api/inbox/status`);
+      const response = await fetch(`${baseUrl}/api/inbox/status`, { credentials: 'include' });
       const data = await response.json();
       setChannels(data.channels || []);
       return data.channels || [];
@@ -73,7 +73,7 @@ export function InboxSidebar() {
       if (search) params.set('search', search);
       if (channelFilter !== 'all') params.set('channel', channelFilter);
 
-      const response = await fetch(`${baseUrl}/api/inbox/messages?${params}`);
+      const response = await fetch(`${baseUrl}/api/inbox/messages?${params}`, { credentials: 'include' });
       const data = await response.json();
       const nextMessages = data.messages || [];
       setMessages(nextMessages);
@@ -160,7 +160,7 @@ export function InboxSidebar() {
       setConnecting(true);
       setError(null);
       const baseUrl = await getBaseUrl();
-      const response = await fetch(`${baseUrl}/api/servers/nylas/setup`, { method: 'POST' });
+      const response = await fetch(`${baseUrl}/api/servers/nylas/setup`, { method: 'POST', credentials: 'include' });
       if (!response.ok) {
         setError('Failed to start OAuth setup');
         setConnecting(false);

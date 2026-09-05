@@ -10,6 +10,7 @@ import { useTranslation } from 'react-i18next';
 import { Mail, Paperclip, Download, Reply, Forward, Loader2, AlertCircle, AlertTriangle } from 'lucide-react';
 import { Button } from './ui/button';
 import { showItemInFolder } from '@/ipc';
+import { canUseHostNativeFileManager } from '../remote/workstationConnection';
 import { callTool } from '@/api';
 import { buildUntrustedEmailDocument, emailContainsRemoteAssets } from '../utils/untrustedHtml';
 import { SandboxedHtmlFrame } from './SandboxedHtmlFrame';
@@ -87,7 +88,7 @@ export function EmailView({ tabId: _tabId, emailId }: EmailViewProps) {
 
       if (result.content?.[0]?.text) {
         const parsed = JSON.parse(result.content[0].text);
-        if (parsed.saved_to) {
+        if (parsed.saved_to && canUseHostNativeFileManager()) {
           // Open the file in finder/explorer
           showItemInFolder(parsed.saved_to);
         }

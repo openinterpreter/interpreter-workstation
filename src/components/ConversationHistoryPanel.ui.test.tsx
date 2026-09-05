@@ -1,7 +1,8 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import type { LayoutState } from '../../shared/types/layout';
 
-import { ConversationHistoryPanel } from './ConversationHistoryPanel';
+import { ConversationHistoryPanel, type ConversationPreview } from './ConversationHistoryPanel';
 
 const layoutState = vi.hoisted(() => ({
   current: {
@@ -14,7 +15,7 @@ const layoutState = vi.hoisted(() => ({
         activeTabId: null,
       },
       sidebarPane: null,
-    },
+    } as Pick<LayoutState, 'tabs' | 'tree' | 'sidebarPane'>,
     closeTab: vi.fn(),
     setActiveTab: vi.fn(),
     setSidebarActiveTab: vi.fn(),
@@ -173,6 +174,82 @@ describe('ConversationHistoryPanel refresh behavior', () => {
       expect(screen.getByText('Archived thread')).toBeVisible();
     });
     expect(screen.getByRole('button', { name: 'Hide archived' })).toBeVisible();
-    expect(fetchMock).toHaveBeenLastCalledWith('/api/agent/threads?archived=1');
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/agent/threads?archived=1', {
+      credentials: 'include',
+    });
+  });
+
+  test('renders a controlled read-only active-conversation list without local history APIs', async () => {
+    const fetchMock = vi.fn();
+    const onOpenConversation = vi.fn();
+    vi.mocked(ipcMock.showContextMenu).mockClear();
+    const conversation: ConversationPreview = {
+      conversationId: 'remote-thread',
+      threadId: 'remote-thread',
+      agentId: 'remote-agent',
+      profileId: '',
+      workspacePath: '/workspace',
+      title: 'Remote conversation',
+      lastMessagePreview: '',
+      messageCount: 1,
+      createdAt: new Date(1).toISOString(),
+      updatedAt: new Date(1).toISOString(),
+      source: 'active',
+      isArchived: false,
+      isOpen: true,
+      isSelected: false,
+    };
+    vi.stubGlobal('fetch', fetchMock);
+    layoutState.current.state = {
+      tabs: {
+        'open-remote-tab': {
+          id: 'open-remote-tab',
+          type: 'agent',
+          label: 'Remote conversation',
+          agent: {
+            runtime: {
+              modelConfig: {
+                provider: 'api',
+                modelId: 'gpt-5.6-luna',
+                profileId: 'remote',
+                apiFormat: 'openai',
+              },
+            },
+            session: {
+              callerToken: 'agtok_remote',
+              codexThreadId: 'remote-workstation-live-thread',
+            },
+          },
+        },
+      },
+      tree: {
+        kind: 'pane',
+        id: 'pane-one',
+        tabIds: ['open-remote-tab'],
+        activeTabId: 'open-remote-tab',
+      },
+      sidebarPane: null,
+    };
+
+    render(
+      <ConversationHistoryPanel
+        fillHeight={false}
+        externalConversations={[conversation]}
+        readOnly
+        indicatorToneOverride="running"
+        onOpenConversation={onOpenConversation}
+      />,
+    );
+
+    expect(await screen.findByText('Remote conversation')).toBeVisible();
+    expect(screen.getAllByTestId(/^conversation-/)).toHaveLength(2);
+    expect(screen.queryByLabelText('Search conversations')).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    fireEvent.contextMenu(screen.getByTestId('conversation-history-list'));
+    expect(vi.mocked(ipcMock.showContextMenu)).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('Remote conversation'));
+    expect(onOpenConversation).toHaveBeenCalledWith(conversation);
   });
 });

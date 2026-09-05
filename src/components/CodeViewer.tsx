@@ -18,6 +18,7 @@ import { useFileRefresh } from '../hooks/useFileRefresh';
 import { SaveStatus } from './ui/save-status';
 import { openFeedbackPopover } from '../utils/feedback';
 import { EditorShell, EditorToolbar, EditorContentSurface } from './EditorShell';
+import { isWorkstationReadOnly } from '../remote/workstationConnection';
 
 // Create lowlight instance with common languages
 const lowlight = createLowlight(common);
@@ -179,7 +180,7 @@ export const CodeViewer = forwardRef<CodeViewerRef, CodeViewerProps>(
         }),
       ],
       content: content ?? codeToTiptap('', language),
-      editable: true,
+      editable: !isWorkstationReadOnly(),
       immediatelyRender: false,
       editorProps: {
         attributes: {
@@ -441,9 +442,9 @@ export const CodeViewer = forwardRef<CodeViewerRef, CodeViewerProps>(
 
     return (
       <EditorShell>
-        <EditorToolbar className="px-4">
+        {!isWorkstationReadOnly() ? <EditorToolbar className="px-4">
           <SaveStatus status={saveStatus} />
-        </EditorToolbar>
+        </EditorToolbar> : null}
         <EditorContentSurface>
           <EditorContent
             editor={editor}

@@ -57,7 +57,7 @@ export function InboxSetupWhatsApp({ onConnected, onCancel }: InboxSetupWhatsApp
         : await getAppServerOrigin();
 
       // Start the socket initialization
-      const response = await fetch(`${baseUrl}/api/servers/whatsapp/setup`, { method: 'POST' });
+      const response = await fetch(`${baseUrl}/api/servers/whatsapp/setup`, { method: 'POST', credentials: 'include' });
       if (!response.ok) {
         let message = 'Failed to initialize WhatsApp setup.';
         try {
@@ -72,7 +72,9 @@ export function InboxSetupWhatsApp({ onConnected, onCancel }: InboxSetupWhatsApp
       }
 
       // Open SSE stream for QR codes
-      const evtSource = new EventSource(`${baseUrl}/api/servers/whatsapp/setup/qr-stream`);
+      const evtSource = new EventSource(`${baseUrl}/api/servers/whatsapp/setup/qr-stream`, {
+        withCredentials: true,
+      });
       eventSourceRef.current = evtSource;
       qrTimeoutRef.current = setTimeout(() => {
         setConnecting(false);

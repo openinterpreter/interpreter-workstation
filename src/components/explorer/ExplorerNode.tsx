@@ -38,6 +38,7 @@ import {
 import { Button } from '../ui/button';
 import { useLayoutActions } from '../../hooks/useLayout';
 import { getActiveFilePathSnapshot, subscribeActiveFilePath } from '../../stores/activeFileStore';
+import { canUseHostNativeFileManager } from '../../remote/workstationConnection';
 
 /**
  * NOTE(victor): CRITICAL!! DRAG AND DROP ARCHITECTURE - READ BEFORE MODIFYING
@@ -104,6 +105,7 @@ interface ExplorerNodeProps extends NodeRendererProps<FileTreeNode> {
   onTreeMutated?: () => void;
   isLoading?: boolean;
   flashPath?: string | null;
+  readOnly?: boolean;
 }
 
 interface ContextTargetItem {
@@ -223,6 +225,7 @@ export const ExplorerNode = React.memo(function ExplorerNode({
   onTreeMutated,
   isLoading = false,
   flashPath,
+  readOnly = false,
 }: ExplorerNodeProps) {
   "use no memo";
 
@@ -235,6 +238,7 @@ export const ExplorerNode = React.memo(function ExplorerNode({
   const data = node.data;
   const fullPath = workspacePath ? pathJoin(workspacePath, data.path) : data.path;
   const helpInfo = getFileHelp(data.name, data.type);
+  const canUseNativeFileManager = canUseHostNativeFileManager();
   const storeActiveFilePath = useSyncExternalStore(
     subscribeActiveFilePath,
     getActiveFilePathSnapshot,
@@ -243,7 +247,7 @@ export const ExplorerNode = React.memo(function ExplorerNode({
   const isActive = data.type === 'file' && storeActiveFilePath === fullPath;
   const shouldFlash = flashPath === fullPath;
   const isRunnableProject = data.type === 'directory' && data.runnableProject?.kind === 'node-web-app';
-  const canUseProjectRunner = isRunnableProject
+  const canUseProjectRunner = !readOnly && isRunnableProject
     && typeof window !== 'undefined'
     && Boolean(window.electron?.projectRunner?.start);
   const isDevelopmentRenderer = Boolean(viteEnv?.DEV) || isUnpackagedElectron();
@@ -378,6 +382,7 @@ export const ExplorerNode = React.memo(function ExplorerNode({
   }, [node, workspacePath, fullPath, data.type, data.name]);
 
   const handleContextMenu = useCallback(async (e: React.MouseEvent) => {
+    if (readOnly) return;
     e.preventDefault();
     e.stopPropagation();
 
@@ -408,8 +413,10 @@ export const ExplorerNode = React.memo(function ExplorerNode({
       { label: 'Copy', action: 'copy' },
       { label: '', action: '', separator: true },
       { label: hasMultipleTargets ? 'Copy Paths' : 'Copy Path', action: 'copy-path' },
-      { label: 'Show in Finder', action: 'show-in-finder' },
     );
+    if (canUseNativeFileManager) {
+      items.push({ label: 'Show in Finder', action: 'show-in-finder' });
+    }
 
     const action = await showContextMenu(items, 'file_tree_node');
     if (action === 'open') {
@@ -488,6 +495,8 @@ export const ExplorerNode = React.memo(function ExplorerNode({
     onAskAgent,
     onItemCreated,
     onTreeMutated,
+    readOnly,
+    canUseNativeFileManager,
     showToast,
   ]);
 
@@ -1094,7 +1103,7 @@ export const ExplorerNode = React.memo(function ExplorerNode({
       data-help-title={helpInfo.title}
       data-help-description={helpInfo.description}
       data-help-item-type={helpInfo.itemType}
-      draggable={node.isDraggable}
+      draggable={!readOnly && node.isDraggable}
       onClickCapture={handleClickCapture}
       onContextMenu={handleContextMenu}
       onDragStart={handleDragStart}

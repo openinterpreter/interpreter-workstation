@@ -2,6 +2,13 @@ import { getDefaultProfile } from './configStore';
 import { agentTabManager } from './agentTabManager';
 import { broadcastEvent } from './handlers/broadcast';
 import { runCodexSubagent } from './tools/builtin-tools/agents/codexSubagentRunnerBridge';
+import { getCodexService } from '../src/lib/codex/service';
+import {
+  ensureOpenAIOAuthAccountReady,
+  resolveCodexProfileFromModelConfig,
+} from './utils/codexRuntime';
+import { buildGroqProxyBaseUrl, routeGroqProfileThroughProxy } from './utils/groqResponsesProxy';
+import { getServerPort } from './utils/serverPort';
 import { IPC_CHANNELS } from '../electron/ipc/registry';
 import type { AgentModelConfig } from '../shared/types/model';
 import type { AgentPermissionOwnerReference } from '../shared/types/approval';
@@ -22,6 +29,7 @@ export interface StartAgentTaskOptions {
   message?: string;
   system?: string;
   timeoutMs?: number;
+  idleTimeoutMs?: number | null;
   mode?: AgentTaskMode;
   modelConfig?: AgentModelConfig;
   workspace?: string;
@@ -38,6 +46,16 @@ export interface StartAgentTaskOptions {
   notifyStarted?: boolean;
   onProgress?: (event: AgentTaskProgressEvent) => void;
   createHeadedTask?: typeof agentTabManager.createAgentTask;
+}
+
+export interface ResumeAgentTaskThreadOptions {
+  threadId: string;
+  workspace?: string;
+  modelConfig?: AgentModelConfig;
+}
+
+export interface ForkAgentTaskThreadOptions extends ResumeAgentTaskThreadOptions {
+  lastTurnId: string;
 }
 
 export interface AgentTaskResult {
@@ -97,6 +115,78 @@ async function resolveAgentModelConfig(
   return getDefaultModelConfig();
 }
 
+/** Restore a persisted OIX thread without manufacturing a model turn. */
+export async function resumeAgentTaskThread(
+  options: ResumeAgentTaskThreadOptions,
+): Promise<{ threadId: string }> {
+  const workspace = normalizeHeadlessTaskWorkspace(options.workspace);
+  if (!workspace) {
+    throw new Error(HEADLESS_TASK_WORKSPACE_ERROR);
+  }
+
+  const modelConfig = await resolveAgentModelConfig(options.modelConfig);
+  const profile = routeGroqProfileThroughProxy(
+    resolveCodexProfileFromModelConfig(modelConfig),
+    buildGroqProxyBaseUrl(getServerPort()),
+  );
+  const service = getCodexService();
+  await ensureOpenAIOAuthAccountReady(
+    service,
+    modelConfig.provider === 'openai-oauth',
+  );
+  // A resumed thread can outlive this request through native OIX features such
+  // as Goal. Provision the provider in OIX first so those later turns retain
+  // environment-backed auth after the request-scoped resume overrides are gone.
+  await service.ensureProvider(profile, true);
+  const threadId = await service.resumeThread({
+    threadId: options.threadId,
+    model: modelConfig.modelId,
+    modelProvider: profile.modelProvider,
+    providerConfig: profile.providerConfig,
+    cwd: workspace,
+    ...(modelConfig.reasoningEffort
+      ? { config: { model_reasoning_effort: modelConfig.reasoningEffort } }
+      : {}),
+  });
+
+  return { threadId };
+}
+
+/** Preserve the source thread and continue its native OIX state from a completed turn. */
+export async function forkAgentTaskThread(
+  options: ForkAgentTaskThreadOptions,
+): Promise<{ threadId: string }> {
+  const workspace = normalizeHeadlessTaskWorkspace(options.workspace);
+  if (!workspace) {
+    throw new Error(HEADLESS_TASK_WORKSPACE_ERROR);
+  }
+
+  const modelConfig = await resolveAgentModelConfig(options.modelConfig);
+  const profile = routeGroqProfileThroughProxy(
+    resolveCodexProfileFromModelConfig(modelConfig),
+    buildGroqProxyBaseUrl(getServerPort()),
+  );
+  const service = getCodexService();
+  await ensureOpenAIOAuthAccountReady(
+    service,
+    modelConfig.provider === 'openai-oauth',
+  );
+  await service.ensureProvider(profile, true);
+  const threadId = await service.forkThread({
+    threadId: options.threadId,
+    lastTurnId: options.lastTurnId,
+    model: modelConfig.modelId,
+    modelProvider: profile.modelProvider,
+    providerConfig: profile.providerConfig,
+    cwd: workspace,
+    ...(modelConfig.reasoningEffort
+      ? { config: { model_reasoning_effort: modelConfig.reasoningEffort } }
+      : {}),
+  });
+
+  return { threadId };
+}
+
 async function startHeadedAgentTask(
   options: StartAgentTaskOptions,
 ): Promise<AgentTaskResult> {
@@ -145,6 +235,7 @@ async function startHeadlessAgentTask(
     skills: options.skills,
     modelConfig,
     timeoutMs: options.timeoutMs,
+    idleTimeoutMs: options.idleTimeoutMs,
     workspace: options.workspace,
     allowedToolNames: options.allowedToolNames,
     parentOwner: options.parentOwner,

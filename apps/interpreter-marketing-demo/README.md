@@ -1,19 +1,21 @@
 # Interpreter Marketing Demo
 
-This target builds the public browser demo as a static site.
+This target builds the browser renderer as a static site.
 
-It is the real Interpreter renderer running in a browser-safe demo mode, not a lookalike mock.
+It is the real Interpreter renderer, not a lookalike mock. Query settings choose
+between seeded demo mode, an authenticated browser Workstation, and the smaller
+public publication surfaces.
 
 ## Goals
 
 - Reuse the real Interpreter renderer.
-- Run entirely in marketing demo mode.
-- Never require auth, SSE, or the app backend.
+- Keep seeded marketing demos independent from the app backend.
+- Package the same shell for authenticated HTTP/SSE browser hosts.
 - Avoid touching the normal desktop build and release path.
 
 ## Architecture
 
-There are two distinct layers:
+The seeded demo has two distinct layers:
 
 1. `apps/interpreter-marketing-demo/`
    - builds the actual app surface as a static Vite app
@@ -128,6 +130,22 @@ What stays disabled:
 - tool execution
 - arbitrary filesystem access
 - real mutations outside the seeded in-memory workspace
+
+## Workstation browser surfaces
+
+The same static renderer also provides non-demo browser entry surfaces:
+
+- `surface=workstation` — the full shell through the normal authenticated
+  Workstation HTTP/SSE bridge; access can be read-write or read-only;
+- `surface=remote-workstation` — the full shell backed by the narrow public
+  publication protocol;
+- `surface=remote-thread` — only the published conversation and native Goal.
+
+These surfaces do not use seeded demo IPC. Connection selection lives in
+`src/remote`, separate from demo data in `src/demo`. The publication endpoint is
+a narrow, same-origin relay and the browser receives no relay credential. See
+[`docs/remote-workstation.md`](../../docs/remote-workstation.md) for the product
+model, setup instructions, API, security boundary, and deployment contract.
 
 ## Thumbnails And File Icons
 
@@ -246,15 +264,14 @@ That split keeps:
 - the marketing page simpler
 - the public demo isolated from the main app backend
 
-## Non-Goals
+## Trust boundary
 
-This target is not trying to be a fully functional web version of Interpreter.
+The default marketing scenarios are static, seeded, bounded, and safe to host
+publicly. The same static renderer can become a functional browser Workstation
+only when `surface=workstation` points it at an authenticated sidecar. The
+static host carries no computer credential; the sidecar session and its
+explicit access setting establish that trust boundary.
 
-It is intentionally:
-
-- static
-- seeded
-- bounded
-- safe to host publicly
-
-It should feel real, but it should not require the desktop trust boundary.
+An anonymous publication remains read-only and uses the smaller allowlisted
+publication protocol. Neither browser mode requires an Electron desktop trust
+boundary.

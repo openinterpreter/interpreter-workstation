@@ -4,11 +4,11 @@ A multi-agent chat interface where multiple AI assistants can run simultaneously
 
 ## Overview
 
-The Agent module provides a sidebar with a tabbed interface for interacting with multiple AI agents concurrently. Each agent operates independently with its own assistant-ui runtime, allowing simultaneous streaming, preserved scroll positions, and isolated conversation states.
+The Agent module provides a sidebar with a tabbed interface for interacting with multiple AI agents concurrently. Each tab binds to an OIX thread, allowing simultaneous work, preserved scroll positions, resumable history, and isolated conversation state.
 
 ## Architecture
 
-The system uses multiple independent assistant-ui runtime instances - one per agent tab. All agent components remain mounted when not visible, which enables background streaming and instant tab switching without interrupting ongoing responses.
+Each agent tab has an independent renderer state backed by a durable OIX thread. All agent components remain mounted when merely hidden, and closing or reloading a renderer does not cancel work already owned by OIX. Reopening a tab loads the newest history page first, then catches up while the thread continues.
 
 The component hierarchy consists of a main sidebar container that manages agent state, a vertical tab bar showing abbreviated conversation previews, and individual thread containers that wrap vanilla assistant-ui components. Each thread gets its own runtime provider and maintains complete independence from other agents.
 
@@ -18,17 +18,19 @@ Tab labels automatically update to show the first user message from each convers
 
 **Independent Runtimes**: Each agent has its own runtime instance, conversation state, and streaming pipeline. Agents can stream responses simultaneously without interference.
 
-**Background Streaming**: Switching tabs doesn't interrupt streaming. All agents remain active when hidden, allowing you to check on multiple conversations while others continue generating responses.
+**Background and detached work**: Switching tabs doesn't interrupt streaming. A renderer disconnect also leaves the OIX turn running; explicit Stop remains the only UI action that interrupts it.
 
-**Preserved State**: Scroll position, message history, and UI state persist per agent. Switching between tabs feels instant because everything is already rendered.
+**Resumable history**: Existing threads open at the newest activity. Older turns load in pages as the user scrolls upward, with scroll anchoring so content does not jump. A lightweight catch-up poll reconciles completed and in-progress history after reconnect.
 
-**Simple Integration**: The module uses vanilla assistant-ui with minimal customization. The only custom logic is the tab management - everything else (streaming, message rendering, tool execution) is standard assistant-ui.
+**Thread Goals**: Workstation reads and edits native OIX Goals. After OIX creates a thread, the Goal row above its transcript provides create, pause, resume, edit, and clear actions. OIX owns persistence and continuation semantics; see [Goals](../docs/goals.md).
+
+**Browser and read-only operation**: the normal `AgentThread` runs through the shared Workstation bridge in both Electron and authenticated browser hosts. `readOnly` removes composer, Stop, steering, approvals, retries, and Goal mutations when the host access setting requires it. `RemoteThreadViewer` is the smaller allowlisted conversation surface used only for an anonymous public publication. See [Workstation hosts, browser access, and read-only mode](../docs/remote-workstation.md).
 
 ## Backend
 
-The API implementation lives in `/server/routes/` and provides streaming chat completions using the AI SDK with OpenAI. The main endpoint is `/api/agent/chat` which handles message streaming and tool execution.
+The API implementation lives in `/server/routes/`. `/api/agent/chat/stream` starts or resumes OIX turns, `/api/agent/threads/:threadId` reads reverse-paginated history, and `/api/agent/threads/:threadId/goal` exposes native Goal state.
 
-The server uses Server-Sent Events (SSE) for streaming, which assistant-ui consumes automatically. The Electron app provides the dynamic server port to the frontend, so no hardcoded URLs are needed.
+The server uses Server-Sent Events for live turn presentation. The Electron app provides the dynamic server port to the frontend, while browser surfaces use the same HTTP abstraction. SSE disconnection is presentation loss, not an instruction to stop the OIX turn.
 
 ## Components
 

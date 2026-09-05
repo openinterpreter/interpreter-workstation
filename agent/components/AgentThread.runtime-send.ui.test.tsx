@@ -183,7 +183,11 @@ describe('AgentThread runtime sends', () => {
 
     expect(rawSendMessage).not.toHaveBeenCalled();
 
-    const [, request] = vi.mocked(fetch).mock.calls[0]!;
+    const steerCall = vi.mocked(fetch).mock.calls.find(([url, request]) => (
+      url === '/api/agent/chat/steer' && request?.method === 'POST'
+    ));
+    expect(steerCall).toBeDefined();
+    const [, request] = steerCall!;
     expect(JSON.parse(String(request?.body))).toMatchObject({
       threadId: 'thread_active',
       turnId: 'turn_active',

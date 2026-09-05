@@ -52,6 +52,7 @@ describe('runCodexSubagent', () => {
     process.env.INTERPRETER_HOME = tempHome;
 
     const runTurnCalls: any[] = [];
+    const accountRefreshCalls: boolean[] = [];
     const sandboxPolicy = {
       type: 'workspaceWrite',
       writableRoots: ['/tmp/workspace'],
@@ -61,6 +62,10 @@ describe('runCodexSubagent', () => {
     } satisfies v2.SandboxPolicy;
     const service = {
       async ensureProvider() {},
+      async getAccount(refreshToken: boolean) {
+        accountRefreshCalls.push(refreshToken);
+        return { account: { type: 'chatgpt' } };
+      },
       async runTurn(options: any) {
         runTurnCalls.push(options);
         options.onEvent({ kind: 'thread', threadId: 'thr_subagent' });
@@ -120,6 +125,7 @@ describe('runCodexSubagent', () => {
       expect(result.completed).toBe(true);
       expect(result.threadId).toBe('thr_subagent');
       expect(result.agentId).toBe('codex-agent-test');
+      expect(accountRefreshCalls).toEqual([true]);
       expect(runTurnCalls).toHaveLength(1);
       expect(runTurnCalls[0].config.reasoning_summary).toBe('none');
       expect(runTurnCalls[0].config.forced_login_method).toBe('chatgpt');

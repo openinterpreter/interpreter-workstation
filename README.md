@@ -2,8 +2,9 @@
 
 **An open, neutral AI workspace for your computer.**
 
-Interpreter Workstation is a desktop agent that works with you across files,
-documents, spreadsheets, PDFs, the browser, and your computer. Built on
+Interpreter Workstation is an agent workspace for a computer. The desktop app
+normally connects to the computer it runs on; the same shell can also connect
+to a remote computer through its shared browser bridge. Built on
 [Open Interpreter](https://github.com/openinterpreter/openinterpreter), it can
 use your choice of supported cloud provider or local model, and it does not
 require an Interpreter account.
@@ -25,10 +26,16 @@ distribution from the same source without maintaining a private fork.
 - [Open Interpreter](https://github.com/openinterpreter/openinterpreter) owns
   the agent runtime, harnesses, provider/model discovery, and app-server
   protocol.
-- This repository owns the Electron shell, user experience, local policy, and
-  workstation tools.
+- This repository owns the shared Workstation shell, its desktop host, its
+  browser host adapters, local policy, and workstation tools.
 - Model-facing app tools use the `interpreter-app` command-line contract. The
   desktop app does not maintain a second provider or harness implementation.
+- Workstation points at a backend endpoint. The renderer may be desktop or
+  browser-based, the endpoint may be local or remote, and an independent
+  access setting makes the interface read-write or read-only. See [Workstation hosts, browser access, and
+  read-only mode](docs/remote-workstation.md).
+- Native OIX [Goals](docs/goals.md) let a thread pursue a durable objective
+  across long execution and context compaction.
 - The browser extension and computer-use driver are pinned Git submodules so a
   desktop release is reproducible while their independent release histories are
   preserved.

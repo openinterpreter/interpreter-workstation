@@ -45,7 +45,11 @@ import {
   printHeadlessTaskHelp,
   runHeadlessTaskCli,
 } from "./headlessTaskCli";
-import { parseCliOptions, type CliOptions } from "./standaloneOptions";
+import {
+  getWorkstationHostingError,
+  parseCliOptions,
+  type CliOptions,
+} from "./standaloneOptions";
 import {
   ensureBrowserExtensionRelayRunning,
   formatOptionalBrowserExtensionRelayStartupFailureLog,
@@ -54,8 +58,7 @@ import {
 
 const DEFAULT_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 5177;
 const DEFAULT_WORKSPACE = process.env.WORKSPACE || process.cwd();
-const STANDALONE_HOST = "127.0.0.1";
-
+const DEFAULT_STANDALONE_HOST = "127.0.0.1";
 
 async function shutdownServer(
   server: http.Server,
@@ -110,6 +113,18 @@ export async function runStandaloneCli(argv: string[] = process.argv.slice(2)) {
     }
   }
   const workspace = cliOptions.workspace?.trim() || DEFAULT_WORKSPACE;
+  const standaloneHost = cliOptions.host?.trim() || DEFAULT_STANDALONE_HOST;
+
+  if (cliOptions.workstationAccess) {
+    process.env.INTERPRETER_WORKSTATION_ACCESS = cliOptions.workstationAccess;
+  }
+  if (cliOptions.workstationAuth) {
+    process.env.INTERPRETER_WORKSTATION_AUTH = cliOptions.workstationAuth;
+  }
+  const hostingError = getWorkstationHostingError(cliOptions);
+  if (hostingError) {
+    throw new Error(hostingError);
+  }
 
   if (cliOptions.home) {
     const resolvedHome = path.resolve(cliOptions.home);
@@ -133,6 +148,8 @@ export async function runStandaloneCli(argv: string[] = process.argv.slice(2)) {
   process.env.WORKSTATION_EXPLICIT_WORKSPACE = path.resolve(workspace);
 
   const serverModule = await import("./server");
+  const { getWorkstationHostPolicy, validateWorkstationHostPolicy } = await import('./workstationConnection');
+  validateWorkstationHostPolicy(getWorkstationHostPolicy());
   const sandboxModule = await import("./utils/sandboxManager");
   const acpProviderModule = await import("./utils/acpProvider");
   const workspaceModule = await import("./utils/workspace");
@@ -194,11 +211,11 @@ export async function runStandaloneCli(argv: string[] = process.argv.slice(2)) {
   const interpreterCliSocketServer = await startInterpreterCliSocketServer(app, serverPort);
   const interpreterCliServerConnection = buildInterpreterCliServerConnection(serverPort);
   await new Promise<void>((resolve) => {
-    server.listen(serverPort, STANDALONE_HOST, () => {
+    server.listen(serverPort, standaloneHost, () => {
       if (cliOptions.streamJsonl && cliOptions.quietStartup) {
         console.log(JSON.stringify({
           type: "server_ready",
-          host: STANDALONE_HOST,
+          host: standaloneHost,
           port: serverPort,
           workspace,
           home: cliOptions.home ? path.resolve(cliOptions.home) : undefined,
@@ -210,7 +227,7 @@ export async function runStandaloneCli(argv: string[] = process.argv.slice(2)) {
       } else if (!cliOptions.quietStartup) {
         console.log("\n" + "=".repeat(60));
         console.log("  WORKSTATION SIDECAR READY");
-        console.log(`  http://${STANDALONE_HOST}:${serverPort}`);
+        console.log(`  http://${standaloneHost}:${serverPort}`);
         console.log("=".repeat(60));
         console.log(`  Interpreter CLI: ${interpreterCliPath}`);
         console.log(`  Interpreter CLI connection: ${interpreterCliServerConnection}`);
@@ -221,12 +238,12 @@ export async function runStandaloneCli(argv: string[] = process.argv.slice(2)) {
           console.log("  Tool approvals: dev auto-approve ENABLED");
         }
         console.log("\n  API Endpoints:");
-        console.log(`    GET  http://${STANDALONE_HOST}:${serverPort}/api/server/info`);
-        console.log(`    GET  http://${STANDALONE_HOST}:${serverPort}/api/agent/threads`);
-        console.log(`    POST http://${STANDALONE_HOST}:${serverPort}/api/agent/tasks`);
-        console.log(`    POST http://${STANDALONE_HOST}:${serverPort}/api/agent/tasks/stream`);
-        console.log(`    POST http://${STANDALONE_HOST}:${serverPort}/api/agent/chat`);
-        console.log(`    GET  http://${STANDALONE_HOST}:${serverPort}/api/events (SSE)`);
+        console.log(`    GET  http://${standaloneHost}:${serverPort}/api/server/info`);
+        console.log(`    GET  http://${standaloneHost}:${serverPort}/api/agent/threads`);
+        console.log(`    POST http://${standaloneHost}:${serverPort}/api/agent/tasks`);
+        console.log(`    POST http://${standaloneHost}:${serverPort}/api/agent/tasks/stream`);
+        console.log(`    POST http://${standaloneHost}:${serverPort}/api/agent/chat`);
+        console.log(`    GET  http://${standaloneHost}:${serverPort}/api/events (SSE)`);
         console.log("\n  Press Ctrl+C to stop\n");
       }
       resolve();

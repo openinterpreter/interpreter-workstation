@@ -46,7 +46,7 @@ if (process.env.NODE_ENV === 'test') {
 }
 import { convertHeicToJpeg } from './utils/heicConverter';
 import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
-import { join as pathJoin, dirname, normalize as pathNormalize, sep as pathSep } from "node:path";
+import { join as pathJoin, dirname, normalize as pathNormalize, resolve as pathResolve, sep as pathSep } from "node:path";
 import os from "node:os";
 import agentRouter from "./routes/agent";
 import authRouter from "./routes/auth";
@@ -60,6 +60,8 @@ import pdfRouter from "./routes/pdf";
 import ipcRouter from "./routes/ipc";
 import mcpRouter from "./routes/mcp";
 import interpreterCliRouter from "./routes/interpreterCli";
+import publicThreadRouter from "./routes/publicThread";
+import publicWorkspaceRouter from "./routes/publicWorkspace";
 import { addClient, removeClient, broadcast } from "./utils/sse";
 import { IPC_CHANNELS } from '../electron/ipc/registry';
 import { broadcastEvent } from './handlers/broadcast';
@@ -90,23 +92,20 @@ import { existsSync, statSync, realpathSync, readFileSync } from "node:fs";
 import { canWritePathInWorkspace } from "./utils/workspacePathValidation";
 import { isAbsoluteFilesystemPath, isTrustedAbsoluteFileReadRequest } from "./utils/fileApiAccess";
 import { shouldServeBuiltRendererRequest } from "./utils/builtRendererRouting";
+import {
+  createWorkstationConnectionRouter,
+  getWorkstationHostPolicy,
+  isWorkstationSessionAuthenticated,
+  workstationAccessMiddleware,
+  workstationCorsMiddleware,
+} from './workstationConnection';
 
 const FILE_WATCHER_DISABLED_FOR_RUNTIME = process.env.INTERPRETER_DISABLE_FILE_WATCHER === '1';
 const app = express();
 
-// NOTE(victor): CORS required for direct fetch() from renderer in test/production mode
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-  // Handle preflight requests
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
-  next();
-});
+// Browser and Electron requests share one HTTP surface. Remote hosting narrows
+// CORS to configured origins and enables credentialed sessions.
+app.use(workstationCorsMiddleware);
 
 app.use(express.json({ limit: '50mb' }));
 
@@ -120,6 +119,9 @@ app.use((err: Error & { status?: number; type?: string }, _req: express.Request,
   }
   next(err);
 });
+
+app.use('/api/workstation-connection', createWorkstationConnectionRouter());
+app.use(workstationAccessMiddleware);
 
 app.use((req, _res, next) => {
   const headerSessionKey = req.headers['x-interpreter-window-session'];
@@ -171,9 +173,16 @@ const serveBuiltRendererFromServer = !process.versions.electron
 // Serve frontend from dist/ when running sidecar/server-only or when unpackaged
 // Electron explicitly requests the built renderer instead of Vite.
 if (serveBuiltRendererFromServer) {
+  const configuredRendererPath = process.env.INTERPRETER_WORKSTATION_RENDERER_DIR?.trim();
+  const sourceRendererPath = pathJoin(process.cwd(), 'dist');
+  const binaryRendererPath = dirname(process.execPath);
   const distPath = process.versions.electron
     ? pathJoin(__dirname, '../../dist')
-    : dirname(process.execPath); // Binary is in dist/, frontend files are alongside it
+    : configuredRendererPath
+      ? pathResolve(configuredRendererPath)
+      : existsSync(pathJoin(sourceRendererPath, 'index.html'))
+        ? sourceRendererPath
+        : binaryRendererPath;
   console.log('[Server] Serving static files from:', distPath);
   const mimeTypes: Record<string, string> = {
     '.html': 'text/html',
@@ -264,6 +273,8 @@ app.use('/api/inbox', inboxRouter);
 app.use('/api/pdf', pdfRouter); // Direct PDF API (no IPC events) for UI use
 app.use('/api/ipc', ipcRouter); // Browser mode IPC-equivalent endpoints
 app.use('/api/interpreter-cli', interpreterCliRouter);
+app.use('/api/public-thread', publicThreadRouter);
+app.use('/api/public-workspace', publicWorkspaceRouter);
 if (ENABLE_EXTERNAL_MCP_HTTP) {
   app.use('/mcp', mcpRouter); // MCP server endpoint (Streamable HTTP)
 } else {
@@ -680,8 +691,15 @@ app.get('/api/files/:path(*)', async (req, res) => {
     const decodedPath = decodeURIComponent(req.params.path);
     const rawMode = req.query.raw === 'true';
     const isAbsolutePath = isAbsoluteFilesystemPath(decodedPath);
+    const workstationPolicy = getWorkstationHostPolicy();
+    const authenticatedRemoteRequest = workstationPolicy.remote
+      && isWorkstationSessionAuthenticated(req, workstationPolicy);
 
-    if (isAbsolutePath && !isTrustedAbsoluteFileReadRequest(req.headers)) {
+    if (
+      isAbsolutePath
+      && !isTrustedAbsoluteFileReadRequest(req.headers)
+      && !authenticatedRemoteRequest
+    ) {
       return res.status(403).json({ error: "Access denied: absolute path reads require local origin" });
     }
 
@@ -710,7 +728,7 @@ app.get('/api/files/:path(*)', async (req, res) => {
 
     // Resolve symlinks to get the real path for reading
     const realPath = realpathSync(fullPath);
-    if (!isAbsolutePath && currentWorkspace) {
+    if (currentWorkspace && (!isAbsolutePath || authenticatedRemoteRequest)) {
       const realWorkspace = realpathSync(currentWorkspace);
       if (realPath !== realWorkspace && !realPath.startsWith(realWorkspace + pathSep)) {
         return res.status(403).json({ error: "Access denied: path outside workspace" });

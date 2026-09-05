@@ -41,7 +41,7 @@ import {
 } from '../utils/treeOperations';
 import { appendSidebarPaneTab, insertSidebarPaneTab, removeSidebarPaneTab } from '../utils/sidebarPane';
 import type { AgentModelConfig } from '../../shared/types/model';
-import { saveLayoutState, loadLayoutState, clearLayoutState, flushLayoutState } from '../utils/layoutPersistence';
+import { saveLayoutState, loadLayoutState, flushLayoutState } from '../utils/layoutPersistence';
 import { getWorkspace, getProfiles } from '../api';
 import type { WorkstationContext, Selection } from '../../shared/types/workstation';
 import {
@@ -472,21 +472,6 @@ export function LayoutProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
     };
   }, [syncWindowWorkspaceIntoIdleAgentTabs]);
-
-  useEffect(() => {
-    getProfiles().then(({ profiles, defaultProfileId, fastProfileId }) => {
-      latestProfilesRef.current = profiles;
-      latestDefaultProfileIdRef.current = defaultProfileId ?? null;
-      latestFastProfileIdRef.current = fastProfileId ?? null;
-      if (!defaultProfileId) {
-        clearLayoutState(windowSessionKey);
-        const freshState = createDefaultLayoutState();
-        stateRef.current = freshState;
-        setActiveFilePathSnapshot(getActiveFilePathFromState(freshState));
-        setState(freshState);
-      }
-    }).catch(() => {});
-  }, [windowSessionKey]);
 
   useEffect(() => {
     let cancelled = false;

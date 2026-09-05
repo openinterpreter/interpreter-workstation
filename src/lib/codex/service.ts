@@ -159,6 +159,19 @@ type RunTurnOptions = {
   dynamicTools?: v2.DynamicToolSpec[] | null;
 };
 
+type ResumeThreadOptions = {
+  threadId: string;
+  model: string;
+  modelProvider?: string | null;
+  providerConfig?: Profile["providerConfig"];
+  cwd?: string;
+  config?: Record<string, JsonValue> | null;
+};
+
+type ForkThreadOptions = ResumeThreadOptions & {
+  lastTurnId: string;
+};
+
 const TURN_BLOCKING_ITEM_TYPES = new Set<v2.ThreadItem["type"]>([
   "commandExecution",
   "fileChange",
@@ -232,6 +245,14 @@ export type CodexClient = {
     config?: Record<string, JsonValue> | null,
     baseInstructions?: string | null,
     developerInstructions?: string | null,
+  ): Promise<string>;
+  forkThread(
+    threadId: string,
+    lastTurnId: string,
+    modelProvider?: string | null,
+    model?: string | null,
+    cwd?: string | null,
+    config?: Record<string, JsonValue> | null,
   ): Promise<string>;
   startTurn(params: {
     threadId: string;
@@ -308,6 +329,9 @@ export type CodexClient = {
   threadList(params?: v2.ThreadListParams): Promise<v2.ThreadListResponse>;
   threadRead(params: v2.ThreadReadParams): Promise<v2.ThreadReadResponse>;
   threadSetName(params: v2.ThreadSetNameParams): Promise<v2.ThreadSetNameResponse>;
+  threadGoalSet(params: v2.ThreadGoalSetParams): Promise<v2.ThreadGoalSetResponse>;
+  threadGoalGet(params: v2.ThreadGoalGetParams): Promise<v2.ThreadGoalGetResponse>;
+  threadGoalClear(params: v2.ThreadGoalClearParams): Promise<v2.ThreadGoalClearResponse>;
   threadArchive(params: v2.ThreadArchiveParams): Promise<v2.ThreadArchiveResponse>;
   threadUnarchive(params: v2.ThreadUnarchiveParams): Promise<v2.ThreadUnarchiveResponse>;
   onAuthInvalidated(handler: (reason: string) => void): () => void;
@@ -428,7 +452,29 @@ export class CodexService {
   private reservedLocalOverridesCleared = false;
   private reservedLocalOverrideCleanup: Promise<void> | null = null;
 
-  constructor(private readonly client: CodexClient) {}
+  constructor(private readonly client: CodexClient) {
+    // Native OIX features can start turns without going through runTurn(), so
+    // keep their terminal failures visible in the service journal as well.
+    this.client.subscribe((notification) => {
+      if (
+        notification.method === SERVER_METHOD.streamError
+        && !notification.params.willRetry
+      ) {
+        console.error(
+          `[codex-native-turn] terminal stream error threadId=${notification.params.threadId} turnId=${notification.params.turnId} message=${notification.params.error.message}`,
+        );
+        return;
+      }
+      if (
+        notification.method === SERVER_METHOD.turnCompleted
+        && notification.params.turn.status === "failed"
+      ) {
+        console.error(
+          `[codex-native-turn] failed threadId=${notification.params.threadId} turnId=${notification.params.turn.id} message=${notification.params.turn.error?.message ?? "unknown turn error"}`,
+        );
+      }
+    });
+  }
 
   private assertNoActiveTurn(threadId: string): void {
     if (!this.activeTurns.has(threadId)) {
@@ -532,6 +578,66 @@ export class CodexService {
     );
 
     this.provisionedProviders.add(profile.modelProvider);
+  }
+
+  /**
+   * Materialize an existing thread in the app-server without creating a turn.
+   * OIX extensions (including Goal) receive their normal thread/resume lifecycle;
+   * callers must not synthesize a user message merely to restore a runtime.
+   */
+  async resumeThread(options: ResumeThreadOptions): Promise<string> {
+    this.assertNoActiveTurn(options.threadId);
+
+    const runConfig: Record<string, JsonValue> = {
+      ...(options.config ?? {}),
+    };
+    if (options.modelProvider && options.providerConfig) {
+      const existingProviders = isRecord(runConfig.model_providers)
+        ? runConfig.model_providers as Record<string, JsonValue>
+        : {};
+      runConfig.model_providers = {
+        ...existingProviders,
+        [options.modelProvider]: providerConfigToJsonValue(options.providerConfig),
+      };
+    }
+
+    return this.client.resumeThread(
+      options.threadId,
+      options.modelProvider,
+      options.model,
+      options.cwd,
+      withElectronRunAsNodeConfig(runConfig),
+    );
+  }
+
+  /**
+   * Preserve a conversation while continuing from one completed turn. The
+   * fork carries the source's native OIX state without mutating its history.
+   */
+  async forkThread(options: ForkThreadOptions): Promise<string> {
+    this.assertNoActiveTurn(options.threadId);
+
+    const runConfig: Record<string, JsonValue> = {
+      ...(options.config ?? {}),
+    };
+    if (options.modelProvider && options.providerConfig) {
+      const existingProviders = isRecord(runConfig.model_providers)
+        ? runConfig.model_providers as Record<string, JsonValue>
+        : {};
+      runConfig.model_providers = {
+        ...existingProviders,
+        [options.modelProvider]: providerConfigToJsonValue(options.providerConfig),
+      };
+    }
+
+    return this.client.forkThread(
+      options.threadId,
+      options.lastTurnId,
+      options.modelProvider,
+      options.model,
+      options.cwd,
+      withElectronRunAsNodeConfig(runConfig),
+    );
   }
 
   async runTurn(options: RunTurnOptions) {
@@ -796,6 +902,24 @@ export class CodexService {
 
   async setThreadName(threadId: string, name: string): Promise<void> {
     await this.client.threadSetName({ threadId, name });
+  }
+
+  async getThreadGoal(threadId: string): Promise<v2.ThreadGoal | null> {
+    const result = await this.client.threadGoalGet({ threadId });
+    return result.goal;
+  }
+
+  async setThreadGoal(
+    threadId: string,
+    update: Omit<v2.ThreadGoalSetParams, 'threadId'>,
+  ): Promise<v2.ThreadGoal> {
+    const result = await this.client.threadGoalSet({ threadId, ...update });
+    return result.goal;
+  }
+
+  async clearThreadGoal(threadId: string): Promise<boolean> {
+    const result = await this.client.threadGoalClear({ threadId });
+    return result.cleared;
   }
 
   async archiveThread(threadId: string): Promise<void> {

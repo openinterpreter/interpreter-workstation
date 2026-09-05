@@ -636,8 +636,14 @@ router.post("/thumbnails", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "No workspace set for relative paths" });
     }
 
-    const { getFileThumbnails } = await import('../handlers/files');
-    res.json(await getFileThumbnails(paths, size ?? 64, currentWorkspace));
+    const { getWorkstationHostPolicy } = await import('../workstationConnection');
+    if (getWorkstationHostPolicy().remote) {
+      const { getWorkspaceFileThumbnails } = await import('../handlers/workspaceFiles');
+      res.json(await getWorkspaceFileThumbnails(paths, size ?? 64));
+    } else {
+      const { getFileThumbnails } = await import('../handlers/files');
+      res.json(await getFileThumbnails(paths, size ?? 64, currentWorkspace));
+    }
   } catch (error: any) {
     res.status(500).json({ error: error?.message || "Failed to get thumbnails" });
   }

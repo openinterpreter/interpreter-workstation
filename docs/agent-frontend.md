@@ -1,5 +1,23 @@
 # Frontend Development
 
+## Host and access model
+
+The Electron app, authenticated browser app, and read-only browser app share
+the same renderer and layout components. Renderer code should call `@/ipc`
+instead of choosing Electron, localhost, or a remote origin itself.
+
+- Use `isWorkstationReadOnly()` to remove mutation controls. The server must
+  independently reject the mutation.
+- Use `isRemoteWorkstationHost()` only for location-specific behavior. Remote
+  does not mean read-only.
+- `isPublicWorkstationPublication()` is an internal compatibility name for an
+  anonymous, restricted read-only backend. It must not produce a second shell.
+- Browser tabs and layout are browser-local state. Connected thread, Goal,
+  workspace, and file content are host state.
+
+See [Workstation hosts, browser access, and read-only mode](remote-workstation.md)
+and [IPC](agent-ipc.md).
+
 ## Layout State Architecture
 
 The file viewer (Explorer) and right side panel (AgentSidebar) share file metadata and selection state through `LayoutContext` - a React Context defined in `src/contexts/LayoutContext.tsx` that manages the entire editor layout including open tabs, columns, and active file tracking. When a user clicks a file in the Explorer, it calls `layout.openFile(path)` which updates `state.editorLayout.columns[].tabs[]` and sets the `activeTabId`; components access the current selection via the `useActiveFilePath()` hook that derives the active file path from this layout state. File metadata (path, label, thumbnail, mtime) is stored in `EditorTab` objects within the layout state, and additionally the Explorer populates a global `fileStore` cache (`src/stores/fileStore.ts`) with `FileEntry` objects that the right panel's @ mention system (`agent/components/assistant-ui/mention/fileMentionSuggestion.ts`) consumes via `getFileCache()`. The LayoutContext also syncs all open tabs to the backend via `POST /api/agent/context/tabs` whenever the editor columns change, making the tab/file state available to the agent system.

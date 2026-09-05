@@ -19,6 +19,7 @@ export interface ProgrammaticTaskDefaultProfileConfig {
   modelId: string;
   providerId?: string;
   apiKey?: string;
+  environmentKey?: string;
   baseURL?: string;
   apiFormat?: ApiFormat;
   wireApi?: WireApi;
@@ -39,6 +40,7 @@ export function createOpenAiApiProgrammaticProfile(config?: {
   name?: string;
   modelId?: string;
   apiKey?: string;
+  environmentKey?: string;
   baseURL?: string;
 }): ProgrammaticTaskDefaultProfileConfig {
   return {
@@ -47,6 +49,7 @@ export function createOpenAiApiProgrammaticProfile(config?: {
     provider: 'api',
     modelId: config?.modelId ?? 'gpt-5.4-mini',
     apiKey: config?.apiKey,
+    environmentKey: config?.environmentKey,
     baseURL: config?.baseURL ?? 'https://api.openai.com/v1',
     apiFormat: 'openai',
     codexProfileId: 'openai-api',
@@ -70,6 +73,7 @@ async function upsertDefaultProfile(
     provider: profileConfig.provider,
     providerId: profileConfig.providerId,
     apiKey: profileConfig.apiKey,
+    environmentKey: profileConfig.environmentKey,
     baseURL: profileConfig.baseURL,
     apiFormat: profileConfig.apiFormat,
     wireApi: profileConfig.provider === 'api' ? profileConfig.wireApi : undefined,

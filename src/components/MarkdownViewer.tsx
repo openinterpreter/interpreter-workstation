@@ -39,6 +39,7 @@ import {
   ListTodo,
   Quote,
 } from 'lucide-react';
+import { isWorkstationReadOnly } from '../remote/workstationConnection';
 import { SaveStatus } from './ui/save-status';
 import { runEditorAnimation } from '../utils/editorAnimation';
 import { formatPrimaryShortcut } from '../utils/platformShortcuts';
@@ -1076,6 +1077,7 @@ export function MarkdownViewer({ filePath }: MarkdownViewerProps) {
 
   // Context menu handler for view mode switching
   const handleContextMenu = useCallback(async (e: React.MouseEvent) => {
+    if (isWorkstationReadOnly()) return;
     e.preventDefault();
 
     const items: ContextMenuItem[] = [
@@ -1102,9 +1104,12 @@ export function MarkdownViewer({ filePath }: MarkdownViewerProps) {
   const remainingDiffs = diffSegments.filter(s => s.type === 'diff').length;
   const hasHydratedContent = Boolean(content) || rawContent.length > 0;
   const isInitialViewReady = !loading && noteContextReady;
+  const showEditableToolbar = showToolbar && !isWorkstationReadOnly();
   const toolbarStyle = {
-    height: showToolbar ? TOOLBAR_HEIGHT : '0px',
-    opacity: showToolbar ? 1 : 0,
+    height: showEditableToolbar ? TOOLBAR_HEIGHT : '0px',
+    opacity: showEditableToolbar ? 1 : 0,
+    visibility: showEditableToolbar ? 'visible' : 'hidden',
+    pointerEvents: showEditableToolbar ? 'auto' : 'none',
     background: 'var(--oa-surface-center)',
     transition: toolbarTransitionsEnabled ? undefined : 'none',
   } as const;
@@ -1536,6 +1541,7 @@ export function MarkdownViewer({ filePath }: MarkdownViewerProps) {
                     frontmatter={frontmatter}
                     onChange={handleFrontmatterChange}
                     onClose={() => setIsMetadataOpen(false)}
+                    readOnly={isWorkstationReadOnly()}
                   >
                   <MarkdownNoteContextCard
                     filePath={filePath}
@@ -1562,7 +1568,7 @@ export function MarkdownViewer({ filePath }: MarkdownViewerProps) {
                 ref={editorRef}
                 content={content}
                 filePath={filePath}
-                editable={true}
+                editable={!isWorkstationReadOnly()}
                 placeholder={t('markdown.placeholder')}
                 onUpdate={handleUpdate}
                 resolveImageSrc={resolveImageSrc}

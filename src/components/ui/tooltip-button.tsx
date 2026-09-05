@@ -23,10 +23,10 @@ export interface TooltipButtonProps
  * Shows a tooltip on hover and provides data for the help panel.
  */
 const TooltipButton = React.forwardRef<HTMLButtonElement, TooltipButtonProps>(
-  ({ tooltip, helpDescription, shortcut, tooltipSide = "top", children, ...props }, ref) => {
+  ({ tooltip, helpDescription, shortcut, tooltipSide = "top", children, "aria-label": ariaLabel, ...props }, ref) => {
     return (
       <TooltipWrapper tooltip={tooltip} helpDescription={helpDescription} shortcut={shortcut} tooltipSide={tooltipSide}>
-        <Button ref={ref} {...props}>
+        <Button ref={ref} aria-label={ariaLabel ?? tooltip} {...props}>
           {children}
         </Button>
       </TooltipWrapper>

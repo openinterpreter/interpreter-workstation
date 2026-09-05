@@ -298,6 +298,16 @@ describe('profileToModelConfig', () => {
     expect(profileToModelConfig(makeProfile({ provider: 'api', wireApi: 'chat' })).wireApi).toBe('chat');
   });
 
+  test('preserves environment-backed credentials for runtime resolution', () => {
+    const modelConfig = profileToModelConfig(makeProfile({
+      provider: 'api',
+      environmentKey: 'OPENAI_API_KEY',
+    }));
+
+    expect(modelConfig.environmentKey).toBe('OPENAI_API_KEY');
+    expect(modelConfig.apiKey).toBeUndefined();
+  });
+
   test('defaults DeepSeek API profiles to Chat Completions', () => {
     expect(profileToModelConfig(makeProfile({
       provider: 'api',

@@ -28,6 +28,7 @@ import { useLayout, useLayoutActions } from '../../hooks/useLayout';
 import { BrowserView } from '../BrowserView';
 import { TerminalView } from '../../../agent/components/TerminalView';
 import { AgentThread } from '../../../agent/components/AgentThread';
+import { RemoteThreadViewer } from '../../../agent/components/RemoteThreadViewer';
 import { AgentMetadataProvider } from '../../../agent/contexts/AgentMetadataContext';
 import { AgentErrorProvider } from '../../../agent/contexts/AgentErrorContext';
 import { ComposerArea } from '../../../agent/components/ComposerArea';
@@ -42,11 +43,18 @@ import { ProgressiveBlurOverlay } from '../ui/ProgressiveBlurOverlay';
 import { agentTabs as agentTabsIpc } from '@/ipc';
 import { isMarketingDemoMode } from '../../demo/marketingDemo';
 import {
+  getRemoteWorkstationEndpoint,
+  isRemoteWorkstationMode,
+  REMOTE_WORKSTATION_THREAD_MARKER,
+} from '../../remote/remoteWorkstation';
+import { isWorkstationReadOnly } from '../../remote/workstationConnection';
+import {
   getEditorEmptyStateJustifyContent,
   shouldShowCenteredAgentLogo,
   shouldShowEditorAgentEmptyState,
 } from './editorAgentState';
 import { TabContent } from './TabContent';
+import { RemoteWorkstationHome } from './RemoteWorkstationHome';
 import type { AgentModelConfig } from '../../../shared/types/model';
 import type { PlanChecklistState } from '../../hooks/use-chat';
 import { EDITOR_AGENT_SURFACE_ID, PERSISTENT_LAYER_ID } from '../../../shared/element-ids';
@@ -111,6 +119,7 @@ const OVERLAY_INSET = 0;
 
 const RenderStatefulTab = React.memo(function RenderStatefulTab({ tab, isVisible, isSidebar }: { tab: Tab; paneId: string; isVisible: boolean; isSidebar: boolean }) {
   const { closeTab, updateSidebarTabLabel, updateTab } = useLayoutActions();
+  const readOnlyWorkstation = isWorkstationReadOnly();
 
   // Stable callbacks for agent event dispatching — must be declared before early returns
   // to satisfy React's rules of hooks (no conditional hook calls).
@@ -214,6 +223,45 @@ const RenderStatefulTab = React.memo(function RenderStatefulTab({ tab, isVisible
   }
 
   if (isAgentTab(tab)) {
+    const remoteWorkstationMode = isRemoteWorkstationMode();
+    if (remoteWorkstationMode && tab.agent.session.codexThreadId === REMOTE_WORKSTATION_THREAD_MARKER) {
+      const endpoint = getRemoteWorkstationEndpoint();
+      return endpoint ? (
+        <RemoteThreadViewer
+          endpoint={endpoint}
+          pageSize={10}
+          embedded
+          onTitleChange={(title) => {
+            if (title === tab.label) return;
+            updateTab(tab.id, (previousTab) => ({ ...previousTab, label: title }));
+          }}
+        />
+      ) : null;
+    }
+    if (remoteWorkstationMode) {
+      return (
+        <RemoteWorkstationHome
+          onOpenConversation={(conversation) => {
+            updateTab(tab.id, (previousTab) => {
+              if (!isAgentTab(previousTab)) return previousTab;
+              return {
+                ...previousTab,
+                label: conversation.title,
+                agent: {
+                  ...previousTab.agent,
+                  session: {
+                    ...previousTab.agent.session,
+                    conversationId: REMOTE_WORKSTATION_THREAD_MARKER,
+                    codexThreadId: REMOTE_WORKSTATION_THREAD_MARKER,
+                  },
+                },
+              };
+            });
+          }}
+        />
+      );
+    }
+
     // console.log('[PersistentLayer] Rendering agent tab', {
     //   tabId: tab.id,
     //   requestId: tab.agent.session.requestId,
@@ -243,6 +291,7 @@ const RenderStatefulTab = React.memo(function RenderStatefulTab({ tab, isVisible
         systemPrompt={tab.agent.runtime.systemPrompt}
         isEditorPane={!isSidebar}
         onStartupConsumed={handleStartupConsumed}
+        readOnly={readOnlyWorkstation}
       />
     );
 
@@ -295,6 +344,7 @@ const EditorAgentPane = React.memo(function EditorAgentPane({ agentId, modelConf
 }) {
   const { updateTab } = useLayoutActions();
   const marketingDemoMode = isMarketingDemoMode();
+  const readOnlyWorkstation = isWorkstationReadOnly();
   const [isStreaming, setIsStreaming] = useState(false);
   const [messageCount, setMessageCount] = useState(morphTransition ? 1 : 0);
   const [fadeIn, setFadeIn] = useState(morphTransition ? true : false);
@@ -471,7 +521,7 @@ const EditorAgentPane = React.memo(function EditorAgentPane({ agentId, modelConf
     messageCount,
     isStreaming,
   });
-  const showCenteredAgentLogo = shouldShowCenteredAgentLogo({
+  const showCenteredAgentLogo = !readOnlyWorkstation && shouldShowCenteredAgentLogo({
     isSidebar,
     hasConversationThread,
     messageCount,
@@ -565,9 +615,9 @@ const EditorAgentPane = React.memo(function EditorAgentPane({ agentId, modelConf
     : null;
   const conversationBottomGap = isSidebar ? 28 : 48;
   const planConversationGap = visiblePlan ? (isSidebar ? 10 : 16) : 0;
-  const composerClearance = `${
-    composerShellHeight + conversationBottomGap + planConversationGap
-  }px`;
+  const composerClearance = readOnlyWorkstation
+    ? '0px'
+    : `${composerShellHeight + conversationBottomGap + planConversationGap}px`;
   const composerBlurHeight = `${
     composerShellHeight + (isSidebar ? 22 : 28) + planConversationGap
   }px`;
@@ -616,7 +666,7 @@ const EditorAgentPane = React.memo(function EditorAgentPane({ agentId, modelConf
         </div>
 
         {/* Empty state content (greeting + cards) — always mounted, display toggled */}
-        <div
+        {!readOnlyWorkstation ? <div
           className="pointer-events-auto"
           data-empty-agent-surface={showEditorEmptyState ? 'true' : undefined}
           style={showEditorEmptyState ? { display: 'block' } : { display: 'none' }}
@@ -626,10 +676,10 @@ const EditorAgentPane = React.memo(function EditorAgentPane({ agentId, modelConf
             onAgentSend={handleSend}
             composerRef={composerRef}
           />
-        </div>
+        </div> : null}
 
         {/* Blur overlay — only when messages visible */}
-        {!showEditorEmptyState && !isSidebar ? (
+        {!readOnlyWorkstation && !showEditorEmptyState && !isSidebar ? (
           <ProgressiveBlurOverlay
             direction="bottom"
             tintOpacity={0.94}
@@ -641,7 +691,7 @@ const EditorAgentPane = React.memo(function EditorAgentPane({ agentId, modelConf
         {/* COMPOSER — always at this tree position (keyed for stability).
             In empty state: in-flow, centered.
             With messages: absolute bottom. */}
-        <div
+        {!readOnlyWorkstation ? <div
           key="composer-shell"
           ref={composerWrapperRef}
           className={showEditorEmptyState
@@ -695,15 +745,16 @@ const EditorAgentPane = React.memo(function EditorAgentPane({ agentId, modelConf
               morphTarget={Boolean(morphTransition && !showEditorEmptyState)}
             />
           </div>
-        </div>
+        </div> : null}
 
         {/* Conversation history — only visible in empty state, below composer */}
         {showEditorEmptyState && !marketingDemoMode ? (
-          <div className="mx-auto w-full max-w-[520px] px-6 pt-12 sm:pt-14 pb-8">
+          <div className={`mx-auto w-full max-w-[520px] px-6 pb-8 ${readOnlyWorkstation ? 'pt-8 sm:pt-10' : 'pt-12 sm:pt-14'}`}>
             <ConversationHistoryPanel
               fillHeight={false}
               onOpenConversation={handleOpenConversation}
               onLoadingChange={handleConversationHistoryLoadingChange}
+              readOnly={readOnlyWorkstation}
             />
           </div>
         ) : null}

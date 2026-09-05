@@ -3,6 +3,7 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -1448,6 +1449,9 @@ export interface ThreadMessagesProps {
   errorEndpointBaseUrl: string | null;
   retrying: string | null;
   historyLoaded: boolean;
+  hasOlderHistory?: boolean;
+  loadingOlderHistory?: boolean;
+  onLoadOlderHistory?: () => Promise<void>;
   activeThreadId?: string | null;
   onStopBackgroundProcess?: (toolCallIds?: string[]) => Promise<void>;
   isEditorPane?: boolean;
@@ -1458,6 +1462,7 @@ export interface ThreadMessagesProps {
   providerLabel?: string;
   suggestionOverlayHeight?: number;
   onSuggestionOverlayOpacityChange?: (opacity: number) => void;
+  chatResizeBehavior?: 'instant' | 'smooth';
 }
 
 export const ThreadMessages: FC<ThreadMessagesProps> = ({
@@ -1470,6 +1475,9 @@ export const ThreadMessages: FC<ThreadMessagesProps> = ({
   errorEndpointBaseUrl,
   retrying,
   historyLoaded,
+  hasOlderHistory = false,
+  loadingOlderHistory = false,
+  onLoadOlderHistory,
   activeThreadId,
   onStopBackgroundProcess,
   isEditorPane,
@@ -1480,6 +1488,7 @@ export const ThreadMessages: FC<ThreadMessagesProps> = ({
   providerLabel,
   suggestionOverlayHeight = 0,
   onSuggestionOverlayOpacityChange,
+  chatResizeBehavior = 'smooth',
 }) => {
   "use no memo";
 
@@ -1589,6 +1598,10 @@ export const ThreadMessages: FC<ThreadMessagesProps> = ({
   const previousSuggestionOverlayHeightRef = useRef(0);
   const virtualBlockRef = useRef<HTMLDivElement>(null);
   const [virtualBlockTop, setVirtualBlockTop] = useState(0);
+  const prependAnchorRef = useRef<{
+    scrollHeight: number;
+    scrollTop: number;
+  } | null>(null);
 
   // Virtualize the committed-messages list. Streaming tail, detached rail,
   // retry/error indicators, and the scroll anchor stay as siblings after
@@ -1678,6 +1691,30 @@ export const ThreadMessages: FC<ThreadMessagesProps> = ({
       onSuggestionOverlayOpacityChange?.(1);
     };
   }, [onSuggestionOverlayOpacityChange, scrollContainer]);
+
+  useEffect(() => {
+    if (!scrollContainer || !hasOlderHistory || !onLoadOlderHistory) return;
+
+    const maybeLoadOlder = () => {
+      if (scrollContainer.scrollTop > 320 || loadingOlderHistory) return;
+      prependAnchorRef.current = {
+        scrollHeight: scrollContainer.scrollHeight,
+        scrollTop: scrollContainer.scrollTop,
+      };
+      void onLoadOlderHistory();
+    };
+
+    scrollContainer.addEventListener('scroll', maybeLoadOlder, { passive: true });
+    return () => scrollContainer.removeEventListener('scroll', maybeLoadOlder);
+  }, [hasOlderHistory, loadingOlderHistory, onLoadOlderHistory, scrollContainer]);
+
+  useLayoutEffect(() => {
+    const anchor = prependAnchorRef.current;
+    if (!scrollContainer || loadingOlderHistory || !anchor) return;
+    const addedHeight = scrollContainer.scrollHeight - anchor.scrollHeight;
+    scrollContainer.scrollTop = anchor.scrollTop + Math.max(0, addedHeight);
+    prependAnchorRef.current = null;
+  }, [loadingOlderHistory, messages.length, scrollContainer]);
 
   useEffect(() => {
     if (!scrollContainer) {
@@ -1825,6 +1862,7 @@ export const ThreadMessages: FC<ThreadMessagesProps> = ({
         <ChatContainerRoot
           key={`${activeThreadId ?? 'draft'}-${isEditorPane ? 'editor' : 'sidebar'}`}
           className="flex-1 min-h-0"
+          resizeBehavior={chatResizeBehavior}
           style={{
             paddingTop: threadTopInset,
             paddingRight: THREAD_HORIZONTAL_INSET,
@@ -1849,7 +1887,7 @@ export const ThreadMessages: FC<ThreadMessagesProps> = ({
             }}
           >
           {/* History loading indicator */}
-          {!historyLoaded && (
+          {(!historyLoaded || loadingOlderHistory) && (
             <div className="w-full">
               <div
                 className="w-full max-w-[var(--thread-max-width)] mx-auto"

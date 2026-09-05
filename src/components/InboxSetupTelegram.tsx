@@ -40,6 +40,7 @@ export function InboxSetupTelegram({ onConnected, onCancel }: InboxSetupTelegram
 
       const response = await fetch(`${baseUrl}/api/servers/telegram/setup`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ botToken: botToken.trim() }),
       });

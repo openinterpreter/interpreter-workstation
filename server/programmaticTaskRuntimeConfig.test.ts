@@ -89,4 +89,20 @@ describe('programmaticTaskRuntimeConfig', () => {
     expect(profile?.useResponsesApi).toBe(true);
     expect(restartCodexRuntimeMock).toHaveBeenCalledTimes(1);
   });
+
+  test('can defer API credential resolution to the runtime environment', async () => {
+    setConfigOverride(createTestConfig());
+
+    await applyProgrammaticTaskRuntimeConfig({
+      defaultProfile: createOpenAiApiProgrammaticProfile({
+        id: 'programmatic:environment-openai',
+        environmentKey: 'OPENAI_API_KEY',
+      }),
+    });
+
+    const config = await loadConfig();
+    const profile = config.profiles?.find((entry) => entry.id === 'programmatic:environment-openai');
+    expect(profile?.environmentKey).toBe('OPENAI_API_KEY');
+    expect(profile?.apiKey).toBeUndefined();
+  });
 });

@@ -27,7 +27,7 @@ import { KeyboardShortcutHint } from './ui/keyboard-shortcut-hint';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { useViewportThumbnails } from '../hooks/useViewportThumbnails';
 import { filesService } from '../api/filesService';
-import { appendWindowSessionKey, isAbsolutePath, isBrowserDevMode, isUnpackagedElectron, getServerPort as getServerPortFromIpc, workspace, showContextMenu, openFolderDialog, showItemInFolder, files as filesIpc, pathBasename, pathDirname, pathJoin, pathSplit, pathStartsWith, pathStripPrefix, type ContextMenuItem } from '@/ipc';
+import { getApiUrl, isAbsolutePath, isUnpackagedElectron, workspace, showContextMenu, openFolderDialog, showItemInFolder, files as filesIpc, pathBasename, pathDirname, pathJoin, pathSplit, pathStartsWith, pathStripPrefix, type ContextMenuItem } from '@/ipc';
 import type { WorkspaceFilesChangedEvent } from '../../electron/ipc/registry';
 import { useCommandOverlay } from '../contexts/CommandOverlayContext';
 import { useToast } from '../contexts/ToastContext';
@@ -35,6 +35,11 @@ import type { FolderTreeNode } from '../../shared/types/folder';
 import { formatPrimaryShortcut, getShortcutPlatform } from '../utils/platformShortcuts';
 import { buildWorkspacePickerMenuItems, getRevealInFileManagerLabel } from '../utils/workspacePickerMenu';
 import { isMarketingDemoMode } from '../demo/marketingDemo';
+import {
+  canUseHostNativeFileManager,
+  isPublicWorkstationPublication,
+  isWorkstationReadOnly,
+} from '../remote/workstationConnection';
 import type { VaultSearchResult } from '../../shared/types/vault';
 import {
   AGENT_SEED_COMPOSER_EVENT,
@@ -109,6 +114,9 @@ function ExplorerContent({
     && typeof window !== 'undefined'
     && !!window.electron?.files?.writeBinary;
   const runtimePlatform = getShortcutPlatform();
+  const publicWorkstationPublication = isPublicWorkstationPublication();
+  const readOnlyWorkstation = isWorkstationReadOnly();
+  const canUseNativeFileManager = canUseHostNativeFileManager();
   const openFolderShortcutLabel = formatPrimaryShortcut('O');
   const hasFixedRoot = !!rootPathOverride;
   const [workspacePath, setWorkspacePath] = useState<string | null>(null);
@@ -242,6 +250,7 @@ function ExplorerContent({
   }, []);
 
   const handleTreeDragOver = useCallback((e: React.DragEvent) => {
+    if (readOnlyWorkstation) return;
     e.preventDefault();
     e.stopPropagation();
     setIsTreeDragOver(true);
@@ -251,7 +260,7 @@ function ExplorerContent({
 
     const isExternal = e.dataTransfer.types.includes('Files') && !e.dataTransfer.types.includes('application/json');
     e.dataTransfer.dropEffect = isExternal ? 'copy' : 'move';
-  }, [startEdgeScroll]);
+  }, [readOnlyWorkstation, startEdgeScroll]);
 
   const handleTreeDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -260,6 +269,7 @@ function ExplorerContent({
   }, [stopEdgeScroll]);
 
   const handleTreeDrop = useCallback((e: React.DragEvent) => {
+    if (readOnlyWorkstation) return;
     e.preventDefault();
     e.stopPropagation();
     setIsTreeDragOver(false);
@@ -290,7 +300,7 @@ function ExplorerContent({
           });
       }
     }
-  }, [hasFixedRoot, workspacePath, stopEdgeScroll]);
+  }, [hasFixedRoot, readOnlyWorkstation, workspacePath, stopEdgeScroll]);
 
   // Reveal an item in the explorer tree (expand parents, scroll to it, optionally expand if folder)
   const revealInTree = useCallback(async (fullPath: string, options?: { expand?: boolean; scrollAlign?: 'center' | 'smart' }) => {
@@ -457,6 +467,7 @@ function ExplorerContent({
   }, [pickerMenuPos]);
 
   const openWorkspacePickerFromElement = useCallback((anchor: HTMLElement | null) => {
+    if (readOnlyWorkstation) return;
     if (!anchor) return;
     if (suppressWorkspacePickerOpenRef.current) {
       suppressWorkspacePickerOpenRef.current = false;
@@ -465,7 +476,7 @@ function ExplorerContent({
     const rect = anchor.getBoundingClientRect();
     setPickerMenuPos({ x: rect.left, y: rect.bottom + 4 });
     loadWorkspacePickerData();
-  }, [loadWorkspacePickerData]);
+  }, [loadWorkspacePickerData, readOnlyWorkstation]);
 
   const handleWorkspacePickerMouseDown = useCallback((event: React.MouseEvent<HTMLElement>) => {
     if (!pickerMenuPos) return;
@@ -950,6 +961,7 @@ function ExplorerContent({
     index: number;
     externalData?: { type: string; filePath: string; fileName: string; isDirectory: boolean } | null;
   }) => {
+    if (readOnlyWorkstation) return;
     if (!workspacePath) return;
 
     // Handle external drops (from tabs) - COPY file to destination folder
@@ -1010,10 +1022,11 @@ function ExplorerContent({
         // TODO: could revert optimistic update here on failure
       }
     }
-  }, [workspacePath]);
+  }, [readOnlyWorkstation, workspacePath]);
 
   // Handle rename from inline edit
   const handleRename = useCallback(async ({ id, name, node: _node }: { id: string; name: string; node: any }) => {
+    if (readOnlyWorkstation) return;
     if (!workspacePath) return;
     const oldPath = pathJoin(workspacePath, id);
 
@@ -1031,7 +1044,7 @@ function ExplorerContent({
     } catch (error) {
       console.error('[Explorer] Rename error:', error);
     }
-  }, [workspacePath, updateTabPath]);
+  }, [readOnlyWorkstation, workspacePath, updateTabPath]);
 
   // Handle create - tree calls this, we create the file/folder and return the data
   // The tree will then enter edit mode for the new item
@@ -1041,6 +1054,7 @@ function ExplorerContent({
     index: number;
     parentNode: any | null;
   }) => {
+    if (readOnlyWorkstation) return null;
     if (!workspacePath) return null;
 
     const parentPath = parentNode
@@ -1068,10 +1082,11 @@ function ExplorerContent({
       console.error('[Explorer] Create error:', error);
     }
     return null;
-  }, [workspacePath]);
+  }, [readOnlyWorkstation, workspacePath]);
 
   // Handle context menu on empty space in the tree
   const handleTreeContextMenu = useCallback(async (e: React.MouseEvent) => {
+    if (readOnlyWorkstation) return;
     // Only handle if clicking on the container itself, not on a node
     const target = e.target as HTMLElement;
     if (target.closest('[role="treeitem"]')) return;
@@ -1091,7 +1106,7 @@ function ExplorerContent({
       items.push({ label: 'Open Folder...', action: 'open-folder' });
     }
 
-    if (workspacePath) {
+    if (workspacePath && canUseNativeFileManager) {
       items.push({ label: '', action: '', separator: true });
       items.push({ label: 'Show in Finder', action: 'show-in-finder' });
     }
@@ -1167,7 +1182,7 @@ function ExplorerContent({
     } else if (action === 'collapse-all') {
       collapseAll();
     }
-  }, [workspacePath, hasFixedRoot, isHelpPanelOpen, isMovieAvailable, isRemotionAvailable, isDevelopmentRenderer, setIsHelpPanelOpen, setHelpPanelHeight, collapseAll]);
+  }, [workspacePath, hasFixedRoot, isHelpPanelOpen, isMovieAvailable, isRemotionAvailable, isDevelopmentRenderer, readOnlyWorkstation, canUseNativeFileManager, setIsHelpPanelOpen, setHelpPanelHeight, collapseAll]);
 
   const handleTreeBackgroundClick = useCallback((e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
@@ -1208,8 +1223,9 @@ function ExplorerContent({
       onTreeMutated={refreshFixedRootTree}
       isLoading={loadingFolders.has(props.node.id)}
       flashPath={flashPath}
+      readOnly={readOnlyWorkstation}
     />
-  ), [workspacePath, onFileOpen, handleAskAgentAboutItems, revealAndEdit, refreshFixedRootTree, loadingFolders, flashPath]);
+  ), [workspacePath, onFileOpen, handleAskAgentAboutItems, revealAndEdit, refreshFixedRootTree, loadingFolders, flashPath, readOnlyWorkstation]);
 
   // Trigger thumbnail recalculation on container resize
   useEffect(() => {
@@ -1422,11 +1438,8 @@ function ExplorerContent({
 
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
-          const port = await getServerPort();
-          const url = appendWindowSessionKey(
-            port ? `http://127.0.0.1:${port}/api/workspace/files?stream=true` : '/api/workspace/files?stream=true',
-          );
-          response = await fetch(url);
+          const url = await getApiUrl('/api/workspace/files?stream=true');
+          response = await fetch(url, { credentials: 'include' });
           if (response.ok && response.body) {
             break; // Success
           }
@@ -1485,14 +1498,6 @@ function ExplorerContent({
       setLoadingFiles(false);
       setLoadProgress(0);
     }
-  }
-
-  async function getServerPort(): Promise<number | null> {
-    // In browser dev mode, use relative URLs (Vite proxies /api to backend)
-    if (isBrowserDevMode()) {
-      return null;
-    }
-    return getServerPortFromIpc();
   }
 
   /**
@@ -1930,7 +1935,7 @@ function ExplorerContent({
 
       {/* Workspace breadcrumbs */}
       {workspacePath && !isSearching && (
-        hasFixedRoot ? (
+        hasFixedRoot && !publicWorkstationPublication && canUseNativeFileManager ? (
           <button
             type="button"
             className={`mx-1 flex w-[calc(100%-0.5rem)] items-center rounded-[12px] px-3 py-2 text-left text-ui-sm transition-colors duration-150 ${isScrolled ? 'bg-transparent text-[#4b5563] dark:text-[#b4b4b4]' : 'bg-transparent text-[#6b7280] dark:text-[#b4b4b4]'} hover:bg-[var(--oa-button-hover-bg)] hover:text-[#202123] dark:hover:text-[#f5f5f5]`}
@@ -1947,6 +1952,20 @@ function ExplorerContent({
           >
             <span className="truncate">{pathBasename(workspacePath) || workspacePath}</span>
           </button>
+        ) : publicWorkstationPublication || hasFixedRoot ? (
+          <div
+            data-testid={WORKSPACE_PICKER_BUTTON_ID}
+            className={`relative mx-1 flex items-center rounded-[12px] px-3 py-2 text-ui-sm ${isScrolled ? 'text-[#4b5563] dark:text-[#b4b4b4]' : 'text-[#6b7280] dark:text-[#b4b4b4]'}`}
+            style={{
+              paddingLeft: '14px',
+              paddingRight: '14px',
+              paddingTop: '10px',
+              paddingBottom: '10px',
+            }}
+            title={workspacePath}
+          >
+            <span className="truncate">{workspacePath}</span>
+          </div>
         ) : (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -2080,6 +2099,9 @@ function ExplorerContent({
                 onMove={handleMove}
                 onRename={handleRename}
                 onCreate={handleCreate}
+                disableDrag={readOnlyWorkstation}
+                disableDrop={readOnlyWorkstation}
+                disableEdit={readOnlyWorkstation}
                 renderCursor={renderCursorNull}
               >
                 {renderNode}
@@ -2097,7 +2119,7 @@ function ExplorerContent({
         </div>
       )}
 
-      {pickerMenuPos && (
+      {!readOnlyWorkstation && pickerMenuPos && (
         <ContextMenu
           x={pickerMenuPos.x}
           y={pickerMenuPos.y}
@@ -2120,6 +2142,7 @@ function ExplorerContent({
               void handleScanNoteWorkspaces();
             },
             isScanningNoteWorkspaces,
+            includeNativeFileManagerActions: canUseNativeFileManager,
           })}
           onClose={() => setPickerMenuPos(null)}
         />

@@ -6,6 +6,7 @@ import { getCodexService, type StreamEvent } from '../../../../src/lib/codex/ser
 import type { Profile as CodexProfile } from '../../../../src/lib/codex/profiles';
 import { agentTabManager } from '../../../agentTabManager';
 import {
+  ensureOpenAIOAuthAccountReady,
   resolveCodexProfileFromModelConfig,
   runCodexAgentTurn,
 } from '../../../utils/codexRuntime';
@@ -22,6 +23,7 @@ export interface RunCodexSubagentOptions {
   threadId?: string;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
+  idleTimeoutMs?: number | null;
   workspace?: string;
   allowedToolNames?: string[];
   parentOwner?: AgentPermissionOwnerReference;
@@ -167,6 +169,15 @@ export async function runCodexSubagent(options: RunCodexSubagentOptions): Promis
       options.reasoningEffort,
     );
 
+    // Programmatic/headless turns use the same persisted ChatGPT account as
+    // the interactive stream route. Refresh and validate it before thread
+    // creation so OIX selects the ChatGPT Codex endpoint instead of falling
+    // back to an unauthenticated OpenAI API request.
+    await ensureOpenAIOAuthAccountReady(
+      session.service,
+      session.modelConfig.provider === 'openai-oauth',
+    );
+
     let threadId = '';
     let turnId = '';
     const runTurnStart = Date.now();
@@ -193,6 +204,7 @@ export async function runCodexSubagent(options: RunCodexSubagentOptions): Promis
       reasoningSummary: options.reasoningSummary ?? 'none',
       system: options.system,
       config: (options.threadConfig ?? {}) as Record<string, any>,
+      idleTimeoutMs: options.idleTimeoutMs,
       signal: runAbortController.signal,
       onEvent: (event) => {
         options.onEvent?.(event);

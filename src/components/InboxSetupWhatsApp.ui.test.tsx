@@ -82,7 +82,7 @@ describe('InboxSetupWhatsApp', () => {
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
       'http://127.0.0.1:5177/api/servers/whatsapp/setup',
-      { method: 'POST' },
+      { method: 'POST', credentials: 'include' },
     );
     expect(MockEventSource.instances[0].url).toBe('http://127.0.0.1:5177/api/servers/whatsapp/setup/qr-stream');
 

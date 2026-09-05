@@ -1,4 +1,4 @@
-import { isBrowserDevMode, apiRequest as ipcApiRequest, getAppServerOrigin, servers, files, settings as settingsIpc } from './ipc';
+import { isBrowserDevMode, apiRequest as ipcApiRequest, getApiUrl, getAppServerOrigin, servers, files, settings as settingsIpc } from './ipc';
 import {
   getMarketingDemoDetectedNoteWorkspaces,
   getMarketingDemoWorkspacePath,
@@ -9,6 +9,14 @@ import {
   readMarketingDemoFile,
   writeMarketingDemoFile,
 } from './demo/marketingDemo';
+import {
+  getRemoteWorkstationFolderChildren,
+  getRemoteWorkstationWorkspace,
+  getRemoteWorkstationWorkspaceFiles,
+  isRemoteWorkstationMode,
+  readRemoteWorkstationFile,
+} from './remote/remoteWorkstation';
+import { isWorkstationReadOnly } from './remote/workstationConnection';
 import { readJsonSseStream } from './utils/sseStream';
 
 // API Types
@@ -71,9 +79,6 @@ export function toolServerNeedsAuth(server: Pick<ToolServer, 'state'>): boolean 
 
 // Get base URL for API calls (empty string in browser dev mode since Vite proxies)
 export async function getApiBaseUrl(): Promise<string> {
-  if (isBrowserDevMode()) {
-    return ''; // Vite proxies /api to the server
-  }
   return getAppServerOrigin();
 }
 
@@ -92,7 +97,10 @@ async function apiRequest(method: string, path: string, body?: any) {
     if (body && method !== 'GET') {
       options.body = JSON.stringify(body);
     }
-    const response = await fetch(path, options);
+    const response = await fetch(await getApiUrl(path), {
+      ...options,
+      credentials: 'include',
+    });
     const data = await response.json();
     if (!response.ok) {
       throw new Error(data?.error || `Request failed with status ${response.status}`);
@@ -178,6 +186,9 @@ export async function callTool(serverId: string, toolName: string, args: Record<
 
 // Workspace APIs
 export async function getWorkspace() {
+  if (isRemoteWorkstationMode()) {
+    return getRemoteWorkstationWorkspace();
+  }
   if (isMarketingDemoMode()) {
     return getMarketingDemoWorkspace();
   }
@@ -189,6 +200,9 @@ export async function setWorkspace(path: string) {
 }
 
 export async function getWorkspaceFiles() {
+  if (isRemoteWorkstationMode()) {
+    return getRemoteWorkstationWorkspaceFiles();
+  }
   if (isMarketingDemoMode()) {
     return getMarketingDemoWorkspaceFiles();
   }
@@ -196,6 +210,9 @@ export async function getWorkspaceFiles() {
 }
 
 export async function getFolderChildren(folderPath: string) {
+  if (isRemoteWorkstationMode()) {
+    return getRemoteWorkstationFolderChildren(folderPath);
+  }
   if (isMarketingDemoMode()) {
     return getMarketingDemoFolderChildren(folderPath);
   }
@@ -317,20 +334,27 @@ export async function getActivitySignals(): Promise<ActivitySignals> {
 }
 
 export async function recordFileOpenActivity(path: string): Promise<void> {
+  if (isWorkstationReadOnly()) return;
   try { await apiRequest('POST', '/api/activity/file-open', { path }); } catch { /* best-effort */ }
 }
 export async function recordSkillUseActivity(skillId: string, name: string): Promise<void> {
+  if (isWorkstationReadOnly()) return;
   try { await apiRequest('POST', '/api/activity/skill-use', { skillId, name }); } catch { /* best-effort */ }
 }
 export async function recordCardClickActivity(cardId: string): Promise<void> {
+  if (isWorkstationReadOnly()) return;
   try { await apiRequest('POST', '/api/activity/card-click', { cardId }); } catch { /* best-effort */ }
 }
 export async function recordUserAction(actionId: string): Promise<void> {
+  if (isWorkstationReadOnly()) return;
   try { await apiRequest('POST', '/api/activity/action', { actionId }); } catch { /* best-effort */ }
 }
 
 // File APIs
 export async function readFile(path: string) {
+  if (isRemoteWorkstationMode()) {
+    return readRemoteWorkstationFile(path);
+  }
   if (isMarketingDemoMode()) {
     return readMarketingDemoFile(path);
   }
@@ -346,6 +370,9 @@ export async function readFile(path: string) {
 }
 
 export async function writeFile(path: string, content: string) {
+  if (isRemoteWorkstationMode()) {
+    return { success: false, error: 'Remote Workstation is read-only' };
+  }
   if (isMarketingDemoMode()) {
     return writeMarketingDemoFile(path, content);
   }
@@ -515,6 +542,7 @@ export async function pullOllamaModel(
   try {
     const response = await fetch(url, {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model,
@@ -567,6 +595,7 @@ export async function downloadLmStudioModel(
   try {
     const response = await fetch(url, {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model,

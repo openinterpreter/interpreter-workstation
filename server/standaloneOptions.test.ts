@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 
 import {
   buildProgrammaticTaskRuntimeConfig,
+  getWorkstationHostingError,
   parseCliOptions,
 } from './standaloneOptions';
 
@@ -82,5 +83,38 @@ describe('standaloneOptions', () => {
     expect(options.quietStartup).toBe(true);
     expect(options.streamJsonl).toBe(true);
     expect(options.devAutoApproveTools).toBe(true);
+  });
+
+  test('parses an explicitly hosted Workstation bridge', () => {
+    const options = parseCliOptions([
+      '--host',
+      '0.0.0.0',
+      '--access',
+      'read-write',
+      '--auth',
+      'password',
+    ]);
+
+    expect(options.host).toBe('0.0.0.0');
+    expect(options.workstationAccess).toBe('read-write');
+    expect(options.workstationAuth).toBe('password');
+  });
+
+  test('keeps loopback development available without remote host settings', () => {
+    expect(getWorkstationHostingError(parseCliOptions([]))).toBeNull();
+  });
+
+  test('requires explicit access and password authentication beyond loopback', () => {
+    expect(getWorkstationHostingError(parseCliOptions(['--host', '0.0.0.0']))).toContain('--access');
+    expect(getWorkstationHostingError(parseCliOptions([
+      '--host', '0.0.0.0',
+      '--access', 'read-only',
+      '--auth', 'none',
+    ]))).toContain('--auth password');
+    expect(getWorkstationHostingError(parseCliOptions([
+      '--host', '0.0.0.0',
+      '--access', 'read-only',
+      '--auth', 'password',
+    ]))).toBeNull();
   });
 });

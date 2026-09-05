@@ -152,6 +152,7 @@ export async function transcribeVoiceWav(wavBlob: Blob): Promise<string> {
   const url = await getApiUrl('/api/agent/voice/transcribe');
   const response = await fetch(url, {
     method: 'POST',
+    credentials: 'include',
     headers: {
       'Content-Type': 'audio/wav',
     },
@@ -187,6 +188,7 @@ export async function startVoiceStreamSession(options?: StartVoiceStreamOptions)
   const url = await getApiUrl('/api/agent/voice/stream/start');
   const response = await fetch(url, {
     method: 'POST',
+    credentials: 'include',
     headers: options?.nativeRecognizer ? { 'Content-Type': 'application/json' } : undefined,
     body: options?.nativeRecognizer ? JSON.stringify({ nativeRecognizer: true }) : undefined,
   });
@@ -214,6 +216,7 @@ export async function appendVoiceStreamChunk(sessionId: string, pcmChunk: Uint8A
   try {
     const response = await fetch(url, {
       method: 'POST',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/octet-stream',
       },
@@ -247,6 +250,7 @@ export async function finishVoiceStreamSession(sessionId: string): Promise<strin
   const url = await getApiUrl(`/api/agent/voice/stream/finish/${encodeURIComponent(sessionId)}`);
   const response = await fetch(url, {
     method: 'POST',
+    credentials: 'include',
   });
 
   const data = await parseVoiceJsonResponse(response);
@@ -267,7 +271,7 @@ export interface SmartTurnResult {
 
 export async function checkEndOfTurn(sessionId: string): Promise<SmartTurnResult> {
   const url = await getApiUrl(`/api/agent/voice/stream/endofturn/${encodeURIComponent(sessionId)}`);
-  const response = await fetch(url, { method: 'POST' });
+  const response = await fetch(url, { method: 'POST', credentials: 'include' });
   const data: { done?: boolean; confidence?: number; error?: string } = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(typeof data.error === 'string' ? data.error : 'End-of-turn check failed');
@@ -279,6 +283,7 @@ export async function abortVoiceStreamSession(sessionId: string): Promise<void> 
   const url = await getApiUrl(`/api/agent/voice/stream/abort/${encodeURIComponent(sessionId)}`);
   const response = await fetch(url, {
     method: 'POST',
+    credentials: 'include',
   });
 
   if (response.ok) return;

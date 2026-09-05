@@ -13,6 +13,7 @@ import { getSidebarFooterMotion } from './sidebarFooterMotion';
 import { isMarketingDemoMode } from '../demo/marketingDemo';
 import { TooltipButton } from './ui/tooltip-button';
 import { cn } from '@/lib/utils';
+import { isWorkstationReadOnly } from '../remote/workstationConnection';
 
 interface SidebarProps {
   onFileOpen: (path: string) => void;
@@ -23,6 +24,7 @@ export function Sidebar({ onFileOpen }: SidebarProps) {
   const { state, toggleLeftSidebar } = useLayout();
   const { isHelpPanelOpen } = useHelp();
   const marketingDemoMode = isMarketingDemoMode();
+  const readOnlyWorkstation = isWorkstationReadOnly();
   const reducedMotion = useReducedMotion() ?? false;
   const dividerMotion = getSidebarFooterMotion('divider', reducedMotion);
   const activeTab = state.leftSidebar.activeTab;
@@ -98,7 +100,7 @@ export function Sidebar({ onFileOpen }: SidebarProps) {
         ) : null}
       </div>
 
-      <div ref={footerStackRef} className="flex-shrink-0">
+      {!readOnlyWorkstation ? <div ref={footerStackRef} className="flex-shrink-0">
         {activeTab === 'explorer' ? (
           <div className="px-2.5">
             <SkillsPanel
@@ -129,7 +131,7 @@ export function Sidebar({ onFileOpen }: SidebarProps) {
         <div className="px-2.5">
           <HelpPanel />
         </div>
-      </div>
+      </div> : null}
     </div>
   );
 }

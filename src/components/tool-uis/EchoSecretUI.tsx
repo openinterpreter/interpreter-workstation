@@ -35,7 +35,7 @@ export function EchoSecretUI({ serverId }: EchoSecretUIProps) {
   async function loadSettings() {
     try {
       const origin = await getAppServerOrigin();
-      const response = await fetch(`${origin}/api/tool-settings/${serverId}`);
+      const response = await fetch(`${origin}/api/tool-settings/${serverId}`, { credentials: 'include' });
 
       if (response.ok) {
         const data = await response.json();
@@ -52,6 +52,7 @@ export function EchoSecretUI({ serverId }: EchoSecretUIProps) {
       const origin = await getAppServerOrigin();
       await fetch(`${origin}/api/tool-settings/${serverId}`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newSettings),
       });

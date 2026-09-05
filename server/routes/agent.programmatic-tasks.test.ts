@@ -4,11 +4,24 @@ import { applyChatEvent, createInitialChatState } from '../../src/hooks/use-chat
 import {
   createAgentStreamErrorPayload,
   getProgrammaticTaskHttpError,
+  parseProgrammaticTaskBody,
   resolveTestModelRuntime,
   toProgrammaticTaskProgressSseEvents,
 } from './agent';
 
 describe('programmatic task HTTP transport', () => {
+  test('keeps whole-task and turn-idle timeouts separate', () => {
+    const parsed = parseProgrammaticTaskBody({
+      message: 'Keep going.',
+      timeoutMs: 86_400_000,
+      idleTimeoutMs: 0,
+      workspace: '/tmp/science',
+    });
+
+    expect(parsed.timeoutMs).toBe(86_400_000);
+    expect(parsed.idleTimeoutMs).toBe(0);
+  });
+
   test('rejects all programmatic task HTTP inside Electron', () => {
     expect(
       getProgrammaticTaskHttpError({

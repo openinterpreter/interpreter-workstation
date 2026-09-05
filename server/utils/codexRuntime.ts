@@ -376,6 +376,7 @@ export interface RunCodexAgentTurnOptions {
   reasoningSummary?: CodexReasoningSummary | null;
   system?: string;
   config?: Record<string, JsonValue> | null;
+  idleTimeoutMs?: number | null;
   signal?: AbortSignal;
   inspectExistingThread?: boolean;
   onEvent?: (event: StreamEvent) => void;
@@ -724,11 +725,6 @@ function withModelConfigHarness(
 export function resolveCodexProfileFromModelConfig(
   modelConfig: AgentModelConfig,
 ): CodexProfile {
-  const environmentApiKey = resolveEnvironmentApiKey(modelConfig.environmentKey);
-  if (!modelConfig.apiKey && environmentApiKey) {
-    modelConfig = { ...modelConfig, apiKey: environmentApiKey };
-  }
-
   if (modelConfig.codexProfileId && isProfileId(modelConfig.codexProfileId)) {
     const explicit = isDeepSeekApiBaseURL(modelConfig.baseURL)
       ? 'deepseek'
@@ -741,6 +737,7 @@ export function resolveCodexProfileFromModelConfig(
       return withModelConfigHarness(buildProfileFromPreset(preset, {
         baseUrl: modelConfig.baseURL,
         apiKey: modelConfig.apiKey,
+        environmentKey: modelConfig.environmentKey,
         model: modelConfig.modelId,
         wireApi: explicit === 'deepseek' ? 'chat' : modelConfig.wireApi,
       }), modelConfig);
@@ -754,17 +751,20 @@ export function resolveCodexProfileFromModelConfig(
     return withModelConfigHarness({
       id: modelConfig.codexProfileId,
       label: modelConfig.codexProfileId,
-      modelProvider: modelConfig.apiKey
+      modelProvider: modelConfig.apiKey || modelConfig.environmentKey
         ? buildAppManagedModelProviderId(modelConfig.codexProfileId)
         : modelConfig.codexProfileId,
       model: modelConfig.modelId || undefined,
-      ...(modelConfig.baseURL && modelConfig.apiKey
+      ...(modelConfig.baseURL && (modelConfig.apiKey || modelConfig.environmentKey)
         ? {
             providerConfig: {
               base_url: modelConfig.baseURL,
               name: modelConfig.codexProfileId,
               requires_openai_auth: false,
               wire_api: wireApi,
+              ...(!modelConfig.apiKey && modelConfig.environmentKey
+                ? { env_key: modelConfig.environmentKey }
+                : {}),
               ...(modelConfig.apiKey
                 ? {
                     experimental_bearer_token: modelConfig.apiKey,
@@ -798,6 +798,7 @@ export function resolveCodexProfileFromModelConfig(
     return withModelConfigHarness(buildProfileFromPreset(preset, {
       baseUrl: modelConfig.baseURL,
       apiKey: modelConfig.apiKey,
+      environmentKey: modelConfig.environmentKey,
       model: modelConfig.modelId,
       wireApi: presetId === 'deepseek' ? 'chat' : modelConfig.wireApi,
     }), modelConfig);
@@ -2138,6 +2139,7 @@ export async function runCodexAgentTurn(
           config: threadConfig,
           effort: options.reasoningEffort ?? null,
           summary: options.reasoningSummary ?? null,
+          idleTimeoutMs: options.idleTimeoutMs,
           signal: options.signal,
           onEvent: (event) => {
             recordTurnAttemptDiagnostics(attemptDiagnostics, event);

@@ -117,6 +117,21 @@ function makeThreadResumeResponse(threadId: string): v2.ThreadResumeResponse {
   };
 }
 
+function makeThreadForkResponse(threadId: string): v2.ThreadForkResponse {
+  return {
+    thread: makeThread(threadId),
+    model: "gpt-5.3-codex",
+    modelProvider: "openai",
+    serviceTier: null,
+    cwd: "/tmp",
+    instructionSources: [],
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
+    sandbox: { type: "dangerFullAccess" },
+    reasoningEffort: null,
+  };
+}
+
 function makeTurn(id: string, status: v2.TurnStatus = "inProgress"): v2.Turn {
   return { id, items: [], status, error: null };
 }
@@ -1367,6 +1382,34 @@ describe("CodexAppServerClient", () => {
 
     const threadId = await threadPromise;
     assert.equal(threadId, "thr_existing");
+  });
+
+  test("forkThread preserves history through one completed turn", async () => {
+    const transport = new FakeTransport();
+    const client = new CodexAppServerClient(transport, null);
+
+    const threadPromise = client.forkThread(
+      "thr_source",
+      "turn_clean",
+      "openai",
+      "gpt-5.3-codex",
+      "/workspace/project",
+      null,
+    );
+
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+
+    await waitFor(() => transport.sent.length >= 3);
+    const threadReq = assertSentRequest(transport, 2, CLIENT_METHOD.threadFork);
+    assert.equal(threadReq.params.threadId, "thr_source");
+    assert.equal(threadReq.params.lastTurnId, "turn_clean");
+    assert.equal(threadReq.params.cwd, "/workspace/project");
+
+    transport.respond(threadReq, makeThreadForkResponse("thr_fork"));
+
+    const threadId = await threadPromise;
+    assert.equal(threadId, "thr_fork");
   });
 
   test("resumeThread passes baseInstructions to thread/resume params", async () => {

@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import type { LayoutState, Pane, Tab } from '../../../shared/types/layout';
 import { shouldHideSingleAgentTabBar } from './editorAgentState';
+import { REMOTE_WORKSTATION_AGENT_TAB_ID } from '../../remote/remoteWorkstation';
 
 const layoutMocks = vi.hoisted(() => ({
   state: null as LayoutState | null,
@@ -69,7 +70,7 @@ function pane(tabIds: string[]): Pane {
   };
 }
 
-function agentTab(id: string): Tab {
+function agentTab(id: string, codexThreadId?: string): Tab {
   return {
     id,
     type: 'agent',
@@ -84,6 +85,7 @@ function agentTab(id: string): Tab {
       },
       session: {
         callerToken: 'agtok_test',
+        codexThreadId,
       },
     },
   };
@@ -124,6 +126,7 @@ describe('shouldHideSingleAgentTabBar', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     layoutMocks.state = null;
+    window.history.replaceState({}, '', '/');
   });
 
   test('hides the tab bar for a single-pane window with one agent tab', () => {
@@ -168,5 +171,59 @@ describe('shouldHideSingleAgentTabBar', () => {
 
     expect(screen.getByTestId('mock-pane-view')).toBeVisible();
     expect(screen.queryByTestId('pane-tab-bar-pane-one')).not.toBeInTheDocument();
+  });
+
+  test('keeps remote artifact and conversation tabs closable', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/?surface=remote-workstation&endpoint=https%3A%2F%2Fexample.test%2Fapi%2Fconnection',
+    );
+    const agent = agentTab(REMOTE_WORKSTATION_AGENT_TAB_ID, 'remote-workstation-live-thread');
+    const file = fileTab('file-one');
+    layoutMocks.state = layoutStateFor([agent.id, file.id], {
+      [agent.id]: agent,
+      [file.id]: file,
+    });
+    const { EditorLayout } = await import('./EditorLayout');
+
+    render(<EditorLayout />);
+
+    expect(screen.getByLabelText('Close notes.md')).toBeVisible();
+    expect(screen.getByLabelText('Close Agent')).toBeVisible();
+    expect(screen.getByTestId('new-tab-button-pane-one')).toBeVisible();
+  });
+
+  test('labels the read-only placeholder and add control as tabs rather than agents', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/?surface=remote-workstation&endpoint=https%3A%2F%2Fexample.test%2Fapi%2Fconnection',
+    );
+    const agent = agentTab(REMOTE_WORKSTATION_AGENT_TAB_ID);
+    layoutMocks.state = layoutStateFor([agent.id], { [agent.id]: agent });
+    const { EditorLayout } = await import('./EditorLayout');
+
+    render(<EditorLayout />);
+
+    expect(screen.getByTestId('pane-tab-bar-pane-one')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Close New Tab' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'New Tab' })).toBeVisible();
+  });
+
+  test('keeps a lone remote conversation closable', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/?surface=remote-workstation&endpoint=https%3A%2F%2Fexample.test%2Fapi%2Fconnection',
+    );
+    const agent = agentTab(REMOTE_WORKSTATION_AGENT_TAB_ID, 'remote-workstation-live-thread');
+    layoutMocks.state = layoutStateFor([agent.id], { [agent.id]: agent });
+    const { EditorLayout } = await import('./EditorLayout');
+
+    render(<EditorLayout />);
+
+    expect(screen.getByTestId('pane-tab-bar-pane-one')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Close Agent' })).toBeVisible();
   });
 });

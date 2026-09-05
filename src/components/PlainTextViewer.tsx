@@ -17,6 +17,7 @@ import { trackDocumentEdited } from '../utils/telemetry';
 import { SaveStatus } from './ui/save-status';
 import { openFeedbackPopover } from '../utils/feedback';
 import { EditorShell, EditorToolbar, EditorContentSurface } from './EditorShell';
+import { isWorkstationReadOnly } from '../remote/workstationConnection';
 
 interface PlainTextViewerProps {
   filePath: string;
@@ -128,7 +129,7 @@ export const PlainTextViewer = forwardRef<PlainTextViewerRef, PlainTextViewerPro
         }),
       ],
       content: content ?? { type: 'doc', content: [{ type: 'paragraph' }] },
-      editable: true,
+      editable: !isWorkstationReadOnly(),
       immediatelyRender: false,
       editorProps: {
         attributes: {
@@ -396,9 +397,9 @@ export const PlainTextViewer = forwardRef<PlainTextViewerRef, PlainTextViewerPro
 
     return (
       <EditorShell>
-        <EditorToolbar>
+        {!isWorkstationReadOnly() ? <EditorToolbar>
           <SaveStatus status={saveStatus} />
-        </EditorToolbar>
+        </EditorToolbar> : null}
         <EditorContentSurface className="p-4">
           <EditorContent
             editor={editor}

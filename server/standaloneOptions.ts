@@ -17,6 +17,9 @@ export type CliOptions = {
   workspace?: string;
   home?: string;
   port?: number | 'auto';
+  host?: string;
+  workstationAccess?: 'read-only' | 'read-write';
+  workstationAuth?: 'none' | 'password';
   shutdownAfterTask: boolean;
   streamJsonl: boolean;
   quietStartup: boolean;
@@ -33,6 +36,24 @@ export type CliOptions = {
   openAIApiKeyEnv?: string;
   baseURL?: string;
 };
+
+function isLoopbackHost(host: string): boolean {
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1';
+}
+
+export function getWorkstationHostingError(
+  options: Pick<CliOptions, 'host' | 'workstationAccess' | 'workstationAuth'>,
+): string | null {
+  const host = options.host?.trim() || '127.0.0.1';
+  if (isLoopbackHost(host)) return null;
+  if (!options.workstationAccess) {
+    return 'Binding Workstation beyond loopback requires --access read-only or --access read-write.';
+  }
+  if (options.workstationAuth !== 'password') {
+    return 'Externally bound Workstation requires --auth password.';
+  }
+  return null;
+}
 
 export function parseCliOptions(argv: string[]): CliOptions {
   const options: CliOptions = {
@@ -130,6 +151,28 @@ export function parseCliOptions(argv: string[]): CliOptions {
           }
           options.port = parsedPort;
         }
+        index += 1;
+        break;
+      }
+      case '--host':
+        options.host = nextValue(index, arg);
+        index += 1;
+        break;
+      case '--access': {
+        const access = nextValue(index, arg);
+        if (access !== 'read-only' && access !== 'read-write') {
+          throw new Error(`Invalid Workstation access mode: ${access}`);
+        }
+        options.workstationAccess = access;
+        index += 1;
+        break;
+      }
+      case '--auth': {
+        const authentication = nextValue(index, arg);
+        if (authentication !== 'none' && authentication !== 'password') {
+          throw new Error(`Invalid Workstation authentication mode: ${authentication}`);
+        }
+        options.workstationAuth = authentication;
         index += 1;
         break;
       }

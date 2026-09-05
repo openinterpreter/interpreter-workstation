@@ -19,6 +19,7 @@ import {
 import {
   reconcileSavedAnnotationState,
 } from '../utils/pdfAnnotationIdRemap';
+import { isWorkstationReadOnly } from '../remote/workstationConnection';
 
 // Configure PDF.js worker using Vite-compatible URL resolution
 if (typeof window !== 'undefined') {
@@ -90,6 +91,7 @@ async function removePdfAnnotations(filePath: string, annotationIds: string[]): 
   const removeUrl = await getApiUrl('/api/pdf/annotations/remove');
   const response = await fetch(removeUrl, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path: filePath, annotationIds }),
   });
@@ -180,6 +182,7 @@ function parseEditableAnnotations(elements: any[]): LocalAnnotation[] {
 }
 
 export function PDFViewer({ filePath, initialPage }: PDFViewerProps) {
+  const readOnlyRemote = isWorkstationReadOnly();
   "use no memo";
 
   const { t } = useTranslation();
@@ -1067,6 +1070,7 @@ export function PDFViewer({ filePath, initialPage }: PDFViewerProps) {
         const removeUrl = await getApiUrl('/api/pdf/annotations/remove');
         await fetch(removeUrl, {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ path: filePath, annotationIds: toRemove })
         });
@@ -1093,6 +1097,7 @@ export function PDFViewer({ filePath, initialPage }: PDFViewerProps) {
         const addUrl = await getApiUrl('/api/pdf/annotations/add');
         const addResponse = await fetch(addUrl, {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ path: filePath, annotations: toAddText })
         });
@@ -1116,6 +1121,7 @@ export function PDFViewer({ filePath, initialPage }: PDFViewerProps) {
         const addImageUrl = await getApiUrl('/api/pdf/annotations/add-image');
         const addResponse = await fetch(addImageUrl, {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ path: filePath, annotations: toAddImages })
         });
@@ -1187,6 +1193,7 @@ export function PDFViewer({ filePath, initialPage }: PDFViewerProps) {
       const saveUrl = await getApiUrl('/api/pdf/formfields/save');
       const response = await fetch(saveUrl, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: filePath, fields })
       });
@@ -3542,6 +3549,7 @@ export function PDFViewer({ filePath, initialPage }: PDFViewerProps) {
           {pathBasename(filePath)}
         </div>
         <div className="ml-4 flex items-center gap-1.5">
+          {!readOnlyRemote ? <>
           {/* Add Annotation Button */}
           <Button
             data-testid={PDF_ADD_ANNOTATION_BUTTON_ID}
@@ -3591,6 +3599,7 @@ export function PDFViewer({ filePath, initialPage }: PDFViewerProps) {
               {t('pdf.status.saved')}
             </div>
           )}
+          </> : null}
 
           <div className="w-px h-4 bg-muted" />
 

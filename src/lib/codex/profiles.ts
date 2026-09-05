@@ -17,6 +17,7 @@ type ProviderConfig = {
   name: string;
   requires_openai_auth: boolean;
   wire_api: WireApi;
+  env_key?: string;
   experimental_bearer_token?: string;
   http_headers?: Record<string, string>;
 };
@@ -248,10 +249,17 @@ export function buildAppManagedModelProviderId(providerId: string): string {
 
 export function buildProfileFromPreset(
   preset: CustomPreset,
-  overrides?: { baseUrl?: string; apiKey?: string; model?: string; wireApi?: WireApi },
+  overrides?: {
+    baseUrl?: string;
+    apiKey?: string;
+    environmentKey?: string;
+    model?: string;
+    wireApi?: WireApi;
+  },
 ): Profile {
   const baseUrl = overrides?.baseUrl || preset.defaultBaseUrl;
   const apiKey = overrides?.apiKey;
+  const environmentKey = apiKey ? undefined : overrides?.environmentKey?.trim() || undefined;
   const effectiveApiKey = apiKey ?? (preset.id === "lmstudio" ? "lm-studio" : undefined);
   const model = overrides?.model || preset.defaultModel || undefined;
 
@@ -270,6 +278,7 @@ export function buildProfileFromPreset(
           name: preset.label,
           requires_openai_auth: false,
           wire_api: overrides?.wireApi ?? preset.wireApi,
+          ...(environmentKey ? { env_key: environmentKey } : {}),
           ...(effectiveApiKey
             ? {
                 experimental_bearer_token: effectiveApiKey,
@@ -291,6 +300,10 @@ export function providerConfigToJsonValue(config: ProviderConfig): JsonValue {
 
   if (config.experimental_bearer_token) {
     record.experimental_bearer_token = config.experimental_bearer_token;
+  }
+
+  if (config.env_key) {
+    record.env_key = config.env_key;
   }
 
   if (config.http_headers) {

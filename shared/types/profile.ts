@@ -179,6 +179,7 @@ export function profileToModelConfig(
     provider: profile.provider,
     modelId: profile.modelId,
     apiKey: profile.apiKey,
+    ...(profile.environmentKey ? { environmentKey: profile.environmentKey } : {}),
     baseURL: profile.baseURL,
     apiFormat: profile.apiFormat,
     codexProfileId: profile.codexProfileId,

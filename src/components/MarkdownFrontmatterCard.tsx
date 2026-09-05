@@ -12,6 +12,7 @@ interface MarkdownFrontmatterCardProps {
   frontmatter: MarkdownFrontmatter | null;
   onChange: (key: string, value: unknown) => void;
   onClose: () => void;
+  readOnly?: boolean;
   children?: ReactNode;
 }
 
@@ -468,7 +469,7 @@ function renderFrontmatterEditor(
   return <EditableJsonValue value={value} onCommit={onCommit} />;
 }
 
-export function MarkdownFrontmatterCard({ frontmatter, onChange, onClose, children }: MarkdownFrontmatterCardProps) {
+export function MarkdownFrontmatterCard({ frontmatter, onChange, onClose, readOnly = false, children }: MarkdownFrontmatterCardProps) {
   const preferredFieldOrder = ['title', 'aliases', 'tags'];
   const mergedData = preferredFieldOrder.reduce<Record<string, unknown>>((result, key) => {
     result[key] = frontmatter?.data[key] ?? (key === 'title' ? '' : []);
@@ -486,6 +487,7 @@ export function MarkdownFrontmatterCard({ frontmatter, onChange, onClose, childr
   const [tagSuggestionStatus, setTagSuggestionStatus] = useState<SuggestionStatus>('idle');
 
   useEffect(() => {
+    if (readOnly) return;
     let cancelled = false;
 
     const loadTagSuggestions = async () => {
@@ -535,7 +537,7 @@ export function MarkdownFrontmatterCard({ frontmatter, onChange, onClose, childr
       cancelled = true;
       unsubscribe();
     };
-  }, []);
+  }, [readOnly]);
 
   return (
     <section
@@ -563,7 +565,13 @@ export function MarkdownFrontmatterCard({ frontmatter, onChange, onClose, childr
                 {formatFieldLabel(key)}
               </dt>
               <dd className="min-w-0 min-h-5">
-                {renderFrontmatterEditor(key, value, (nextValue) => onChange(key, nextValue), (searchValue) => {
+                {readOnly ? (
+                  <span className="whitespace-pre-wrap break-words text-ui-sm font-medium">
+                    {Array.isArray(value)
+                      ? value.map(formatInlineValue).join(', ')
+                      : formatInlineValue(value)}
+                  </span>
+                ) : renderFrontmatterEditor(key, value, (nextValue) => onChange(key, nextValue), (searchValue) => {
                   window.dispatchEvent(new CustomEvent('explorer:set-search-query', {
                   detail: {
                     query: key.toLowerCase() === 'tags' ? `#${searchValue}` : searchValue,

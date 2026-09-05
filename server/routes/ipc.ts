@@ -673,45 +673,65 @@ const handlers: Record<string, Record<string, HandlerFn>> = {
 
   // ========== Files ==========
   files: {
+    read: async ([filePath]: [string]) => {
+      const { readWorkspaceTextFile } = await import('../handlers/workspaceFiles');
+      return readWorkspaceTextFile(filePath);
+    },
+    write: async ([filePath, content]: [string, string]) => {
+      const { writeWorkspaceTextFile } = await import('../handlers/workspaceFiles');
+      return writeWorkspaceTextFile(filePath, content);
+    },
+    isDirectory: async ([filePath]: [string]) => {
+      const { isWorkspaceDirectory } = await import('../handlers/workspaceFiles');
+      return isWorkspaceDirectory(filePath);
+    },
+    listDirectory: async ([filePath]: [string]) => {
+      const { listWorkspaceDirectory } = await import('../handlers/workspaceFiles');
+      return listWorkspaceDirectory(filePath);
+    },
+    getThumbnails: async ([paths, size]: [string[], number | undefined]) => {
+      const { getWorkspaceFileThumbnails } = await import('../handlers/workspaceFiles');
+      return getWorkspaceFileThumbnails(paths, size);
+    },
     move: async ([sourcePath, destPath]: [string, string]) => {
-      const { moveFile } = await import('../handlers/files');
-      return moveFile(sourcePath, destPath);
+      const { moveWorkspaceFile } = await import('../handlers/workspaceFiles');
+      return moveWorkspaceFile(sourcePath, destPath);
     },
     rename: async ([filePath, newName]: [string, string]) => {
-      const { renameFile } = await import('../handlers/files');
-      return renameFile(filePath, newName);
+      const { renameWorkspaceFile } = await import('../handlers/workspaceFiles');
+      return renameWorkspaceFile(filePath, newName);
     },
     delete: async ([filePath]: [string]) => {
-      const { trashFile } = await import('../handlers/files');
-      return trashFile(filePath);
+      const { trashWorkspaceFile } = await import('../handlers/workspaceFiles');
+      return trashWorkspaceFile(filePath);
     },
     trash: async ([filePath]: [string]) => {
-      const { trashFile } = await import('../handlers/files');
-      return trashFile(filePath);
+      const { trashWorkspaceFile } = await import('../handlers/workspaceFiles');
+      return trashWorkspaceFile(filePath);
     },
     duplicate: async ([filePath]: [string]) => {
-      const { duplicateFile } = await import('../handlers/files');
-      return duplicateFile(filePath);
+      const { duplicateWorkspaceFile } = await import('../handlers/workspaceFiles');
+      return duplicateWorkspaceFile(filePath);
     },
     copyPath: async ([filePath]: [string]) => {
       const { copyPath } = await import('../handlers/files');
       return copyPath(filePath);
     },
     create: async ([type, workspacePath]: ['note' | 'document' | 'spreadsheet' | 'slides' | 'automation' | 'remotion' | 'movie', string]) => {
-      const { createFile } = await import('../handlers/files');
-      return createFile(type, workspacePath);
+      const { createWorkspaceFile } = await import('../handlers/workspaceFiles');
+      return createWorkspaceFile(type, workspacePath);
     },
     createFolder: async ([parentPath, name]: [string, string | undefined]) => {
-      const { createFolder } = await import('../handlers/files');
-      return createFolder(parentPath, name);
+      const { createWorkspaceFolder } = await import('../handlers/workspaceFiles');
+      return createWorkspaceFolder(parentPath, name);
     },
     createBookmark: async ([url, title, faviconUrl, destFolder]: [string, string, string | undefined, string]) => {
-      const { createBookmark } = await import('../handlers/files');
-      return createBookmark(url, title, faviconUrl, destFolder);
+      const { createWorkspaceBookmark } = await import('../handlers/workspaceFiles');
+      return createWorkspaceBookmark(url, title, faviconUrl, destFolder);
     },
     getStats: async ([filePath]: [string]) => {
-      const { getFileStats } = await import('../handlers/files');
-      return getFileStats(filePath);
+      const { getWorkspaceFileStats } = await import('../handlers/workspaceFiles');
+      return getWorkspaceFileStats(filePath);
     },
   },
 
@@ -1385,7 +1405,10 @@ router.post('/:namespace/:method', async (req: Request, res: Response) => {
         );
       }
     }
-    res.status(500).json({ error: message });
+    const status = Number.isInteger(error?.status) && error.status >= 400 && error.status < 600
+      ? error.status
+      : 500;
+    res.status(status).json({ error: message });
   }
 });
 

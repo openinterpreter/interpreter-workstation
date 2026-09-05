@@ -151,6 +151,8 @@ export function FileSystemProxy({
   onEditCancel,
   renameInputTestId,
 }: FileSystemProxyProps) {
+  const isReadOnlySurface = typeof document !== 'undefined'
+    && document.documentElement.dataset.remoteAccess === 'read-only';
   const shortPath = path ? pathBasename(path) : 'no-path';
   const [instanceId] = useState(() => Math.random().toString(36).slice(2, 6));
 
@@ -281,7 +283,7 @@ export function FileSystemProxy({
 
   // Native HTML5 drag start
   const handleDragStart = useCallback((e: React.DragEvent) => {
-    if (disableDrag || !entityId) {
+    if (disableDrag || isReadOnlySurface || !entityId) {
       e.preventDefault();
       return;
     }
@@ -325,7 +327,7 @@ export function FileSystemProxy({
     if (nodeRef.current) {
       e.dataTransfer.setDragImage(nodeRef.current, 0, 0);
     }
-  }, [disableDrag, entityId, isBrowserTab, isEmailTab, url, displayName, browserId, faviconUrl, emailId, path, type, dragContext]);
+  }, [disableDrag, isReadOnlySurface, entityId, isBrowserTab, isEmailTab, url, displayName, browserId, faviconUrl, emailId, path, type, dragContext]);
 
   const handleDragEnd = useCallback(() => {
     console.log('[file-drag-debug] file-system-proxy:dragend', {
@@ -339,6 +341,7 @@ export function FileSystemProxy({
 
   // Native HTML5 drop target (for folders and files with external drops)
   const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (isReadOnlySurface) return;
     if (isBrowserTab || !path) return;
 
     const isExternal = e.dataTransfer.types.includes('Files') && !e.dataTransfer.types.includes('application/json');
@@ -350,7 +353,7 @@ export function FileSystemProxy({
     e.stopPropagation();
     setIsOver(true);
     e.dataTransfer.dropEffect = isExternal ? 'copy' : 'move';
-  }, [type, isBrowserTab, path]);
+  }, [type, isBrowserTab, isReadOnlySurface, path]);
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -358,6 +361,7 @@ export function FileSystemProxy({
   }, []);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
+    if (isReadOnlySurface) return;
     e.preventDefault();
     e.stopPropagation();
     setIsOver(false);
@@ -438,12 +442,13 @@ export function FileSystemProxy({
           }
         });
     }
-  }, [type, path, dragContext]);
+  }, [type, path, dragContext, isReadOnlySurface]);
 
   // Context menu handler - defines items here, system handles rendering
   // When in Explorer (dragContext='explorer'), let ExplorerNode handle context menu
   // since it has more comprehensive options and proper inline rename
   const handleContextMenu = useCallback(async (e: React.MouseEvent) => {
+    if (isReadOnlySurface) return;
     if (dragContext === 'explorer') return; // ExplorerNode has better context menu
     if (isBrowserTab || isEmailTab) return;
     if (!path) return;
@@ -451,7 +456,7 @@ export function FileSystemProxy({
     e.stopPropagation();
 
     await showFileReferenceContextMenu(path, 'file_system_proxy');
-  }, [path, isBrowserTab, isEmailTab, dragContext]);
+  }, [path, isBrowserTab, isEmailTab, dragContext, isReadOnlySurface]);
 
   // Size classes based on variant
   // Inline variant uses CSS variables for consistent spacing
@@ -568,7 +573,7 @@ export function FileSystemProxy({
           border: 'var(--border-width) solid var(--border)',
           boxShadow: 'var(--shadow-elevated)',
         }}
-        draggable={!disableDrag && !!entityId}
+        draggable={!disableDrag && !isReadOnlySurface && !!entityId}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
         onDragOver={handleDragOver}
@@ -617,7 +622,7 @@ export function FileSystemProxy({
           gap: variant === 'card' ? 'var(--unit-padding)' : undefined,
           ...inlineStyle,
         }}
-        draggable={!disableDrag && !!entityId}
+        draggable={!disableDrag && !isReadOnlySurface && !!entityId}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
         onDragOver={handleDragOver}

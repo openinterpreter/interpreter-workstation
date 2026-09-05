@@ -47,7 +47,7 @@ export function ChatView({ tabId: _tabId, threadId, channel }: ChatViewProps) {
       setLoading(true);
       setError(null);
       const baseUrl = await getBaseUrl();
-      const response = await fetch(`${baseUrl}/api/inbox/thread/${channel}/${encodeURIComponent(threadId)}`);
+      const response = await fetch(`${baseUrl}/api/inbox/thread/${channel}/${encodeURIComponent(threadId)}`, { credentials: 'include' });
       if (!response.ok) {
         throw new Error('Failed to fetch thread');
       }
@@ -87,6 +87,7 @@ export function ChatView({ tabId: _tabId, threadId, channel }: ChatViewProps) {
       const baseUrl = await getBaseUrl();
       const response = await fetch(`${baseUrl}/api/inbox/send`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ channel, threadId, message: trimmedMessage }),
       });

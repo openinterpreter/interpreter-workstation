@@ -14,6 +14,7 @@ function buildMenu(options?: {
     source: 'obsidian';
   }>;
   onScanNoteWorkspaces?: () => void;
+  includeNativeFileManagerActions?: boolean;
 }) {
   return buildWorkspacePickerMenuItems({
     workspacePath: '/Users/test/project',
@@ -24,6 +25,7 @@ function buildMenu(options?: {
     onOpenFolder: vi.fn(),
     onSelectWorkspace: vi.fn(),
     onScanNoteWorkspaces: options?.onScanNoteWorkspaces,
+    includeNativeFileManagerActions: options?.includeNativeFileManagerActions,
   });
 }
 
@@ -51,5 +53,13 @@ describe('workspace picker menu', () => {
     });
 
     expect(items.some((item) => item.label === 'Rescan for note workspaces…')).toBe(true);
+  });
+
+  test('omits display-device file-manager actions for a remote browser host', () => {
+    const items = buildMenu({ includeNativeFileManagerActions: false });
+
+    expect(items.some((item) => item.label === 'Reveal in Finder')).toBe(false);
+    expect(items.some((item) => item.label === 'Open folder...')).toBe(false);
+    expect(items.some((item) => item.label === 'Open parent folder')).toBe(true);
   });
 });

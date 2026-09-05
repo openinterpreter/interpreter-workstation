@@ -1,8 +1,6 @@
 # IPC (Frontend/Backend Communication)
 
-**Current product scope: the desktop Electron app. Prefer IPC. Do not design new UI features around browser-mode parity.**
-
-**The frontend should call `@/ipc`, but not every capability is transport-agnostic. Shared app features can abstract over IPC vs HTTP. Privileged desktop capabilities stay Electron-only.**
+**Workstation has one renderer for desktop and browser hosts. Frontend features call `@/ipc`; the bridge chooses Electron IPC or authenticated HTTP/SSE.**
 
 ```
 ┌─────────────┐
@@ -11,7 +9,7 @@
        │
        ▼
 ┌─────────────────────────────┐
-│   src/ipc.ts (client)       │  ──→  Picks the correct desktop transport
+│   src/ipc.ts (client)       │  ──→  Picks transport and host
 └─────────────────────────────┘
        │
        ├── Electron preload API → IPC → electron/ipc/handlers.ts
@@ -19,15 +17,23 @@
        │                                  ├── Native Electron API (when better)
        │                                  └── OR calls server/handlers/*
        │
-       └── Loopback HTTP only for explicit exceptions
+       └── Browser HTTP → server/routes/* → server/handlers/*
+                    SSE ← /api/events ← broadcastEvent()
 ```
 
 ## Current Rule
 
-- **Electron app first** - optimize for the packaged/desktop runtime
-- **Prefer IPC for app UI features** - especially file access and native capabilities
-- **Do not add HTTP mirrors just for symmetry** - if a capability is desktop-only, keep it desktop-only
-- **If we ever ship a web app** - design a separate web-safe API then; do not pre-emptively weaken the desktop boundary now
+- **One component API** - renderer code calls `@/ipc`, `getApiUrl()`, or
+  `apiRequest()` instead of selecting a transport itself.
+- **One business implementation** - shared logic stays in `server/handlers`.
+- **Explicit access** - host policy decides read-write vs read-only; components
+  reflect that policy with `isWorkstationReadOnly()`.
+- **Location is not permission** - remote does not imply read-only, and local
+  does not define which controls a configured distribution must expose.
+- **Native affordances stay native** - operating-system dialogs and local
+  window management need Electron implementations or a deliberate browser UX.
+- **HTTP is an authenticated product transport** - do not widen it accidentally
+  or rely on hidden UI as the authorization boundary.
 
 ## Key Principle: NO DUPLICATE BUSINESS LOGIC
 
@@ -38,23 +44,24 @@
 
 ## Shared vs Desktop-Only
 
-There are two categories of frontend capabilities:
+There are two categories of frontend operations:
 
-- **Shared capabilities** can have both IPC and HTTP transports behind `@/ipc`
-- **Privileged desktop capabilities** are exposed only to the trusted Electron renderer and must not be mirrored onto HTTP
+- **Connected-computer operations** use the bridge and can have both IPC and
+  HTTP transports. In browser mode they affect the selected remote host, not
+  the device displaying the webpage.
+- **Display-device-native operations** are meaningful only in Electron or need
+  a separate browser interaction.
 
-Examples of **privileged desktop capabilities**:
+Examples of **display-device-native operations**:
 
-- user-opened local file reads/writes for editor tabs
-- explicit thumbnail generation for arbitrary local file paths
-- native shell integration, dialogs, drag-and-drop file handles
+- choosing a folder with the local operating-system picker;
+- revealing a file in the local Finder or Explorer;
+- Electron window management and native menus;
+- resolving a browser `File` object to a local absolute path.
 
-For these APIs:
-
-- add them to `electron/preload.ts` and `electron/ipc/handlers.ts`
-- call shared server handlers only if that does not widen the trust boundary
-- **do not** add them to `server/routes/ipc.ts`
-- **do not** route them through generic `/api/ipc/*`
+For these operations, add an Electron implementation and either omit the
+control in a browser or design a browser-safe equivalent. Do not call a remote
+machine's Finder merely because the method exists in an HTTP namespace.
 
 ## Architecture
 
@@ -87,11 +94,13 @@ import { myFeature } from '@/ipc';
 await myFeature.doThing('hello');
 ```
 
-## Adding Event Subscriptions (CRITICAL - Requires preload.ts)
+## Adding Event Subscriptions
 
-**Event subscriptions (`namespace.onXxx()`) REQUIRE explicit preload.ts bindings in Electron mode.**
-
-The fallback proxy only supports method calls, NOT event subscriptions. If you try to subscribe to an event on a namespace that isn't in preload.ts, **it will throw an error**.
+Event subscriptions need both transports: explicit preload bindings in
+Electron and a named SSE event in browser mode. If a namespace is not in the
+preload, the Electron renderer does not receive that event. If the handler does
+not call `broadcastEvent()`, browser clients do not receive it through
+`/api/events`.
 
 ```typescript
 // 1. server/handlers/myFeature.ts - emit event after action
@@ -149,10 +158,8 @@ useEffect(() => {
 }, []);
 ```
 
-**Why is preload.ts required?**
-- event subscriptions are an explicit Electron capability boundary
-- the fallback proxy only supports method calls, not event channels
-- if a namespace is not in preload, the renderer does not get that capability
+The renderer-facing bridge owns both subscriptions. A component should not
+create a second `EventSource` or subscribe to `ipcRenderer` directly.
 
 ## When to Use Native Electron APIs vs Shared Handlers
 
@@ -165,20 +172,23 @@ useEffect(() => {
 
 The rule: **If Electron has a native API that's better, use it. Otherwise, call the shared handler.**
 
-## Privileged File Access
+## Workspace File Access
 
-User-opened desktop files are a special case.
+File tabs refer to files on the connected computer. Electron may return a
+`file://` URL for a trusted local file. Browser hosts use the authenticated
+workspace-scoped `/api/files` route. A browser request must not turn an
+arbitrary absolute path into filesystem access: the server resolves it and
+proves that it remains inside the configured workspace.
 
-- In Electron, opened file tabs read and write through renderer-only IPC
-- Those reads/writes are **not** part of the workspace-scoped HTTP file API
-- `files.read`, `files.write`, and explicit thumbnail reads for arbitrary local paths must stay off `server/routes/ipc.ts`
-- `getFileUrl(filePath)` should return `file://` in Electron so viewers do not depend on `/api/files` for absolute local files
-
-This boundary exists to keep untrusted HTML/email/browser content from gaining local file access just because the app also runs a loopback server.
+Anonymous publication does not use this route. It uses
+`/api/public-workspace/file` with its own publication-root and MIME allowlist.
 
 **Trust model:**
 
-- privileged Electron APIs are for the trusted app renderer only
+- native Electron APIs are for the trusted app renderer only
+- private browser file APIs require an authenticated Workstation session
+- read-only host policy rejects file writes before the route runs
+- workspace and symlink containment are enforced on the server
 - trust checks must parse URLs and validate exact protocol/host/port rules
 - **never** trust a renderer with string-prefix origin checks like `startsWith('http://localhost:5173')`
 

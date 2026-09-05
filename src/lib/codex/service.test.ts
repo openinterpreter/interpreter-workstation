@@ -32,6 +32,7 @@ function createFakeClient(overrides: {
   startTurn?: (params: Parameters<CodexClient["startTurn"]>[0]) => Promise<v2.Turn>;
   steerTurn?: (params: Parameters<CodexClient["steerTurn"]>[0]) => Promise<v2.TurnSteerResponse>;
   resumeThread?: (...args: Parameters<CodexClient["resumeThread"]>) => Promise<string>;
+  forkThread?: (...args: Parameters<CodexClient["forkThread"]>) => Promise<string>;
   threadRead?: (params: Parameters<CodexClient["threadRead"]>[0]) => Promise<v2.ThreadReadResponse>;
   configValueWrite?: (keyPath: string, value: JsonValue) => Promise<void>;
   configRead?: () => Promise<v2.ConfigReadResponse>;
@@ -43,6 +44,7 @@ function createFakeClient(overrides: {
     startThread: 0,
     startThreadWithConfig: 0,
     resumeThread: 0,
+    forkThread: 0,
     startTurn: 0,
     steerTurn: [] as Array<Parameters<CodexClient["steerTurn"]>[0]>,
     ensureConnected: 0,
@@ -60,6 +62,7 @@ function createFakeClient(overrides: {
     resumeThreadConfig: [] as Array<Record<string, JsonValue> | null | undefined>,
     resumeThreadBaseInstructions: [] as Array<string | null | undefined>,
     resumeThreadDeveloperInstructions: [] as Array<string | null | undefined>,
+    forkThreadArgs: [] as Array<Parameters<CodexClient["forkThread"]>>,
     startTurnCwd: [] as Array<string | null | undefined>,
     skillsListParams: [] as Array<v2.SkillsListParams>,
     threadListParams: [] as Array<v2.ThreadListParams>,
@@ -149,6 +152,14 @@ function createFakeClient(overrides: {
         throw new Error("missing thread");
       }
       return threadId;
+    },
+    async forkThread(...args) {
+      calls.forkThread += 1;
+      calls.forkThreadArgs.push(args);
+      if (overrides.forkThread) {
+        return overrides.forkThread(...args);
+      }
+      return "thr_fork";
     },
     async startTurn(params) {
       calls.startTurn += 1;
@@ -1057,6 +1068,34 @@ describe("CodexService", () => {
     ]);
   });
 
+  test("allows callers to disable the idle watchdog for native Goal turns", async () => {
+    const fake = createFakeClient();
+    const service = new CodexService(fake.client);
+
+    const runPromise = service.runTurn({
+      threadId: "thr_existing",
+      message: "continue the active Goal",
+      model: "test-model",
+      idleTimeoutMs: 0,
+      onEvent: () => {},
+    });
+
+    await waitFor(() => fake.calls.startTurn === 1);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.deepEqual(fake.calls.interruptTurn, []);
+
+    fake.emit({
+      method: SERVER_METHOD.turnCompleted,
+      params: {
+        threadId: "thr_existing",
+        turn: createTurn("turn_1", "completed"),
+      },
+    });
+
+    const result = await runPromise;
+    assert.equal(result.status, "completed");
+  });
+
   test("does not interrupt while a blocking MCP tool call is still in flight", async () => {
     const fake = createFakeClient();
     const service = new CodexService(fake.client);
@@ -1254,6 +1293,99 @@ describe("CodexService", () => {
     });
 
     await run;
+  });
+
+  test("restores a thread without manufacturing a turn", async () => {
+    const fake = createFakeClient();
+    const service = new CodexService(fake.client);
+
+    const threadId = await service.resumeThread({
+      threadId: "thr_existing",
+      model: "test-model",
+      modelProvider: "custom",
+      providerConfig: {
+        base_url: "https://example.test/v1",
+        name: "Custom",
+        requires_openai_auth: false,
+        wire_api: "responses",
+        env_key: "CUSTOM_API_KEY",
+      },
+      cwd: "/workspace/science",
+      config: { model_reasoning_effort: "max" },
+    });
+
+    assert.equal(threadId, "thr_existing");
+    assert.equal(fake.calls.resumeThread, 1);
+    assert.equal(fake.calls.startTurn, 0);
+    assert.equal(fake.calls.resumeThreadModelProvider[0], "custom");
+    assert.equal(fake.calls.resumeThreadModel[0], "test-model");
+    assert.equal(fake.calls.resumeThreadCwd[0], "/workspace/science");
+    assert.deepEqual(fake.calls.resumeThreadConfig[0], {
+      model_reasoning_effort: "max",
+      model_providers: {
+        custom: {
+          base_url: "https://example.test/v1",
+          name: "Custom",
+          requires_openai_auth: false,
+          wire_api: "responses",
+          env_key: "CUSTOM_API_KEY",
+        },
+      },
+      shell_environment_policy: {
+        set: {
+          ELECTRON_RUN_AS_NODE: "1",
+        },
+      },
+    });
+  });
+
+  test("forks through a completed turn without manufacturing a turn", async () => {
+    const fake = createFakeClient();
+    const service = new CodexService(fake.client);
+
+    const threadId = await service.forkThread({
+      threadId: "thr_source",
+      lastTurnId: "turn_clean",
+      model: "test-model",
+      modelProvider: "custom",
+      providerConfig: {
+        base_url: "https://example.test/v1",
+        name: "Custom",
+        requires_openai_auth: false,
+        wire_api: "responses",
+        env_key: "CUSTOM_API_KEY",
+      },
+      cwd: "/workspace/science",
+      config: { model_reasoning_effort: "max" },
+    });
+
+    assert.equal(threadId, "thr_fork");
+    assert.equal(fake.calls.forkThread, 1);
+    assert.equal(fake.calls.startTurn, 0);
+    assert.deepEqual(fake.calls.forkThreadArgs[0], [
+      "thr_source",
+      "turn_clean",
+      "custom",
+      "test-model",
+      "/workspace/science",
+      {
+        model_reasoning_effort: "max",
+        model_providers: {
+          custom: {
+            base_url: "https://example.test/v1",
+            name: "Custom",
+            requires_openai_auth: false,
+            wire_api: "responses",
+            env_key: "CUSTOM_API_KEY",
+          },
+        },
+        shell_environment_policy: {
+          set: {
+            ELECTRON_RUN_AS_NODE: "1",
+          },
+        },
+      },
+    ]);
   });
 
   test("passes modelProvider through to resumeThread", async () => {

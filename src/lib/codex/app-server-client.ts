@@ -2296,6 +2296,54 @@ export class CodexAppServerClient {
     return result.thread.id;
   }
 
+  async forkThread(
+    threadId: string,
+    lastTurnId: string,
+    modelProvider?: string | null,
+    model?: string | null,
+    cwd?: string | null,
+    config?: Record<string, JsonValue> | null,
+  ) {
+    const runtimeAccess = await this.getRuntimeAccessSnapshot();
+    const workspacePermission = buildCodexWorkspacePermissionSelection({
+      sandboxMode: runtimeAccess.sandboxMode,
+      readAccessMode: runtimeAccess.readAccessMode,
+      networkAccess: runtimeAccess.networkAccess,
+      allowTempAccess: process.platform === "darwin" ? runtimeAccess.macosTempAccess : true,
+      cwd,
+      additionalReadableRoots: getInterpreterCliSandboxReadableRoots(),
+      additionalWritableRoots: getInterpreterCliSandboxWritableRoots(),
+    });
+    const nextConfig = withWorkspacePermissionConfig(config, workspacePermission);
+
+    console.log(
+      `[interpreter-thread] fork threadId=${threadId} lastTurnId=${lastTurnId} model=${model ?? ""} modelProvider=${modelProvider ?? "default"} cwd=${cwd ?? ""} access=${workspacePermission?.permissionProfileId ?? runtimeAccess.sandboxMode}`,
+    );
+
+    const request: v2.ThreadForkParams & ExperimentalThreadAccessFields = {
+      threadId,
+      lastTurnId,
+      modelProvider: modelProvider ?? null,
+      ...(model ? { model } : {}),
+      ...(cwd ? { cwd } : {}),
+      config: nextConfig,
+      ...(workspacePermission
+        ? {
+            permissions: workspacePermission.permissionProfileId,
+            runtimeWorkspaceRoots: workspacePermission.runtimeWorkspaceRoots,
+          }
+        : { sandbox: runtimeAccess.sandboxMode as v2.SandboxMode }),
+    };
+    const result = await this.rpcRequest(CLIENT_METHOD.threadFork, request);
+    if (workspacePermission) {
+      this.workspaceScopedThreads.add(result.thread.id);
+    } else {
+      this.workspaceScopedThreads.delete(result.thread.id);
+    }
+
+    return result.thread.id;
+  }
+
   async threadList(params: v2.ThreadListParams = {}): Promise<v2.ThreadListResponse> {
     return this.rpcRequest(CLIENT_METHOD.threadList, params);
   }
@@ -2306,6 +2354,18 @@ export class CodexAppServerClient {
 
   async threadSetName(params: v2.ThreadSetNameParams): Promise<v2.ThreadSetNameResponse> {
     return this.rpcRequest(CLIENT_METHOD.threadSetName, params);
+  }
+
+  async threadGoalSet(params: v2.ThreadGoalSetParams): Promise<v2.ThreadGoalSetResponse> {
+    return this.rpcRequest(CLIENT_METHOD.threadGoalSet, params);
+  }
+
+  async threadGoalGet(params: v2.ThreadGoalGetParams): Promise<v2.ThreadGoalGetResponse> {
+    return this.rpcRequest(CLIENT_METHOD.threadGoalGet, params);
+  }
+
+  async threadGoalClear(params: v2.ThreadGoalClearParams): Promise<v2.ThreadGoalClearResponse> {
+    return this.rpcRequest(CLIENT_METHOD.threadGoalClear, params);
   }
 
   async threadArchive(params: v2.ThreadArchiveParams): Promise<v2.ThreadArchiveResponse> {

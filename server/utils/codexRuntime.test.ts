@@ -1221,7 +1221,7 @@ describe('resolveCodexProfileForStreamRequest', () => {
     expect(storedProfile).not.toHaveProperty('apiKey');
   });
 
-  test('resolves model-config environment keys without mutating persisted config', () => {
+  test('passes model-config environment keys to OIX without materializing the secret', () => {
     process.env.WORKSTATION_TEST_OPENAI_API_KEY = 'sk-runtime-only';
     const modelConfig = {
       provider: 'api' as const,
@@ -1235,8 +1235,9 @@ describe('resolveCodexProfileForStreamRequest', () => {
     const profile = resolveCodexProfileFromModelConfig(modelConfig);
 
     expect(profile.modelProvider).toBe(buildAppManagedModelProviderId('openai-api'));
-    expect(profile.providerConfig?.experimental_bearer_token).toBe('sk-runtime-only');
-    expect(profile.providerConfig?.http_headers?.Authorization).toBe('Bearer sk-runtime-only');
+    expect(profile.providerConfig?.env_key).toBe('WORKSTATION_TEST_OPENAI_API_KEY');
+    expect(profile.providerConfig?.experimental_bearer_token).toBeUndefined();
+    expect(profile.providerConfig?.http_headers).toBeUndefined();
     expect(modelConfig).not.toHaveProperty('apiKey');
   });
 
@@ -1295,11 +1296,14 @@ describe('runCodexAgentTurn overlay continuation', () => {
       });
     }) as typeof fetch;
 
-    const runTurnCalls: Array<{ model?: string }> = [];
+    const runTurnCalls: Array<{ model?: string; idleTimeoutMs?: number | null }> = [];
     const fakeService = {
       async ensureProvider() {},
       async runTurn(options: any) {
-        runTurnCalls.push({ model: options.model });
+        runTurnCalls.push({
+          model: options.model,
+          idleTimeoutMs: options.idleTimeoutMs,
+        });
         return {
           threadId: 'thread-local-qwen',
           turnId: 'turn-local-qwen',
@@ -1320,13 +1324,17 @@ describe('runCodexAgentTurn overlay continuation', () => {
         } as any,
         workspacePath: '/tmp',
         message: 'Say hello.',
+        idleTimeoutMs: 0,
         binding: {
           agentId: 'agent-local-qwen',
         },
       });
 
       expect(result.resolvedModel).toBe('qwen3.5:0.8b');
-      expect(runTurnCalls).toEqual([{ model: 'qwen3.5:0.8b' }]);
+      expect(runTurnCalls).toEqual([{
+        model: 'qwen3.5:0.8b',
+        idleTimeoutMs: 0,
+      }]);
       expect(showBodies).toEqual([
         { model: 'qwen3.5:0.8b' },
         { name: 'qwen3.5:0.8b' },

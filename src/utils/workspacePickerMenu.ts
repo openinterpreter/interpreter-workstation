@@ -29,6 +29,7 @@ interface BuildWorkspacePickerMenuItemsOptions {
   onSelectWorkspace: (path: string) => void;
   onScanNoteWorkspaces?: () => void;
   isScanningNoteWorkspaces?: boolean;
+  includeNativeFileManagerActions?: boolean;
 }
 
 const NOTE_WORKSPACE_SOURCE_ORDER: DetectedNoteWorkspaceSource[] = [
@@ -92,6 +93,7 @@ export function buildWorkspacePickerMenuItems({
   onSelectWorkspace,
   onScanNoteWorkspaces,
   isScanningNoteWorkspaces = false,
+  includeNativeFileManagerActions = true,
 }: BuildWorkspacePickerMenuItemsOptions): WorkspacePickerMenuItem[] {
   const items: WorkspacePickerMenuItem[] = [];
   const filteredRecentFolders = recentFolders
@@ -107,11 +109,13 @@ export function buildWorkspacePickerMenuItems({
       title: true,
     });
     pushSeparator(items);
-    items.push({
-      label: revealWorkspaceLabel,
-      icon: menuIcon(FolderSearch),
-      onClick: () => onRevealWorkspace(workspacePath),
-    });
+    if (includeNativeFileManagerActions) {
+      items.push({
+        label: revealWorkspaceLabel,
+        icon: menuIcon(FolderSearch),
+        onClick: () => onRevealWorkspace(workspacePath),
+      });
+    }
     if (canOpenParent && parentFolderPath) {
       items.push({
         label: 'Open parent folder',
@@ -178,12 +182,14 @@ export function buildWorkspacePickerMenuItems({
     pushSeparator(items);
   }
 
-  items.push({
-    label: 'Open folder...',
-    icon: menuIcon(FolderOpen),
-    onClick: onOpenFolder,
-    shortcut: openFolderShortcut,
-  });
+  if (includeNativeFileManagerActions) {
+    items.push({
+      label: 'Open folder...',
+      icon: menuIcon(FolderOpen),
+      onClick: onOpenFolder,
+      shortcut: openFolderShortcut,
+    });
+  }
 
   return trimTrailingSeparator(items);
 }

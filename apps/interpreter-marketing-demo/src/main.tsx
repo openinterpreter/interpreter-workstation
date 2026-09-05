@@ -8,6 +8,11 @@ async function start(): Promise<void> {
     return;
   }
 
+  if (surface === "remote-thread") {
+    await import("./surfaces/RemoteThreadViewerSurface");
+    return;
+  }
+
   await import("../../../src/main");
 }
 

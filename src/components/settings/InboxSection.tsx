@@ -27,7 +27,7 @@ export function InboxSectionContent() {
     try {
       setError(null);
       const baseUrl = await getBaseUrl();
-      const response = await fetch(`${baseUrl}/api/inbox/status`);
+      const response = await fetch(`${baseUrl}/api/inbox/status`, { credentials: 'include' });
       const data = await response.json();
       setChannels(data.channels || []);
     } catch (err: any) {
@@ -47,7 +47,7 @@ export function InboxSectionContent() {
       setDisconnecting(true);
       setError(null);
       const baseUrl = await getBaseUrl();
-      const response = await fetch(`${baseUrl}/api/servers/whatsapp/disconnect`, { method: 'POST' });
+      const response = await fetch(`${baseUrl}/api/servers/whatsapp/disconnect`, { method: 'POST', credentials: 'include' });
       if (!response.ok) throw new Error('Failed to disconnect WhatsApp');
       await fetchStatus();
     } catch (err: any) {

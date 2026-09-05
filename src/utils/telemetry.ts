@@ -32,7 +32,7 @@ function track(event: string, data?: Record<string, unknown>) {
     if (!PASSIVE_EVENTS.has(event)) {
       noteUserAction(event);
     }
-    void telemetry.track(event, enriched, undefined);
+    void telemetry.track(event, enriched, undefined).catch(() => {});
   } catch {
     // never crash the app for telemetry
   }
@@ -43,7 +43,7 @@ function trackError(errorType: string, error: string, context?: Record<string, u
     // Error events carry enrichment so we know WHERE and WHEN the error hit
     // without every call site needing to pass it.
     const enriched = { ...getEnrichment(), ...(context ?? {}) };
-    void telemetry.trackError(errorType, error, enriched);
+    void telemetry.trackError(errorType, error, enriched).catch(() => {});
   } catch {
     // never crash the app for telemetry
   }

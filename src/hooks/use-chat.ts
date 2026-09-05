@@ -125,6 +125,7 @@ async function requestBackgroundProcessStopForThread(
   const stopUrl = await getApiUrl("/api/agent/chat/background/stop");
   const response = await fetch(stopUrl, {
     method: "POST",
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ threadId }),
   });
@@ -783,6 +784,9 @@ export type UseChatReturn = {
   streamingMessage: ChatMessage | null;
   planChecklist: PlanChecklistState | null;
   historyLoaded: boolean;
+  hasOlderHistory: boolean;
+  loadingOlderHistory: boolean;
+  loadOlderHistory: () => Promise<void>;
   isStreaming: boolean;
   error: string | null;
   errorDetails: string | null;
@@ -819,6 +823,41 @@ export type UseChatOptions = {
     text: string;
   }) => boolean;
 };
+
+type ThreadHistoryPageMetadata = {
+  nextCursor: string | null;
+  hasMore: boolean;
+};
+
+function readThreadHistoryPageMetadata(value: unknown): ThreadHistoryPageMetadata {
+  if (typeof value !== 'object' || value === null) {
+    return { nextCursor: null, hasMore: false };
+  }
+  const page = (value as { historyPage?: unknown }).historyPage;
+  if (typeof page !== 'object' || page === null) {
+    return { nextCursor: null, hasMore: false };
+  }
+  const nextCursor = (page as { nextCursor?: unknown }).nextCursor;
+  const hasMore = (page as { hasMore?: unknown }).hasMore;
+  return {
+    nextCursor: typeof nextCursor === 'string' ? nextCursor : null,
+    hasMore: hasMore === true,
+  };
+}
+
+export function mergeChatHistory(
+  current: ChatMessage[],
+  incoming: ChatMessage[],
+  direction: 'older' | 'newer',
+): ChatMessage[] {
+  const incomingById = new Map(incoming.map((message) => [message.id, message]));
+  const updatedCurrent = current.map((message) => incomingById.get(message.id) ?? message);
+  const currentIds = new Set(current.map((message) => message.id));
+  const additions = incoming.filter((message) => !currentIds.has(message.id));
+  return direction === 'older'
+    ? [...additions, ...updatedCurrent]
+    : [...updatedCurrent, ...additions];
+}
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -976,6 +1015,8 @@ export function useChat(
     options?.initialThreadId ?? null,
   );
   const [historyLoaded, setHistoryLoaded] = useState(!options.initialThreadId);
+  const [hasOlderHistory, setHasOlderHistory] = useState(false);
+  const [loadingOlderHistory, setLoadingOlderHistory] = useState(false);
   const [runtimeContinuationNonce, setRuntimeContinuationNonce] = useState(0);
 
   const abortRef = useRef<AbortController | null>(null);
@@ -991,6 +1032,7 @@ export function useChat(
     options.customEndpoint ?? null,
   );
   const toolStartTimesRef = useRef<Map<string, number>>(new Map());
+  const olderHistoryCursorRef = useRef<string | null>(null);
 
   // Keep the telemetry context in sync with the chat's active profile so
   // every emitted event is enriched with activeProfileId/activeModel — not
@@ -1120,8 +1162,9 @@ export function useChat(
       try {
         const response = await fetch(
           await getApiUrl(
-            `/api/agent/threads/${encodeURIComponent(initialThreadId)}`,
+            `/api/agent/threads/${encodeURIComponent(initialThreadId)}?limit=24`,
           ),
+          { credentials: 'include' },
         );
         if (response.status === 404) {
           if (!cancelled) {
@@ -1150,6 +1193,7 @@ export function useChat(
         }
 
         if (!cancelled) {
+          const historyPage = readThreadHistoryPageMetadata(payload);
           const nextMessages = mapThreadToChatMessages(payload.thread).filter(
             (message) => !isHiddenRuntimeContinuationMessage(message),
           );
@@ -1166,6 +1210,9 @@ export function useChat(
             planChecklist: null,
           };
           setMessages(nextMessages);
+          setIsStreaming(payload.thread.status?.type === 'active');
+          olderHistoryCursorRef.current = historyPage.nextCursor;
+          setHasOlderHistory(historyPage.hasMore);
           setPlanChecklist(null);
           setError(null);
           setErrorDetails(null);
@@ -1202,6 +1249,95 @@ export function useChat(
     showError,
     threadId,
   ]);
+
+  const loadOlderHistory = useCallback(async () => {
+    const activeThreadId = stateRef.current.threadId ?? threadId;
+    const cursor = olderHistoryCursorRef.current;
+    if (!activeThreadId || !cursor || loadingOlderHistory || marketingDemoMode) {
+      return;
+    }
+
+    setLoadingOlderHistory(true);
+    try {
+      const response = await fetch(
+        await getApiUrl(
+          `/api/agent/threads/${encodeURIComponent(activeThreadId)}?limit=24&before=${encodeURIComponent(cursor)}`,
+        ),
+        { credentials: 'include' },
+      );
+      if (!response.ok) {
+        throw new Error(tr('errors.chat.threadHistoryLoadHttp', { status: response.status }));
+      }
+      const payload: unknown = await response.json();
+      if (!isThreadReadResponse(payload)) {
+        throw new Error('Invalid thread history response shape.');
+      }
+      const historyPage = readThreadHistoryPageMetadata(payload);
+      const olderMessages = mapThreadToChatMessages(payload.thread).filter(
+        (message) => !isHiddenRuntimeContinuationMessage(message),
+      );
+      const nextMessages = mergeChatHistory(
+        stateRef.current.messages,
+        olderMessages,
+        'older',
+      );
+      stateRef.current = { ...stateRef.current, messages: nextMessages };
+      setMessages(nextMessages);
+      olderHistoryCursorRef.current = historyPage.nextCursor;
+      setHasOlderHistory(historyPage.hasMore);
+    } catch (loadError) {
+      showError(
+        loadError instanceof Error
+          ? loadError.message
+          : tr('errors.chat.threadHistoryLoadFailed'),
+      );
+    } finally {
+      setLoadingOlderHistory(false);
+    }
+  }, [loadingOlderHistory, marketingDemoMode, showError, threadId]);
+
+  useEffect(() => {
+    const activeThreadId = options.initialThreadId?.trim();
+    if (!activeThreadId || !historyLoaded || marketingDemoMode) {
+      return;
+    }
+
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const response = await fetch(
+          await getApiUrl(
+            `/api/agent/threads/${encodeURIComponent(activeThreadId)}?limit=24&bestEffort=1`,
+          ),
+          { credentials: 'include' },
+        );
+        if (!response.ok || cancelled) return;
+        const payload: unknown = await response.json();
+        if (!isThreadReadResponse(payload) || cancelled) return;
+        const refreshed = mapThreadToChatMessages(payload.thread).filter(
+          (message) => !isHiddenRuntimeContinuationMessage(message),
+        );
+        const nextMessages = mergeChatHistory(
+          stateRef.current.messages,
+          refreshed,
+          'newer',
+        );
+        stateRef.current = { ...stateRef.current, messages: nextMessages };
+        setMessages(nextMessages);
+        setIsStreaming(payload.thread.status?.type === 'active');
+      } catch {
+        // Reconnect polling is best-effort. The normal history error remains the
+        // authoritative failure surface and the next interval tries again.
+      }
+    };
+
+    const intervalId = window.setInterval(() => void refresh(), 2500);
+    void refresh();
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [historyLoaded, marketingDemoMode, options.initialThreadId]);
 
   const handleParsedEvent = useCallback(
     (chunk: SseStreamEvent) => {
@@ -1750,6 +1886,7 @@ export function useChat(
             await getApiUrl("/api/agent/chat/stream"),
             {
               method: "POST",
+              credentials: "include",
               headers: { "Content-Type": "application/json" },
               signal: abortController.signal,
               body: JSON.stringify(requestBody),
@@ -2017,6 +2154,7 @@ export function useChat(
         .then((stopUrl) =>
           fetch(stopUrl, {
             method: "POST",
+            credentials: "include",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ threadId: targetThreadId }),
           }),
@@ -2162,6 +2300,9 @@ export function useChat(
     streamingMessage,
     planChecklist,
     historyLoaded,
+    hasOlderHistory,
+    loadingOlderHistory,
+    loadOlderHistory,
     isStreaming,
     error,
     errorDetails,

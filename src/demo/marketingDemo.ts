@@ -20,6 +20,11 @@ import type {
 import type { v2 } from '../../server/handlers/codex-generated-types/index';
 import { DEFAULT_STT_SETTINGS } from '../../shared/types/stt';
 import { DEFAULT_TTS_SETTINGS } from '../../shared/types/tts';
+import { getRemoteWorkstationLayoutState, isRemoteWorkstationMode } from '../remote/remoteWorkstation';
+import {
+  isPublicWorkstationPublication,
+  isRemoteWorkstationHost,
+} from '../remote/workstationConnection';
 
 export interface MarketingDemoFileTreeNode {
   name: string;
@@ -281,6 +286,12 @@ function getSearchParams(): URLSearchParams {
 }
 
 export function isMarketingDemoMode(): boolean {
+  // The marketing bundle also packages the real Workstation shell. A general
+  // remote connection must use the live HTTP/SSE bridge, not demo fixtures.
+  if (isRemoteWorkstationHost() && !isPublicWorkstationPublication()) {
+    return false;
+  }
+
   if (MARKETING_DEMO_ENV_ENABLED) {
     return true;
   }
@@ -2578,6 +2589,9 @@ export function getMarketingDemoFileStats(filePath: string): {
 
 export function getMarketingDemoLayoutState(): LayoutState {
   const sidebarAgentModelConfig = profileToModelConfig(marketingDemoProfiles[0]);
+  if (isRemoteWorkstationMode()) {
+    return getRemoteWorkstationLayoutState(sidebarAgentModelConfig);
+  }
   const tabIds = marketingDemoLayoutPreset.tabs.map((tab) => tab.id);
   const tabs = marketingDemoLayoutPreset.tabs.reduce<LayoutState['tabs']>((accumulator, tab) => {
     const absolutePath = demoPath(tab.relativePath);

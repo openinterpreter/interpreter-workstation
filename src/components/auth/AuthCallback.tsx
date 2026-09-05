@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '../../utils/supabase/client';
 import { Card, CardHeader, CardTitle, CardContent } from '../ui/card';
 import { isMarketingDemoMode } from '../../demo/marketingDemo';
+import { getApiUrl } from '@/ipc';
 
 /*
  * Why we don't auto-close this tab
@@ -95,8 +96,9 @@ export function AuthCallback() {
           setStatus('Authentication successful! Transferring to Interpreter...');
 
           // Send session data to the transfer endpoint
-          const response = await fetch('/api/auth/transfer-session', {
+          const response = await fetch(await getApiUrl('/api/auth/transfer-session'), {
             method: 'POST',
+            credentials: 'include',
             headers: {
               'Content-Type': 'application/json',
             },

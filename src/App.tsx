@@ -60,6 +60,8 @@ import type {
   ProfilesConfigRecoveredEvent,
 } from "../electron/ipc/registry";
 import { getMarketingDemoSurface, isMarketingDemoMode, isMarketingDemoWindowChromeEnabled } from "./demo/marketingDemo";
+import { isWorkstationReadOnly } from "./remote/workstationConnection";
+import { WorkstationConnectionGate } from './components/WorkstationConnectionGate';
 
 const FIRST_STARTUP_NUDGE_EVENT = 'onboarding:first-startup-nudge';
 const TITLEBAR_LAYOUT_CHANGED_EVENT = 'titlebar:layout-changed';
@@ -70,6 +72,7 @@ function AppContent() {
 
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
   const marketingDemoMode = isMarketingDemoMode();
+  const readOnlyWorkstation = isWorkstationReadOnly();
   const marketingDemoWindowChrome = marketingDemoMode && isMarketingDemoWindowChromeEnabled();
   const [primaryColor, setPrimaryColor] = useState<PrimaryColorId>('blue');
   const [_isDraggingLeft, setIsDraggingLeft] = useState(false);
@@ -114,8 +117,8 @@ function AppContent() {
 
   // Onboarding state
   // null = still loading config, true = needs onboarding, false = onboarding not needed / completed
-  const [isOnboarding, setIsOnboarding] = useState<boolean | null>(null);
-  const [showOnboardingOverlay, setShowOnboardingOverlay] = useState(true);
+  const [isOnboarding, setIsOnboarding] = useState<boolean | null>(marketingDemoMode ? false : null);
+  const [showOnboardingOverlay, setShowOnboardingOverlay] = useState(!marketingDemoMode);
   const configRecoveryNoticeCountRef = useRef(0);
   const windowSurfaceMode = isMac
     ? (nativeMacTransparencyDisabled ? 'opaque' : 'vibrant')
@@ -228,6 +231,7 @@ function AppContent() {
 
   // Check if user needs onboarding on mount
   useEffect(() => {
+    if (marketingDemoMode) return;
     getOnboardingState()
       .then(({ state }) => {
         const needsOnboarding = shouldShowOnboarding(state);
@@ -241,7 +245,7 @@ function AppContent() {
         setIsOnboarding(true);
         setShowOnboardingOverlay(true);
       });
-  }, []);
+  }, [marketingDemoMode]);
 
   // Listen for restart-onboarding event from Settings
   useEffect(() => {
@@ -907,7 +911,7 @@ function AppContent() {
 
           {/* Right: Agent Sidebar - absolutely positioned, always pinned to right edge */}
           {/* ml-auto right-aligns content so it slides off to the right when closing */}
-          <div
+          {!readOnlyWorkstation ? <div
             ref={rightSidebarRef}
             className={`absolute top-0 right-0 bottom-0 overflow-hidden ${
               marketingDemoMode ? 'pointer-events-none' : ''
@@ -919,7 +923,7 @@ function AppContent() {
             >
               {shouldRenderMainSurfaces ? <AgentSidebar /> : null}
             </div>
-          </div>
+          </div> : null}
         </div>
       </div>
 
@@ -959,23 +963,25 @@ export default function App() {
   return (
     <MotionConfig transition={APP_DEFAULT_TRANSITION} reducedMotion="user">
       <I18nextProvider i18n={i18n}>
-        <LowerLeftNoticeProvider>
-          <ToastProvider>
-            <AuthProvider>
-              <ToolServersProvider>
-                <LayoutProvider>
-                  <HelpProvider>
-                    <CommandOverlayProvider>
-                      <AppContent />
-                      <BrowserContextMenu />
-                      <BrowserSelect />
-                    </CommandOverlayProvider>
-                  </HelpProvider>
-                </LayoutProvider>
-              </ToolServersProvider>
-            </AuthProvider>
-          </ToastProvider>
-        </LowerLeftNoticeProvider>
+        <WorkstationConnectionGate>
+          <LowerLeftNoticeProvider>
+            <ToastProvider>
+              <AuthProvider>
+                <ToolServersProvider>
+                  <LayoutProvider>
+                    <HelpProvider>
+                      <CommandOverlayProvider>
+                        <AppContent />
+                        <BrowserContextMenu />
+                        <BrowserSelect />
+                      </CommandOverlayProvider>
+                    </HelpProvider>
+                  </LayoutProvider>
+                </ToolServersProvider>
+              </AuthProvider>
+            </ToastProvider>
+          </LowerLeftNoticeProvider>
+        </WorkstationConnectionGate>
       </I18nextProvider>
     </MotionConfig>
   );

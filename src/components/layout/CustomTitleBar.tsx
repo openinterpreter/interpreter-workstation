@@ -7,7 +7,7 @@
 
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { PanelLeft, PanelRight } from 'lucide-react';
+import { LogOut, PanelLeft, PanelRight } from 'lucide-react';
 import { useLayout } from '../../hooks/useLayout';
 import { detectNoteWorkspaces, getDetectedNoteWorkspaces, getWorkspace, getRecentWorkspaces, type RecentWorkspaceFolder, type DetectedNoteWorkspace } from '../../api';
 import { TooltipButton } from '../ui/tooltip-button';
@@ -31,6 +31,13 @@ import { formatPrimaryShortcut } from '../../utils/platformShortcuts';
 import { getDragRegionStyle } from '../../utils/titlebarLayout';
 import { usePendingApprovalsByAgent } from '../../hooks/usePendingApprovalsByAgent';
 import { isMarketingDemoMode } from '../../demo/marketingDemo';
+import {
+  canUseHostNativeFileManager,
+  getBrowserWorkstationConnection,
+  isPublicWorkstationPublication,
+  isWorkstationReadOnly,
+  workstationFetch,
+} from '../../remote/workstationConnection';
 import { clampZoomFactor, DEFAULT_ZOOM_FACTOR } from '../../../shared/zoom';
 
 const WINDOWS_TITLE_MENU_ZOOM_STEP = 0.1;
@@ -48,6 +55,12 @@ export function CustomTitleBar() {
   const pendingApprovalsByAgent = usePendingApprovalsByAgent();
   const runtimePlatform = getRuntimeSystemInfo().platform;
   const marketingDemoMode = isMarketingDemoMode();
+  const readOnlyWorkstation = isWorkstationReadOnly();
+  const canUseNativeFileManager = canUseHostNativeFileManager();
+  const browserConnection = getBrowserWorkstationConnection();
+  const canSignOut = browserConnection.host === 'remote'
+    && !isPublicWorkstationPublication()
+    && browserConnection.authentication === 'password';
   const isMac = runtimePlatform === 'darwin';
   const isWindows = runtimePlatform === 'win32';
 
@@ -184,6 +197,7 @@ export function CustomTitleBar() {
   // Workspace context menu (custom HTML menu so it matches app popovers in all modes)
   const handleWorkspaceContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
+    if (readOnlyWorkstation) return;
     // Load persisted picker data only. Neither request probes the filesystem.
     getRecentWorkspaces().then((data) => setRecentFolders(data.folders)).catch(() => {});
     getDetectedNoteWorkspaces().then((data) => setNoteWorkspaces(data.workspaces)).catch(() => {});
@@ -340,7 +354,19 @@ export function CustomTitleBar() {
       void handleScanNoteWorkspaces();
     },
     isScanningNoteWorkspaces,
+    includeNativeFileManagerActions: canUseNativeFileManager,
   });
+
+  const handleSignOut = async () => {
+    const response = await workstationFetch('/api/workstation-connection/session', {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      console.error(`[Workstation] Sign out failed (${response.status})`);
+      return;
+    }
+    window.location.reload();
+  };
 
   const paddingStyle: React.CSSProperties = isMac
     ? { paddingLeft: 'var(--titlebar-left-inset)', paddingRight: 'var(--unit-padding)' }
@@ -421,8 +447,8 @@ export function CustomTitleBar() {
       />
 
       {/* Right sidebar button */}
-      <div ref={rightControlsRef} className="flex items-center pointer-events-auto" style={{ gap: 'var(--unit-padding-small)', WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-        <div className="relative">
+      {!readOnlyWorkstation || canSignOut ? <div ref={rightControlsRef} className="flex items-center pointer-events-auto" style={{ gap: 'var(--unit-padding-small)', WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+        {!readOnlyWorkstation ? <div className="relative">
           <TooltipButton
             variant="ghost"
             size="icon-element"
@@ -454,10 +480,22 @@ export function CustomTitleBar() {
               <AgentAttentionIndicator tone="attention" className="size-2.5" />
             </span>
           )}
-        </div>
-      </div>
+        </div> : null}
+        {canSignOut ? (
+          <TooltipButton
+            variant="ghost"
+            size="icon-element"
+            onClick={() => void handleSignOut()}
+            tooltip="Sign out of this Workstation"
+            tooltipSide="bottom"
+            className={shellButtonClassName}
+          >
+            <LogOut aria-hidden="true" />
+          </TooltipButton>
+        ) : null}
+      </div> : null}
 
-      {workspaceMenuPos && (
+      {!readOnlyWorkstation && workspaceMenuPos && (
         <ContextMenu
           x={workspaceMenuPos.x}
           y={workspaceMenuPos.y}

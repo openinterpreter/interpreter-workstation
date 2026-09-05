@@ -20,6 +20,7 @@ import {
 import { agentTabs, getApiUrl, tts as ttsIpc } from '../../src/ipc';
 import { useAgentNotifications } from '../hooks/useAgentNotifications';
 import { ThreadMessages } from './prompt-kit/thread-messages';
+import { ThreadGoalBar } from './ThreadGoalBar';
 import { computeUnreadCount } from '../../shared/utils/agentAttention';
 import { removeAgentActivity, updateAgentActivity } from '../../src/stores/agentActivityStore';
 import {
@@ -234,6 +235,7 @@ interface AgentThreadProps {
   onStartupConsumed?: (agentId: string, startupId: string) => void;
   suggestionOverlayHeight?: number;
   onSuggestionOverlayOpacityChange?: (opacity: number) => void;
+  readOnly?: boolean;
 }
 
 export function AgentThread({
@@ -257,6 +259,7 @@ export function AgentThread({
   onStartupConsumed,
   suggestionOverlayHeight,
   onSuggestionOverlayOpacityChange,
+  readOnly = false,
 }: AgentThreadProps) {
   const runtimeKey = useMemo(
     () => getAgentThreadRuntimeKey({ agentId, conversationId: providedConversationId }),
@@ -285,6 +288,7 @@ export function AgentThread({
       onStartupConsumed={onStartupConsumed}
       suggestionOverlayHeight={suggestionOverlayHeight}
       onSuggestionOverlayOpacityChange={onSuggestionOverlayOpacityChange}
+      readOnly={readOnly}
     />
   );
 }
@@ -309,6 +313,7 @@ function AgentThreadWithRuntime({
   onStartupConsumed,
   suggestionOverlayHeight,
   onSuggestionOverlayOpacityChange,
+  readOnly,
 }: {
   agentId: string;
   isVisible: boolean;
@@ -329,6 +334,7 @@ function AgentThreadWithRuntime({
   onStartupConsumed?: (agentId: string, startupId: string) => void;
   suggestionOverlayHeight?: number;
   onSuggestionOverlayOpacityChange?: (opacity: number) => void;
+  readOnly: boolean;
 }) {
   const { showToast } = useToast();
   const handleCommittedUserMessage = useCallback(({ text }: { text: string }) => {
@@ -349,6 +355,9 @@ function AgentThreadWithRuntime({
     messages,
     streamingMessage,
     historyLoaded,
+    hasOlderHistory,
+    loadingOlderHistory,
+    loadOlderHistory,
     isStreaming,
     error,
     errorDetails,
@@ -926,6 +935,7 @@ function AgentThreadWithRuntime({
     try {
       response = await fetch(await getApiUrl('/api/agent/chat/steer'), {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           threadId,
@@ -1246,6 +1256,7 @@ function AgentThreadWithRuntime({
       }}
       data-agent-id={agentId}
     >
+      {threadId ? <ThreadGoalBar threadId={threadId} readOnly={readOnly} /> : null}
       <ThreadMessages
         agentId={agentId}
         messages={messages}
@@ -1256,12 +1267,15 @@ function AgentThreadWithRuntime({
         errorEndpointBaseUrl={errorEndpointBaseUrl}
         retrying={retrying}
         historyLoaded={historyLoaded}
+        hasOlderHistory={hasOlderHistory}
+        loadingOlderHistory={loadingOlderHistory}
+        onLoadOlderHistory={loadOlderHistory}
         activeThreadId={threadId}
-        onStopBackgroundProcess={stopBackgroundProcess}
+        onStopBackgroundProcess={readOnly ? undefined : stopBackgroundProcess}
         isEditorPane={isEditorPane}
-        openSettings={openSettings}
-        onStartNewChatWithHistory={startNewChatWithHistory}
-        onRetry={retryWithContinue}
+        openSettings={readOnly ? undefined : openSettings}
+        onStartNewChatWithHistory={readOnly ? undefined : startNewChatWithHistory}
+        onRetry={readOnly ? undefined : retryWithContinue}
         showProfileSwitchWarning={didSwitchRuntimeDuringConversation === true}
         suggestionOverlayHeight={suggestionOverlayHeight}
         onSuggestionOverlayOpacityChange={onSuggestionOverlayOpacityChange}
