@@ -87,15 +87,23 @@ router.get('/snapshot', async (req: Request, res: Response) => {
     const { thread, goal } = state;
     const limit = parseThreadHistoryLimit(req.query.limit) ?? 24;
     const before = typeof req.query.before === 'string' ? req.query.before : undefined;
-    const page = paginateThreadTurns(thread.turns, { limit, before });
-    const pagedThread = { ...thread, turns: page.turns };
-    const snapshot = buildPublicThreadSnapshot({
-      thread: pagedThread,
+    // Paginate the public messages rather than raw Codex turns. A turn can be
+    // intentionally hidden (for example the automatic restart continuation)
+    // or expand into multiple visible messages. Turn-based cursors could
+    // therefore advertise more history but return an empty page.
+    const fullSnapshot = buildPublicThreadSnapshot({
+      thread,
       goal,
       title: process.env.INTERPRETER_PUBLIC_THREAD_TITLE?.trim() || thread.name || 'Live agent',
-      nextCursor: page.nextCursor,
-      hasMore: page.hasMore,
+      nextCursor: null,
+      hasMore: false,
     });
+    const page = paginateThreadTurns(fullSnapshot.messages, { limit, before });
+    const snapshot = {
+      ...fullSnapshot,
+      messages: page.turns,
+      page: { nextCursor: page.nextCursor, hasMore: page.hasMore },
+    };
     res.setHeader('Cache-Control', 'no-store');
     return res.json(snapshot);
   } catch (error) {
