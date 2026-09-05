@@ -9,7 +9,7 @@ import type {
 import { ThreadMessages } from './prompt-kit/thread-messages';
 import { ThreadGoalSummary } from './ThreadGoalSummary';
 
-type RemoteThreadViewerProps = {
+export type RemoteThreadViewerProps = {
   endpoint: string;
   pageSize?: number;
   onReady?: () => void;

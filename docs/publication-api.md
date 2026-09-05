@@ -12,6 +12,64 @@ The API contract is described by
 framework-free client lives in
 [`examples/publication-viewer/index.html`](../examples/publication-viewer/index.html).
 
+## Use the maintained conversation component
+
+You do not have to recreate the transcript UI. A built Workstation renderer
+includes a dedicated `remote-thread` surface containing the maintained
+`RemoteThreadViewer`: message and tool rendering, Goal summary, newest-first
+positioning, live refresh, reconnection, and upward-scroll pagination.
+
+Embed that surface in an iframe and point it at the same public relay:
+
+```html
+<iframe
+  title="Live Interpreter conversation"
+  src="https://workstation-ui.example/?surface=remote-thread&amp;endpoint=https%3A%2F%2Fexample.com%2Fpublication&amp;pageSize=10&amp;embedded=1"
+  style="width: 100%; height: 720px; border: 0"
+></iframe>
+```
+
+The supported query parameters are:
+
+| Parameter | Meaning |
+| --- | --- |
+| `surface=remote-thread` | Selects only the maintained conversation viewer, not the full Workstation shell. |
+| `endpoint` | Required public relay base URL. URL-encode it. |
+| `pageSize` | Optional messages per request, clamped to 1–100; default 10. |
+| `embedded=1` | Removes the viewer's title/status header for tighter composition. The Goal and transcript remain. |
+
+The surface posts `{ "type": "interpreter-marketing-demo-ready" }` to its
+parent after the transcript has been positioned. A host page can use that event
+to remove a loading placeholder. Validate `event.source` against the iframe's
+`contentWindow`; do not trust unrelated window messages.
+
+React code maintained inside a Workstation checkout may use the component
+directly:
+
+```tsx
+import { RemoteThreadViewer } from './agent/components/RemoteThreadViewer';
+import './src/index.css';
+
+export function Conversation() {
+  return (
+    <div style={{ height: 720 }}>
+      <RemoteThreadViewer
+        endpoint="https://example.com/publication"
+        pageSize={10}
+        embedded
+      />
+    </div>
+  );
+}
+```
+
+`RemoteThreadViewerProps` is exported with the component. The source-level
+React import is for applications built in this repository because the component
+uses Workstation's design system and message renderers. External projects should
+use the iframe surface or the raw API. There is not currently a separately
+versioned npm component package; the iframe and API are the supported loose-
+coupling boundaries.
+
 ## Connect through a relay
 
 A browser talks to a public relay, never directly to the private sidecar. The
@@ -159,4 +217,3 @@ are required.
 For a trusted, interactive custom client—prompts, streaming events, approvals,
 models, and Goal mutation—use the OIX app-server protocol instead. See the
 [OIX app-server guide](https://github.com/openinterpreter/open-interpreter/blob/main/core/docs/app-server.md).
-
