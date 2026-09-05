@@ -17,7 +17,7 @@ export type RemoteThreadViewerProps = {
   embedded?: boolean;
 };
 
-const DEFAULT_PAGE_SIZE = 4;
+const DEFAULT_PAGE_SIZE = 10;
 
 function normalizeEndpoint(endpoint: string): string {
   return endpoint.replace(/\/+$/, '');
@@ -35,10 +35,17 @@ function isSnapshot(value: unknown): value is PublicThreadSnapshot {
     && snapshot.page !== null;
 }
 
-function toChatMessage(message: PublicThreadMessage): ChatMessage {
+export function resolvePublicArtifactLinks(content: string, endpoint: string): string {
+  const base = new URL(`${normalizeEndpoint(endpoint)}/`, window.location.href);
+  return content.replace(/\]\((file\?path=[^)\r\n]+)\)/gu, (_match, href: string) => {
+    return `](${new URL(href, base).toString()})`;
+  });
+}
+
+function toChatMessage(message: PublicThreadMessage, endpoint: string): ChatMessage {
   const parts: ChatMessagePart[] = message.parts.map((part): ChatMessagePart => {
     if (part.kind === 'text') {
-      return { kind: 'text', content: part.content };
+      return { kind: 'text', content: resolvePublicArtifactLinks(part.content, endpoint) };
     }
     return {
       kind: 'tool-call',
@@ -107,7 +114,7 @@ export function RemoteThreadViewer({
   }, [onReady]);
 
   const applySnapshot = useCallback((next: PublicThreadSnapshot, direction: 'older' | 'newer') => {
-    const incoming = next.messages.map(toChatMessage);
+    const incoming = next.messages.map((message) => toChatMessage(message, endpoint));
     setMessages((current) => mergeChatHistory(current, incoming, direction));
     setSnapshot((current) => direction === 'older' && current
       ? {
@@ -116,7 +123,7 @@ export function RemoteThreadViewer({
           eventCursor: next.eventCursor ?? current.eventCursor,
         }
       : next);
-  }, []);
+  }, [endpoint]);
 
   const refresh = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);

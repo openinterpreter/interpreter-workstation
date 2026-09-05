@@ -24,7 +24,7 @@ Embed that surface in an iframe and point it at the same public relay:
 ```html
 <iframe
   title="Live Interpreter conversation"
-  src="https://workstation-ui.example/?surface=remote-thread&amp;endpoint=https%3A%2F%2Fexample.com%2Fpublication&amp;pageSize=10&amp;embedded=1"
+  src="https://workstation-embed.vercel.app/?surface=remote-thread&amp;endpoint=https%3A%2F%2Fexample.com%2Fpublication&amp;pageSize=10&amp;embedded=1"
   style="width: 100%; height: 720px; border: 0"
 ></iframe>
 ```
@@ -150,7 +150,9 @@ Goal remains active between work cycles; it does not mean the project ended.
 Render message parts in array order:
 
 - `text` is sanitized display text. Render it as text or with a safe Markdown
-  renderer; never inject it as raw HTML.
+  renderer; never inject it as raw HTML. Allowlisted workspace links use an
+  endpoint-relative `file?path=...` target; resolve them against the publication
+  endpoint so they open through the same read-only relay.
 - `tool` is a public activity summary. Show its `label` and `state`. `output` is
   optional and clients must work when it is absent.
 
