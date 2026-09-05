@@ -1,0 +1,48 @@
+# Browser workflows
+
+Interpreter drives a real browser through Playwright. Use it for work that lives inside web portals, dashboards, CRMs, and internal admin tools — the same surfaces you click through yourself.
+
+## Keep credentials human-owned
+
+You sign in. Interpreter works inside the session you already opened.
+
+- Open the portal and authenticate yourself before starting the task.
+- Never paste passwords, API keys, or recovery codes into instructions.
+- If a site times out, sign back in yourself and tell Interpreter to resume.
+
+## Good browser tasks
+
+Browser work pays off when the data lives behind a login and you'd otherwise click through it row by row.
+
+- Read a customer update from a support portal and draft a CRM note.
+- Pull order status across an admin panel and reconcile it with a spreadsheet.
+- Gather metrics from a dashboard and assemble a weekly report in your workspace.
+- Fill a web form using values from a PDF, CSV, or spreadsheet row.
+
+> "I just signed into our Stripe dashboard. For each customer in `vips.csv`, pull their last 3 invoices, total amount paid, and current subscription status. Put one row per customer in `vip-status.xlsx`. Stop before sending the summary email."
+
+## Name the surface precisely
+
+Vague references make Interpreter guess. Specific references make it reliable.
+
+- Name the portal, the page, the record, and the action.
+- Prefer "the order detail page in Shopify admin, the line item for SKU X" over "the Shopify thing".
+- Reference column headers, button labels, and field names exactly as they appear on screen.
+- When a workflow spans multiple tabs, list them in the order Interpreter should visit.
+
+## Use approvals for anything destructive
+
+Approvals are the gate between a draft and a real change.
+
+- Require approval before saving, submitting, deleting, refunding, or sending.
+- Ask Interpreter to screenshot the page before any destructive click so you can verify what it sees.
+- For bulk operations, have it do the first record end-to-end and pause for your sign-off before continuing.
+
+## Handle slow and flaky pages
+
+Web apps lie about being ready. Tell Interpreter to confirm before acting.
+
+- Ask it to wait for the page to finish loading and re-read state before clicking.
+- If a click does nothing, have it re-read the page and retry — don't let it click blindly.
+- For long lists, paginate explicitly: "go through pages 1 through 5, one at a time, and write rows to the file as you go."
+- When the same selector breaks twice, switch to visible text or a nearby anchor and tell Interpreter why.

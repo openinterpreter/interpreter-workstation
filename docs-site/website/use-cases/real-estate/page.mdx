@@ -1,0 +1,76 @@
+import { UseCaseCard, UseCaseGrid } from "@/components/docs/use-case-card";
+import { BrandIconRow } from "@/components/docs/brand-icon";
+
+# Real estate
+
+Interpreter handles the document-heavy work that fills a broker's, property manager's, or transaction coordinator's week &mdash; filling applications from intake docs, building lease-rate analyses with comps, surveying market rents, drafting listings, and producing portfolio reports. It works on the files you already have, with your approval before anything goes out.
+
+<BrandIconRow names={["excel", "pdf", "word", "google-sheets", "outlook", "dropbox"]} />
+
+## Example workflows
+
+<UseCaseGrid>
+  <UseCaseCard
+    title="Fill a rental application from intake docs"
+    description="Point Interpreter at a tenant's intake folder &mdash; ID, paystubs, prior lease, references &mdash; and have it fill the rental application PDF, flag any missing field, and queue it for your final review."
+    apps={["pdf", "word", "dropbox"]}
+    prompt="Fill the rental application at ~/templates/rental-app.pdf using the intake documents in ~/tenants/garcia. Flag any field you couldn't confirm and don't sign anything."
+  />
+  <UseCaseCard
+    title="Lease Rate Analysis Report"
+    description="Builds a 4-page Lease Rate Analysis Report with 3-6 comparable lease comps within a 3-mile radius, including rent per square foot, term, concessions, and a recommended rate band."
+    apps={["excel", "pdf", "word"]}
+    prompt="Build a Lease Rate Analysis Report for 410 Market Street using comps from the lease database. Pull 5 comps within 3 miles signed in the last 12 months. Output as PDF using my report template."
+  />
+  <UseCaseCard
+    title="Market rent survey"
+    description="Reads a CSV of recent area leases and a subject property's specs, normalizes for square footage and amenities, and produces a market rent band with the comp set behind it."
+    apps={["excel", "google-sheets", "pdf"]}
+    prompt="Run a market rent survey for the 2-bed at 88 Linden. Use the recent-leases.csv, filter to 2-beds within a half mile, and give me a recommended rent band with the comp set behind it."
+  />
+  <UseCaseCard
+    title="Property listing description"
+    description="Drafts an MLS-style listing description from the photo folder, spec sheet, and neighborhood notes. Keeps fair-housing language clean and surfaces the features worth leading with."
+    apps={["word", "pdf", "dropbox"]}
+    prompt="Draft a listing description for 22 Oak Lane using the photos in ~/listings/22-oak and the spec sheet. Lead with the kitchen renovation and the school district. Keep it fair-housing compliant."
+  />
+  <UseCaseCard
+    title="Lease comparison with a clause change log"
+    description="Compare two lease documents clause-by-clause &mdash; the prior version and the proposed redline &mdash; and produce a change log with each substantive difference, plain-English impact, and any risk flag."
+    apps={["word", "pdf", "google-docs"]}
+    prompt="Compare the prior lease at ~/leases/220-pine-v1.pdf with the proposed redline at v2. Build a change log: every substantive difference, impact in plain English, and any clause that shifts risk to the landlord."
+  />
+  <UseCaseCard
+    title="Transaction coordinator checklist from the contract"
+    description="Reads the fully executed purchase or lease contract, extracts every deadline and contingency, and builds a transaction checklist with dates, owners, and the source clause for each item."
+    apps={["pdf", "google-sheets", "excel", "outlook"]}
+    prompt="Read the executed contract at ~/transactions/jones-purchase.pdf and build a coordinator checklist: every deadline, every contingency, dates, and which clause it came from."
+  />
+  <UseCaseCard
+    title="Monthly portfolio performance report"
+    description="Pulls occupancy, rent roll, delinquencies, and maintenance spend across the portfolio, compares to last month and budget, and writes a one-page report per property plus a portfolio summary."
+    apps={["excel", "google-sheets", "word", "pdf"]}
+    prompt="Build the April portfolio report. For each of the 12 properties: occupancy, rent collected, delinquencies, maintenance vs. budget. Compare to March. Roll up to a one-page portfolio summary."
+  />
+  <UseCaseCard
+    title="Showing-feedback summary emails"
+    description="Reads a folder of agent showing notes and drafts an owner-facing summary email per property, highlighting feedback patterns and recommending next steps on price or staging."
+    apps={["outlook", "gmail", "word"]}
+    prompt="Read the showing notes in ~/showings/22-oak-lane for the last two weeks and draft an owner update email: feedback patterns, what we heard on price, and a staging recommendation."
+  />
+</UseCaseGrid>
+
+## Where to be careful
+
+- **Never send a signed offer or contract.** Interpreter can fill and prepare documents, but signature and transmission of executed agreements always stay with you.
+- **Don't change pricing without explicit approval.** List price, lease rate, and credit-rebate fields should require an approval click before any update.
+- **Cite the source comps.** Every comp used in a Lease Rate Analysis or market survey should link back to the underlying record &mdash; not summarized from memory.
+- **Keep tenant and owner PII in the workspace.** Scope the agent to the property or transaction folder. Sensitive intake docs should never end up pasted into chat history.
+
+## Related how-tos
+
+- [Forms from documents](/docs/desktop/forms-from-documents)
+- [Document review](/docs/desktop/document-review)
+- [Spreadsheets and PDFs](/docs/desktop/spreadsheets-and-pdfs)
+- [Email and messaging](/docs/desktop/email-and-messaging)
+- [Workspaces](/docs/desktop/workspaces)

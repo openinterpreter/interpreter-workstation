@@ -1,0 +1,75 @@
+import { UseCaseCard, UseCaseGrid } from "@/components/docs/use-case-card";
+import { BrandIconRow } from "@/components/docs/brand-icon";
+
+# Healthcare
+
+Clinic administrators, medical writers, pharmacists, prior-auth specialists, and healthcare consultants use Interpreter for the paperwork around care: prescribing-guideline drafts, prior-auth packets, intake processing, compliance logs, and guideline synthesis. Interpreter handles the document work, cites every source, and pauses before anything is submitted to a payer or sent to a patient. Interpreter is not a clinical decision tool.
+
+<BrandIconRow names={["word", "pdf", "pubmed", "excel", "outlook", "dropbox"]} />
+
+## Example workflows
+
+<UseCaseGrid>
+  <UseCaseCard
+    title="Draft a prescribing-guideline document"
+    description="Build a clinic prescribing-guideline draft with structured sections (indications, dosing, contraindications, monitoring) and PubMed citations on every recommendation."
+    apps={["word", "pubmed", "pdf"]}
+    prompt="Draft a hormone-therapy prescribing guideline in guideline.docx using our template, pull supporting references from PubMed for every recommendation, cite inline, and stop before sending for clinical review."
+  />
+  <UseCaseCard
+    title="Cost-effectiveness analysis on maintenance medications"
+    description="Pull pricing and adherence data for a list of medications, build a cost-effectiveness workbook with per-patient cost, generic alternatives, and formulary recommendations."
+    apps={["excel", "pdf", "pubmed"]}
+    prompt="Read meds/top-10-maintenance.csv and pricing/2024-formulary.pdf, build cost-effectiveness.xlsx with per-patient annual cost, generic alternatives, and a recommendation column with supporting PubMed citations."
+  />
+  <UseCaseCard
+    title="Build an intake packet from paper forms"
+    description="Scan a stack of completed paper intake forms, extract demographics, history, medications, and allergies into a structured workbook ready for EHR import."
+    apps={["pdf", "excel"]}
+    prompt="Read intake/scanned-forms/, extract demographics, history, medications, and allergies into intake.xlsx with one row per patient, flag any field you could not read with confidence, and stop before any record touches the EHR."
+  />
+  <UseCaseCard
+    title="Summarize patient-interview transcripts into themes"
+    description="Walk a folder of de-identified QI interview transcripts, extract recurring themes, and produce a thematic summary with anonymized supporting quotes."
+    apps={["word", "pdf", "dropbox"]}
+    prompt="Read transcripts/qi-interviews/ (de-identified), build themes.docx with the top recurring themes for the QI committee, attach two anonymized supporting quotes per theme, and cite the transcript file for each quote."
+  />
+  <UseCaseCard
+    title="Draft a prior-auth submission"
+    description="Combine chart notes and payer-specific requirements into a complete prior-auth packet, with every requested field filled and supporting documentation cross-referenced."
+    apps={["pdf", "word", "outlook"]}
+    prompt="Read chart-notes/patient-1042.pdf and payer-requirements/aetna-pa-template.md, draft prior-auth.docx with every required field filled and supporting evidence cited from the chart, and stop before submission."
+  />
+  <UseCaseCard
+    title="Build a monthly compliance log"
+    description="Read a folder of incident-report PDFs, extract date, type, severity, and resolution status into a compliance log ready for the monthly review."
+    apps={["pdf", "excel"]}
+    prompt="Read incidents/oct-reports/, build compliance-log.xlsx with date, incident type, severity, location, and resolution status, and produce a one-page summary for the monthly review meeting."
+  />
+  <UseCaseCard
+    title="Synthesize guidelines from multiple societies"
+    description="Compare clinical guidelines from multiple professional societies on a single condition and produce a side-by-side synthesis with agreements, disagreements, and citations."
+    apps={["pdf", "word", "pubmed"]}
+    prompt="Read guidelines/diabetes/ from ADA, AACE, and EASD, build synthesis.docx with a side-by-side comparison of recommendations, mark where societies agree and disagree, and cite the source guideline and page for every row."
+  />
+  <UseCaseCard
+    title="Generate a patient-education one-pager"
+    description="Convert approved clinical source material into a plain-language one-page handout in the clinic's branded Word template."
+    apps={["word", "pdf"]}
+    prompt="Read source/post-op-knee-replacement-source.pdf, draft education-handout.docx using templates/patient-education.docx, write at an eighth-grade reading level, and stop before clinical review."
+  />
+</UseCaseGrid>
+
+## Where to be careful
+
+- Keep PHI out of any instruction you can. When PHI is unavoidable, work from local files and never let the agent send patient-identifying content to an outside system.
+- Never let Interpreter submit a prior-auth, file a claim, or send patient-facing messages without explicit review.
+- Clinical decisions stay with the clinician. Interpreter drafts paperwork, summarizes documents, and assembles packets. It does not advise on care.
+- Every recommendation, citation, and extracted field must point back to the source document or PubMed reference.
+
+## Related how-tos
+
+- [Document review](/docs/desktop/document-review)
+- [Forms from documents](/docs/desktop/forms-from-documents)
+- [Spreadsheets and data](/docs/desktop/spreadsheets-and-pdfs)
+- [Approvals and stops](/docs/desktop/approvals)

@@ -1,0 +1,122 @@
+# Connect a model
+
+Interpreter uses saved **models** to decide which provider and model an agent runs on. Each saved model stores the provider, model ID, API key, and base URL when that provider needs one.
+
+## Models, not one global setting
+
+Models are configured individually in Settings.
+
+- Each saved model stores its provider, model ID, API key, and base URL when the provider needs one.
+- You can keep as many models as you want — a hosted frontier model for hard work, a local model for sensitive files, a cheap model for batch jobs.
+- Switching models mid-session is supported. The next turn uses the newly selected model.
+
+Use the **Models** screen in Settings to add, edit, delete, and set the default model.
+
+## Open model settings
+
+1. Open Interpreter.
+2. Open **Settings**.
+3. Open **Models**.
+4. Select an existing model, or click **New Model**.
+
+The provider and connection settings are inside the model editor.
+
+## Add a custom base URL
+
+Use this when your model is behind an API gateway, proxy, self-hosted server, or provider that exposes an OpenAI-compatible endpoint.
+
+1. In **Settings → Models**, click **New Model**.
+2. Choose **Custom endpoint** from the model list. If you are already editing a saved model, choose **API** in the provider section.
+3. In **Base URL**, paste the provider's API root.
+4. In **API Key**, paste the key for that provider.
+5. In **Model ID**, enter the exact model identifier from the provider.
+6. Leave **Use Chat Completions** off unless your provider does not support the Responses API.
+7. Click **Create Model** or **Save Changes**.
+8. Select that model for the agent.
+
+Example:
+
+| Field | Example value |
+|---|---|
+| Base URL | `https://api.example.com/v1` |
+| API Key | Your provider key |
+| Model ID | `provider/model-name` |
+
+The **Base URL** is the server address. The **Model ID** is the model name. Do not put the model name in the Base URL field.
+
+## What to put in each field
+
+Most hosted and gateway providers give you three things:
+
+- **Base URL**: the server root, usually ending in `/v1`.
+- **API key**: the credential for that provider or gateway.
+- **Model ID**: the exact model name the provider expects.
+
+Keep these separate. The base URL tells Interpreter where to send requests. The model ID tells that server which model to run.
+
+## Choosing the API mode
+
+Interpreter can talk to API providers in two modes:
+
+| Mode | When to use it | Setting |
+|---|---|---|
+| Responses API | Newer OpenAI-compatible endpoints that support `/responses` | Leave **Use Chat Completions** off |
+| Chat Completions | Older OpenAI-compatible endpoints that support `/chat/completions` but not `/responses` | Turn **Use Chat Completions** on |
+
+Start with Responses API. Switch only when the provider's docs or an Interpreter error says the endpoint does not support Responses.
+
+When you save, Interpreter checks Responses API support for custom endpoints. If the endpoint is reachable but does not support Responses, turn on **Use Chat Completions** and save again.
+
+## Common provider examples
+
+| Provider style | Base URL example | Notes |
+|---|---|---|
+| OpenAI-compatible gateway | `https://api.example.com/v1` | Use the gateway's model ID and API key. |
+| OpenRouter | `https://openrouter.ai/api/v1` | You can also pick OpenRouter from the preset list. |
+| OpenAI API key | `https://api.openai.com/v1` | You can also pick OpenAI from the preset list. |
+| Local or internal proxy | `http://localhost:8000/v1` | Use only if that server is reachable from your computer. |
+
+## Built-in provider choices
+
+You do not need **Custom endpoint** for every model.
+
+- **OpenAI** — use this if you have an OpenAI API key.
+- **OpenRouter** — use this if you want one key for many model providers.
+- **Ollama** — use this for local Ollama models.
+- **LM Studio** — use this for local LM Studio models.
+- **NVIDIA NIM** — use this for NVIDIA-hosted or self-hosted NIM endpoints.
+- **Custom endpoint** — use this for any other OpenAI-compatible API root.
+
+## Common mistakes
+
+- **Putting the model name in Base URL**. Use a URL like `https://api.example.com/v1`, not `gpt-5.4-nano`.
+- **Using the provider homepage**. Use the API root, not a dashboard URL.
+- **Leaving off `/v1` when the provider requires it**. Most OpenAI-compatible endpoints expect `/v1`.
+- **Using Responses mode with a Chat Completions-only endpoint**. Turn on **Use Chat Completions** for those providers.
+- **Using a local URL from another machine**. `localhost` means your own computer. If the server runs on another computer, use that computer's reachable network address.
+
+## Check that it works
+
+After saving the model, select it for an agent and send a small test request:
+
+> Say one sentence confirming this model is connected.
+
+If that works, try a small real task before running a long workflow. For example, ask Interpreter to summarize one file or inspect one browser page. If the model struggles with tool use or long multi-step work, keep it for simple jobs and use a stronger hosted model for harder tasks.
+
+## When to use which
+
+Pick the smallest model that actually does the job. In practice:
+
+- **Hosted frontier models** — use for judgment-heavy work: messy documents, ambiguous instructions, long multi-step browser flows, anything where the agent has to recover from surprises.
+- **Smaller hosted or local models** — fine for repeatable structured extraction once you have a working instruction, simple file renaming, spreadsheet reformatting.
+- **Local models (Ollama, LM Studio)** — best for sensitive workspaces, offline work, or cost-sensitive batch jobs. Expect slower turns and weaker recovery from unexpected UI state.
+
+## Validate before scaling
+
+Local and smaller models often look correct on one example and drift on the tenth.
+
+- Run on a single file first. Read the output.
+- Run on five files. Spot-check.
+- Then run on the full batch.
+
+If a model keeps making the same mistake, switch to a stronger model for that run rather than fighting the prompt. You can switch back after.

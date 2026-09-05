@@ -1,0 +1,46 @@
+# Your first task
+
+The fastest way to learn Interpreter is to give it one boring job you already do by hand. This page walks through a real one: pulling fields out of a folder of PDFs into a spreadsheet.
+
+## Pick a workflow you already do
+
+Pick something repetitive, file-based, and easy to verify. Good first tasks:
+
+- extracting fields from invoices, receipts, or statements
+- renaming and sorting a folder of downloads
+- reformatting rows in a spreadsheet
+- pulling a few values out of each PDF in a folder
+
+Avoid anything that sends email, posts to a portal, or moves money on the first run.
+
+## Set the workspace
+
+Point the workspace at the folder that contains both the source files and the destination file. For this walkthrough, set the workspace to `~/Documents/invoices-q1/` and put an empty `invoices.xlsx` inside it.
+
+The agent can only touch files inside this folder. If it needs anything outside, it will ask.
+
+## Write the instruction
+
+Be specific. Name the input folder, the output file, the exact columns, and a stopping condition.
+
+> Read every PDF in `~/Documents/invoices-q1/`, extract vendor, invoice number, date, and total, then append rows to `invoices.xlsx`. Stop before sending any emails.
+
+Notes on what makes this work:
+
+- It names a concrete input folder and output file.
+- It lists the fields explicitly, in order.
+- It ends with a hard stop ("Stop before sending any emails") so the agent does not keep going past the part you want to verify.
+
+## Watch the first run
+
+Run it on one or two files first. Keep the overlay visible.
+
+- Interpreter will read the first PDF, open the spreadsheet, and start filling rows.
+- It will pause for **approvals** before writing the file the first time, and before anything irreversible.
+- If a column is wrong (date format, total includes tax, vendor truncated), stop the run and edit the instruction. Add an example row if it helps.
+
+## Repeat on the batch
+
+Once one file looks right, tell Interpreter to continue with the rest of the folder. For larger batches, ask it to log any PDF it could not parse to a `skipped.txt` so you can review them at the end instead of stopping the run.
+
+Next: [Connect a model](/docs/desktop/models).

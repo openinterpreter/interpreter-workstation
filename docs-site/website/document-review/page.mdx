@@ -1,0 +1,44 @@
+# Document review
+
+Interpreter reads, redlines, compares, and summarizes documents in your workspace. Use it for contracts, NDAs, research papers, policy docs, and any place where review notes need to land back in a draft.
+
+## Good tasks
+
+- Extract requested changes from review notes and mark them in a draft NDA
+- Compare two versions of a contract and produce a redline summary
+- Summarize a 40-page policy doc into a one-page brief
+- Draft a cover letter for a redlined contract going back to counterparty
+- Flag clauses that conflict with a reference policy in the workspace
+
+## Set up the workspace
+
+- Put the source document, the review notes, and any reference policies in one folder.
+- Open the target document in Word or its native editor if you want tracked changes applied live.
+- Confirm Interpreter can read every file you reference. Name them by path, not by description.
+
+## Worked example
+
+> Read the requested changes in `client-feedback.md`. Apply each one as a tracked change to `mutual-nda-v3.docx`. For each clause you change, write a one-line justification at the bottom of the file. Stop before saving so I can review.
+
+Interpreter walks the review notes in order, locates the matching clause in the NDA, inserts the edit as a tracked change, and appends a justification block. It pauses at save so you can step through each redline before it lands on disk.
+
+## Where Interpreter is strong
+
+- Tracking which review comments were addressed and which were skipped
+- Surfacing where two reviewers disagree on the same clause
+- Drafting negotiation summaries that pair each change with its rationale
+- Producing a clean diff between two versions when track changes are off
+
+Use a subagent for long policy docs. The subagent reads the full text once, returns a structured outline, and the main agent edits against that outline. This keeps the editing pass focused.
+
+## Where to be careful
+
+Legal judgment is yours, not the agent's. Interpreter can move language, but it should not decide whether a liability cap is acceptable or whether an indemnity is balanced.
+
+- Set an approval before any change to substantive terms (liability, IP, term, exclusivity).
+- Set an approval before sending the redline back to counterparty.
+- Set an approval before accepting or rejecting tracked changes in bulk.
+
+If review notes contradict each other, tell Interpreter to stop and ask, not to pick one.
+
+Cross-link: `/docs/desktop/approvals`.

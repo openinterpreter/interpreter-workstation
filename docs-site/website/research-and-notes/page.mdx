@@ -1,0 +1,49 @@
+# Research and notes
+
+Research is only useful if it lands in your files. Use Interpreter to read source material and write the findings into the notes you actually keep — not into chat history you'll lose.
+
+## Write into your files, not the chat
+
+The chat is scratch space. Your workspace is the record.
+
+- Tell Interpreter the exact file to write to and the exact section to append under.
+- Prefer appending to an existing notes file over creating a new one each session.
+- When a task spans multiple sessions, point Interpreter at the same files so the notes accumulate.
+- If you don't know where it should go yet, ask Interpreter to propose a path inside the workspace and confirm before it writes.
+
+## Good research tasks
+
+Research tasks work best when the input is concrete and the output location is fixed.
+
+- Read a paper and append the relevant findings to `research-log.md`.
+- Read 10 customer interview transcripts and update `themes.md` with the new patterns.
+- Turn a YouTube transcript into structured notes under a dated heading.
+- Summarize a long doc into a one-page brief, then link the brief from your index file.
+
+> "Read `interview-transcripts/2026-04-*.md`. For each new theme, append a section to `themes.md` with: theme name, supporting quotes (with file + line refs), and how often it appeared. Don't duplicate themes already there."
+
+## Demand citations
+
+Notes you can't verify aren't notes — they're guesses.
+
+- Ask Interpreter to include file paths, line numbers, page numbers, or timestamps next to every claim.
+- For web sources, capture the URL and the exact quote, not a paraphrase.
+- When a finding spans multiple sources, list all of them inline.
+- If a citation looks wrong when you spot-check it, tell Interpreter to re-read and correct that section.
+
+## Use an intermediate file when input is messy
+
+Going straight from raw transcripts to polished notes loses fidelity. Stage it.
+
+- Have Interpreter extract a clean intermediate first — a JSON file, a CSV, or a structured table.
+- Spot-check the intermediate. Fixing structured data is much easier than fixing prose.
+- Then ask Interpreter to write the narrative notes from the intermediate file.
+- Keep the intermediate in the workspace so you can regenerate the notes later without re-reading the sources.
+
+## Use voice mode for long sessions
+
+Reading is a good time to be hands-free.
+
+- Switch to voice mode to ask follow-up questions while you keep reading.
+- Ask Interpreter to read passages aloud, then dictate the note you want appended.
+- See [Voice mode](/docs/desktop/voice-mode) for setup.

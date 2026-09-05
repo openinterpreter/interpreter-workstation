@@ -1,0 +1,69 @@
+import { UseCaseCard, UseCaseGrid } from "@/components/docs/use-case-card";
+import { BrandIconRow } from "@/components/docs/brand-icon";
+
+# Legal
+
+In-house counsel, law-firm associates, legal ops, and paralegals use Interpreter to grind through the document work around a matter: redlines, memos, discovery review, closing binders, clause extraction. Interpreter opens the files on your desktop the way you do, drafts in your templates, and stops before anything leaves the firm.
+
+<BrandIconRow names={["word", "pdf", "outlook", "google-drive", "dropbox", "notion", "excel"]} />
+
+## Example workflows
+
+<UseCaseGrid>
+  <UseCaseCard
+    title="Redline an NDA against your playbook"
+    description="Compare an incoming NDA to your firm's standard playbook, mark deviations with tracked changes, and leave margin comments explaining each edit."
+    apps={["word", "pdf", "outlook"]}
+    prompt="Redline the NDA in inbox/acme-nda.docx against playbook/standard-nda-playbook.md, leave a comment on every change explaining the rationale, save as acme-nda-redline.docx, and stop before sending."
+  />
+  <UseCaseCard
+    title="Produce a contract change log"
+    description="Diff two versions of an agreement clause-by-clause and produce a clean change log with old text, new text, and a one-line summary per change."
+    apps={["word", "excel", "pdf"]}
+    prompt="Compare contracts/v3-counterparty.docx against contracts/v2-ours.docx, build a clause-by-clause change log in change-log.xlsx with old text, new text, and a one-line summary per row."
+  />
+  <UseCaseCard
+    title="Draft a legal memo from research notes"
+    description="Turn a folder of case notes, statutes, and partner instructions into a structured memo with issue, rule, analysis, and conclusion sections."
+    apps={["word", "pdf", "notion"]}
+    prompt="Read research/standard-of-review/ and draft memo.docx in our IRAC template, cite every authority inline, and leave a TODO marker anywhere a citation needs partner confirmation."
+  />
+  <UseCaseCard
+    title="Summarize discovery into a privilege log"
+    description="Walk a folder of discovery PDFs, extract author, recipients, date, and subject, and assemble a privilege log with proposed redaction calls flagged for review."
+    apps={["pdf", "excel", "dropbox"]}
+    prompt="Read every PDF in discovery/batch-04/, extract sender, recipients, date, and subject into privilege-log.xlsx, flag any document mentioning outside counsel as 'review for privilege', and stop before marking anything final."
+  />
+  <UseCaseCard
+    title="Build a clause library from past deals"
+    description="Scan a folder of executed agreements, pull recurring clauses (indemnity, IP, termination, governing law), and assemble a categorized clause library."
+    apps={["word", "google-drive", "excel"]}
+    prompt="Read every executed agreement in deals/2024/, extract indemnity, IP, termination, and governing-law clauses into clause-library.xlsx, one row per clause with the source deal and counterparty."
+  />
+  <UseCaseCard
+    title="Draft a will from intake notes"
+    description="Convert a paralegal intake form into a draft will in the firm's template, with beneficiaries, specific gifts, and executor language pre-filled for attorney review."
+    apps={["word", "pdf"]}
+    prompt="Read intake/smith-family-intake.pdf, draft a will using templates/will-template.docx, fill in beneficiaries, specific gifts, and executor language, save as smith-will-draft.docx, and stop before any signature block is finalized."
+  />
+  <UseCaseCard
+    title="Assemble a closing binder"
+    description="Pull executed signature pages, schedules, and ancillary documents from a closing folder into a single bookmarked PDF binder with an auto-generated index."
+    apps={["pdf", "google-drive", "dropbox"]}
+    prompt="Read closing/acme-acquisition/, assemble a bookmarked PDF binder in the order listed in closing-checklist.md, generate an index page, and save as acme-closing-binder.pdf."
+  />
+</UseCaseGrid>
+
+## Where to be careful
+
+- Always require explicit approval before any draft, redline, or memo leaves the firm by email or shared link.
+- Never let the agent file with a court, sign documents, or execute on behalf of a client.
+- Every clause flagged, cited, or summarized must point back to the source document and section.
+- Legal-judgment calls (privilege, materiality, strategic edits) stay with the attorney. Interpreter prepares; the attorney decides.
+
+## Related how-tos
+
+- [Document review](/docs/desktop/document-review)
+- [Forms from documents](/docs/desktop/forms-from-documents)
+- [Spreadsheets and data](/docs/desktop/spreadsheets-and-pdfs)
+- [Approvals and stops](/docs/desktop/approvals)

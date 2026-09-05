@@ -1,0 +1,35 @@
+# Skills
+
+Skills are bundled, agent-facing guides that load when relevant to your task. They teach the agent how to work in a specific domain — clicking and typing on screen, editing documents, reading PDFs, taking screenshots, generating slides, automating browsers, producing media.
+
+## What a skill is
+
+A skill is a short, focused guide written for the agent, not for you. When you ask Interpreter to do something in a domain it has a skill for, the agent loads that skill before it starts working. The skill gives it the right vocabulary, the right tools, and the patterns that tend to work for that kind of task.
+
+A general-purpose model is okay at most things. A model with the right skill loaded for the task at hand is much better.
+
+## What ships by default
+
+Interpreter ships with skills for the things people actually do on a desktop:
+
+- `computer-use` — clicks, keyboard, on-screen interactions
+- `doc` — read and edit Word and rich text documents
+- `pdf` — open, extract from, and reason about PDFs
+- `screenshot` — capture and reference regions of the screen
+- `slides` — generate slide decks
+- `playwright` — drive a real browser end to end
+- `media-creation` — produce images and video assets
+
+You do not have to install any of these. They are already there.
+
+## When you can tell skills are working
+
+Usually you should not have to think about them. The agent picks what it needs and gets on with the task. If something is going sideways and the approach looks wrong for the domain, ask the agent which skills it loaded for this turn. That answer will often tell you whether it framed the problem the way you expected.
+
+## Custom skills
+
+Right now, skills are bundled with the app. Authoring your own skills will come later.
+
+## Skills vs MCP
+
+Skills are bundled prompts that change how the agent thinks about a domain. MCP servers are external tools the agent can call. They are complementary — see [MCP servers](/docs/desktop/mcp-servers) for the difference.

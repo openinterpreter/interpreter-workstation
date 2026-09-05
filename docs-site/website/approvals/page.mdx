@@ -1,0 +1,55 @@
+# Approvals and safety
+
+Approvals are how Interpreter stays fast without surprising you. Sensitive actions pause for confirmation with the exact change shown, so you can decide in a second or two without slowing the agent down.
+
+## What triggers an approval
+
+Anything that changes the world outside a read-only inspection. By default this includes:
+
+- writing or overwriting files outside what was explicitly asked
+- sending messages, emails, or chats
+- submitting forms in the browser
+- deleting files or data
+- making purchases or any irreversible commit
+- running shell commands
+- calling external APIs through configured integrations
+
+Reading files inside the workspace, inspecting open windows, and scrolling through pages do not require approval. The line is "would I want to see this before it happens?"
+
+## Approval policy modes
+
+You choose the policy per agent in Settings. The available modes:
+
+- **Ask** (default, recommended). Every sensitive action pauses for your confirmation. Best for new workflows, unfamiliar apps, and anything involving customer data, money, or external systems.
+- **Auto-approve**. Sensitive actions run without prompting. Use this only after you have already validated the workflow end to end on a real example, and only inside a workspace you trust. Great for batch runs you have already proven out.
+- **Never**. Sensitive actions are blocked entirely. Use this when you want Interpreter to read and report only, with no ability to change anything.
+
+You can also approve a specific tool for the rest of the session. That tool will stop prompting until you restart the app, while other sensitive actions still ask.
+
+## What an approval prompt shows
+
+Every prompt is designed to be readable at a glance:
+
+- the tool name and which agent requested it
+- the exact parameters being passed
+- a diff or preview of the change where one applies
+- a warning callout for anything irreversible
+
+You approve, deny, or grant for the session. If the action is unsafe, deny and tell the agent what to do instead.
+
+## Patterns that work well
+
+Give the agent explicit stopping points in your instructions. Phrasings that hold up well across tasks:
+
+- "Stop before sending."
+- "Draft only, do not submit."
+- "Prepare a copy in a new file and wait for review."
+- "Show me the diff, then ask before saving."
+
+These cooperate with the approval system rather than fighting it. The agent will plan around the pause instead of trying to push through.
+
+## The first-run rule
+
+When you build a new workflow, run it on a single example with **Ask** turned on. Watch every approval. Look at what the agent actually wants to do, not what you assumed it would do. Fix the prompt, the workspace, or the [scope](/docs/desktop/workspaces) until the prompts look exactly right.
+
+Once the first run is clean, batch the rest. Switch to auto-approve only after the workflow has earned it.

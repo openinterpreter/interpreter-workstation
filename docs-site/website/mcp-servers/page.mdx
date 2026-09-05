@@ -1,0 +1,42 @@
+# MCP servers
+
+Interpreter can connect to any Model Context Protocol (MCP) server as an extension. This is the main way you extend Interpreter beyond the built-in tools.
+
+## What MCP is
+
+Model Context Protocol is an open standard for giving agents tools. An MCP server is a small program that exposes tools, and sometimes resources, that the agent can call. A Slack MCP server exposes tools for reading channels and posting messages. A database MCP server exposes tools for querying tables. A custom MCP server you write can expose anything your business already has an API for.
+
+Each MCP server is a separate process. Interpreter launches it, lists its tools, and routes the agent's tool calls to it.
+
+## Add an MCP server
+
+Open Settings, then MCP servers, then Add. You give Interpreter either:
+
+- the command to launch a local MCP server (for example, an `npx` or `uvx` command), or
+- a URL for a remote MCP server.
+
+Save it, and the new server's tools appear to the agent on the next turn.
+
+## How calls work
+
+Once a server is connected, the agent sees its tools alongside everything else. Calls are subject to your **approvals** policy like any other tool. If you have approvals set to ask before sensitive actions, MCP calls follow the same rule.
+
+## Good MCP servers to start with
+
+Most teams add MCP servers for systems they already use every day:
+
+- company chat: Slack, Discord
+- data warehouse: BigQuery, Snowflake, Postgres
+- ticketing: Linear, Jira
+- CRM: HubSpot, Salesforce
+- docs: Notion, Confluence
+
+Most of these have community-maintained MCP servers. Check the MCP ecosystem before writing your own.
+
+## Build your own
+
+Any tool you already have an API for can be wrapped as an MCP server. This is the right path when a workflow needs your internal system that isn't on the public list. The MCP spec is small, and there are SDKs for several languages.
+
+## Safety
+
+An MCP server can do whatever you allow it to do. Treat a new server the way you would treat installing a new desktop app: start with read-only tools, watch the approvals queue, and widen access only once you trust the workflow.

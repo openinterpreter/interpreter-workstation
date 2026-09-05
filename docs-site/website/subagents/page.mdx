@@ -1,0 +1,41 @@
+# Subagents
+
+A subagent is a child agent the main agent spawns to handle a sub-task. It runs alongside the main session, does its piece of the work, and reports back.
+
+## When subagents help
+
+Reach for subagents when a task fans out or specializes:
+
+- long batch jobs — process 50 PDFs in parallel rather than one at a time
+- mixed work — use a smaller, cheaper model to do extraction, then let the main agent review the results
+- focus — keep the main session on the high-level task while side work happens in its own context
+
+You can do everything without subagents. They exist to make parallel and specialized work faster and cleaner.
+
+## File scope is enforced
+
+Every subagent has its own workspace. That workspace is always narrower than or equal to the parent's. A subagent cannot read or write outside its scope, and it cannot escape the parent's reach by going up a level. This is enforced by the runtime — it is not a convention or a prompt instruction.
+
+If the parent agent only has access to one folder, no subagent it spawns can see anything else on disk.
+
+## How to use them
+
+Most of the time you will not spawn subagents directly. The main agent will decide that parallelism or specialization is worth it and spawn them on its own.
+
+You can also ask for it explicitly:
+
+- "spawn one subagent per PDF in this folder and have each one extract vendor and total independently"
+- "use a smaller model in a subagent to draft each section, then review them yourself"
+
+The main agent handles the dispatch and the bookkeeping.
+
+## Reviewing what they did
+
+The main agent waits for subagents to finish, collects their results, and folds them into its own answer before reporting back to you. You see the merged result in the main conversation.
+
+Approvals still apply. If your approval mode is "ask", any action a subagent takes that needs approval surfaces to you, the same as if the main agent had done it directly.
+
+## Related
+
+- [Workspaces](/docs/desktop/workspaces) — the file scope subagents inherit from
+- [Approvals](/docs/desktop/approvals) — how subagent actions get reviewed

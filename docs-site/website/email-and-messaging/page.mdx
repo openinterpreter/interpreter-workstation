@@ -1,0 +1,50 @@
+# Email and messaging
+
+Interpreter can draft and send messages through configured integrations. The right pattern is almost always: draft first, review the approvals queue, then send.
+
+## Connect the integrations first
+
+Integrations don't show up to the agent until you've connected them in Settings.
+
+- Email through Nylas — connect the account you want Interpreter to send from.
+- Telegram — link the bot or account that should post on your behalf.
+- WhatsApp — link the number that should send messages.
+- See [Integrations](/docs/desktop/integrations) for the setup flow.
+
+## Draft, then approve
+
+Sending is gated by approvals on purpose. Treat the draft step as the work and the send step as the review.
+
+- Tell Interpreter to draft and stop before send.
+- Read the draft in the approvals queue before letting it go out.
+- For batches, ask for one draft to review first, then approve the rest after spot-checking.
+- See [Approvals](/docs/desktop/approvals) for how the queue works.
+
+## Good messaging tasks
+
+The strongest tasks are ones where the message body depends on data you'd otherwise hand-assemble.
+
+- Weekly status notes to a list of customers, pulling each customer's recent activity.
+- Follow-up emails from a spreadsheet of leads, personalized per row.
+- One-off notifications fired when a longer workflow finishes.
+- Replies to a triaged inbox using a small set of templates.
+
+> "Read `follow-ups.csv`. For each row where 'last contact' is more than 21 days ago, draft a short follow-up email referencing the 'topic' column. Stop before sending — I'll review the queue."
+
+## Be specific about recipients and tone
+
+Vague instructions produce drafts you'll rewrite. Concrete instructions produce drafts you'll send.
+
+- Name the exact column or field that contains the recipient address.
+- Say what tone to use: "warm, two sentences, no exclamation points" beats "friendly".
+- Tell Interpreter what to leave out — internal jargon, prior context the recipient doesn't have, anything speculative.
+- For Telegram and WhatsApp, keep messages short. Long blocks read poorly in chat clients.
+
+## Where to be careful
+
+Some categories of message need a human eye every time.
+
+- Anything regulated — legal, financial, medical, HR — gets reviewed line by line.
+- Recipient lists pulled from spreadsheets get verified before approving a batch.
+- External-facing apologies, refunds, and policy statements get your wording, not Interpreter's first pass.
+- When in doubt, lower the batch size and approve drafts individually.

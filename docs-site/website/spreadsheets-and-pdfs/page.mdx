@@ -1,0 +1,56 @@
+# Spreadsheets and data
+
+Interpreter cleans, joins, and categorizes data across spreadsheets and PDFs in your workspace. Use it when data needs to move between formats, get normalized, or be classified against a policy you can name.
+
+## Cleaning a CSV
+
+Ask for specific, named operations. Vague requests produce vague results.
+
+- Deduplicate rows by a column you name (e.g. `email`)
+- Normalize names to "First Last" capitalization
+- Split a single address column into `street`, `city`, `state`, `zip`
+- Flag missing values in required columns
+- Coerce date strings to ISO format
+
+Always tell Interpreter where the output goes: overwrite the file, write to a new sheet, or write to a new file with a suffix.
+
+## Joining a PDF into a sheet
+
+When data lives in a PDF report and needs to land in existing rows, name the exact fields and destination columns.
+
+- Source: `q1-vendor-report.pdf`
+- Match key: `vendor_id` in column A of the spreadsheet
+- Pull fields: `total_spend`, `contract_end_date`, `account_owner`
+- Destination columns: E, F, G
+
+If a row in the sheet has no matching record in the PDF, tell Interpreter to leave the cells blank and add the row number to a `missing` tab.
+
+## Categorizing against a policy
+
+Interpreter is strong at classifying rows when the policy lives in the workspace as a readable document.
+
+## Worked example
+
+> Categorize every row in `corp-card-march.csv` against the policy in `expense-policy.md`. Add a `category` and `flag` column. Flag anything over the per-meal limit or missing a receipt. Stop before emailing finance the summary.
+
+Interpreter reads the policy, walks each row, assigns a category, and flags exceptions. It pauses before sending the summary email so you can audit the flags first.
+
+## Working over big sheets
+
+Do not turn Interpreter loose on 10,000 rows. Run a small batch, review the result, then expand.
+
+- Ask for the first 5-10 rows.
+- Spot-check the category and flag columns.
+- If the logic looks right, tell Interpreter to continue against the rest.
+- If it is wrong, correct the instruction and rerun the small batch.
+
+This loop catches misread fields and bad policy interpretations before they touch the whole file.
+
+## Require approvals at the right points
+
+- Before overwriting a source spreadsheet
+- Before emailing a summary to finance, ops, or a client
+- Before exporting flagged rows to a downstream system
+- Before deleting rows you marked as duplicates
+
+Stop before any step that leaves your machine. Cross-link: `/docs/desktop/approvals`.
