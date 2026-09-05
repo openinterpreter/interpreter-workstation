@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interpreter publication</title>
+<style>
+  :root { color-scheme: light dark; font: 15px/1.5 system-ui, sans-serif; }
+  body { margin: 0 auto; max-width: 760px; padding: 32px 20px 80px; }
+  header { position: sticky; top: 0; padding: 12px 0; background: Canvas; }
+  h1 { font-size: 1.25rem; margin: 0; }
+  #status { color: GrayText; }
+  #older { margin: 20px 0; }
+  article { border-top: 1px solid color-mix(in srgb, CanvasText 18%, transparent); padding: 16px 0; }
+  .role, .tool { color: GrayText; font-size: .82rem; }
+  .text { white-space: pre-wrap; }
+  .tool { margin: 8px 0; }
+  .tool[data-state="error"] { color: #c33; }
+</style>
+<header>
+  <h1 id="title">Joining publication…</h1>
+  <div id="status" role="status"></div>
+</header>
+<button id="older" hidden>Load older messages</button>
+<main id="messages" aria-live="polite"></main>
+<script type="module">
+  // Supply the relay base as ?endpoint=https://example.com/publication.
+  // Same-origin deployments may omit it and serve this page beside /publication.
+  const query = new URLSearchParams(location.search);
+  const endpoint = (query.get('endpoint') || '/publication').replace(/\/$/, '');
+  const pageSize = 10;
+  const known = new Map();
+  let threadId;
+  let nextCursor;
+  let hasMore = false;
+  let retryMs = 1000;
+
+  const title = document.querySelector('#title');
+  const status = document.querySelector('#status');
+  const messages = document.querySelector('#messages');
+  const older = document.querySelector('#older');
+
+  function renderPart(part) {
+    const node = document.createElement('div');
+    if (part.kind === 'text') {
+      node.className = 'text';
+      node.textContent = part.content;
+      return node;
+    }
+    if (part.kind === 'tool') {
+      node.className = 'tool';
+      node.dataset.state = part.state;
+      node.textContent = `${part.state === 'loading' ? '◌' : '✓'} ${part.label}`;
+      return node;
+    }
+    return null; // Version 1 readers ignore unknown additive part kinds.
+  }
+
+  function renderMessage(message) {
+    const article = document.createElement('article');
+    article.dataset.messageId = message.id;
+    const role = document.createElement('div');
+    role.className = 'role';
+    role.textContent = message.role;
+    article.append(role);
+    for (const part of message.parts) {
+      const node = renderPart(part);
+      if (node) article.append(node);
+    }
+    return article;
+  }
+
+  function upsertNewest(items) {
+    for (const item of items) {
+      const replacement = renderMessage(item);
+      const current = known.get(item.id);
+      if (current) current.replaceWith(replacement);
+      else messages.append(replacement);
+      known.set(item.id, replacement);
+    }
+  }
+
+  async function getSnapshot(before) {
+    const url = new URL(`${endpoint}/snapshot`, location.href);
+    url.searchParams.set('limit', pageSize);
+    if (before) url.searchParams.set('before', before);
+    const response = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (!response.ok) throw new Error(`Publication unavailable (${response.status})`);
+    const snapshot = await response.json();
+    if (snapshot.schemaVersion !== 1) throw new Error('Unsupported publication schema');
+    return snapshot;
+  }
+
+  async function refresh() {
+    try {
+      const snapshot = await getSnapshot();
+      if (threadId && snapshot.threadId !== threadId) {
+        known.clear();
+        messages.replaceChildren();
+      }
+      threadId = snapshot.threadId;
+      title.textContent = snapshot.title;
+      status.textContent = snapshot.goal
+        ? `${snapshot.status} · Goal ${snapshot.goal.status}`
+        : snapshot.status;
+      upsertNewest(snapshot.messages);
+      nextCursor = snapshot.page.nextCursor;
+      hasMore = snapshot.page.hasMore;
+      older.hidden = !hasMore || !nextCursor;
+      retryMs = 1000;
+      setTimeout(refresh, 3000);
+    } catch (error) {
+      status.textContent = `${error.message}; reconnecting…`;
+      retryMs = Math.min(retryMs + 1000, 5000);
+      setTimeout(refresh, retryMs);
+    }
+  }
+
+  older.addEventListener('click', async () => {
+    if (!hasMore || !nextCursor) return;
+    older.disabled = true;
+    try {
+      const anchor = messages.firstElementChild;
+      const beforeTop = anchor?.getBoundingClientRect().top;
+      const snapshot = await getSnapshot(nextCursor);
+      const fragment = document.createDocumentFragment();
+      for (const item of snapshot.messages) {
+        if (known.has(item.id)) continue;
+        const node = renderMessage(item);
+        known.set(item.id, node);
+        fragment.append(node);
+      }
+      messages.prepend(fragment);
+      if (anchor && beforeTop != null) {
+        scrollBy(0, anchor.getBoundingClientRect().top - beforeTop);
+      }
+      nextCursor = snapshot.page.nextCursor;
+      hasMore = snapshot.page.hasMore;
+      older.hidden = !hasMore || !nextCursor;
+    } finally {
+      older.disabled = false;
+    }
+  });
+
+  refresh();
+</script>
+</html>
+
