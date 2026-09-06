@@ -261,7 +261,7 @@ If you want to minimize what Vercel receives, do not connect the whole repositor
 
 Recommended public shape:
 
-- hosted demo app: `interpreter-marketing-demo.vercel.app`
+- hosted Workstation embed: `workstation-embed.vercel.app`
 - marketing wrapper: `openinterpreter.com/demo`
 
 That split keeps:

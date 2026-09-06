@@ -35,6 +35,23 @@ describe('public thread snapshots', () => {
     expect(sanitized).not.toContain('C:\\Users\\');
   });
 
+  test('rewrites allowlisted workspace links to endpoint-relative public files', () => {
+    const sanitized = sanitizePublicThreadText(
+      [
+        '[English PDF](/workspace/projects/science/public-artifacts/papers/00295/english.pdf)',
+        '[Private note](/workspace/projects/science/private/note.md)',
+        '[Traversal](/workspace/projects/science/public-artifacts/../private/note.md)',
+      ].join('\n'),
+      100_000,
+      '/workspace/projects/science/public-artifacts',
+    );
+
+    expect(sanitized).toContain('[English PDF](file?path=papers%2F00295%2Fenglish.pdf)');
+    expect(sanitized).toContain('Private note (saved in the workspace)');
+    expect(sanitized).toContain('Traversal (saved in the workspace)');
+    expect(sanitized).not.toContain('/workspace/projects/science');
+  });
+
   test('replaces internal citation tokens with a public-safe label', () => {
     expect(sanitizePublicThreadText('Finding. citeturn123search0')).toBe(
       'Finding. [source citation]',
