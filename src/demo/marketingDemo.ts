@@ -137,7 +137,11 @@ const MARKETING_DEMO_LOCALE = 'en';
 const MARKETING_DEMO_THUMBNAIL_SIZE = 768;
 const MARKETING_DEMO_VAULT_BUILT_AT = 1712700000000;
 const MARKETING_DEMO_RESEARCH_PAPER_RELATIVE_PATH = 'raw/papers/pi0-general-robot-control.pdf';
-const MARKETING_DEMO_RESEARCH_PAPER_URL = '/papers/pi0-general-robot-control.pdf';
+const marketingDemoAssetUrl = (assetPath: string): string => {
+  if (typeof document === 'undefined') return `/${assetPath}`;
+  return new URL(assetPath, document.baseURI).toString();
+};
+const MARKETING_DEMO_RESEARCH_PAPER_URL = marketingDemoAssetUrl('papers/pi0-general-robot-control.pdf');
 export const MARKETING_DEMO_SIDEBAR_THREAD_ID = getMarketingDemoSidebarThreadId(ACTIVE_MARKETING_DEMO_USE_CASE_ID);
 const MARKETING_DEMO_OAUTH_MODELS: SupportedOpenAIOAuthModel[] = [
   { id: 'gpt-5.4', name: 'GPT-5.4', isDefault: true },
@@ -2455,7 +2459,7 @@ function getMarketingDemoThumbnailAssetName(filePath: string): string {
 }
 
 export function getMarketingDemoThumbnailAssetUrl(filePath: string): string {
-  return `/thumbnails/${encodeURIComponent(getMarketingDemoThumbnailAssetName(filePath))}.png`;
+  return marketingDemoAssetUrl(`thumbnails/${encodeURIComponent(getMarketingDemoThumbnailAssetName(filePath))}.png`);
 }
 
 function getMarketingDemoFileIconAssetName(filePath: string): string {
@@ -2469,7 +2473,7 @@ function getMarketingDemoFileIconAssetName(filePath: string): string {
 }
 
 export function getMarketingDemoFileIconAssetUrl(filePath: string): string {
-  return `/file-icons/${encodeURIComponent(getMarketingDemoFileIconAssetName(filePath))}.png`;
+  return marketingDemoAssetUrl(`file-icons/${encodeURIComponent(getMarketingDemoFileIconAssetName(filePath))}.png`);
 }
 
 export function getMarketingDemoSeedFiles(): MarketingDemoSeedFile[] {
