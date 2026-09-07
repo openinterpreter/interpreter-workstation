@@ -21,10 +21,18 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
       PYTHON: /usr/bin/python3
     steps:
+      - name: Mint submodule checkout token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.INTERPRETERWORK_APP_ID }}
+          private-key: ${{ secrets.INTERPRETERWORK_APP_PRIVATE_KEY }}
+          owner: openinterpreter
+          repositories: interpreter-extension,interpreter-cua
       - uses: actions/checkout@v7
         with:
           submodules: recursive
-          token: ${{ secrets.WORKSTATION_SUBMODULE_TOKEN || github.token }}
+          token: ${{ steps.app-token.outputs.token }}
       - uses: pnpm/action-setup@v6
         with:
           version: 9.15.9
