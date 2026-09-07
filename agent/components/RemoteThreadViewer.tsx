@@ -35,17 +35,22 @@ function isSnapshot(value: unknown): value is PublicThreadSnapshot {
     && snapshot.page !== null;
 }
 
-export function resolvePublicArtifactLinks(content: string, endpoint: string): string {
-  const base = new URL(`${normalizeEndpoint(endpoint)}/`, window.location.href);
+export function resolvePublicArtifactLinks(content: string): string {
   return content.replace(/\]\((file\?path=[^)\r\n]+)\)/gu, (_match, href: string) => {
-    return `](${new URL(href, base).toString()})`;
+    const path = new URL(href, 'https://workstation.invalid/').searchParams.get('path');
+    const segments = path?.split('/') ?? [];
+    if (!segments.length || segments.some((segment) => !segment || segment === '.' || segment === '..')) {
+      return ']()';
+    }
+    const workspacePath = segments.map((segment) => encodeURIComponent(segment)).join('/');
+    return `](/workspace/${workspacePath})`;
   });
 }
 
-function toChatMessage(message: PublicThreadMessage, endpoint: string): ChatMessage {
+function toChatMessage(message: PublicThreadMessage): ChatMessage {
   const parts: ChatMessagePart[] = message.parts.map((part): ChatMessagePart => {
     if (part.kind === 'text') {
-      return { kind: 'text', content: resolvePublicArtifactLinks(part.content, endpoint) };
+      return { kind: 'text', content: resolvePublicArtifactLinks(part.content) };
     }
     return {
       kind: 'tool-call',
@@ -114,7 +119,7 @@ export function RemoteThreadViewer({
   }, [onReady]);
 
   const applySnapshot = useCallback((next: PublicThreadSnapshot, direction: 'older' | 'newer') => {
-    const incoming = next.messages.map((message) => toChatMessage(message, endpoint));
+    const incoming = next.messages.map((message) => toChatMessage(message));
     setMessages((current) => mergeChatHistory(current, incoming, direction));
     setSnapshot((current) => direction === 'older' && current
       ? {
@@ -123,7 +128,7 @@ export function RemoteThreadViewer({
           eventCursor: next.eventCursor ?? current.eventCursor,
         }
       : next);
-  }, [endpoint]);
+  }, []);
 
   const refresh = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
