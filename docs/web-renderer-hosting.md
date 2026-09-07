@@ -99,10 +99,13 @@ A production pipeline should:
 5. Revalidate `index.html` and cache fingerprinted assets immutably.
 6. Smoke-test the entry HTML, a script, a worker, and the selected backend.
 
-The included `web-renderer-deploy.yml` demonstrates this flow for Vercel. It
-expects `VERCEL_TOKEN`, `VERCEL_ORG_ID`, and
-`VERCEL_WEB_RENDERER_PROJECT_ID` repository secrets. Forks should use their own
-deployment account or replace the final step for another static host.
+A Git-connected static-host project is the simplest automatic deployment:
+select this repository, use the build and output paths above, and deploy the
+production branch after its required checks pass. The included
+`web-renderer-deploy.yml` is an optional token-based Vercel template. It expects
+`VERCEL_TOKEN`, `VERCEL_ORG_ID`, and `VERCEL_WEB_RENDERER_PROJECT_ID` repository
+secrets and skips cleanly when they are absent. Forks should use their own
+deployment account or replace its final step for another static host.
 
 Never put sidecar passwords, bearer tokens, or session secrets in the static
 build, URLs, iframe HTML, browser storage, or public CI variables. Password mode
