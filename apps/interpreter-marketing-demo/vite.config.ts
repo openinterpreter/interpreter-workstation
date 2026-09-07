@@ -13,7 +13,8 @@ export default defineConfig({
   root: __dirname,
   publicDir: path.resolve(__dirname, "public"),
   envDir: repoRoot,
-  base: "/",
+  // Relative assets let the renderer live at any host path.
+  base: "./",
   build: {
     outDir: path.resolve(__dirname, "dist"),
     emptyOutDir: true,

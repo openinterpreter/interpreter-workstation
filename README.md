@@ -82,6 +82,19 @@ pnpm test
 live-provider tests are opt-in because they require platform assets or external
 services.
 
+## Use Workstation on the web
+
+The repository includes a static browser renderer for the complete Workstation
+shell, the maintained conversation-only viewer, and seeded demos. Host that
+renderer on any static HTTPS service and point it at either an authenticated
+Workstation sidecar or a deliberately restricted publication relay.
+
+See [Web renderer hosting](docs/web-renderer-hosting.md) for building, hosting,
+path-prefix support, connection parameters, security, caching, and deployment
+automation. See [Workstation hosts and browser access](docs/remote-workstation.md)
+for the backend model, and [the publication API](docs/publication-api.md) for
+custom read-only interfaces.
+
 The browser extension can be bootstrapped and verified independently:
 
 ```bash

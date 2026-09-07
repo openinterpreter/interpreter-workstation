@@ -1,6 +1,6 @@
-# Interpreter Marketing Demo
+# Workstation web renderer
 
-This target builds the browser renderer as a static site.
+This target builds the real Workstation renderer as a static browser app.
 
 It is the real Interpreter renderer, not a lookalike mock. Query settings choose
 between seeded demo mode, an authenticated browser Workstation, and the smaller
@@ -245,30 +245,27 @@ When changing the marketing demo, keep this order:
 
 That sequencing matters. The hosted app and the marketing wrapper are two separate products with different responsibilities.
 
-## Vercel
+## Hosting
 
-Use a separate Vercel project for this demo.
+Host the complete static output on any HTTPS service:
 
 - Root Directory: the repo root
 - Build Command: `pnpm run marketing-demo:build`
 - Output Directory: `apps/interpreter-marketing-demo/dist`
 
-That keeps dependency installation on the normal repo root and avoids adding a second package graph just for the demo.
+The build uses relative asset URLs, so it works at an origin root or beneath a
+path prefix without a path-specific rebuild. Preserve the generated directory
+structure. Revalidate `index.html`; fingerprinted assets may be cached
+immutably.
 
-If you want to minimize what Vercel receives, do not connect the whole repository as a Git-based Vercel project. Instead, build the static demo first and deploy the generated `dist/` folder to a dedicated Vercel project. The GitHub Actions workflow in `../../.github/workflows/interpreter-marketing-demo-deploy.yml` does exactly that.
+The included
+[`web-renderer-deploy.yml`](../../.github/workflows/web-renderer-deploy.yml)
+shows one production pipeline. Forks can supply their own hosting credentials
+or replace only its final static deployment step.
 
-## Deployment Shape
-
-Recommended public shape:
-
-- hosted Workstation embed: `workstation-embed.vercel.app`
-- marketing wrapper: `openinterpreter.com/demo`
-
-That split keeps:
-
-- the app surface reusable
-- the marketing page simpler
-- the public demo isolated from the main app backend
+For complete build, reverse-proxy, iframe, backend, security, caching, and
+smoke-test instructions, read
+[`docs/web-renderer-hosting.md`](../../docs/web-renderer-hosting.md).
 
 ## Trust boundary
 
