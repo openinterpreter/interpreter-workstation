@@ -42,8 +42,6 @@ jobs:
         if: steps.deployment.outputs.enabled == 'true'
       - uses: pnpm/action-setup@v4
         if: steps.deployment.outputs.enabled == 'true'
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         if: steps.deployment.outputs.enabled == 'true'
         with:
