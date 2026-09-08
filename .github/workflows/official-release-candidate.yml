@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
-          token: ${{ secrets.WORKSTATION_SUBMODULE_TOKEN || github.token }}
+          token: ${{ github.token }}
       - uses: pnpm/action-setup@v6
         with:
           version: 9.15.9
