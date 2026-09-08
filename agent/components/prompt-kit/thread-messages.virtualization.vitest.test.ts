@@ -16,6 +16,8 @@ import {
   collectDetachedToolCalls,
   collectLastAssistantMessageIdsInTurns,
   groupMessageParts,
+  isUserMessageFullyOutOfView,
+  resolveMeasuredUserMessageSize,
   type MessageBubbleProps,
 } from './thread-messages';
 import type { ChatMessage, ToolCallInfo } from '../../../src/hooks/use-chat';
@@ -235,5 +237,38 @@ describe('grouping helpers used by the virtualized list', () => {
 
     const detached = collectDetachedToolCalls(messages, null);
     expect(detached).toHaveLength(0);
+  });
+});
+
+describe('sticky user-message visibility', () => {
+  test('does not treat the virtualizer estimate as a measured long bubble', () => {
+    expect(resolveMeasuredUserMessageSize({
+      cachedSize: 240,
+      estimateSize: 240,
+    })).toBeUndefined();
+    expect(resolveMeasuredUserMessageSize({
+      mountedSize: 900,
+      cachedSize: 240,
+      estimateSize: 240,
+    })).toBe(900);
+    expect(resolveMeasuredUserMessageSize({
+      mountedSize: 0,
+      cachedSize: 900,
+      estimateSize: 240,
+    })).toBe(900);
+  });
+
+  test('waits until a long user bubble is fully above the viewport', () => {
+    expect(isUserMessageFullyOutOfView({
+      itemTop: 0,
+      itemHeight: 900,
+      scrollTop: 899,
+    })).toBe(false);
+
+    expect(isUserMessageFullyOutOfView({
+      itemTop: 0,
+      itemHeight: 900,
+      scrollTop: 900,
+    })).toBe(true);
   });
 });

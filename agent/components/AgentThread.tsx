@@ -20,7 +20,6 @@ import {
 import { agentTabs, getApiUrl, tts as ttsIpc } from '../../src/ipc';
 import { useAgentNotifications } from '../hooks/useAgentNotifications';
 import { ThreadMessages } from './prompt-kit/thread-messages';
-import { ThreadGoalBar } from './ThreadGoalBar';
 import { computeUnreadCount } from '../../shared/utils/agentAttention';
 import { removeAgentActivity, updateAgentActivity } from '../../src/stores/agentActivityStore';
 import {
@@ -1255,8 +1254,8 @@ function AgentThreadWithRuntime({
         color: 'var(--oa-text, var(--foreground))',
       }}
       data-agent-id={agentId}
+      data-read-only={readOnly ? 'true' : undefined}
     >
-      {threadId ? <ThreadGoalBar threadId={threadId} readOnly={readOnly} /> : null}
       <ThreadMessages
         agentId={agentId}
         messages={messages}

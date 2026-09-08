@@ -697,6 +697,7 @@ const EDITOR_BOTTOM_FADE =
   'calc(var(--thread-scroll-bottom-clearance, 7rem) * 0.52)';
 const SIDEBAR_BOTTOM_FADE =
   'calc(var(--thread-scroll-bottom-clearance, 7rem) * 0.56)';
+const VIRTUAL_MESSAGE_ESTIMATE_SIZE = 240;
 const THREAD_HORIZONTAL_INSET = 'var(--unit-padding-medium)';
 const EDITOR_THREAD_TOP_INSET = 'calc(var(--unit-padding) * 2.5)';
 const SIDEBAR_THREAD_TOP_INSET = 'calc(var(--unit-padding) * 1.75)';
@@ -827,6 +828,35 @@ interface UserMessageEntry {
   content: string;
 }
 
+export function isUserMessageFullyOutOfView({
+  itemTop,
+  itemHeight,
+  scrollTop,
+}: {
+  itemTop: number;
+  itemHeight: number;
+  scrollTop: number;
+}): boolean {
+  return itemHeight > 0 && itemTop + itemHeight <= scrollTop;
+}
+
+export function resolveMeasuredUserMessageSize({
+  mountedSize,
+  cachedSize,
+  estimateSize,
+}: {
+  mountedSize?: number;
+  cachedSize?: number;
+  estimateSize: number;
+}): number | undefined {
+  const size = mountedSize !== undefined && mountedSize > 0
+    ? mountedSize
+    : cachedSize !== estimateSize
+      ? cachedSize
+      : undefined;
+  return size !== undefined && size > 0 ? size : undefined;
+}
+
 function useStickyUserMessageHeader({
   scrollContainer,
   isWideUserLayout,
@@ -889,16 +919,25 @@ function useStickyUserMessageHeader({
 
     for (const entry of userMessageEntries) {
       const measurement = cache[entry.index];
-      // If a message hasn't been measured yet (never been near the viewport),
-      // we can't decide whether it's scrolled past. Skip; estimate is unreliable.
-      if (!measurement) continue;
+      const mountedElement = virtualizer.elementsCache.get(entry.id);
+      const measuredSize = resolveMeasuredUserMessageSize({
+        mountedSize: mountedElement?.getBoundingClientRect().height,
+        cachedSize: measurement?.size,
+        estimateSize: VIRTUAL_MESSAGE_ESTIMATE_SIZE,
+      });
+      // The measurements cache also contains estimates. A long newly-sent
+      // user bubble can therefore look fully scrolled away for one frame
+      // before its real height is known. Prefer the mounted row's real DOM
+      // height, and only trust an unmounted cached size once it differs from
+      // the virtualizer's estimate.
+      if (!measurement || measuredSize === undefined || measuredSize <= 0) continue;
 
       const itemTopInContainer = virtualBlockTop + measurement.start;
-      const itemHeight = measurement.size;
-      const threshold = Math.max(20, itemHeight - 18);
-      const relativeTop = itemTopInContainer - scrollTop;
-
-      if (relativeTop < -threshold) {
+      if (isUserMessageFullyOutOfView({
+        itemTop: itemTopInContainer,
+        itemHeight: measuredSize,
+        scrollTop,
+      })) {
         if (!candidate || measurement.start > (cache[candidate.index]?.start ?? -Infinity)) {
           candidate = entry;
         }
@@ -1609,7 +1648,7 @@ export const ThreadMessages: FC<ThreadMessagesProps> = ({
   const virtualizer = useVirtualizer({
     count: messages.length,
     getScrollElement: () => scrollContainer,
-    estimateSize: () => 240,
+    estimateSize: () => VIRTUAL_MESSAGE_ESTIMATE_SIZE,
     overscan: 4,
     // Use stable item ids so measurement cache survives reorders / streaming
     // appends. ChatMessage.id is stable for committed messages.

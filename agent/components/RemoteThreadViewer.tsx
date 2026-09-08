@@ -7,6 +7,7 @@ import type {
   PublicThreadSnapshot,
 } from '../../shared/types/publicThread';
 import { ThreadMessages } from './prompt-kit/thread-messages';
+import { ThreadAccessoryStack } from './ThreadAccessoryStack';
 import { ThreadGoalSummary } from './ThreadGoalSummary';
 
 export type RemoteThreadViewerProps = {
@@ -110,7 +111,9 @@ export function RemoteThreadViewer({
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [initialPositioned, setInitialPositioned] = useState(false);
+  const [accessoryStackHeight, setAccessoryStackHeight] = useState(0);
   const viewerRef = useRef<HTMLDivElement>(null);
+  const accessoryStackRef = useRef<HTMLDivElement>(null);
   const onTitleChangeRef = useRef(onTitleChange);
   const readySignalledRef = useRef(false);
   const gesturePrependAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
@@ -262,6 +265,23 @@ export function RemoteThreadViewer({
     if (initialPositioned) signalReady();
   }, [initialPositioned, signalReady]);
 
+  useLayoutEffect(() => {
+    if (!snapshot?.goal || !accessoryStackRef.current) {
+      setAccessoryStackHeight(0);
+      return;
+    }
+
+    const stack = accessoryStackRef.current;
+    const updateHeight = () => {
+      setAccessoryStackHeight(Math.ceil(stack.getBoundingClientRect().height));
+    };
+
+    updateHeight();
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(stack);
+    return () => observer.disconnect();
+  }, [snapshot?.goal]);
+
   useEffect(() => {
     if (!loading && !snapshot && error) signalReady();
   }, [error, loading, signalReady, snapshot]);
@@ -305,8 +325,11 @@ export function RemoteThreadViewer({
   return (
     <div
       ref={viewerRef}
-      className="flex h-full min-h-0 flex-col overflow-hidden bg-[var(--oa-bg-app)] text-[var(--oa-text)]"
-      style={{ visibility: initialPositioned ? 'visible' : 'hidden' }}
+      className="relative flex h-full min-h-0 flex-col overflow-hidden bg-[var(--oa-bg-app)] text-[var(--oa-text)]"
+      style={{
+        visibility: initialPositioned ? 'visible' : 'hidden',
+        '--thread-scroll-bottom-clearance': `${accessoryStackHeight + 32}px`,
+      }}
       aria-busy={!initialPositioned}
       onWheelCapture={(event) => {
         if (event.deltaY < 0) armHistoryPaging();
@@ -345,13 +368,6 @@ export function RemoteThreadViewer({
           </div>
         </div>
       </header> : null}
-      {snapshot.goal ? (
-        <ThreadGoalSummary
-          objective={snapshot.goal.objective}
-          status={snapshot.goal.status}
-          readOnly
-        />
-      ) : null}
       {error ? (
         <div className="shrink-0 border-b border-[var(--oa-border)] px-4 py-1.5 text-center text-ui-xs text-[var(--oa-text-muted)]">
           Connection interrupted. Showing the last durable snapshot while reconnecting.
@@ -378,6 +394,23 @@ export function RemoteThreadViewer({
         isEditorPane
         chatResizeBehavior={initialPositioned ? 'smooth' : 'instant'}
       />
+      {snapshot.goal ? (
+        <div
+          ref={accessoryStackRef}
+          className="pointer-events-none absolute inset-x-0 bottom-0 z-20 pb-3"
+          data-thread-accessory-stack-host="true"
+        >
+          <div className="pointer-events-auto">
+            <ThreadAccessoryStack>
+              <ThreadGoalSummary
+                objective={snapshot.goal.objective}
+                status={snapshot.goal.status}
+                readOnly
+              />
+            </ThreadAccessoryStack>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

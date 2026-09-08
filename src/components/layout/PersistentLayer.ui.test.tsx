@@ -150,7 +150,21 @@ vi.mock('./new-tab/ApprovalsContainer', () => ({
 }));
 
 vi.mock('../../../agent/components/PlanChecklistCard', () => ({
-  PlanChecklistCard: () => <div data-testid="mock-plan-checklist" />,
+  PlanChecklistCard: () => <div data-testid="mock-plan-checklist">Plan card</div>,
+}));
+
+vi.mock('../../../agent/components/ThreadGoalBar', () => ({
+  ThreadGoalBar: () => <div data-goal-card="true">Goal card</div>,
+}));
+
+vi.mock('../../../agent/utils/threadGoalCommand', () => ({
+  executeThreadGoalCommand: vi.fn(),
+  isThreadGoalCommand: () => false,
+  THREAD_GOAL_UPDATED_EVENT: 'thread-goal:updated',
+}));
+
+vi.mock('../../contexts/ToastContext', () => ({
+  useToast: () => ({ showToast: vi.fn() }),
 }));
 
 vi.mock('../../../agent/components/composer/SettingsPopover', () => ({
@@ -389,6 +403,37 @@ describe('PersistentLayer editor empty state layout', () => {
       expect(screen.getByTestId('mock-plan-checklist')).toBeVisible();
     });
     expect(screen.getByTestId('mock-composer')).toHaveAttribute('data-show-suggestion-chips', 'false');
+  });
+
+  test('renders goal and plan as sibling cards in one accessory stack', async () => {
+    const tab = createAgentTab();
+    const agent = tab.agent;
+    if (!agent) throw new Error('Expected an agent tab');
+    agent.session.codexThreadId = 'thread-one';
+    renderPersistentLayer(tab);
+
+    window.dispatchEvent(new CustomEvent('persistent-layer:plan-update', {
+      detail: {
+        agentId: 'agent-one',
+        planChecklist: {
+          turnId: 'turn-one',
+          explanation: 'Plan explanation',
+          steps: [{ step: 'Patch the UI', status: 'inProgress' }],
+        },
+      },
+    }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Goal card')).toBeVisible();
+      expect(screen.getByText('Plan card')).toBeVisible();
+    });
+
+    const goalCard = screen.getByText('Goal card');
+    const planCard = screen.getByText('Plan card');
+    const stack = goalCard.closest('[data-thread-accessory-stack]');
+    expect(stack).not.toBeNull();
+    expect(stack).toContainElement(planCard);
+    expect(stack?.children).toHaveLength(2);
   });
 
   test('waits_for_conversation_history_before_revealing_the_empty_agent_surface', async () => {

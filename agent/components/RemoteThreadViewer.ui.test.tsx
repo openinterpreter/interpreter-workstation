@@ -13,13 +13,16 @@ vi.mock('./prompt-kit/thread-messages', () => ({
   ),
 }));
 
-function snapshot(nextCursor: string | null): PublicThreadSnapshot {
+function snapshot(
+  nextCursor: string | null,
+  goal: PublicThreadSnapshot['goal'] = null,
+): PublicThreadSnapshot {
   return {
     schemaVersion: 1,
     threadId: 'thread-one',
     title: 'Remote conversation',
     status: 'working',
-    goal: null,
+    goal,
     messages: [],
     page: {
       hasMore: Boolean(nextCursor),
@@ -78,5 +81,28 @@ describe('RemoteThreadViewer history gestures', () => {
     await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(3));
     expect(String(vi.mocked(fetch).mock.calls[2]?.[0])).toContain('before=cursor-one');
     expect(screen.getByTestId('chat-scroll')).toHaveAttribute('data-generic-history-loader', 'false');
+  });
+
+  test('places a read-only Goal card at the bottom accessory edge', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(new Response(JSON.stringify(snapshot(null, {
+      objective: 'Keep the published transcript tidy',
+      status: 'active',
+      updatedAt: Date.now(),
+    }))));
+
+    const { RemoteThreadViewer } = await import('./RemoteThreadViewer');
+    render(
+      <RemoteThreadViewer
+        endpoint="https://example.test/api/connection"
+        embedded
+      />,
+    );
+
+    const goal = await screen.findByText('Keep the published transcript tidy');
+    expect(goal.closest('[data-thread-accessory-stack-host]')).not.toBeNull();
+    expect(document.querySelector('[data-thread-accessory-stack]')).toContainElement(goal);
+    expect(screen.queryByText('Set a goal for this thread')).not.toBeInTheDocument();
   });
 });

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { v2 } from '../../server/handlers/codex-generated-types';
 
@@ -30,36 +30,22 @@ describe('ThreadGoalBar', () => {
     vi.unstubAllGlobals();
   });
 
-  test('creates a native active Goal from the thread surface', async () => {
-    const createdGoal = goal({ objective: 'Translate every queued document' });
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ goal: null })))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ goal: createdGoal })));
+  test('does not render a top-level create-goal prompt when no goal exists', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ goal: null })),
+    );
     vi.stubGlobal('fetch', fetchMock);
 
     const { ThreadGoalBar } = await import('./ThreadGoalBar');
     render(<ThreadGoalBar threadId="thread-one" />);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Set a goal for this thread' }));
-    fireEvent.change(screen.getByLabelText('Goal'), {
-      target: { value: 'Translate every queued document' },
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Set a goal for this thread' })).not.toBeInTheDocument();
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Save goal' }));
-
-    await waitFor(() => expect(screen.getByText('Translate every queued document')).toBeVisible());
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
+    expect(fetchMock).toHaveBeenCalledWith(
       '/api/agent/threads/thread-one/goal',
-      expect.objectContaining({
-        method: 'PUT',
-        body: JSON.stringify({
-          objective: 'Translate every queued document',
-          status: 'active',
-        }),
-      }),
+      expect.objectContaining({ credentials: 'include' }),
     );
-    expect(screen.getByRole('button', { name: 'Pause goal' })).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Edit goal' })).toBeVisible();
   });
 
   test('shows Goal state without mutation controls in read-only mode', async () => {
