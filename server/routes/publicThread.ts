@@ -1,12 +1,18 @@
 import { Router, type Request, type Response } from 'express';
-import { getCodexService } from '../../src/lib/codex/service';
+import {
+  extractNotificationThreadId,
+  extractNotificationTurnId,
+  getCodexService,
+} from '../../src/lib/codex/service';
 import { enrichThreadWithReasoning } from '../../src/lib/codex/enrich-thread-reasoning';
+import { mapNotificationToUiEvents } from '../../src/lib/codex/event-mapper';
 import {
   paginateThreadTurns,
   parseThreadHistoryLimit,
 } from '../utils/threadHistoryPagination';
 import {
   buildPublicThreadSnapshot,
+  applyPublicThreadUiEvents,
   matchesPublicThreadToken,
 } from '../utils/publicThreadSnapshot';
 import {
@@ -17,8 +23,6 @@ import {
 import { resolvePublicThreadId } from '../utils/publicThreadConfig';
 
 const router = Router();
-const PUBLIC_THREAD_REFRESH_INTERVAL_MS = 1_000;
-
 async function loadPublicThreadState(threadId: string): Promise<CachedPublicThreadSnapshot> {
   const service = getCodexService();
   let thread = await service.readThread(threadId);
@@ -39,7 +43,48 @@ async function loadPublicThreadState(threadId: string): Promise<CachedPublicThre
 
 let cachedPublicThreadState: CachedPublicThreadSnapshot | null = null;
 let publicThreadRefresh: Promise<CachedPublicThreadSnapshot> | null = null;
+let publicThreadSubscription: { threadId: string; unsubscribe: () => void } | null = null;
+let publicThreadCacheWriteTimer: ReturnType<typeof setTimeout> | null = null;
+let publicThreadCacheWriteChain = Promise.resolve();
 let lastRefreshErrorLogAt = 0;
+
+function schedulePublicThreadCacheWrite(): void {
+  if (publicThreadCacheWriteTimer) return;
+  publicThreadCacheWriteTimer = setTimeout(() => {
+    publicThreadCacheWriteTimer = null;
+    const state = cachedPublicThreadState;
+    if (!state) return;
+    publicThreadCacheWriteChain = publicThreadCacheWriteChain
+      .then(() => writePublicThreadCache(
+        process.env.INTERPRETER_PUBLIC_THREAD_CACHE_FILE?.trim(),
+        state,
+      ))
+      .catch(reportBackgroundRefreshFailure);
+  }, 200);
+}
+
+function ensurePublicThreadSubscription(threadId: string): void {
+  if (publicThreadSubscription?.threadId === threadId) return;
+  publicThreadSubscription?.unsubscribe();
+  const service = getCodexService();
+  publicThreadSubscription = {
+    threadId,
+    unsubscribe: service.subscribeNotifications((notification) => {
+      if (extractNotificationThreadId(notification) !== threadId) return;
+      const current = cachedPublicThreadState;
+      if (!current || current.snapshot.threadId !== threadId) return;
+      const nextSnapshot = applyPublicThreadUiEvents({
+        snapshot: current.snapshot,
+        events: mapNotificationToUiEvents(notification),
+        turnId: extractNotificationTurnId(notification),
+        publicWorkspaceRoot: process.env.INTERPRETER_PUBLIC_WORKSPACE_ROOT?.trim(),
+      });
+      if (nextSnapshot === current.snapshot) return;
+      cachedPublicThreadState = { snapshot: nextSnapshot, refreshedAt: Date.now() };
+      schedulePublicThreadCacheWrite();
+    }),
+  };
+}
 
 function refreshPublicThreadState(threadId: string): Promise<CachedPublicThreadSnapshot> {
   if (cachedPublicThreadState?.snapshot.threadId !== threadId) {
@@ -50,6 +95,7 @@ function refreshPublicThreadState(threadId: string): Promise<CachedPublicThreadS
   publicThreadRefresh = loadPublicThreadState(threadId)
     .then((state) => {
       cachedPublicThreadState = state;
+      ensurePublicThreadSubscription(threadId);
       void writePublicThreadCache(
         process.env.INTERPRETER_PUBLIC_THREAD_CACHE_FILE?.trim(),
         state,
@@ -96,16 +142,15 @@ router.get('/snapshot', async (req: Request, res: Response) => {
         process.env.INTERPRETER_PUBLIC_THREAD_CACHE_FILE?.trim(),
         threadId,
       );
+      if (state) cachedPublicThreadState = state;
     }
     if (!state) {
       state = await refreshPublicThreadState(threadId);
-    } else if (Date.now() - state.refreshedAt >= PUBLIC_THREAD_REFRESH_INTERVAL_MS) {
-      // OIX may be occupied by a long tool operation in the active Goal turn.
-      // Keep public reads instant from the last successful in-memory snapshot
-      // while one shared refresh waits for the native runtime. The rollout on
-      // disk remains the durable source of truth across service restarts.
-      void refreshPublicThreadState(threadId).catch(reportBackgroundRefreshFailure);
     }
+    // The same native OIX client emits every Goal turn notification. Advance
+    // the durable projection from that event stream instead of continuously
+    // reparsing the full thread, which can grow to multiple gigabytes.
+    ensurePublicThreadSubscription(threadId);
 
     const fullSnapshot = state.snapshot;
     const limit = parseThreadHistoryLimit(req.query.limit) ?? 24;

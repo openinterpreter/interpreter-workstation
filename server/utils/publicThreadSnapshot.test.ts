@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { v2 } from '../handlers/codex-generated-types';
 import {
+  applyPublicThreadUiEvents,
   buildPublicThreadSnapshot,
   matchesPublicThreadToken,
   sanitizePublicThreadText,
@@ -106,5 +107,58 @@ describe('public thread snapshots', () => {
     expect(JSON.stringify(snapshot)).toContain('Created paper.md and 1 more');
     expect(JSON.stringify(snapshot)).not.toContain('/workspace/translations');
     expect(JSON.stringify(snapshot)).toContain('Public result');
+  });
+
+  test('advances a public snapshot from live OIX events without exposing tool payloads', () => {
+    const initial = buildPublicThreadSnapshot({
+      thread: {
+        id: 'thread-1',
+        name: 'Long task',
+        updatedAt: 100,
+        status: { type: 'idle' },
+        turns: [],
+      } as unknown as v2.Thread,
+      goal: null,
+      title: 'Long task',
+      nextCursor: null,
+      hasMore: false,
+      publicWorkspaceRoot: '/workspace/public',
+    });
+
+    const updated = applyPublicThreadUiEvents({
+      snapshot: initial,
+      turnId: 'turn-live',
+      publicWorkspaceRoot: '/workspace/public',
+      now: 1234,
+      events: [
+        {
+          event: 'tool',
+          payload: {
+            phase: 'completed',
+            type: 'fileChange',
+            item: {
+              id: 'file-one',
+              type: 'fileChange',
+              status: 'completed',
+              changes: [{ path: '/workspace/public/papers/one.pdf', kind: { type: 'add' } }],
+            } as unknown as v2.ThreadItem,
+          },
+        },
+        {
+          event: 'final',
+          payload: {
+            itemId: 'message-one',
+            text: '[Paper](/workspace/public/papers/one.pdf) is ready. api_key=sk_examplelongsecret',
+          },
+        },
+      ],
+    });
+
+    expect(updated.status).toBe('working');
+    expect(updated.updatedAt).toBe(1234);
+    expect(updated.messages).toHaveLength(1);
+    expect(JSON.stringify(updated)).toContain('Created one.pdf');
+    expect(JSON.stringify(updated)).toContain('[Paper](file?path=papers%2Fone.pdf)');
+    expect(JSON.stringify(updated)).not.toContain('sk_examplelongsecret');
   });
 });
