@@ -51,8 +51,15 @@ jobs:
         if: steps.deployment.outputs.enabled == 'true'
       - run: pnpm run marketing-demo:build
         if: steps.deployment.outputs.enabled == 'true'
+      - name: Prepare immutable Vercel build output
+        if: steps.deployment.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          mkdir -p .vercel/output/static
+          cp -R apps/interpreter-marketing-demo/dist/. .vercel/output/static/
+          node -e 'require("node:fs").writeFileSync(".vercel/output/config.json", JSON.stringify({ version: 3 }))'
       - name: Deploy immutable static build
         if: steps.deployment.outputs.enabled == 'true'
-        run: pnpm dlx vercel@latest deploy apps/interpreter-marketing-demo/dist --prod --yes --token "$VERCEL_TOKEN"
+        run: pnpm dlx vercel@latest deploy --prebuilt --prod --yes --token "$VERCEL_TOKEN"
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
