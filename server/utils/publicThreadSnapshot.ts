@@ -5,6 +5,7 @@ import type {
   PublicThreadMessagePart,
   PublicThreadSnapshot,
 } from '../../shared/types/publicThread';
+import type { UiStreamEvent } from '../../src/lib/codex/event-mapper';
 
 const RUNTIME_RESTART_CONTINUE_MESSAGE =
   'Continue the previous task now that Interpreter restarted. Continue from where you left off and verify the MCP/tool changes are available.';
@@ -83,7 +84,7 @@ function publicFileChangeLabel(item: Extract<v2.ThreadItem, { type: 'fileChange'
   return `${verb} ${sanitizePublicThreadText(filename, 200)}${suffix}`;
 }
 
-function publicToolPart(item: v2.ThreadItem): PublicThreadMessagePart | null {
+export function publicToolPart(item: v2.ThreadItem): PublicThreadMessagePart | null {
   switch (item.type) {
     case 'commandExecution':
       return { kind: 'tool', id: item.id, label: 'Ran a command', state: toolState(item.status) };
@@ -113,6 +114,112 @@ function publicToolPart(item: v2.ThreadItem): PublicThreadMessagePart | null {
     default:
       return null;
   }
+}
+
+const MAX_LIVE_TOOL_PARTS_PER_MESSAGE = 20;
+
+function appendLivePart(
+  messages: PublicThreadMessage[],
+  messageId: string,
+  part: PublicThreadMessagePart,
+  createdAt: number,
+): PublicThreadMessage[] {
+  const index = messages.findIndex((message) => message.id === messageId);
+  const current = index >= 0
+    ? messages[index]
+    : { id: messageId, role: 'assistant' as const, parts: [], createdAt };
+  let parts = current.parts;
+
+  if (part.kind === 'tool') {
+    const existingPart = parts.findIndex((candidate) => candidate.kind === 'tool' && candidate.id === part.id);
+    parts = existingPart >= 0
+      ? parts.map((candidate, partIndex) => partIndex === existingPart ? part : candidate)
+      : [...parts, part];
+    const toolIndexes = parts.flatMap((candidate, partIndex) => candidate.kind === 'tool' ? [partIndex] : []);
+    const excess = toolIndexes.length - MAX_LIVE_TOOL_PARTS_PER_MESSAGE;
+    if (excess > 0) {
+      const omitted = new Set(toolIndexes.slice(0, excess));
+      parts = parts.filter((_candidate, partIndex) => !omitted.has(partIndex));
+    }
+  } else if (!parts.some((candidate) => candidate.kind === 'text' && candidate.content === part.content)) {
+    parts = [...parts, part];
+  }
+
+  const next = { ...current, parts };
+  if (index < 0) return [...messages, next];
+  return messages.map((message, messageIndex) => messageIndex === index ? next : message);
+}
+
+/**
+ * Advance the durable public projection from native OIX notifications. This
+ * avoids repeatedly reconstructing a multi-gigabyte thread merely to show its
+ * newest activity. Tool inputs and outputs are never copied into the public
+ * projection; only the same sanitized display labels used by full snapshots
+ * are retained.
+ */
+export function applyPublicThreadUiEvents(options: {
+  snapshot: PublicThreadSnapshot;
+  events: readonly UiStreamEvent[];
+  turnId: string | null;
+  publicWorkspaceRoot?: string;
+  now?: number;
+}): PublicThreadSnapshot {
+  const now = options.now ?? Date.now();
+  let messages = options.snapshot.messages;
+  let status = options.snapshot.status;
+  const liveMessageId = options.turnId ? `live-turn-${options.turnId}` : null;
+
+  for (const event of options.events) {
+    if (event.event === 'userMessage') {
+      const text = event.payload.text.trim();
+      if (text && text !== RUNTIME_RESTART_CONTINUE_MESSAGE && !messages.some((message) => message.id === event.payload.itemId)) {
+        messages = [...messages, {
+          id: event.payload.itemId,
+          role: 'user',
+          parts: [{ kind: 'text', content: sanitizePublicThreadText(text, 100_000, options.publicWorkspaceRoot) }],
+          createdAt: now,
+        }];
+      }
+      continue;
+    }
+
+    if (event.event === 'tool' && liveMessageId) {
+      const part = publicToolPart(event.payload.item);
+      if (part) messages = appendLivePart(messages, liveMessageId, part, now);
+      status = 'working';
+      continue;
+    }
+
+    if (event.event === 'final') {
+      const text = event.payload.text.trim();
+      if (text) {
+        messages = appendLivePart(
+          messages,
+          liveMessageId ?? event.payload.itemId ?? `live-message-${now}`,
+          { kind: 'text', content: sanitizePublicThreadText(text, 100_000, options.publicWorkspaceRoot) },
+          now,
+        );
+      }
+      status = 'working';
+      continue;
+    }
+
+    if (event.event === 'completed') {
+      status = event.payload.status === 'failed' ? 'error' : 'idle';
+      continue;
+    }
+
+    if (event.event === 'error') status = 'error';
+  }
+
+  if (messages === options.snapshot.messages && status === options.snapshot.status) return options.snapshot;
+  return {
+    ...options.snapshot,
+    messages,
+    status,
+    eventCursor: `${now}:${options.turnId ?? 'thread'}`,
+    updatedAt: now,
+  };
 }
 
 function publicUserText(item: Extract<v2.ThreadItem, { type: 'userMessage' }>): string {

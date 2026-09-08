@@ -68,10 +68,13 @@ async function requestListing(relativePath: string): Promise<PublicWorkspaceList
 
   let lastError: Error | null = null;
   for (let attempt = 0; attempt < LISTING_ATTEMPTS; attempt += 1) {
+    const abortController = new AbortController();
+    const timeoutId = window.setTimeout(() => abortController.abort(), 8_000);
     try {
       const response = await fetch(url, {
         headers: { Accept: 'application/json' },
         cache: 'no-store',
+        signal: abortController.signal,
       });
       if (!response.ok) {
         throw new Error(`Remote workspace is unavailable (${response.status})`);
@@ -83,6 +86,8 @@ async function requestListing(relativePath: string): Promise<PublicWorkspaceList
     } catch (error) {
       lastError = error instanceof Error ? error : new Error('Remote workspace is unavailable');
       if (attempt < LISTING_ATTEMPTS - 1) await waitForListingRetry(attempt);
+    } finally {
+      window.clearTimeout(timeoutId);
     }
   }
   throw lastError ?? new Error('Remote workspace is unavailable');

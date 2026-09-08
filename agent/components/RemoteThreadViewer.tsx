@@ -79,10 +79,18 @@ export async function fetchRemoteThreadSnapshot(
   const url = new URL(`${normalizeEndpoint(endpoint)}/snapshot`, window.location.href);
   url.searchParams.set('limit', String(pageSize));
   if (before) url.searchParams.set('before', before);
-  const response = await fetch(url, {
-    headers: { Accept: 'application/json' },
-    cache: 'no-store',
-  });
+  const abortController = new AbortController();
+  const timeoutId = window.setTimeout(() => abortController.abort(), 8_000);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+      signal: abortController.signal,
+    });
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
   if (!response.ok) throw new Error(`Live thread is unavailable (${response.status})`);
   const payload: unknown = await response.json();
   if (!isSnapshot(payload)) throw new Error('Live thread returned an invalid snapshot');
@@ -107,6 +115,7 @@ export function RemoteThreadViewer({
   const readySignalledRef = useRef(false);
   const gesturePrependAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
   const touchStartYRef = useRef<number | null>(null);
+  const refreshingRef = useRef(false);
 
   useEffect(() => {
     onTitleChangeRef.current = onTitleChange;
@@ -131,6 +140,10 @@ export function RemoteThreadViewer({
   }, []);
 
   const refresh = useCallback(async (quiet = false) => {
+    // A slow or disconnected publication must not create an ever-growing pile
+    // of overlapping 2.5-second polls in the browser.
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
     if (!quiet) setLoading(true);
     try {
       const next = await fetchRemoteThreadSnapshot(endpoint, pageSize);
@@ -140,6 +153,7 @@ export function RemoteThreadViewer({
     } catch (refreshError) {
       setError(refreshError instanceof Error ? refreshError.message : 'Live thread is unavailable');
     } finally {
+      refreshingRef.current = false;
       if (!quiet) setLoading(false);
     }
   }, [applySnapshot, endpoint, pageSize]);
