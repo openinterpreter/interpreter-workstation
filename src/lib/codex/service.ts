@@ -476,11 +476,6 @@ export class CodexService {
     });
   }
 
-  /** Observe native OIX notifications, including Goal turns started outside an HTTP request. */
-  subscribeNotifications(handler: (notification: AppServerNotification) => void): () => void {
-    return this.client.subscribe(handler);
-  }
-
   private assertNoActiveTurn(threadId: string): void {
     if (!this.activeTurns.has(threadId)) {
       return;
@@ -1084,6 +1079,34 @@ export class CodexService {
 
 let sharedClient: CodexAppServerClient | null = null;
 let sharedMcpClient: CodexAppServerClient | null = null;
+const persistentNotificationSubscribers = new Set<(notification: AppServerNotification) => void>();
+let sharedNotificationUnsubscribe: (() => void) | null = null;
+
+function attachPersistentNotificationSubscribers(client: CodexAppServerClient): void {
+  sharedNotificationUnsubscribe?.();
+  sharedNotificationUnsubscribe = client.subscribe((notification) => {
+    for (const subscriber of persistentNotificationSubscribers) {
+      try {
+        subscriber(notification);
+      } catch {
+        console.error('[interpreter-server] persistent notification subscriber failed');
+      }
+    }
+  });
+}
+
+/**
+ * Observe notifications across shared app-server restarts. Runtime profile
+ * changes intentionally replace the shared client; publication and other
+ * process-level observers must survive that replacement.
+ */
+export function subscribeCodexNotifications(
+  handler: (notification: AppServerNotification) => void,
+): () => void {
+  persistentNotificationSubscribers.add(handler);
+  getCodexClient();
+  return () => persistentNotificationSubscribers.delete(handler);
+}
 
 export function getCodexClient(): CodexClient {
   if (!sharedClient) {
@@ -1098,6 +1121,7 @@ export function getCodexClient(): CodexClient {
       loadCodexRuntimeAccessSnapshot,
     );
     attachCodexServerRequestApprovals(sharedClient);
+    attachPersistentNotificationSubscribers(sharedClient);
   }
   return sharedClient;
 }
@@ -1130,6 +1154,8 @@ export function getCodexService(): CodexService {
  * Shut down the shared Codex app-server process and reset singletons.
  */
 export function shutdownCodexRuntime(): void {
+  sharedNotificationUnsubscribe?.();
+  sharedNotificationUnsubscribe = null;
   if (sharedClient) {
     sharedClient.shutdown();
     sharedClient = null;

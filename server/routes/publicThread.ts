@@ -3,6 +3,7 @@ import {
   extractNotificationThreadId,
   extractNotificationTurnId,
   getCodexService,
+  subscribeCodexNotifications,
 } from '../../src/lib/codex/service';
 import { enrichThreadWithReasoning } from '../../src/lib/codex/enrich-thread-reasoning';
 import { mapNotificationToUiEvents } from '../../src/lib/codex/event-mapper';
@@ -66,10 +67,9 @@ function schedulePublicThreadCacheWrite(): void {
 function ensurePublicThreadSubscription(threadId: string): void {
   if (publicThreadSubscription?.threadId === threadId) return;
   publicThreadSubscription?.unsubscribe();
-  const service = getCodexService();
   publicThreadSubscription = {
     threadId,
-    unsubscribe: service.subscribeNotifications((notification) => {
+    unsubscribe: subscribeCodexNotifications((notification) => {
       if (extractNotificationThreadId(notification) !== threadId) return;
       const current = cachedPublicThreadState;
       if (!current || current.snapshot.threadId !== threadId) return;
