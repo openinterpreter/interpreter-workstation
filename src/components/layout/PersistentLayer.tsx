@@ -29,6 +29,8 @@ import { BrowserView } from '../BrowserView';
 import { TerminalView } from '../../../agent/components/TerminalView';
 import { AgentThread } from '../../../agent/components/AgentThread';
 import { RemoteThreadViewer } from '../../../agent/components/RemoteThreadViewer';
+import { ThreadAccessoryStack } from '../../../agent/components/ThreadAccessoryStack';
+import { ThreadGoalBar } from '../../../agent/components/ThreadGoalBar';
 import { AgentMetadataProvider } from '../../../agent/contexts/AgentMetadataContext';
 import { AgentErrorProvider } from '../../../agent/contexts/AgentErrorContext';
 import { ComposerArea } from '../../../agent/components/ComposerArea';
@@ -39,7 +41,6 @@ import { useTtsPlayback } from '../../../agent/hooks/useTtsPlayback';
 import { AgentEmptyState } from './AgentEmptyState';
 import { ApprovalsContainer } from './new-tab/ApprovalsContainer';
 import { ConversationHistoryPanel } from '../ConversationHistoryPanel';
-import { ProgressiveBlurOverlay } from '../ui/ProgressiveBlurOverlay';
 import { agentTabs as agentTabsIpc } from '@/ipc';
 import { isMarketingDemoMode } from '../../demo/marketingDemo';
 import {
@@ -57,6 +58,12 @@ import { TabContent } from './TabContent';
 import { RemoteWorkstationHome } from './RemoteWorkstationHome';
 import type { AgentModelConfig } from '../../../shared/types/model';
 import type { PlanChecklistState } from '../../hooks/use-chat';
+import {
+  executeThreadGoalCommand,
+  isThreadGoalCommand,
+  THREAD_GOAL_UPDATED_EVENT,
+} from '../../../agent/utils/threadGoalCommand';
+import { useToast } from '../../contexts/ToastContext';
 import { EDITOR_AGENT_SURFACE_ID, PERSISTENT_LAYER_ID } from '../../../shared/element-ids';
 import { useSettledReveal } from './useSettledReveal';
 import type {
@@ -307,6 +314,7 @@ const RenderStatefulTab = React.memo(function RenderStatefulTab({ tab, isVisible
         <AgentErrorProvider>
           <EditorAgentPane
             agentId={tab.id}
+            threadId={tab.agent.session.codexThreadId}
             modelConfig={tab.agent.runtime.modelConfig}
             workspacePath={tab.agent.runtime.workspacePath}
             morphTransition={tab.morphTransition}
@@ -331,8 +339,9 @@ const RenderStatefulTab = React.memo(function RenderStatefulTab({ tab, isVisible
  * Renders: logo overlay (when empty) + thread (children) + composer at bottom.
  * Tracks streaming/message state via events.
  */
-const EditorAgentPane = React.memo(function EditorAgentPane({ agentId, modelConfig, workspacePath, morphTransition, isSidebar, isVisible, hasConversationThread, autoStartVoiceMode, children }: {
+const EditorAgentPane = React.memo(function EditorAgentPane({ agentId, threadId, modelConfig, workspacePath, morphTransition, isSidebar, isVisible, hasConversationThread, autoStartVoiceMode, children }: {
   agentId: string;
+  threadId?: string;
   modelConfig: AgentModelConfig;
   workspacePath?: string;
   morphTransition?: boolean;
@@ -351,6 +360,7 @@ const EditorAgentPane = React.memo(function EditorAgentPane({ agentId, modelConf
   const composerShellRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<import('../../../agent/components/composer/BaseTiptapComposer').BaseTiptapComposerRef>(null);
   const composerWrapperRef = useRef<HTMLDivElement>(null);
+  const accessoryStackRef = useRef<HTMLDivElement>(null);
   const settledRevealRef = useRef<HTMLDivElement>(null);
   const flipFirstRectRef = useRef<DOMRect | null>(null);
   const prevShowEmptyRef = useRef(true);
@@ -360,12 +370,14 @@ const EditorAgentPane = React.memo(function EditorAgentPane({ agentId, modelConf
   );
   const [suggestionOverlayHeight, setSuggestionOverlayHeight] = useState(0);
   const [suggestionOverlayOpacity, setSuggestionOverlayOpacity] = useState(1);
+  const [accessoryStackHeight, setAccessoryStackHeight] = useState(0);
   const [planChecklist, setPlanChecklist] = useState<PlanChecklistState | null>(null);
   const [dismissedPlanKey, setDismissedPlanKey] = useState<string | null>(null);
   const [conversationHistoryLoadState, setConversationHistoryLoadState] = useState<{
     key: string | null;
     loading: boolean;
   }>({ key: null, loading: true });
+  const { showToast } = useToast();
 
   const getComposerFlipElement = useCallback((): HTMLElement | null => {
     const wrapper = composerWrapperRef.current;
@@ -433,6 +445,36 @@ const EditorAgentPane = React.memo(function EditorAgentPane({ agentId, modelConf
     };
   }, [agentId, getComposerFlipElement]);
 
+  const handleGoalCommand = useCallback(async (commandText: string): Promise<boolean> => {
+    if (!threadId) {
+      showToast('Start the thread before setting a goal.', 'error', 5000);
+      return true;
+    }
+
+    try {
+      const command = await executeThreadGoalCommand(threadId, commandText);
+      window.dispatchEvent(new CustomEvent(THREAD_GOAL_UPDATED_EVENT, {
+        detail: { threadId },
+      }));
+      const message = command.kind === 'set'
+        ? 'Goal set.'
+        : command.kind === 'clear'
+          ? 'Goal cleared.'
+          : command.kind === 'pause'
+            ? 'Goal paused.'
+            : 'Goal resumed.';
+      showToast(message, 'success', 2500);
+      return true;
+    } catch (error) {
+      showToast(
+        error instanceof Error ? error.message : 'Could not update the thread goal.',
+        'error',
+        7000,
+      );
+      return false;
+    }
+  }, [showToast, threadId]);
+
   const handleSend = useCallback((
     text: string,
     options?: {
@@ -441,6 +483,11 @@ const EditorAgentPane = React.memo(function EditorAgentPane({ agentId, modelConf
       messageSource?: import('../../../shared/types/messageSendSource').MessageSendSource | null;
     },
   ) => {
+    if (isThreadGoalCommand(text)) {
+      void handleGoalCommand(text);
+      return;
+    }
+
     window.dispatchEvent(new CustomEvent('agent-runtime:send', {
       detail: {
         tabId: agentId,
@@ -450,7 +497,7 @@ const EditorAgentPane = React.memo(function EditorAgentPane({ agentId, modelConf
         messageSource: options?.messageSource,
       }
     }));
-  }, [agentId]);
+  }, [agentId, handleGoalCommand]);
 
   useEffect(() => {
     const unsubscribe = agentTabsIpc.onSendRequested((event: AgentTabSendRequestedEvent) => {
@@ -614,13 +661,40 @@ const EditorAgentPane = React.memo(function EditorAgentPane({ agentId, modelConf
     ? planChecklist
     : null;
   const conversationBottomGap = isSidebar ? 28 : 48;
-  const planConversationGap = visiblePlan ? (isSidebar ? 10 : 16) : 0;
+  const accessoryStack = (
+    <ThreadAccessoryStack>
+      {threadId ? <ThreadGoalBar threadId={threadId} readOnly={readOnlyWorkstation} /> : null}
+      {!showEditorEmptyState && visiblePlan && planKey ? (
+        <PlanChecklistCard
+          plan={visiblePlan}
+          isRunning={isStreaming}
+          onDismiss={() => setDismissedPlanKey(planKey)}
+        />
+      ) : null}
+    </ThreadAccessoryStack>
+  );
+  const hasAccessoryStack = Boolean(threadId || (visiblePlan && planKey));
+
+  useLayoutEffect(() => {
+    if (!readOnlyWorkstation || showEditorEmptyState || !accessoryStackRef.current) {
+      setAccessoryStackHeight(0);
+      return;
+    }
+
+    const stack = accessoryStackRef.current;
+    const updateHeight = () => {
+      setAccessoryStackHeight(Math.ceil(stack.getBoundingClientRect().height));
+    };
+
+    updateHeight();
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(stack);
+    return () => observer.disconnect();
+  }, [isSidebar, planKey, readOnlyWorkstation, showEditorEmptyState, threadId, visiblePlan]);
+
   const composerClearance = readOnlyWorkstation
-    ? '0px'
-    : `${composerShellHeight + conversationBottomGap + planConversationGap}px`;
-  const composerBlurHeight = `${
-    composerShellHeight + (isSidebar ? 22 : 28) + planConversationGap
-  }px`;
+    ? `${accessoryStackHeight + conversationBottomGap}px`
+    : `${composerShellHeight + conversationBottomGap}px`;
   const threadContent = React.isValidElement<{
     suggestionOverlayHeight?: number;
     onSuggestionOverlayOpacityChange?: (opacity: number) => void;
@@ -678,14 +752,13 @@ const EditorAgentPane = React.memo(function EditorAgentPane({ agentId, modelConf
           />
         </div> : null}
 
-        {/* Blur overlay — only when messages visible */}
-        {!readOnlyWorkstation && !showEditorEmptyState && !isSidebar ? (
-          <ProgressiveBlurOverlay
-            direction="bottom"
-            tintOpacity={0.94}
-            className="inset-x-0 bottom-0 z-10"
-            style={{ height: composerBlurHeight }}
-          />
+        {readOnlyWorkstation && !showEditorEmptyState && hasAccessoryStack ? (
+          <div
+            ref={accessoryStackRef}
+            className="pointer-events-none absolute inset-x-0 bottom-0 z-20 pb-3"
+          >
+            <div className="pointer-events-auto">{accessoryStack}</div>
+          </div>
         ) : null}
 
         {/* COMPOSER — always at this tree position (keyed for stability).
@@ -712,13 +785,8 @@ const EditorAgentPane = React.memo(function EditorAgentPane({ agentId, modelConf
               autoStartVoiceMode={autoStartVoiceMode}
               messageCount={messageCount}
               onAgentSend={handleSend}
-              topAccessory={!showEditorEmptyState && visiblePlan && planKey ? (
-                <PlanChecklistCard
-                  plan={visiblePlan}
-                  isRunning={isStreaming}
-                  onDismiss={() => setDismissedPlanKey(planKey)}
-                />
-              ) : null}
+              onGoalCommand={handleGoalCommand}
+              topAccessory={!showEditorEmptyState && hasAccessoryStack ? accessoryStack : null}
               onWorkspacePathChange={(nextWorkspacePath) => {
                 updateTab(agentId, (previousTab) => {
                   if (!isAgentTab(previousTab)) return previousTab;

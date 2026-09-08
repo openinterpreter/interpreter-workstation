@@ -12,13 +12,18 @@ still requires the OIX process and its persisted home to remain available.
 
 ## Create a Goal in Workstation
 
-1. Start a conversation. Once OIX assigns the thread id, a **Set a goal for
-   this thread** row appears above the conversation.
-2. Select it, describe the concrete outcome, and choose **Save goal**.
-3. Workstation creates the native OIX Goal as `active`. The Goal row stays above
-   the transcript and shows its current status.
-4. Use the pause/resume control to change whether OIX should continue, the edit
-   control to replace the objective, or **Clear** to remove the Goal entirely.
+1. Start a conversation so OIX assigns the thread id.
+2. Enter `/goal <objective>` in the composer. Workstation writes the native OIX
+   Goal as `active` and does not send the slash command to the model.
+3. The compact Goal card appears in the accessory stack immediately above the
+   composer, alongside any active Plan card.
+4. Use `/goal pause`, `/goal resume`, or `/goal clear` for lifecycle changes.
+   The card also provides pause/resume, edit, and clear controls when the host
+   is read-write.
+
+The bare `/goal` command reports its usage locally. Goal commands are available
+after a thread id exists; read-only and public web surfaces show the same bottom
+accessory location but do not expose mutation controls.
 
 Goal creation has no implicit token budget. The HTTP API supports an optional
 positive `tokenBudget` for callers that need one; omitting it lets OIX use its

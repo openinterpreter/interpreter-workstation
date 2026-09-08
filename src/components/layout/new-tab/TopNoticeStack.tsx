@@ -1,15 +1,40 @@
 import type { RefObject } from 'react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { browserControl, interviewInvite as interviewInviteIpc, topNotices as topNoticesIpc } from '@/ipc';
 import type { BaseTiptapComposerRef } from '../../../../agent/components/composer/BaseTiptapComposer';
 import type { TopNotice } from '../../../../shared/types/topNotices';
+import { isMarketingDemoMode } from '../../../demo/marketingDemo';
 import { useLayoutActions } from '../../../hooks/useLayout';
 
 import { InterviewInviteBanner, type InterviewInviteStatus } from './InterviewInviteBanner';
 import { TopNoticeCard } from './TopNoticeCard';
 
 const SHOW_INTERVIEW_INVITE_BANNER = false;
+const MARKETING_DEMO_DISMISSED_NOTICES_KEY = 'interpreter:marketing-demo:dismissed-top-notices';
+
+function readMarketingDemoDismissedNotices(): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+
+  try {
+    const value: unknown = JSON.parse(window.localStorage.getItem(MARKETING_DEMO_DISMISSED_NOTICES_KEY) ?? '{}');
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    return Object.fromEntries(
+      Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function writeMarketingDemoDismissedNotices(dismissed: Record<string, string>): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(MARKETING_DEMO_DISMISSED_NOTICES_KEY, JSON.stringify(dismissed));
+  } catch {
+    // Demo persistence is best effort when storage is unavailable.
+  }
+}
 
 export function TopNoticeStack({
   composerRef,
@@ -17,6 +42,10 @@ export function TopNoticeStack({
   composerRef?: RefObject<BaseTiptapComposerRef | null>;
 }) {
   const { openSettings } = useLayoutActions();
+  const marketingDemoMode = isMarketingDemoMode();
+  const dismissedNoticeVersionsRef = useRef<Record<string, string>>(
+    marketingDemoMode ? readMarketingDemoDismissedNotices() : {},
+  );
   const [topNotices, setTopNotices] = useState<TopNotice[]>([]);
   const [interviewInviteStatus, setInterviewInviteStatus] = useState<InterviewInviteStatus | null>(null);
   const [browserConnected, setBrowserConnected] = useState(false);
@@ -29,7 +58,9 @@ export function TopNoticeStack({
       try {
         const status = await topNoticesIpc.list();
         if (!cancelled) {
-          setTopNotices(status.notices);
+          setTopNotices(marketingDemoMode
+            ? status.notices.filter((notice: TopNotice) => dismissedNoticeVersionsRef.current[notice.id] !== notice.version)
+            : status.notices);
         }
       } catch (error) {
         if (!cancelled) {
@@ -43,7 +74,7 @@ export function TopNoticeStack({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [marketingDemoMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -96,11 +127,18 @@ export function TopNoticeStack({
   const handleDismissTopNotice = useCallback(async (noticeId: string) => {
     try {
       await topNoticesIpc.dismiss(noticeId);
+      if (marketingDemoMode) {
+        const dismissedNotice = topNotices.find((notice) => notice.id === noticeId);
+        if (dismissedNotice) {
+          dismissedNoticeVersionsRef.current[noticeId] = dismissedNotice.version;
+          writeMarketingDemoDismissedNotices(dismissedNoticeVersionsRef.current);
+        }
+      }
       setTopNotices((prev) => prev.filter((notice) => notice.id !== noticeId));
     } catch (error) {
       console.error('[TopNoticeStack] Failed to dismiss top notice:', error);
     }
-  }, []);
+  }, [marketingDemoMode, topNotices]);
 
   const handleDismissInterviewInvite = useCallback(async () => {
     try {

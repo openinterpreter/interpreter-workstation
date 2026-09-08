@@ -22,7 +22,7 @@ Tab labels automatically update to show the first user message from each convers
 
 **Resumable history**: Existing threads open at the newest activity. Older turns load in pages as the user scrolls upward, with scroll anchoring so content does not jump. A lightweight catch-up poll reconciles completed and in-progress history after reconnect.
 
-**Thread Goals**: Workstation reads and edits native OIX Goals. After OIX creates a thread, the Goal row above its transcript provides create, pause, resume, edit, and clear actions. OIX owns persistence and continuation semantics; see [Goals](../docs/goals.md).
+**Thread Goals**: Workstation reads and edits native OIX Goals. After OIX creates a thread, `/goal <objective>` sets one without sending a model message; compact Goal and Plan cards share the accessory stack above the composer. OIX owns persistence and continuation semantics; see [Goals](../docs/goals.md).
 
 **Browser and read-only operation**: the normal `AgentThread` runs through the shared Workstation bridge in both Electron and authenticated browser hosts. `readOnly` removes composer, Stop, steering, approvals, retries, and Goal mutations when the host access setting requires it. `RemoteThreadViewer` is the smaller allowlisted conversation surface used only for an anonymous public publication. See [Workstation hosts, browser access, and read-only mode](../docs/remote-workstation.md).
 

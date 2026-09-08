@@ -162,7 +162,7 @@ export function PlanChecklistCard({ plan, isRunning, onDismiss }: PlanChecklistC
   }, [updateScrollFade, visibleSteps.length, planStepsKey]);
 
   return (
-    <div ref={wrapperRef} className="mx-auto mb-2 w-full max-w-[48rem]">
+    <div ref={wrapperRef} className="mx-auto w-full max-w-[48rem]">
       <div style={{ padding: isWide ? '0 var(--unit-padding-medium)' : '0 0.5rem' }}>
         <section
           className="oa-composer-surface oa-interactive-surface relative overflow-hidden py-[14px] pl-[14px] pr-12"
