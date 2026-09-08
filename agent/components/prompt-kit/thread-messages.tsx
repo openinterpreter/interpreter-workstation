@@ -840,6 +840,20 @@ export function isUserMessageFullyOutOfView({
   return itemHeight > 0 && itemTop + itemHeight <= scrollTop;
 }
 
+export function isMountedUserMessageFullyOutOfView({
+  itemBottom,
+  viewportTop,
+}: {
+  itemBottom: number;
+  viewportTop: number;
+}): boolean {
+  return itemBottom <= viewportTop;
+}
+
+export function mountedMessageRowSelector(index: number): string {
+  return `[data-index="${index}"]`;
+}
+
 export function resolveMeasuredUserMessageSize({
   mountedSize,
   cachedSize,
@@ -915,13 +929,20 @@ function useStickyUserMessageHeader({
     lastScrollTopRef.current = scrollTop;
 
     const cache = virtualizer.measurementsCache;
+    const viewportTop = scrollContainer.getBoundingClientRect().top;
     let candidate: UserMessageEntry | null = null;
 
     for (const entry of userMessageEntries) {
       const measurement = cache[entry.index];
-      const mountedElement = virtualizer.elementsCache.get(entry.id);
+      // The virtualizer's internal element cache can briefly lag the actual
+      // mounted rows during measurement/scroll updates. Query the rendered
+      // row first so a visible long prompt can never also appear as sticky.
+      const mountedElement = scrollContainer.querySelector<HTMLElement>(
+        mountedMessageRowSelector(entry.index),
+      ) ?? virtualizer.elementsCache.get(entry.id);
+      const mountedRect = mountedElement?.getBoundingClientRect();
       const measuredSize = resolveMeasuredUserMessageSize({
-        mountedSize: mountedElement?.getBoundingClientRect().height,
+        mountedSize: mountedRect?.height,
         cachedSize: measurement?.size,
         estimateSize: VIRTUAL_MESSAGE_ESTIMATE_SIZE,
       });
@@ -933,11 +954,17 @@ function useStickyUserMessageHeader({
       if (!measurement || measuredSize === undefined || measuredSize <= 0) continue;
 
       const itemTopInContainer = virtualBlockTop + measurement.start;
-      if (isUserMessageFullyOutOfView({
-        itemTop: itemTopInContainer,
-        itemHeight: measuredSize,
-        scrollTop,
-      })) {
+      const fullyOutOfView = mountedRect
+        ? isMountedUserMessageFullyOutOfView({
+            itemBottom: mountedRect.bottom,
+            viewportTop,
+          })
+        : isUserMessageFullyOutOfView({
+            itemTop: itemTopInContainer,
+            itemHeight: measuredSize,
+            scrollTop,
+          });
+      if (fullyOutOfView) {
         if (!candidate || measurement.start > (cache[candidate.index]?.start ?? -Infinity)) {
           candidate = entry;
         }

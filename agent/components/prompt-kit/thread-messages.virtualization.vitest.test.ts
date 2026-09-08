@@ -16,7 +16,9 @@ import {
   collectDetachedToolCalls,
   collectLastAssistantMessageIdsInTurns,
   groupMessageParts,
+  isMountedUserMessageFullyOutOfView,
   isUserMessageFullyOutOfView,
+  mountedMessageRowSelector,
   resolveMeasuredUserMessageSize,
   type MessageBubbleProps,
 } from './thread-messages';
@@ -270,5 +272,21 @@ describe('sticky user-message visibility', () => {
       itemHeight: 900,
       scrollTop: 900,
     })).toBe(true);
+  });
+
+  test('uses the mounted row position instead of a stale virtual offset', () => {
+    expect(isMountedUserMessageFullyOutOfView({
+      itemBottom: 420,
+      viewportTop: 120,
+    })).toBe(false);
+
+    expect(isMountedUserMessageFullyOutOfView({
+      itemBottom: 120,
+      viewportTop: 120,
+    })).toBe(true);
+  });
+
+  test('selects the mounted row by its stable virtual index', () => {
+    expect(mountedMessageRowSelector(7)).toBe('[data-index="7"]');
   });
 });
