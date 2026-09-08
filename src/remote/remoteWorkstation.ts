@@ -17,6 +17,9 @@ export const REMOTE_WORKSTATION_AGENT_TAB_ID = 'remote-workstation-live-agent';
 export const REMOTE_WORKSTATION_THREAD_MARKER = 'remote-workstation-live-thread';
 
 const listingCache = new Map<string, PublicWorkspaceListing>();
+const listingRequests = new Map<string, Promise<PublicWorkspaceListing>>();
+const LISTING_ATTEMPTS = 3;
+const LISTING_RETRY_DELAY_MS = 200;
 
 export function isRemoteWorkstationMode(): boolean {
   return isPublicWorkstationPublication() && Boolean(getRemoteWorkstationEndpoint());
@@ -51,21 +54,52 @@ function isListing(value: unknown): value is PublicWorkspaceListing {
       && typeof entry.modifiedAt === 'number');
 }
 
-async function fetchListing(filePath = ''): Promise<PublicWorkspaceListing> {
+function waitForListingRetry(attempt: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, LISTING_RETRY_DELAY_MS * (2 ** attempt));
+  });
+}
+
+async function requestListing(relativePath: string): Promise<PublicWorkspaceListing> {
   const endpoint = getRemoteWorkstationEndpoint();
   if (!endpoint) throw new Error('Remote Workstation endpoint is not configured');
-  const relativePath = remoteRelativePath(filePath);
   const url = new URL(`${endpoint}/workspace`, window.location.href);
   if (relativePath) url.searchParams.set('path', relativePath);
-  const response = await fetch(url, {
-    headers: { Accept: 'application/json' },
-    cache: 'no-store',
-  });
-  if (!response.ok) throw new Error(`Remote workspace is unavailable (${response.status})`);
-  const payload: unknown = await response.json();
-  if (!isListing(payload)) throw new Error('Remote workspace returned an invalid listing');
-  listingCache.set(relativePath, payload);
-  return payload;
+
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < LISTING_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+      });
+      if (!response.ok) {
+        throw new Error(`Remote workspace is unavailable (${response.status})`);
+      }
+      const payload: unknown = await response.json();
+      if (!isListing(payload)) throw new Error('Remote workspace returned an invalid listing');
+      listingCache.set(relativePath, payload);
+      return payload;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error('Remote workspace is unavailable');
+      if (attempt < LISTING_ATTEMPTS - 1) await waitForListingRetry(attempt);
+    }
+  }
+  throw lastError ?? new Error('Remote workspace is unavailable');
+}
+
+async function fetchListing(filePath = ''): Promise<PublicWorkspaceListing> {
+  const relativePath = remoteRelativePath(filePath);
+  const pending = listingRequests.get(relativePath);
+  if (pending) return pending;
+
+  const request = requestListing(relativePath);
+  listingRequests.set(relativePath, request);
+  try {
+    return await request;
+  } finally {
+    if (listingRequests.get(relativePath) === request) listingRequests.delete(relativePath);
+  }
 }
 
 function toTreeEntry(entry: PublicWorkspaceEntry, prepareLazyDirectory = false) {

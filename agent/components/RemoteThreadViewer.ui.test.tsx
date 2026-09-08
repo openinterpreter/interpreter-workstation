@@ -31,11 +31,16 @@ function snapshot(nextCursor: string | null): PublicThreadSnapshot {
 }
 
 describe('RemoteThreadViewer history gestures', () => {
-  test('resolves endpoint-relative public file links', () => {
+  test('resolves public file links into the remote workspace namespace', () => {
     expect(resolvePublicArtifactLinks(
       '[English PDF](file?path=papers%2F00295%2Fenglish.pdf)',
-      'https://example.com/publication',
-    )).toBe('[English PDF](https://example.com/publication/file?path=papers%2F00295%2Fenglish.pdf)');
+    )).toBe('[English PDF](/workspace/papers/00295/english.pdf)');
+  });
+
+  test('does not turn traversal paths into workspace links', () => {
+    expect(resolvePublicArtifactLinks(
+      '[Private file](file?path=..%2Fprivate.txt)',
+    )).toBe('[Private file]()');
   });
 
   beforeEach(() => {

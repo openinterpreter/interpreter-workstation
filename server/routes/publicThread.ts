@@ -9,27 +9,40 @@ import {
   buildPublicThreadSnapshot,
   matchesPublicThreadToken,
 } from '../utils/publicThreadSnapshot';
+import {
+  readPublicThreadCache,
+  writePublicThreadCache,
+  type CachedPublicThreadSnapshot,
+} from '../utils/publicThreadCache';
 import { resolvePublicThreadId } from '../utils/publicThreadConfig';
 
 const router = Router();
 const PUBLIC_THREAD_REFRESH_INTERVAL_MS = 1_000;
 
-async function loadPublicThreadState(threadId: string) {
+async function loadPublicThreadState(threadId: string): Promise<CachedPublicThreadSnapshot> {
   const service = getCodexService();
   let thread = await service.readThread(threadId);
   thread = enrichThreadWithReasoning(thread);
   const goal = await service.getThreadGoal(threadId);
-  return { threadId, thread, goal, refreshedAt: Date.now() };
+  return {
+    snapshot: buildPublicThreadSnapshot({
+      thread,
+      goal,
+      title: process.env.INTERPRETER_PUBLIC_THREAD_TITLE?.trim() || thread.name || 'Live agent',
+      nextCursor: null,
+      hasMore: false,
+      publicWorkspaceRoot: process.env.INTERPRETER_PUBLIC_WORKSPACE_ROOT?.trim(),
+    }),
+    refreshedAt: Date.now(),
+  };
 }
 
-type PublicThreadState = Awaited<ReturnType<typeof loadPublicThreadState>>;
-
-let cachedPublicThreadState: PublicThreadState | null = null;
-let publicThreadRefresh: Promise<PublicThreadState> | null = null;
+let cachedPublicThreadState: CachedPublicThreadSnapshot | null = null;
+let publicThreadRefresh: Promise<CachedPublicThreadSnapshot> | null = null;
 let lastRefreshErrorLogAt = 0;
 
-function refreshPublicThreadState(threadId: string): Promise<PublicThreadState> {
-  if (cachedPublicThreadState?.threadId !== threadId) {
+function refreshPublicThreadState(threadId: string): Promise<CachedPublicThreadSnapshot> {
+  if (cachedPublicThreadState?.snapshot.threadId !== threadId) {
     cachedPublicThreadState = null;
   }
   if (publicThreadRefresh) return publicThreadRefresh;
@@ -37,6 +50,10 @@ function refreshPublicThreadState(threadId: string): Promise<PublicThreadState> 
   publicThreadRefresh = loadPublicThreadState(threadId)
     .then((state) => {
       cachedPublicThreadState = state;
+      void writePublicThreadCache(
+        process.env.INTERPRETER_PUBLIC_THREAD_CACHE_FILE?.trim(),
+        state,
+      ).catch(reportBackgroundRefreshFailure);
       return state;
     })
     .finally(() => {
@@ -71,9 +88,15 @@ router.get('/snapshot', async (req: Request, res: Response) => {
   }
 
   try {
-    let state = cachedPublicThreadState?.threadId === threadId
+    let state = cachedPublicThreadState?.snapshot.threadId === threadId
       ? cachedPublicThreadState
       : null;
+    if (!state) {
+      state = await readPublicThreadCache(
+        process.env.INTERPRETER_PUBLIC_THREAD_CACHE_FILE?.trim(),
+        threadId,
+      );
+    }
     if (!state) {
       state = await refreshPublicThreadState(threadId);
     } else if (Date.now() - state.refreshedAt >= PUBLIC_THREAD_REFRESH_INTERVAL_MS) {
@@ -84,21 +107,13 @@ router.get('/snapshot', async (req: Request, res: Response) => {
       void refreshPublicThreadState(threadId).catch(reportBackgroundRefreshFailure);
     }
 
-    const { thread, goal } = state;
+    const fullSnapshot = state.snapshot;
     const limit = parseThreadHistoryLimit(req.query.limit) ?? 24;
     const before = typeof req.query.before === 'string' ? req.query.before : undefined;
     // Paginate the public messages rather than raw Codex turns. A turn can be
     // intentionally hidden (for example the automatic restart continuation)
     // or expand into multiple visible messages. Turn-based cursors could
     // therefore advertise more history but return an empty page.
-    const fullSnapshot = buildPublicThreadSnapshot({
-      thread,
-      goal,
-      title: process.env.INTERPRETER_PUBLIC_THREAD_TITLE?.trim() || thread.name || 'Live agent',
-      nextCursor: null,
-      hasMore: false,
-      publicWorkspaceRoot: process.env.INTERPRETER_PUBLIC_WORKSPACE_ROOT?.trim(),
-    });
     const page = paginateThreadTurns(fullSnapshot.messages, { limit, before });
     const snapshot = {
       ...fullSnapshot,
