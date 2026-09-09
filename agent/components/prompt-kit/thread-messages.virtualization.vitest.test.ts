@@ -352,6 +352,8 @@ describe('sticky user-message visibility', () => {
   });
 
   test('selects the mounted row by its stable virtual index', () => {
-    expect(mountedMessageRowSelector(7)).toBe('[data-index="7"]');
+    expect(mountedMessageRowSelector(7)).toBe(
+      '.oa-thread-virtual-block > [data-index="7"]',
+    );
   });
 });

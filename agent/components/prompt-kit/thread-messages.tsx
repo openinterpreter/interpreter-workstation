@@ -851,7 +851,7 @@ export function isMountedUserMessageFullyOutOfView({
 }
 
 export function mountedMessageRowSelector(index: number): string {
-  return `[data-index="${index}"]`;
+  return `.oa-thread-virtual-block > [data-index="${index}"]`;
 }
 
 export function observeStickyUserMessageLayout({
@@ -872,9 +872,11 @@ export function observeStickyUserMessageLayout({
 
   const resizeObserver = new ResizeObserver(scheduleLayoutChange);
   const observeMountedRows = () => {
-    scrollContainer.querySelectorAll<HTMLElement>('[data-index]').forEach((row) => {
-      resizeObserver.observe(row);
-    });
+    scrollContainer
+      .querySelectorAll<HTMLElement>('.oa-thread-virtual-block > [data-index]')
+      .forEach((row) => {
+        resizeObserver.observe(row);
+      });
   };
 
   observeMountedRows();
