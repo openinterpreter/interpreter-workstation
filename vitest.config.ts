@@ -31,6 +31,10 @@ export default defineConfig({
     // child-process load from server tests.
     maxWorkers: 4,
     minWorkers: 1,
+    // Cold dependency transforms on CI can legitimately push interaction-heavy
+    // renderer tests beyond Vitest's five-second default without indicating a
+    // hung interaction. Keep the deadline bounded while avoiding false failures.
+    testTimeout: 10_000,
     passWithNoTests: false,
   },
 });
