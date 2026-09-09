@@ -89,7 +89,7 @@ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-## sharp-libvips 1.2.4 and 1.3.2 shared libraries
+## sharp-libvips 1.2.4, 1.3.2, and 1.3.3 shared libraries
 
 Platform packages matching `@img/sharp-libvips-*` contain precompiled shared
 libraries. Their npm metadata reports `LGPL-3.0-or-later`, and their component
@@ -99,12 +99,15 @@ versions are recorded in each package's `versions.json`.
 - Browser-extension relay source archive: https://github.com/lovell/sharp-libvips/archive/refs/tags/v1.2.4.tar.gz
 - Exact packaging/build source: https://github.com/lovell/sharp-libvips/tree/v1.3.2
 - Source archive: https://github.com/lovell/sharp-libvips/archive/refs/tags/v1.3.2.tar.gz
+- Current packaging/build source: https://github.com/lovell/sharp-libvips/tree/v1.3.3
+- Current source archive: https://github.com/lovell/sharp-libvips/archive/refs/tags/v1.3.3.tar.gz
 - Preserved upstream component notices:
   `sharp-libvips-v1.2.4-THIRD-PARTY-NOTICES.md` and
-  `sharp-libvips-v1.3.2-THIRD-PARTY-NOTICES.md`
+  `sharp-libvips-v1.3.2-THIRD-PARTY-NOTICES.md`, and
+  `sharp-libvips-v1.3.3-THIRD-PARTY-NOTICES.md`
 - License texts: `LGPL-3.0.txt` and its incorporated `GPL-3.0.txt`
 
-The frozen pnpm inventory conservatively reports the 1.3.2 packages even when a
+The frozen pnpm inventory conservatively reports the 1.3.3 packages even when a
 target artifact does not contain them. The separately generated browser relay
 runtime currently bundles a platform-specific 1.2.4 package outside the
 application ASAR. Release checks inspect both dependency trees and require an

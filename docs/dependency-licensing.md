@@ -34,7 +34,7 @@ Known items requiring explicit release review:
   artifacts at every bridge update, because the pnpm inventory does not inspect
   licenses embedded inside prebuilt binaries.
 - Platform packages matching `@img/sharp-libvips-*` appear in two reviewed
-  places: optional 1.3.2 packages in pnpm's conservative app inventory and a
+  places: optional 1.3.3 packages in pnpm's conservative app inventory and a
   platform-specific 1.2.4 package in the generated browser-relay runtime. Both
   are LGPL-3.0-or-later. Every app packages exact-version upstream component
   notices, LGPL/GPL text, and corresponding-source links. Release checks inspect

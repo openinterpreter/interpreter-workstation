@@ -108,6 +108,7 @@ function getRequiredBundledResourcePaths(resourcesRoot, platform, arch) {
     path.join(resourcesRoot, 'licenses', 'THIRD_PARTY_NOTICES.md'),
     path.join(resourcesRoot, 'licenses', 'sharp-libvips-v1.2.4-THIRD-PARTY-NOTICES.md'),
     path.join(resourcesRoot, 'licenses', 'sharp-libvips-v1.3.2-THIRD-PARTY-NOTICES.md'),
+    path.join(resourcesRoot, 'licenses', 'sharp-libvips-v1.3.3-THIRD-PARTY-NOTICES.md'),
     path.join(resourcesRoot, 'licenses', 'LGPL-3.0.txt'),
     path.join(resourcesRoot, 'licenses', 'GPL-3.0.txt'),
     path.join(resourcesRoot, 'licenses', 'release-policy.json'),
