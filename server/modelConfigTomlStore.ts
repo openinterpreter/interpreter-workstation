@@ -840,7 +840,7 @@ export function recoverLoadedModelConfigState(state: ModelConfigState, issues: s
     state.defaultProfileId = fallbackState.defaultProfileId;
     state.fastProfileId = fallbackState.fastProfileId;
     modified = true;
-    addIssue('Restored Interpreter hosted fallback profiles so the app remains usable.');
+    addIssue('Restored Hacienda hosted fallback profiles so the app remains usable.');
     return modified;
   }
 

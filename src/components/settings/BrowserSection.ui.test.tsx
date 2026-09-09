@@ -125,11 +125,11 @@ describe('BrowserSectionContent', () => {
 
     render(<BrowserSectionContent />);
 
-    expect(await screen.findByText('Installing the extension only connects Chrome to Interpreter. Browser permissions below still decide whether Interpreter asks, denies, or allows read, write, and control actions.')).toBeVisible();
+    expect(await screen.findByText('Installing the extension only connects Chrome to Hacienda. Browser permissions below still decide whether Hacienda asks, denies, or allows read, write, and control actions.')).toBeVisible();
     const modeRow = (await screen.findByText('Read browser pages')).closest('[data-help-title="Read browser pages"]');
     expect(modeRow).not.toBeNull();
     expect(within(modeRow as HTMLElement).getByRole('button', { name: 'Ask before use' })).toBeVisible();
-    expect(await screen.findByText('Browser pages will ask before Interpreter uses them.')).toBeVisible();
+    expect(await screen.findByText('Browser pages will ask before Hacienda uses them.')).toBeVisible();
   });
 
   test('renders deny browser policy mode', async () => {
@@ -493,7 +493,7 @@ describe('BrowserSectionContent', () => {
     expect(await screen.findByText('Chrome Personal')).toBeVisible();
     expect(await screen.findByText('Detected')).toBeVisible();
     expect(await screen.findByText('Connect extension to set rules')).toBeVisible();
-    expect(screen.getByText('Open this profile with the Interpreter extension before setting page permissions for it.')).toBeVisible();
+    expect(screen.getByText('Open this profile with the Hacienda extension before setting page permissions for it.')).toBeVisible();
     expect(browserControlMocks.setPolicy).not.toHaveBeenCalled();
   });
 });

@@ -27,7 +27,7 @@ export const estimateMediaCostTool: BuiltinToolDefinition = {
   name: "estimate_media_cost",
   description: `Estimate Media AI cost before running a model.
 
-Returns both the raw fal.ai price and the approximate charge against the user's Interpreter balance when pricing data is available.
+Returns both the raw fal.ai price and the approximate charge against the user's Hacienda balance when pricing data is available.
 
 Use this before \`run_media_model\`, then tell the user the expected cost clearly before spending it.`,
   inputSchema: {

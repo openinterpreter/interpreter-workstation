@@ -22,7 +22,7 @@ describe('custom instructions tools', () => {
     clearConfigCache();
   });
 
-  test('are exposed through the Interpreter builtin server', () => {
+  test('are exposed through the Hacienda builtin server', () => {
     expect(interpreterServerDefinition.tools.map((tool) => tool.name)).toContain('interpreter_custom_instructions_get');
     expect(interpreterServerDefinition.tools.map((tool) => tool.name)).toContain('interpreter_custom_instructions_set');
   });

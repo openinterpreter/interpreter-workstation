@@ -9,7 +9,7 @@ import { emitEvent } from '../../../utils/ipcBridge';
 export const refreshFileTool: BuiltinToolDefinition = {
   name: 'interpreter_refresh_file',
   description:
-    'Notify Interpreter that a file changed on disk so any open viewer tab reloads it. Use this after shell/Python edits that bypass native file-edit tools.',
+    'Notify Hacienda that a file changed on disk so any open viewer tab reloads it. Use this after shell/Python edits that bypass native file-edit tools.',
   inputSchema: {
     type: 'object',
     properties: {

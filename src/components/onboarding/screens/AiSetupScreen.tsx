@@ -17,7 +17,7 @@ interface AiSetupScreenProps {
   onComplete: (answers: OnboardingInterviewAnswers) => void | Promise<void>;
 }
 
-const OVERLAY_NOT_READY_ERROR = 'Interpreter Overlay is not ready.';
+const OVERLAY_NOT_READY_ERROR = 'Hacienda Overlay is not ready.';
 const OVERLAY_READY_RETRY_ATTEMPTS = 50;
 const OVERLAY_READY_RETRY_DELAY_MS = 100;
 

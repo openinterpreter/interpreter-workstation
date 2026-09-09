@@ -116,7 +116,7 @@ describe('ToolManager interpreter CLI approval ownership', () => {
     expect(approval.agentId).toBe('agent-owner-tab');
     expect(approval.toolCallId).toBeUndefined();
     expect(approval.owner?.approvalOwnerKind).toBe('normal-agent');
-    expect(approval.owner?.displayName).toBe('Interpreter agent (profile-xyz)');
+    expect(approval.owner?.displayName).toBe('Hacienda agent (profile-xyz)');
     expect(approval.owner?.identity).toEqual({
       agentId: 'agent-owner-tab',
       threadId: 'thread-owner-tab',

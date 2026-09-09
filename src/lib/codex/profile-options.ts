@@ -42,7 +42,7 @@ export type ProfileOption = {
 
 export const PROFILE_OPTIONS: readonly ProfileOption[] = [
   { id: "default", label: "OpenAI" },
-  { id: "interpreter", label: "Interpreter" },
+  { id: "interpreter", label: "Hacienda" },
   { id: "ollama", label: "Ollama" },
   { id: "ollama-cloud", label: "Ollama Cloud" },
   { id: "lmstudio", label: "LM Studio" },

@@ -1,5 +1,5 @@
 {
-  "name": "interpreter",
+  "name": "hacienda",
   "version": "0.1.24",
   "internalVersion": "0.2.171",
   "publicVersion": "0.2.184",
@@ -98,7 +98,9 @@
     "package:smoke:official": "node scripts/with-distribution-config.mjs distribution/product.official.json -- pnpm run package:smoke",
     "package:official": "node scripts/with-distribution-config.mjs distribution/product.official.json -- pnpm run build:dist --config distribution/electron-builder.official.yml",
     "package:official:candidate:mac-arm64": "PYTHON=/usr/bin/python3 CSC_IDENTITY_AUTO_DISCOVERY=false node scripts/with-distribution-config.mjs distribution/product.official.json -- pnpm run build:dist --config distribution/electron-builder.official-candidate.yml --mac dmg zip --arm64 --publish never",
+    "package:official:candidate:mac-x64": "PYTHON=/usr/bin/python3 CSC_IDENTITY_AUTO_DISCOVERY=false node scripts/with-distribution-config.mjs distribution/product.official.json -- pnpm run build:dist --config distribution/electron-builder.official-candidate.yml --mac dmg zip --x64 --publish never",
     "package:internal:mac-arm64": "PYTHON=/usr/bin/python3 CSC_IDENTITY_AUTO_DISCOVERY=false node scripts/with-distribution-config.mjs distribution/product.official.json -- pnpm run build:dist --config distribution/electron-builder.internal.yml --mac dmg zip --arm64 --publish never",
+    "package:internal:mac-x64": "PYTHON=/usr/bin/python3 CSC_IDENTITY_AUTO_DISCOVERY=false node scripts/with-distribution-config.mjs distribution/product.official.json -- pnpm run build:dist --config distribution/electron-builder.internal.yml --mac dmg zip --x64 --publish never",
     "release:verify:official-candidate": "node scripts/verify-official-release-candidate.mjs",
     "release:verify:internal": "node scripts/verify-internal-release.mjs",
     "start": "node scripts/run-unpackaged-electron.cjs",
@@ -192,6 +194,7 @@
     "@vitejs/plugin-react": "6.0.5",
     "autoprefixer": "10.4.23",
     "babel-plugin-react-compiler": "1.0.0",
+    "@eslint/js": "10.0.1",
     "builder-util-runtime": "9.7.0",
     "concurrently": "9.2.1",
     "cross-env": "10.1.0",
@@ -214,6 +217,7 @@
     "tailwindcss": "4.1.18",
     "tsx": "4.20.6",
     "typescript": "5.9.3",
+    "typescript-eslint": "8.69.0",
     "vite": "8.2.0",
     "vitest": "4.1.10",
     "zod-to-json-schema": "3.25.1"

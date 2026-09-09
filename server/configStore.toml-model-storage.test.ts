@@ -1293,13 +1293,13 @@ web_search = "disabled"
     expect(fullConfig.profiles).toMatchObject([
       {
         id: 'onboarding:interpreter-smart',
-        name: 'Interpreter Smart',
+        name: 'Hacienda Smart',
         provider: 'hosted',
         modelId: 'interpreter-smart',
       },
       {
         id: 'onboarding:interpreter-fast',
-        name: 'Interpreter Fast',
+        name: 'Hacienda Fast',
         provider: 'hosted',
         modelId: 'interpreter-fast',
       },

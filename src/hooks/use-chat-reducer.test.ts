@@ -18,8 +18,8 @@ const LMSTUDIO_SINGLE_TOOL_CALL_TEMPLATE_ERROR =
 const EXPECTED_LMSTUDIO_TOOL_SUPPORT_GUIDANCE = [
   LMSTUDIO_SINGLE_TOOL_CALL_TEMPLATE_ERROR,
   "",
-  "The selected model from LM Studio doesn't support Interpreter tools.",
-  "Choose a tool-capable model in LM Studio, or switch to an Interpreter hosted model, then retry.",
+  "The selected model from LM Studio doesn't support Hacienda tools.",
+  "Choose a tool-capable model in LM Studio, or switch to a Hacienda-hosted model, then retry.",
 ].join("\n");
 
 // ---------------------------------------------------------------------------
@@ -862,7 +862,7 @@ describe("applyChatEvent", () => {
 
       assert.equal(
         state.error,
-        "This endpoint/model does not support Interpreter's Responses/tool-calling contract.",
+        "This endpoint/model does not support Hacienda's Responses/tool-calling contract.",
       );
       assert.equal(textContent(state.draft!), "");
     });
@@ -954,7 +954,7 @@ describe("applyChatEvent", () => {
       );
       assert.equal(
         state.error,
-        "You've hit your ChatGPT usage limit. Try again at: Mar 28th, 2026 1:52 PM. This limit is set by your ChatGPT account and is separate from Interpreter plan usage shown in Settings.",
+        "You've hit your ChatGPT usage limit. Try again at: Mar 28th, 2026 1:52 PM. This limit is set by your ChatGPT account and is separate from Hacienda plan usage shown in Settings.",
       );
     });
 
@@ -1024,7 +1024,7 @@ describe("applyChatEvent", () => {
 
         assert.equal(
           state.retrying,
-          "Недостаточно токенов Interpreter. Добавьте токены в настройках биллинга.",
+          "Недостаточно токенов Hacienda. Добавьте токены в настройках биллинга.",
         );
       } finally {
         await i18n.changeLanguage("en");
@@ -1042,7 +1042,7 @@ describe("applyChatEvent", () => {
 
         assert.equal(
           state.error,
-          "Insufficient interpreter tokens. Add tokens in billing settings.",
+          "Insufficient Hacienda tokens. Add tokens in billing settings.",
         );
       } finally {
         await i18n.changeLanguage("en");

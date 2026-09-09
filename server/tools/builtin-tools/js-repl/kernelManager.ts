@@ -228,7 +228,7 @@ class JsReplKernel {
         type: 'run_tool_result',
         id: message.id,
         ok: false,
-        error: 'interpreter.tool(...) is not available in this app; run other Interpreter tools through the interpreter-app CLI from shell instead.',
+        error: 'interpreter.tool(...) is not available in this app; run other Hacienda tools through the interpreter-app CLI from shell instead.',
       });
       return;
     }

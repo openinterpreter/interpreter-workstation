@@ -47,7 +47,7 @@ function InterpreterManagedReviewSurface() {
       profiles: toOnboardingProfiles(hostedPack),
       defaultProfileId: hostedPack.defaultProfileId,
       fastProfileId: 'onboarding:interpreter-fast',
-      errorMessage: 'Interpreter could not be configured.',
+      errorMessage: 'Hacienda could not be configured.',
     };
   }, [t]);
 

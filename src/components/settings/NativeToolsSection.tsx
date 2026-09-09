@@ -94,12 +94,12 @@ const TEMP_ACCESS_OPTIONS: RuntimeSelectOption[] = [
   {
     value: 'off',
     label: 'Off',
-    description: 'Interpreter cannot use /tmp screenshots, so pasted overlay images and Interpreter Overlay are unavailable.',
+    description: 'Hacienda cannot use /tmp screenshots, so pasted overlay images and Hacienda Overlay are unavailable.',
   },
   {
     value: 'on',
     label: 'On',
-    description: 'Allow /tmp working files for screenshots, pasted overlay images, and Interpreter Overlay.',
+    description: 'Allow /tmp working files for screenshots, pasted overlay images, and Hacienda Overlay.',
   },
 ];
 
@@ -598,8 +598,8 @@ export function NativeToolsSection() {
           label="Temporary files"
           description={
             tempAccess === 'off'
-              ? 'Interpreter cannot see saved screenshots in /tmp, so pasted overlay images and Interpreter Overlay are unavailable.'
-              : 'Allow Interpreter to use temporary working files on your Mac, including saved screenshots for pasted overlay images and Interpreter Overlay.'
+              ? 'Hacienda cannot see saved screenshots in /tmp, so pasted overlay images and Hacienda Overlay are unavailable.'
+              : 'Allow Hacienda to use temporary working files on your Mac, including saved screenshots for pasted overlay images and Hacienda Overlay.'
           }
           contentClassName="sm:justify-end"
         >

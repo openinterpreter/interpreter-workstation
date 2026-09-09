@@ -15,7 +15,7 @@ import {
 import { getBrowserControlStatus } from '../../../utils/browserExtensionRelay';
 import type { BuiltinToolContext } from '../../builtinTools';
 
-const BROWSER_POLICY_DENIAL_PREFIX = 'Interpreter browser settings blocked this request.';
+const BROWSER_POLICY_DENIAL_PREFIX = 'Hacienda browser settings blocked this request.';
 
 type BrowserPermissionReviewPromptInput = {
   toolName: ToolName;
@@ -126,7 +126,7 @@ async function requestBrowserPermissionReviewPrompt(
         blocks: [
           {
             type: 'text',
-            text: 'Interpreter needs approval before using this browser tab.',
+            text: 'Hacienda needs approval before using this browser tab.',
           },
           {
             type: 'list',

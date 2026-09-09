@@ -109,17 +109,20 @@ export function normalizeApprovalCopy(value: string): string {
 
   switch (trimmed) {
     case 'Interpreter wants to edit files with apply_patch.':
-      return 'Interpreter wants to make changes to files.';
+    case 'Hacienda wants to edit files with apply_patch.':
+      return 'Hacienda wants to make changes to files.';
     case 'Interpreter apply_patch requested approval.':
       return 'Review the proposed changes before continuing.';
     case 'Agent wants to run a shell command.':
     case 'Run this command?':
     case 'Interpreter wants to run this command.':
-      return 'Interpreter wants to run a command.';
+    case 'Hacienda wants to run this command.':
+      return 'Hacienda wants to run a command.';
     case 'Delete file requires approval':
-      return 'Let Interpreter delete this file?';
+      return 'Let Hacienda delete this file?';
     case 'Codex shell execution requested approval.':
     case 'Interpreter shell execution requested approval.':
+    case 'Hacienda shell execution requested approval.':
       return 'Review this command before continuing.';
     default:
       return trimmed;
@@ -221,7 +224,8 @@ export function normalizeApprovalOptionCopy(
 
 function isGenericCommandApprovalCopy(value: string): boolean {
   const normalized = normalizeApprovalCopy(value);
-  return normalized === 'Interpreter wants to run a command.'
+  return normalized === 'Hacienda wants to run a command.'
+    || normalized === 'Interpreter wants to run a command.'
     || normalized === 'Review this command before continuing.';
 }
 

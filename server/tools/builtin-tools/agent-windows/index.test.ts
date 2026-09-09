@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 describe('agent windows builtin tools', () => {
-  test('lists Interpreter-owned agent window metadata without internal tokens or secrets', async () => {
+  test('lists Hacienda-owned agent window metadata without internal tokens or secrets', async () => {
     registerWindowSession({
       sessionKey: 'window-main',
       windowId: 101,
@@ -436,7 +436,7 @@ describe('agent windows builtin tools', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]?.text).toBe('No Interpreter agent window is registered for agent_id="agent-missing".');
+    expect(result.content[0]?.text).toBe('No Hacienda agent window is registered for agent_id="agent-missing".');
   });
 
   test('reveals a registered agent window through the existing focus-tab event', async () => {
@@ -522,7 +522,7 @@ describe('agent windows builtin tools', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]?.text).toBe('No Interpreter agent window is registered for agent_id="agent-missing".');
+    expect(result.content[0]?.text).toBe('No Hacienda agent window is registered for agent_id="agent-missing".');
   });
 
   test('stops a registered agent window through the existing runtime cancel event', async () => {
@@ -611,7 +611,7 @@ describe('agent windows builtin tools', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]?.text).toBe('No Interpreter agent window is registered for agent_id="agent-missing".');
+    expect(result.content[0]?.text).toBe('No Hacienda agent window is registered for agent_id="agent-missing".');
   });
 
   test('closes a registered agent window through the existing close-tab event', async () => {
@@ -697,7 +697,7 @@ describe('agent windows builtin tools', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]?.text).toBe('No Interpreter agent window is registered for agent_id="agent-missing".');
+    expect(result.content[0]?.text).toBe('No Hacienda agent window is registered for agent_id="agent-missing".');
   });
 
   test('awaits a matching agent completion event and returns safe completion metadata', async () => {
@@ -752,6 +752,6 @@ describe('agent windows builtin tools', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]?.text).toBe('No Interpreter agent window is registered for agent_id="agent-missing".');
+    expect(result.content[0]?.text).toBe('No Hacienda agent window is registered for agent_id="agent-missing".');
   });
 });

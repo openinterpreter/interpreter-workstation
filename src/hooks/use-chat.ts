@@ -82,7 +82,7 @@ export type ChatMessagePart =
   | { kind: "tool-call"; toolCall: ToolCallInfo };
 
 const RUNTIME_RESTART_CONTINUE_MESSAGE =
-  "Continue the previous task now that Interpreter restarted. Continue from where you left off and verify the MCP/tool changes are available.";
+  "Continue the previous task now that Hacienda restarted. Continue from where you left off and verify the MCP/tool changes are available.";
 const RUNTIME_RESTART_CONTINUATION_STORAGE_PREFIX =
   "interpreter.runtimeRestartContinuation:";
 
@@ -101,7 +101,9 @@ export function textContent(msg: { parts: ChatMessagePart[] }): string {
 }
 
 function isRuntimeRestartContinuationText(text: string): boolean {
-  return text.trim() === RUNTIME_RESTART_CONTINUE_MESSAGE;
+  const trimmed = text.trim();
+  return trimmed === RUNTIME_RESTART_CONTINUE_MESSAGE || 
+         trimmed === "Continue the previous task now that Interpreter restarted. Continue from where you left off and verify the MCP/tool changes are available.";
 }
 
 export function runtimeRestartContinuationStorageKey(threadId: string): string {
@@ -2205,7 +2207,7 @@ export function useChat(
         ...prev,
         createTextChatMessage(
           "assistant",
-          "Interpreter restarted. New changes have taken effect.",
+          "Hacienda restarted. New changes have taken effect.",
         ),
       ]);
       setRuntimeContinuationNonce((value) => value + 1);
@@ -2233,7 +2235,7 @@ export function useChat(
         ...prev,
         createTextChatMessage(
           "assistant",
-          "Interpreter restarted. New changes have taken effect.",
+          "Hacienda restarted. New changes have taken effect.",
         ),
       ]);
     }

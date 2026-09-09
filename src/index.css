@@ -3111,6 +3111,23 @@
   outline: none;
 }
 
+.oa-tiptap-viewer .ProseMirror .oa-pii-label {
+  background: color-mix(in srgb, var(--pii-category-color, #6b7280) 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pii-category-color, #6b7280) 55%, transparent);
+  border-radius: 6px;
+  padding: 0 5px;
+  margin: 0 1px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.14s ease;
+}
+
+.oa-tiptap-viewer .ProseMirror .oa-pii-label:hover,
+.oa-tiptap-viewer .ProseMirror .oa-pii-label:focus-visible {
+  background: color-mix(in srgb, var(--pii-category-color, #6b7280) 38%, transparent);
+  outline: none;
+}
+
 /* ===== TIPTAP TASK LIST (CIRCULAR CHECKBOXES) =====
 /* Target both custom class and TipTap's native data-type attribute */
 /* Use high specificity to override Tailwind prose styles */

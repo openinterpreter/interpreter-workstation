@@ -3,7 +3,7 @@ import * as configStore from '../../../configStore';
 
 export const customInstructionsGetTool: BuiltinToolDefinition = {
   name: 'interpreter_custom_instructions_get',
-  description: 'Read the saved Interpreter custom instructions.',
+  description: 'Read the saved Hacienda custom instructions.',
   inputSchema: {
     type: 'object',
     properties: {},
@@ -33,7 +33,7 @@ export const customInstructionsGetTool: BuiltinToolDefinition = {
 
 export const customInstructionsSetTool: BuiltinToolDefinition = {
   name: 'interpreter_custom_instructions_set',
-  description: 'Replace the saved Interpreter custom instructions. Pass an empty string to clear them.',
+  description: 'Replace the saved Hacienda custom instructions. Pass an empty string to clear them.',
   inputSchema: {
     type: 'object',
     properties: {

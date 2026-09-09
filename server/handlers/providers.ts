@@ -2014,7 +2014,7 @@ export async function resolveGitHubCliPath(): Promise<string | null> {
 type GitHubAuthSource = 'gh-cli' | 'env';
 
 export function getGitHubMcpAuthSetupErrorMessage(installed: boolean): string {
-  const setupStep = 'Run "gh auth login" in a terminal, or set GH_TOKEN/GITHUB_TOKEN before starting Interpreter.';
+  const setupStep = 'Run "gh auth login" in a terminal, or set GH_TOKEN/GITHUB_TOKEN before starting Hacienda.';
   if (installed) {
     return `GitHub CLI is installed but not authenticated. ${setupStep}`;
   }
@@ -2588,11 +2588,11 @@ export async function getAllProfileStatuses(isAuthenticated?: boolean): Promise<
       case 'hosted':
         if (isAuthenticated) {
           ready = true;
-          detail = 'Interpreter-managed model, signed in';
+          detail = 'Hacienda-managed model, signed in';
           badge = 'Ready';
         } else {
           ready = false;
-          detail = 'Interpreter-managed model, sign in required';
+          detail = 'Hacienda-managed model, sign in required';
           badge = 'Available';
         }
         break;

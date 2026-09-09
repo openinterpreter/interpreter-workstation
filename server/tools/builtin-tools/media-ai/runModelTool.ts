@@ -568,7 +568,7 @@ export function buildValidationFailureMessage({
 
 export const runMediaModelTool: BuiltinToolDefinition = {
   name: "run_media_model",
-  description: `Run a fal.ai media model through Interpreter hosted media.
+  description: `Run a fal.ai media model through Hacienda hosted media.
 
 Before calling this tool:
 - call \`estimate_media_cost\` for the chosen endpoint.

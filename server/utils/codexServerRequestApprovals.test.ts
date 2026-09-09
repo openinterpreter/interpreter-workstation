@@ -162,8 +162,8 @@ describe('codexServerRequestApprovals', () => {
         path: '/tmp/image.png',
         reason: 'view_image: /tmp/image.png',
         threadId: 'thr_1',
-        warning: 'Interpreter wants to view an image file.',
-        description: 'Interpreter needs permission to view this image.',
+        warning: 'Hacienda wants to view an image file.',
+        description: 'Hacienda needs permission to view this image.',
         command: 'view_image /tmp/image.png',
         cwd: '/tmp',
         itemId: 'item_1',
@@ -228,7 +228,7 @@ describe('codexServerRequestApprovals', () => {
       toolName: 'Apply patch',
       serverId: 'codex',
       questions: [{
-        question: 'How should Interpreter handle these file changes?',
+        question: 'How should Hacienda handle these file changes?',
         options: [
           {
             label: 'Allow once',
@@ -244,7 +244,7 @@ describe('codexServerRequestApprovals', () => {
           {
             label: "Don't allow",
             value: 'decision:2',
-            description: 'Skip these changes and let Interpreter continue.',
+            description: 'Skip these changes and let Hacienda continue.',
           },
           {
             label: 'Stop here',
@@ -259,7 +259,7 @@ describe('codexServerRequestApprovals', () => {
         threadId: 'thr_1',
         turnId: 'turn_1',
         itemId: 'item_file_1',
-        message: 'Interpreter wants to make changes to files.',
+        message: 'Hacienda wants to make changes to files.',
         description: 'Review these file changes before continuing.',
         reason: 'Needs write access to apply patch',
         grantRoot: '/tmp',
@@ -328,7 +328,7 @@ describe('codexServerRequestApprovals', () => {
       toolName: 'Apply patch',
       serverId: 'codex',
       questions: [{
-        question: 'How should Interpreter handle these file changes?',
+        question: 'How should Hacienda handle these file changes?',
         options: [
           {
             label: 'Allow once',
@@ -344,7 +344,7 @@ describe('codexServerRequestApprovals', () => {
           {
             label: "Don't allow",
             value: 'decision:2',
-            description: 'Skip these changes and let Interpreter continue.',
+            description: 'Skip these changes and let Hacienda continue.',
           },
           {
             label: 'Stop here',
@@ -358,7 +358,7 @@ describe('codexServerRequestApprovals', () => {
       context: {
         threadId: 'thr_legacy',
         itemId: 'call_legacy_patch',
-        message: 'Interpreter wants to make changes to files.',
+        message: 'Hacienda wants to make changes to files.',
         description: 'Review these file changes before continuing.',
         reason: null,
         grantRoot: null,
@@ -478,7 +478,7 @@ describe('codexServerRequestApprovals', () => {
         threadId: 'thr_legacy',
         itemId: 'call_legacy',
         approvalId: 'approval_legacy',
-        message: 'Interpreter wants to run a command.',
+        message: 'Hacienda wants to run a command.',
         description: 'legacy shell approval',
         command: ['/bin/zsh', '-lc', 'ls -la'],
         cwd: '/workspace',
@@ -536,7 +536,7 @@ describe('codexServerRequestApprovals', () => {
       toolName: 'interpreter__MCP tool',
       serverId: 'interpreter',
       args: {
-        message: 'Interpreter wants to use an MCP tool.',
+        message: 'Hacienda wants to use an MCP tool.',
         description: 'Review this MCP tool call before continuing.',
         serverId: 'interpreter',
         toolName: 'MCP tool',
@@ -545,7 +545,7 @@ describe('codexServerRequestApprovals', () => {
         },
         threadId: 'thr_mcp_tool',
       },
-      warningMessage: 'Interpreter wants to call interpreter__MCP tool.',
+      warningMessage: 'Hacienda wants to call interpreter__MCP tool.',
       timeout: 0,
       toolCallId: undefined,
       agentId: 'agent-mcp-tool',
@@ -1107,7 +1107,7 @@ describe('codexServerRequestApprovals', () => {
     assert.equal(sessionApprovalCalls[0]?.serverId, 'real-memory-e2e');
     assert.equal(sessionApprovalCalls[0]?.agentId, 'agent-mcp-1');
     assert.deepEqual(sessionApprovalCalls[0]?.args, {
-      message: 'Interpreter wants to use an MCP tool.',
+      message: 'Hacienda wants to use an MCP tool.',
       description: 'Review this MCP tool call before continuing.',
       serverId: 'real-memory-e2e',
       toolName: 'Create Entities',

@@ -136,7 +136,7 @@ describe('overlayTools', () => {
     expect(result.isError).toBeUndefined();
     expect(result.content).toHaveLength(1);
     expect(result.content?.[0]?.type).toBe('text');
-    expect(result.content?.[0]?.text).toContain('Interpreter Overlay live context');
+    expect(result.content?.[0]?.text).toContain('Hacienda Overlay live context');
     expect(result.content?.[0]?.text).toContain('target_browser_tab_id: 8');
     expect(result.content?.[0]?.text).toContain('target_document_app_specific_id: tab-8');
     expect(result.content?.[0]?.text).toContain('<selected_context>');
@@ -259,7 +259,7 @@ describe('overlayTools', () => {
     expect(selectedTargetResultText).toContain('<window_diff window="<window name=\\"Lead form\\">" status="changed">');
     expect(selectedTargetResultText).toContain('- <button>Save</button>');
     expect(selectedTargetResultText).toContain('+ <button>Saved</button>');
-    expect(selectedTargetResultText).not.toContain('Interpreter Overlay live context');
+    expect(selectedTargetResultText).not.toContain('Hacienda Overlay live context');
   });
 
   test('computer_batch rejects flat action objects', async () => {
@@ -293,7 +293,7 @@ describe('overlayTools', () => {
     expect(hotkeyVariant?.properties?.tool?.properties?.params?.properties).not.toHaveProperty('key');
   });
 
-  test('computer_batch schema advertises the unified normal Interpreter tool action', () => {
+  test('computer_batch schema advertises the unified normal Hacienda tool action', () => {
     const actionItems = overlayComputerBatchTool.inputSchema.properties?.actions?.items as {
       oneOf?: Array<{
         properties?: Record<string, unknown>;

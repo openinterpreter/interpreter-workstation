@@ -185,7 +185,7 @@ class OverlaySessionManager {
       (session) => session.status === 'active' && session.agentId !== options.agentId,
     );
     if (conflictingSession) {
-      throw new Error('Interpreter Overlay is already attached to another agent. Detach it before starting a new live overlay session.');
+      throw new Error('Hacienda Overlay is already attached to another agent. Detach it before starting a new live overlay session.');
     }
 
     const now = Date.now();
@@ -212,7 +212,7 @@ class OverlaySessionManager {
 
   getSessionForAgent(agentId: string | undefined): OverlaySessionRecord {
     if (!agentId) {
-      throw new Error('Overlay tools are only available to agents launched from Interpreter Overlay.');
+      throw new Error('Overlay tools are only available to agents launched from Hacienda Overlay.');
     }
 
     const sessionId = this.sessionIdByAgentId.get(agentId);
@@ -423,7 +423,7 @@ class OverlaySessionManager {
 
   private getDriverOrThrow(): OverlaySessionDriver {
     if (!this.driver) {
-      throw new Error('Interpreter Overlay runtime is unavailable.');
+      throw new Error('Hacienda Overlay runtime is unavailable.');
     }
     return this.driver;
   }

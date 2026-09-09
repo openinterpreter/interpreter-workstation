@@ -289,7 +289,7 @@ export async function setBooleanUISetting(id: BooleanUISettingId, enabled: boole
 }
 
 // ============================================================================
-// Interpreter Overlay Settings
+// Hacienda Overlay Settings
 // ============================================================================
 
 export async function getInterpreterOverlaySettings(): Promise<{ settings: InterpreterOverlaySettings }> {

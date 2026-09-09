@@ -28,7 +28,7 @@ async function writeZipArchive(zipPath: string, entries: Record<string, string>)
 describe('buildMacUpdateInstallScript', () => {
   test('replaces the existing app bundle instead of merging into it', () => {
     const script = buildMacUpdateInstallScript({
-      appName: 'Interpreter',
+      appName: 'Hacienda',
       currentPid: 123,
       updaterPendingDir: '/tmp/pending',
     });
@@ -71,7 +71,7 @@ describe('buildMacUpdateInstallScript', () => {
     });
 
     const script = buildMacUpdateInstallScript({
-      appName: 'Interpreter',
+      appName: 'Hacienda',
       currentPid: 999_999,
       updaterPendingDir: pendingDir,
       applicationsDir,
@@ -115,7 +115,7 @@ describe('buildMacUpdateInstallScript', () => {
     });
 
     const script = buildMacUpdateInstallScript({
-      appName: 'Interpreter',
+      appName: 'Hacienda',
       currentPid: 999_999,
       updaterPendingDir: pendingDir,
       applicationsDir,

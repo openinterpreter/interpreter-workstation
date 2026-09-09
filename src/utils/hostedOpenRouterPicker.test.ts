@@ -8,8 +8,8 @@ import {
 } from './hostedOpenRouterPicker';
 
 const interpreterModels = [
-  { id: 'interpreter-smart', name: 'Interpreter Smart' },
-  { id: 'interpreter-fast', name: 'Interpreter Fast' },
+  { id: 'interpreter-smart', name: 'Hacienda Smart' },
+  { id: 'interpreter-fast', name: 'Hacienda Fast' },
 ];
 
 const openRouterModels = [
@@ -62,20 +62,20 @@ describe('buildHostedModelPickerGroups', () => {
     expect(buildHostedModelPickerGroups(interpreterModels, openRouterModels)).toEqual([
       {
         id: 'interpreter',
-        label: 'Interpreter',
+        label: 'Hacienda',
         items: [
           {
             id: 'interpreter-smart',
-            name: 'Interpreter Smart',
+            name: 'Hacienda Smart',
             secondaryLabel: 'interpreter-smart',
-            provider: 'Interpreter',
+            provider: 'Hacienda',
             description: '',
           },
           {
             id: 'interpreter-fast',
-            name: 'Interpreter Fast',
+            name: 'Hacienda Fast',
             secondaryLabel: 'interpreter-fast',
-            provider: 'Interpreter',
+            provider: 'Hacienda',
             description: '',
           },
         ],

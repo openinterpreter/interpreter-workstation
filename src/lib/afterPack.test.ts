@@ -92,10 +92,10 @@ describe('electron-builder mac privacy metadata', () => {
     const config = fs.readFileSync(path.join(process.cwd(), 'electron-builder.yml'), 'utf8');
 
     const requiredUsageDescriptions = {
-      NSCameraUsageDescription: 'Interpreter uses camera access when you choose a camera as a video recording source.',
-      NSMicrophoneUsageDescription: 'Interpreter uses microphone access when you start voice input, Push to Talk, Ambient speech-to-text, or connect a microphone as an audio recording source.',
-      NSSpeechRecognitionUsageDescription: 'Interpreter uses speech recognition to detect Ambient voice phrases and transcribe voice input when you enable voice mode.',
-      NSAudioCaptureUsageDescription: 'Interpreter uses audio capture to record and transcribe audio only when you start voice input or connect an audio source for recording.',
+      NSCameraUsageDescription: 'Hacienda uses camera access when you choose a camera as a video recording source.',
+      NSMicrophoneUsageDescription: 'Hacienda uses microphone access when you start voice input, Push to Talk, Ambient speech-to-text, or connect a microphone as an audio recording source.',
+      NSSpeechRecognitionUsageDescription: 'Hacienda uses speech recognition to detect Ambient voice phrases and transcribe voice input when you enable voice mode.',
+      NSAudioCaptureUsageDescription: 'Hacienda uses audio capture to record and transcribe audio only when you start voice input or connect an audio source for recording.',
     } as const;
 
     for (const [usageKey, description] of Object.entries(requiredUsageDescriptions)) {

@@ -134,7 +134,7 @@ describe('ApprovalPromptDock', () => {
         context: {
           appIconDataUrl: APP_ICON_DATA_URL,
           appIconLabel: 'Calculator',
-          message: 'Let Interpreter control "Calculator"?',
+          message: 'Let Hacienda control "Calculator"?',
           sessionAware: true,
         },
       }),
@@ -142,7 +142,7 @@ describe('ApprovalPromptDock', () => {
 
     const { container } = render(<ApprovalPromptDock />);
 
-    expect(await screen.findByText('Let Interpreter control "Calculator"?')).toBeInTheDocument();
+    expect(await screen.findByText('Let Hacienda control "Calculator"?')).toBeInTheDocument();
     const icon = screen.getByRole('img', { name: 'Calculator app icon' });
     expect(icon).toHaveAttribute('src', APP_ICON_DATA_URL);
     expect(container.querySelector('.oa-approval-app-icon')).toBeTruthy();
@@ -216,7 +216,7 @@ describe('ApprovalPromptDock', () => {
         id: 'other-agent-approval',
         isSimpleApproval: true,
         context: {
-          message: 'Let Interpreter inspect another agent target?',
+          message: 'Let Hacienda inspect another agent target?',
         },
         owner: {
           approvalOwnerKind: 'normal-agent',
@@ -235,7 +235,7 @@ describe('ApprovalPromptDock', () => {
         id: 'active-agent-approval',
         isSimpleApproval: true,
         context: {
-          message: 'Let Interpreter inspect the active agent target?',
+          message: 'Let Hacienda inspect the active agent target?',
         },
         owner: {
           approvalOwnerKind: 'normal-agent',
@@ -254,8 +254,8 @@ describe('ApprovalPromptDock', () => {
 
     const { container } = render(<ApprovalPromptDock agentId="agent-active" />);
 
-    expect(await screen.findByText('Let Interpreter inspect the active agent target?')).toBeInTheDocument();
-    expect(screen.queryByText('Let Interpreter inspect another agent target?')).not.toBeInTheDocument();
+    expect(await screen.findByText('Let Hacienda inspect the active agent target?')).toBeInTheDocument();
+    expect(screen.queryByText('Let Hacienda inspect another agent target?')).not.toBeInTheDocument();
     expect(container.querySelector('[data-kind="permission"]')).toHaveStyle({
       boxShadow: 'inset 3px 0 0 #2563eb',
     });

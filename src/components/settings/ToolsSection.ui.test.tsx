@@ -115,7 +115,7 @@ describe('ToolsSectionContent', () => {
       installed: true,
       loggedIn: false,
       source: undefined,
-      error: 'GitHub CLI is installed but not authenticated. Run "gh auth login" in a terminal, or set GH_TOKEN/GITHUB_TOKEN before starting Interpreter.',
+      error: 'GitHub CLI is installed but not authenticated. Run "gh auth login" in a terminal, or set GH_TOKEN/GITHUB_TOKEN before starting Hacienda.',
     });
 
     render(<ToolsSectionContent />);
@@ -129,7 +129,7 @@ describe('ToolsSectionContent', () => {
     expect(apiMocks.startToolServerOAuth).not.toHaveBeenCalled();
     expect(ipcMocks.openExternal).not.toHaveBeenCalled();
     expect(toastMocks.showToast).toHaveBeenCalledWith(
-      'GitHub CLI is installed but not authenticated. Run "gh auth login" in a terminal, or set GH_TOKEN/GITHUB_TOKEN before starting Interpreter.',
+      'GitHub CLI is installed but not authenticated. Run "gh auth login" in a terminal, or set GH_TOKEN/GITHUB_TOKEN before starting Hacienda.',
       'error',
       8000,
     );

@@ -880,7 +880,7 @@ export class ToolManager {
   async listAllToolServers(): Promise<ToolServerStatus[]> {
     // NOTE(interpreter-cli-mcp): `interpreter-app tools list` depends on this method,
     // not on direct MCP config parsing. It joins app-managed MCP servers with
-    // built-in Interpreter tool servers before caller-specific filtering in the
+    // built-in Hacienda tool servers before caller-specific filtering in the
     // CLI handler at `server/handlers/interpreterCli.ts`.
     const requestId = ++toolManagerListAllRequestId;
     const startedAt = Date.now();
@@ -1120,7 +1120,7 @@ export class ToolManager {
         approvalToolName,
         serverId,
         {
-          message: 'Interpreter wants to use an MCP tool.',
+          message: 'Hacienda wants to use an MCP tool.',
           description: 'Review this action before continuing.',
           serverId,
           toolName,

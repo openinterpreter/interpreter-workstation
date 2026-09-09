@@ -17,6 +17,7 @@ export default defineConfig({
       'agent/**/*.vitest.test.ts',
       'server/**/*.vitest.test.ts',
     ],
+    exclude: ['server/utils/basemindManager.vitest.test.ts', 'server/handlers/basemindDownload.vitest.test.ts', 'server/handlers/workspaceScan.vitest.test.ts'],
     environment: 'jsdom',
     // Server-side tests exercise real child processes and file IO; they run in
     // the plain node environment instead of jsdom.

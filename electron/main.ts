@@ -2779,7 +2779,7 @@ app.whenReady().then(async () => {
     Sentry.captureException(error);
     await Sentry.flush(2000);
     dialog.showErrorBox(
-      'Interpreter',
+      'Hacienda',
       'The application failed to start.\n\nOur team has been notified. If this persists, please contact help@openinterpreter.com'
     );
     app.quit();

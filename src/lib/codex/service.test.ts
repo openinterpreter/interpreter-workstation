@@ -1697,11 +1697,11 @@ describe("CodexService", () => {
 
     const profile: Profile = {
       id: "interpreter",
-      label: "Interpreter",
+      label: "Hacienda",
       modelProvider: "interpreter",
       providerConfig: {
         base_url: "https://example.com",
-        name: "Interpreter",
+        name: "Hacienda",
         requires_openai_auth: false,
       },
     };

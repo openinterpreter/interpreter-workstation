@@ -54,7 +54,7 @@ describe('mainAgentPrompt', () => {
     expect(developerPrompt).toContain('Prefer `interpreter-app tools find <query>` when the likely tool is clear but the host server is not.');
     expect(developerPrompt).toContain('Many built-in tools live on shared servers such as `builtin-interpreter`.');
     expect(developerPrompt).toContain('For workspace/UI/vault tools, inspect `builtin-interpreter` first.');
-    expect(developerPrompt).toContain('Interpreter workstation tools are CLI-only for the model by default.');
+    expect(developerPrompt).toContain('Hacienda workstation tools are CLI-only for the model by default.');
     expect(developerPrompt).toContain('Use `interpreter-app` for Interpreter app-tool discovery and execution.');
     expect(developerPrompt).toContain('Skills are workflow instructions, not callable tools.');
     expect(developerPrompt).toContain('Never emit a tool call named after a skill such as `computer-use`, `doc`, `spreadsheets`, `slides`, `pdf`, or `settings`');

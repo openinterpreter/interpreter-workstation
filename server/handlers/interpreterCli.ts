@@ -1102,7 +1102,7 @@ export async function callInterpreterCliTool(params: {
   const allowedTools = createAllowedToolSet(binding.allowedToolNames);
   const disabledServers = new Set(getGlobalDisabledToolsSync());
 
-  console.log("[Interpreter CLI] Calling tool", {
+  console.log("[Hacienda CLI] Calling tool", {
     agentId: binding.agentId,
     serverId: params.serverId,
     toolName: params.toolName,
@@ -1380,7 +1380,7 @@ export async function restartInterpreterCliRuntime(params: {
   const outcome = await requestInterpreterRuntimeRestart({
     approvalToolName: "interpreter_config_restart_runtime",
     approvalServerId: "builtin-interpreter",
-    message: `Interpreter wants to restart its agent runtime. ${reason} Restarting will stop running conversations for every agent.`,
+    message: `Hacienda wants to restart its agent runtime. ${reason} Restarting will stop running conversations for every agent.`,
     agentId: binding.agentId,
     timeoutMs: 120_000,
   });
@@ -1390,8 +1390,8 @@ export async function restartInterpreterCliRuntime(params: {
     reason,
     ...outcome,
     message: outcome.restartPerformed
-      ? "Interpreter restarted. New changes have taken effect."
-      : "Interpreter agent runtime restart was not performed.",
+      ? "Hacienda restarted. New changes have taken effect."
+      : "Hacienda agent runtime restart was not performed.",
   };
 }
 

@@ -112,6 +112,126 @@ jobs:
             dist/Interpreter.Internal*.zip \
             dist/SHA256SUMS \
             --repo "$INTERNAL_RELEASE_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Interpreter Internal v${version}" \
+            --notes-file dist/INTERNAL_RELEASE.md \
+            --prerelease
+
+  macos-x64:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-15-intel
+    timeout-minutes: 120
+    environment: internal-release
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      GITHUB_TOKEN: ${{ github.token }}
+      PYTHON: /usr/bin/python3
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          token: ${{ secrets.WORKSTATION_SUBMODULE_TOKEN || github.token }}
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version: 1.2.20
+      - uses: dtolnay/rust-toolchain@stable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm run test:unit
+      - run: pnpm run release:licenses:check
+      - name: Build unsigned official internal package
+        run: pnpm run package:internal:mac-x64
+      - name: Verify official overlay and packaged resources
+        run: pnpm run release:verify:internal
+      - name: Write checksums and release notes
+        working-directory: dist
+        run: |
+          for source in "Interpreter Internal"*.dmg "Interpreter Internal"*.zip; do
+            published="${source// /.}"
+            mv "$source" "$published"
+          done
+          shasum -a 256 Interpreter.Internal*.dmg Interpreter.Internal*.zip > SHA256SUMS
+          cat > INTERNAL_RELEASE.md <<EOF
+          Internal test build of the official Interpreter distribution (Intel x64).
+
+          Source: $GITHUB_REPOSITORY@$GITHUB_SHA
+
+          This build includes the hosted authentication/API profile, bundled OIX
+          runtime and CLI, CUA driver, and packaged third-party notices from the
+          exact canonical source revision.
+
+          This build is unsigned and unnotarized. It is not a public release.
+          EOF
+      - name: Require a private artifact destination after OSS publication
+        if: ${{ !github.event.repository.private && vars.INTERNAL_RELEASE_REPOSITORY == '' }}
+        run: |
+          echo "Set INTERNAL_RELEASE_REPOSITORY to a private owner/repository target."
+          exit 1
+      - name: Upload artifact while source repository is private
+        if: github.event.repository.private
+        uses: actions/upload-artifact@v7
+        with:
+          name: interpreter-internal-macos-x64
+          path: |
+            dist/Interpreter.Internal*.dmg
+            dist/Interpreter.Internal*.zip
+            dist/SHA256SUMS
+            dist/INTERNAL_RELEASE.md
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish prerelease in private source repository
+        if: github.event.repository.private
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./package.json').internalVersion")
+          tag="internal-v${version}-build.${GITHUB_RUN_NUMBER}"
+          gh release create "$tag" \
+            dist/Interpreter.Internal*.dmg \
+            dist/Interpreter.Internal*.zip \
+            dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Interpreter Internal v${version} (Intel x64)" \
+            --notes-file dist/INTERNAL_RELEASE.md \
+            --prerelease
+      - name: Publish prerelease to private artifact repository after OSS publication
+        if: ${{ !github.event.repository.private && vars.INTERNAL_RELEASE_REPOSITORY != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.INTERNAL_RELEASE_TOKEN }}
+          INTERNAL_RELEASE_REPOSITORY: ${{ vars.INTERNAL_RELEASE_REPOSITORY }}
+        run: |
+          version=$(node -p "require('./package.json').internalVersion")
+          tag="internal-v${version}-build.${GITHUB_RUN_NUMBER}"
+          gh release create "$tag" \
+            dist/Interpreter.Internal*.dmg \
+            dist/Interpreter.Internal*.zip \
+            dist/SHA256SUMS \
+            --repo "$INTERNAL_RELEASE_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Interpreter Internal v${version} (Intel x64)" \
+            --notes-file dist/INTERNAL_RELEASE.md \
+            --prerelease
+      - name: Publish prerelease to private artifact repository after OSS publication
+        if: ${{ !github.event.repository.private && vars.INTERNAL_RELEASE_REPOSITORY != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.INTERNAL_RELEASE_TOKEN }}
+          INTERNAL_RELEASE_REPOSITORY: ${{ vars.INTERNAL_RELEASE_REPOSITORY }}
+        run: |
+          version=$(node -p "require('./package.json').internalVersion")
+          tag="internal-v${version}-build.${GITHUB_RUN_NUMBER}"
+          gh release create "$tag" \
+            dist/Interpreter.Internal*.dmg \
+            dist/Interpreter.Internal*.zip \
+            dist/SHA256SUMS \
+            --repo "$INTERNAL_RELEASE_REPOSITORY" \
             --title "Interpreter Internal v${version}" \
             --notes-file dist/INTERNAL_RELEASE.md \
             --prerelease

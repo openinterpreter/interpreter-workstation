@@ -245,7 +245,7 @@ async function getBoundedBrowserControlState(input: {
 export const wholeComputerStateGetTool: BuiltinToolDefinition = {
   name: 'interpreter_whole_computer_state_get',
   description:
-    'Read bounded local Interpreter whole-computer state: known Interpreter windows, registered agent-window metadata, and browser-control profile/window/tab inventory. This read-only tool never returns caller tokens, prompts, full messages, attachments, or API keys.',
+    'Read bounded local Hacienda whole-computer state: known Hacienda windows, registered agent-window metadata, and browser-control profile/window/tab inventory. This read-only tool never returns caller tokens, prompts, full messages, attachments, or API keys.',
   inputSchema: {
     type: 'object',
     properties: {

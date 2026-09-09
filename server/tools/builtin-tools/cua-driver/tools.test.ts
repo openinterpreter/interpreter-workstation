@@ -1292,7 +1292,7 @@ describe('browser access policy denial parity for native Computer Use reads', ()
           app: 'Google Chrome',
           target_identity: chromeTargetIdentity,
         }, { agentId: 'browser-policy-deny' })).rejects.toThrow(
-          /^Interpreter browser settings blocked this request\. Browser read access is denied for https:\/\/denied\.example\.test\.$/,
+          /^Hacienda browser settings blocked this request\. Browser read access is denied for https:\/\/denied\.example\.test\.$/,
         );
       });
       expect(calls).toEqual([]);
@@ -1416,7 +1416,7 @@ describe('browser access policy denial parity for native Computer Use reads', ()
       const controlWindows = JSON.parse(text)[0].browser_control.windows as Array<Record<string, unknown>>;
       const denied = controlWindows.find((window) => window.browser_profile_policy_id === 'install:denied');
       const allowed = controlWindows.find((window) => window.browser_profile_policy_id === 'install:allowed');
-      expect(denied?.tabs).toBe('Interpreter browser settings blocked this request. Tab titles and URLs are hidden for this browser window.');
+      expect(denied?.tabs).toBe('Hacienda browser settings blocked this request. Tab titles and URLs are hidden for this browser window.');
       expect(denied?.active_tab_ref).toBeNull();
       expect(allowed?.tabs).toEqual([expect.objectContaining({
         title: 'Allowed',
@@ -1480,7 +1480,7 @@ describe('Computer Use daemon shutdown', () => {
   });
 });
 
-describe('Interpreter self-automation guard', () => {
+describe('Hacienda self-automation guard', () => {
   test('blocks targeted GUI automation against protected app pids', () => {
     const protectedPids = new Set([1234]);
     expect(isProtectedDesktopAutomationTarget('get_window_state', { pid: 1234 }, protectedPids)).toBe(true);
@@ -1547,7 +1547,7 @@ describe('Interpreter self-automation guard', () => {
     const filtered = filterProtectedDesktopTargetsFromTextForTest(JSON.stringify({
       ok: true,
       data: [
-        { pid: 1234, title: 'Interpreter' },
+        { pid: 1234, title: 'Hacienda' },
         { pid: 5678, title: 'Calculator' },
       ],
     }), protectedPids);

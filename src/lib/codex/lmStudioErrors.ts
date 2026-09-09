@@ -31,8 +31,8 @@ export function formatLmStudioPromptTemplateFailure(
       : originalErrorMessage
     : normalizedDetails;
   const guidance = [
-    "The selected model from LM Studio doesn't support Interpreter tools.",
-    "Choose a tool-capable model in LM Studio, or switch to an Interpreter hosted model, then retry.",
+    "The selected model from LM Studio doesn't support Hacienda tools.",
+    "Choose a tool-capable model in LM Studio, or switch to a Hacienda-hosted model, then retry.",
   ].join("\n");
 
   return rawErrorSection ? `${rawErrorSection}\n\n${guidance}` : guidance;

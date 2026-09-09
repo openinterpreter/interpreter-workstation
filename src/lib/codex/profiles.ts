@@ -173,12 +173,12 @@ const OPENAI_PROFILE: Profile = {
 
 const INTERPRETER_HOSTED_PROFILE: Profile = {
     id: "interpreter",
-    label: "Interpreter",
+    label: "Hacienda",
     modelProvider: "interpreter",
     model: "interpreter-smart",
     providerConfig: {
       base_url: getInterpreterBaseUrl(),
-      name: "Interpreter",
+      name: "Hacienda",
       requires_openai_auth: false,
       wire_api: "responses",
     },

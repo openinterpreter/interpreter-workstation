@@ -170,6 +170,16 @@ const handlers: Record<string, Record<string, HandlerFn>> = {
       return searchNotes(request.query, request.limit);
     },
   },
+  pii: {
+    detectPii: async ([text, options]: [string, { categories?: string[] }]) => {
+      const { piiDetectionService } = await import('../services/piiDetection');
+      return piiDetectionService.detectPii(text, options);
+    },
+    decryptRehydration: async ([docId, passphrase]: [string, string]) => {
+      const { vaultManager } = await import('../services/vault');
+      return vaultManager.decrypt(docId, passphrase);
+    },
+  },
 
   // ========== Workspace Scan (basemind) ==========
   workspaceScan: {
@@ -182,8 +192,10 @@ const handlers: Record<string, Record<string, HandlerFn>> = {
   // ========== Basemind MCP Server Lifecycle ==========
   basemind: {
     register: async () => {
-      const { registerBasemindServer } = await import('../utils/basemindManager');
+      const { registerBasemindServer, checkAndDownloadMissingModels } = await import('../utils/basemindManager');
       const serverId = await registerBasemindServer();
+      // Background model check - non-blocking, fire-and-forget
+      checkAndDownloadMissingModels().catch(() => {});
       return { serverId };
     },
     unregister: async () => {
@@ -201,17 +213,23 @@ const handlers: Record<string, Record<string, HandlerFn>> = {
     },
     download: async () => {
       const { basemindDownload } = await import('../handlers/basemindDownload');
-      const results: Array<{ stage: string; success: boolean; error?: string }> = [];
+      const results: Array<{ stage: string; success: boolean; skipped?: boolean; skipReason?: string; error?: string }> = [];
       for await (const update of basemindDownload()) {
         if (update.done || update.error) {
           results.push({
             stage: update.stage,
-            success: update.done,
+            success: update.done && !update.skipped,
+            skipped: update.skipped,
+            skipReason: update.skipReason,
             error: update.error,
           });
         }
       }
-      return { stages: results, success: results.every(r => r.success) };
+      return { stages: results, success: results.every(r => r.success || r.skipped) };
+    },
+    cpuFeatures: async () => {
+      const { cpuFeatures } = await import('../handlers/cpuFeatures');
+      return cpuFeatures();
     },
   },
 

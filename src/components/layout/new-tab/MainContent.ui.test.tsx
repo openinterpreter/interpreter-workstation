@@ -107,7 +107,7 @@ describe('MainContent', () => {
         onComposerSend={() => {}}
         onCreateEmptyNote={() => {}}
         onCreateDailyNote={() => {}}
-        topBanner={<div data-testid="adjunct-guidance">Use Interpreter from anywhere</div>}
+        topBanner={<div data-testid="adjunct-guidance">Use Hacienda from anywhere</div>}
       />,
     );
 

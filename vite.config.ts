@@ -72,6 +72,13 @@ export default defineConfig(() => {
     server: {
       port: parseInt(process.env.VITE_PORT || '5173', 10),
       strictPort: false, // Allow fallback to next available port for multi-instance support
+      watch: {
+        // Exclude the basemind rust build dir from file watching to avoid ENOSPC.
+        // Without this, chokidar traverses 10k+ files in basemind/target/ and
+        // exhausts inotify watches on systems with low limits (default: 63269).
+        // Use negative-ignore pattern so chokidar never opens watchers for these dirs.
+        ignored: ['basemind/target', 'basemind/target/**', '**/basemind/target', '**/basemind/target/**'],
+      },
       warmup: {
         // The overlay renderers load hidden at app startup and must mount
         // immediately; without warmup their module transforms queue behind the

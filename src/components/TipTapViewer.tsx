@@ -13,7 +13,7 @@ import Underline from '@tiptap/extension-underline';
 import { DraggableTaskItem } from '../extensions/DraggableTaskItem';
 import { ResizableImage, type ResolveImageSrc } from '../extensions/ResizableImage';
 import { AnimationHighlight } from '../extensions/AnimationHighlight';
-import { openExternal, showContextMenu, vault, workspace, type ContextMenuItem } from '@/ipc';
+import { openExternal, showContextMenu, pii, vault, workspace, type ContextMenuItem } from '@/ipc';
 import { markdownToTiptap } from '../utils/markdown-parser';
 import { resolveLocalLinkTarget } from '../utils/localLinkDetection';
 import { shouldRefreshUnlinkedMentionCandidatesFromWorkspaceEvent } from '../utils/unlinkedMentionRefresh';
@@ -23,6 +23,7 @@ import { Wikilink } from '../extensions/Wikilink';
 import { WikilinkAutocomplete } from '../extensions/WikilinkAutocomplete';
 import { openMentionTarget } from '../../agent/components/mentions/openMentionTarget';
 import { UnlinkedMentionSuggestions } from '../extensions/UnlinkedMentionSuggestions';
+import { PiiLabel } from '../extensions/PiiLabel';
 import type { UnlinkedMentionCandidate } from '../utils/unlinkedMentions';
 import { buildUnlinkedMentionCandidates } from '../utils/unlinkedMentions';
 import { Button } from './ui/button';
@@ -63,6 +64,26 @@ export interface TipTapViewerRef {
   setContentJSON: (json: Record<string, unknown>) => void;
 }
 
+export interface PiiViewerOptions {
+  /** Render PII labels: stored tokens (`view`) or live regex (`compose`). Omit to disable. */
+  mode?: 'view' | 'compose';
+  /** Vault document id used for explicit decrypt-to-reveal. Labels still render without it. */
+  docId?: string;
+  /** Resolve the vault passphrase on demand; never stored by the viewer. */
+  getPassphrase?: () => Promise<string | null>;
+}
+
+interface ActivePiiLabel {
+  category: string;
+  token: string;
+  from: number;
+  to: number;
+  rect: DOMRect;
+  original?: string;
+  error?: string;
+  revealing?: boolean;
+}
+
 interface TipTapViewerProps {
   content: Record<string, unknown>; // Tiptap JSON format
   className?: string;
@@ -70,6 +91,7 @@ interface TipTapViewerProps {
   placeholder?: string;
   onUpdate?: () => void;
   filePath?: string;
+  pii?: PiiViewerOptions;
   /** Resolve a raw image path (absolute or relative) to a displayable URL. */
   resolveImageSrc?: ResolveImageSrc;
   /** Return a container element for positioning the @ mention dropdown. */
@@ -158,6 +180,7 @@ export const TipTapViewer = forwardRef<TipTapViewerRef, TipTapViewerProps>(
     filePath,
     resolveImageSrc,
     mentionContainer,
+    pii: piiOptions,
   }, ref) {
   "use no memo";
 
@@ -172,6 +195,13 @@ export const TipTapViewer = forwardRef<TipTapViewerRef, TipTapViewerProps>(
   const [ignoredUnlinkedMentionKeys, setIgnoredUnlinkedMentionKeys] = useState<Set<string>>(() => new Set());
   const ignoredUnlinkedMentionKeysRef = useRef<Set<string>>(new Set());
   const [activeUnlinkedMention, setActiveUnlinkedMention] = useState<ActiveUnlinkedMention | null>(null);
+  const piiPopoverRef = useRef<HTMLDivElement>(null);
+  const piiCloseTimerRef = useRef<number | null>(null);
+  const [activePiiLabel, setActivePiiLabel] = useState<ActivePiiLabel | null>(null);
+  const activePiiLabelRef = useRef<ActivePiiLabel | null>(null);
+  useEffect(() => {
+    activePiiLabelRef.current = activePiiLabel;
+  }, [activePiiLabel]);
 
   const getUnlinkedMentionCandidates = useCallback(() => unlinkedMentionCandidatesRef.current, []);
   const getIgnoredUnlinkedMentionKeys = useCallback(() => ignoredUnlinkedMentionKeysRef.current, []);
@@ -198,6 +228,13 @@ export const TipTapViewer = forwardRef<TipTapViewerRef, TipTapViewerProps>(
       getIgnoredKeys: getIgnoredUnlinkedMentionKeys,
     });
   }, [editable, filePath, getIgnoredUnlinkedMentionKeys, getUnlinkedMentionCandidates]);
+
+  const piiExtension = useMemo(() => {
+    if (!piiOptions?.mode) {
+      return undefined;
+    }
+    return PiiLabel.configure({ mode: piiOptions.mode });
+  }, [piiOptions?.mode]);
 
   const viewer = useEditor({
     extensions: [
@@ -244,6 +281,7 @@ export const TipTapViewer = forwardRef<TipTapViewerRef, TipTapViewerProps>(
       Wikilink,
       WikilinkAutocomplete,
       ...(unlinkedMentionExtension ? [unlinkedMentionExtension] : []),
+      ...(piiExtension ? [piiExtension] : []),
       Table.configure({
         resizable: true,
         HTMLAttributes: {
@@ -271,6 +309,25 @@ export const TipTapViewer = forwardRef<TipTapViewerRef, TipTapViewerProps>(
       },
       handleClick: (_view, _pos, event) => {
         const target = event.target as HTMLElement;
+
+        // PII labels: open the transient reveal popover. The document is never
+        // rewritten; revealing happens only through an explicit vault decrypt.
+        const piiLabel = target.closest('[data-pii-label="true"]') as HTMLElement | null;
+        if (piiLabel) {
+          event.preventDefault();
+          const category = piiLabel.getAttribute('data-pii-category') ?? 'unknown';
+          const token = piiLabel.getAttribute('data-pii-token') ?? piiLabel.textContent ?? '';
+          const from = Number(piiLabel.getAttribute('data-from'));
+          const to = Number(piiLabel.getAttribute('data-to'));
+          openPiiLabelPopover({
+            category,
+            token,
+            from: Number.isFinite(from) ? from : 0,
+            to: Number.isFinite(to) ? to : 0,
+            rect: piiLabel.getBoundingClientRect(),
+          });
+          return true;
+        }
 
         // Wikilinks: dispatch wikilink:open so the workspace resolver can open the target.
         const wikilink = target.closest('[data-wikilink]') as HTMLElement | null;
@@ -438,6 +495,75 @@ export const TipTapViewer = forwardRef<TipTapViewerRef, TipTapViewerProps>(
       unlinkedMentionCloseTimerRef.current = null;
     }, UNLINKED_MENTION_CLOSE_DELAY_MS);
   }, [clearUnlinkedMentionCloseTimer]);
+
+  const clearPiiCloseTimer = useCallback(() => {
+    if (piiCloseTimerRef.current !== null) {
+      window.clearTimeout(piiCloseTimerRef.current);
+      piiCloseTimerRef.current = null;
+    }
+  }, []);
+
+  const openPiiLabelPopover = useCallback((label: Omit<ActivePiiLabel, 'original' | 'error' | 'revealing'>) => {
+    clearPiiCloseTimer();
+    setActivePiiLabel(label);
+  }, [clearPiiCloseTimer]);
+
+  const scheduleClosePiiPopover = useCallback((relatedTarget?: EventTarget | null) => {
+    if (relatedTarget instanceof Node) {
+      if (
+        piiPopoverRef.current?.contains(relatedTarget)
+        || (relatedTarget instanceof HTMLElement && relatedTarget.closest('[data-pii-label="true"]'))
+      ) {
+        return;
+      }
+    }
+
+    clearPiiCloseTimer();
+    piiCloseTimerRef.current = window.setTimeout(() => {
+      setActivePiiLabel(null);
+      piiCloseTimerRef.current = null;
+    }, UNLINKED_MENTION_CLOSE_DELAY_MS);
+  }, [clearPiiCloseTimer]);
+
+  const handleRevealPiiLabel = useCallback(async () => {
+    const active = activePiiLabelRef.current;
+    const docId = piiOptions?.docId;
+    const getPassphrase = piiOptions?.getPassphrase;
+    if (!active || !docId || !getPassphrase) {
+      return;
+    }
+    setActivePiiLabel({ ...active, revealing: true, error: undefined });
+    try {
+      const passphrase = await getPassphrase();
+      if (!passphrase) {
+        setActivePiiLabel({ ...active, revealing: false, error: 'Reveal cancelled.' });
+        return;
+      }
+      const map = await pii.decryptRehydration(docId, passphrase);
+      const original = map[active.token];
+      if (!original) {
+        setActivePiiLabel({ ...active, revealing: false, error: 'No stored value for this label.' });
+        return;
+      }
+      setActivePiiLabel({ ...active, revealing: false, original });
+    } catch (error) {
+      setActivePiiLabel({
+        ...active,
+        revealing: false,
+        error: error instanceof Error ? error.message : 'Reveal failed.',
+      });
+    }
+  }, [piiOptions?.docId, piiOptions?.getPassphrase]);
+
+  useEffect(() => {
+    setActivePiiLabel(null);
+  }, [filePath]);
+
+  useEffect(() => () => {
+    if (piiCloseTimerRef.current !== null) {
+      window.clearTimeout(piiCloseTimerRef.current);
+    }
+  }, []);
 
   // Search function to find all matches of a query
   const searchText = useCallback((query: string): SearchMatch[] => {
@@ -880,6 +1006,57 @@ export const TipTapViewer = forwardRef<TipTapViewerRef, TipTapViewerProps>(
               Open note
             </button>
           </div>
+        </div>
+      ) : null}
+      {activePiiLabel ? (
+        <div
+          ref={piiPopoverRef}
+          className="rounded-[14px] px-3 py-2 shadow-[var(--oa-shadow-md)]"
+          style={{
+            position: 'fixed',
+            width: `${UNLINKED_MENTION_POPOVER_WIDTH}px`,
+            ...getUnlinkedMentionPopoverPosition(activePiiLabel.rect),
+            border: 'var(--border-width) solid color-mix(in srgb, var(--oa-border) 82%, transparent)',
+            background: 'color-mix(in srgb, var(--oa-bg-app) 94%, white)',
+            zIndex: 80,
+          }}
+          onMouseEnter={clearPiiCloseTimer}
+          onMouseLeave={(event) => scheduleClosePiiPopover(event.relatedTarget)}
+        >
+          <p className="text-ui-sm text-[var(--oa-text)]">
+            Redacted <span className="font-medium">{activePiiLabel.category}</span>
+          </p>
+          <p className="pt-1 font-mono text-ui-xs text-[var(--oa-text-muted)]">
+            {activePiiLabel.token}
+          </p>
+          {activePiiLabel.original ? (
+            <p className="pt-2 text-ui-sm text-[var(--oa-text)]">
+              Original: <span className="font-medium">{activePiiLabel.original}</span>
+            </p>
+          ) : null}
+          {activePiiLabel.error ? (
+            <p className="pt-2 text-ui-xs text-[var(--oa-danger)]">
+              {activePiiLabel.error}
+            </p>
+          ) : null}
+          {!activePiiLabel.original ? (
+            <div className="flex items-center gap-2 pt-3">
+              <Button
+                type="button"
+                size="sm"
+                className="h-7 px-2.5 text-ui-sm"
+                disabled={activePiiLabel.revealing || !piiOptions?.docId || !piiOptions?.getPassphrase}
+                onClick={() => void handleRevealPiiLabel()}
+              >
+                {activePiiLabel.revealing ? 'Revealing…' : 'Reveal'}
+              </Button>
+              {!piiOptions?.docId || !piiOptions?.getPassphrase ? (
+                <span className="text-ui-xs text-[var(--oa-text-muted)]">
+                  No vault entry linked for this document.
+                </span>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

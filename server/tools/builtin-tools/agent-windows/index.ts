@@ -188,7 +188,7 @@ function waitForAgentCompletion(input: {
 export const listAgentWindowsTool: BuiltinToolDefinition = {
   name: 'list_agent_windows',
   description:
-    'List Interpreter-owned agent windows and safe thread/status metadata. This read-only tool never returns caller tokens, startup messages, system prompts, attachments, or API keys.',
+    'List Hacienda-owned agent windows and safe thread/status metadata. This read-only tool never returns caller tokens, startup messages, system prompts, attachments, or API keys.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -273,7 +273,7 @@ export const listAgentWindowsTool: BuiltinToolDefinition = {
 export const launchAgentWindowTool: BuiltinToolDefinition = {
   name: 'launch_agent_window',
   description:
-    'Launch a normal visible Interpreter agent window and send it an initial message. Returns public agent/window ids only; use await_agent_window to wait for completion.',
+    'Launch a normal visible Hacienda agent window and send it an initial message. Returns public agent/window ids only; use await_agent_window to wait for completion.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -388,7 +388,7 @@ export const launchAgentWindowTool: BuiltinToolDefinition = {
 export const sendAgentWindowMessageTool: BuiltinToolDefinition = {
   name: 'send_agent_window_message',
   description:
-    'Send a follow-up message to an existing visible Interpreter agent window. If that agent is running, the existing agent UI queues the message for the next safe turn.',
+    'Send a follow-up message to an existing visible Hacienda agent window. If that agent is running, the existing agent UI queues the message for the next safe turn.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -461,7 +461,7 @@ export const sendAgentWindowMessageTool: BuiltinToolDefinition = {
 export const revealAgentWindowTool: BuiltinToolDefinition = {
   name: 'reveal_agent_window',
   description:
-    'Reveal and focus an existing visible Interpreter agent window/tab by agent id.',
+    'Reveal and focus an existing visible Hacienda agent window/tab by agent id.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -513,7 +513,7 @@ export const revealAgentWindowTool: BuiltinToolDefinition = {
 export const stopAgentWindowTool: BuiltinToolDefinition = {
   name: 'stop_agent_window',
   description:
-    'Request cancellation of a running visible Interpreter agent window through the existing agent UI stop path.',
+    'Request cancellation of a running visible Hacienda agent window through the existing agent UI stop path.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -565,7 +565,7 @@ export const stopAgentWindowTool: BuiltinToolDefinition = {
 export const closeAgentWindowTool: BuiltinToolDefinition = {
   name: 'close_agent_window',
   description:
-    'Close an existing visible Interpreter agent window/tab through the existing app tab close path.',
+    'Close an existing visible Hacienda agent window/tab through the existing app tab close path.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -617,7 +617,7 @@ export const closeAgentWindowTool: BuiltinToolDefinition = {
 export const awaitAgentWindowTool: BuiltinToolDefinition = {
   name: 'await_agent_window',
   description:
-    'Wait for an Interpreter-owned agent window to finish its current task and return safe completion metadata. This does not expose caller tokens or full message history.',
+    'Wait for a Hacienda-owned agent window to finish its current task and return safe completion metadata. This does not expose caller tokens or full message history.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -648,7 +648,7 @@ export const awaitAgentWindowTool: BuiltinToolDefinition = {
       const timeoutMs = optionalPositiveIntegerArg(args, 'timeout_ms', 120_000);
       const binding = agentTabManager.getBindingForAgentId(agentId);
       if (!binding) {
-        throw new Error(`No Interpreter agent window is registered for agent_id=${JSON.stringify(agentId)}.`);
+        throw new Error(`No Hacienda agent window is registered for agent_id=${JSON.stringify(agentId)}.`);
       }
       if (threadId && binding.threadId && binding.threadId !== threadId) {
         throw new Error(`Agent ${agentId} is bound to thread ${binding.threadId}, not ${threadId}.`);
@@ -697,7 +697,7 @@ export const awaitAgentWindowTool: BuiltinToolDefinition = {
 export const agentWindowsServerDefinition: BuiltinServerDefinition = {
   id: 'builtin-agent-windows',
   name: 'Agent Windows',
-  description: 'Read Interpreter-owned agent window and thread metadata',
+  description: 'Read Hacienda-owned agent window and thread metadata',
   isBuiltin: true,
   tools: [
     listAgentWindowsTool,

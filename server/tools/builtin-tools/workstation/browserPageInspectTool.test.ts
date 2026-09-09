@@ -22,7 +22,7 @@ describe('browser page inspect tool', () => {
     setBrowserPermissionReviewPromptProviderForTest(null);
   });
 
-  test('is exposed through the Interpreter builtin server', () => {
+  test('is exposed through the Hacienda builtin server', () => {
     expect(interpreterServerDefinition.tools.map((tool) => tool.name)).toContain('interpreter_browser_page_inspect');
   });
 
@@ -180,7 +180,7 @@ describe('browser page inspect tool', () => {
     setBrowserPageInspectRelayEnsureProviderForTest(async () => {});
     setBrowserPageInspectProviderForTest(async () => {
       throw new Error(
-        'Interpreter browser settings blocked this request. Cannot use "https://docs.example.test" because it does not match the allowed page rules (no allowed page rules). Change this in Settings > Browser.',
+        'Hacienda browser settings blocked this request. Cannot use "https://docs.example.test" because it does not match the allowed page rules (no allowed page rules). Change this in Settings > Browser.',
       );
     });
     setBrowserPermissionReviewPromptProviderForTest(async (input) => {
@@ -201,7 +201,7 @@ describe('browser page inspect tool', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(textFromResult(result)).toContain('Interpreter browser settings blocked this request');
+    expect(textFromResult(result)).toContain('Hacienda browser settings blocked this request');
     expect(prompts).toEqual([{
       toolName: 'interpreter_browser_page_inspect',
       tabRef: 'install:work:chrome-tab:91',

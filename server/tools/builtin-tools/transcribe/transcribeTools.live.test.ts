@@ -27,7 +27,7 @@ function normalizeTranscript(text: string): string {
 
 async function generateMacSpeechWav(outputPath: string): Promise<void> {
   const aiffPath = path.join(path.dirname(outputPath), 'generated-speech.aiff');
-  const phrase = 'Hello Interpreter. This is a local transcription test.';
+  const phrase = 'Hello Hacienda. This is a local transcription test.';
 
   await execFileAsync('/usr/bin/say', [
     '-o',
@@ -49,7 +49,7 @@ function powershellLiteral(value: string): string {
 }
 
 async function generateWindowsSpeechWav(outputPath: string): Promise<void> {
-  const phrase = 'Hello Interpreter. This is a local transcription test.';
+  const phrase = 'Hello Hacienda. This is a local transcription test.';
   const script = [
     'Add-Type -AssemblyName System.Speech',
     '$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer',

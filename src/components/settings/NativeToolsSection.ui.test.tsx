@@ -157,12 +157,12 @@ describe('NativeToolsSection', () => {
     const tempRow = (await screen.findByText('Temporary files')).closest('[data-help-title="Temporary files"]');
     expect(tempRow).not.toBeNull();
     expect(
-      screen.getByText(/Interpreter cannot see saved screenshots in \/tmp, so pasted overlay images and Interpreter Overlay are unavailable\./),
+      screen.getByText(/Hacienda cannot see saved screenshots in \/tmp, so pasted overlay images and Hacienda Overlay are unavailable\./),
     ).toBeVisible();
 
     await user.click(within(tempRow as HTMLElement).getByRole('combobox'));
     expect(
-      await screen.findByText(/Interpreter cannot use \/tmp screenshots, so pasted overlay images and Interpreter Overlay are unavailable\./),
+      await screen.findByText(/Hacienda cannot use \/tmp screenshots, so pasted overlay images and Hacienda Overlay are unavailable\./),
     ).toBeVisible();
   });
 

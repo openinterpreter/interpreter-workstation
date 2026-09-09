@@ -75,7 +75,7 @@ function formatUsageError(payload: unknown, response: Response): string {
 async function fetchHostedUsage(): Promise<HostedUsageResponse> {
   const accessToken = getCurrentServerAccessTokenSync();
   if (!accessToken) {
-    throw new Error('You must be signed in to view Interpreter usage.');
+    throw new Error('You must be signed in to view Hacienda usage.');
   }
 
   const response = await fetch(ACCOUNT_USAGE_URL, {
@@ -93,7 +93,7 @@ async function fetchHostedUsage(): Promise<HostedUsageResponse> {
 export const usageGetTool: BuiltinToolDefinition = {
   name: 'interpreter_usage_get',
   description:
-    'Get the user\'s remaining Interpreter credits, approximate dollar-equivalent balance, current plan allowance, and percent remaining. Use this with `estimate_media_cost` when a task may spend Media AI credits.',
+    'Get the user\'s remaining Hacienda credits, approximate dollar-equivalent balance, current plan allowance, and percent remaining. Use this with `estimate_media_cost` when a task may spend Media AI credits.',
   inputSchema: {
     type: 'object',
     properties: {},
@@ -152,7 +152,7 @@ export const usageGetTool: BuiltinToolDefinition = {
         content: [
           {
             type: 'text',
-            text: `Failed to get Interpreter usage: ${message}`,
+            text: `Failed to get Hacienda usage: ${message}`,
           },
         ],
         isError: true,

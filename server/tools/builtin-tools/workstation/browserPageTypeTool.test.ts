@@ -32,7 +32,7 @@ describe('browser page type tool', () => {
     setBrowserPageTypeProviderForTest(null);
   });
 
-  test('is exposed through the Interpreter builtin server', () => {
+  test('is exposed through the Hacienda builtin server', () => {
     expect(interpreterServerDefinition.tools.map((tool) => tool.name)).toContain('interpreter_browser_page_type');
   });
 

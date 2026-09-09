@@ -128,7 +128,7 @@ test('onboarding voice interview completion fills the real AI setup review field
     await reloadAndWaitForPageLoadSignals(page);
     await waitForUiStability(page);
 
-    await expect(page.getByText('Tell Interpreter how you use AI')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText('Tell Hacienda how you use AI')).toBeVisible({ timeout: 15000 });
 
     pauseErrorChecking(page);
     try {

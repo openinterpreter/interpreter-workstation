@@ -352,7 +352,7 @@ function getGitHubCliAuthSetupErrorMessage(error?: string): string {
   if (detail) {
     return detail;
   }
-  return 'GitHub CLI is not installed or not authenticated. Run "gh auth login" in a terminal, or set GH_TOKEN/GITHUB_TOKEN before starting Interpreter.';
+  return 'GitHub CLI is not installed or not authenticated. Run "gh auth login" in a terminal, or set GH_TOKEN/GITHUB_TOKEN before starting Hacienda.';
 }
 
 async function persistDiscoveredMcpSummary(discoveredMcps: DiscoveredMcp[]): Promise<void> {
@@ -1363,7 +1363,7 @@ export function ToolAddonsScreen({ onNext: _onNext, bucket }: ToolAddonsScreenPr
       <div className="w-full space-y-4">
         <OnboardingHeading
           title={t('onboarding.toolAddons.title')}
-          description="Connect Interpreter to your other applications."
+          description="Connect Hacienda to your other applications."
         />
 
         <div className="space-y-3">

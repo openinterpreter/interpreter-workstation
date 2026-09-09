@@ -75,7 +75,7 @@ describe('approvalManager tool-call thread correlation', () => {
     expect(request?.owner).toEqual({
       approvalOwnerKind: 'normal-agent',
       capturedAt: expect.any(Number),
-      displayName: 'Interpreter agent (profile-owner)',
+      displayName: 'Hacienda agent (profile-owner)',
       color: request?.owner?.color,
       identity: {
         agentId: 'agent-owner',
@@ -105,7 +105,7 @@ describe('approvalManager tool-call thread correlation', () => {
     expect(request?.owner).toEqual({
       approvalOwnerKind: 'cli',
       capturedAt: expect.any(Number),
-      displayName: 'Interpreter CLI',
+      displayName: 'Hacienda CLI',
       color: request?.owner?.color,
       identity: {
         agentId: null,
@@ -193,7 +193,7 @@ describe('approvalManager tool-call thread correlation', () => {
     expect(byAgentId.get(overlayParentOwner.agentId)?.owner?.approvalOwnerKind).toBe('overlay-agent');
     expect(byAgentId.get('codex-agent-unified-hidden')?.owner?.approvalOwnerKind).toBe('hidden-agent');
     expect(byAgentId.get('codex-agent-unified-hidden')?.owner?.identity.parentOwner).toEqual(overlayParentOwner);
-    expect(byAgentId.get(overlayParentOwner.agentId)?.owner?.displayName).toBe('Interpreter Overlay');
+    expect(byAgentId.get(overlayParentOwner.agentId)?.owner?.displayName).toBe('Hacienda Overlay');
 
     const overlayProjection = approvalManager.getApprovalsForOverlayAgents({
       agentIds: [overlayParentOwner.agentId, 'codex-agent-unified-hidden'],
@@ -541,7 +541,7 @@ describe('approvalManager tool-call thread correlation', () => {
     expect(request?.owner).toEqual({
       approvalOwnerKind: 'extension-action',
       capturedAt: expect.any(Number),
-      displayName: 'Interpreter extension (chrome-profile)',
+      displayName: 'Hacienda extension (chrome-profile)',
       color: request?.owner?.color,
       identity: {
         agentId: 'extension-action-chrome-tab',
@@ -563,7 +563,7 @@ describe('approvalManager tool-call thread correlation', () => {
       'cua_driver:inspect:Calculator',
       'builtin-cua-driver',
       { message: 'Inspect Calculator' },
-      'Interpreter can inspect Calculator.',
+      'Hacienda can inspect Calculator.',
       0,
       'call_first',
       'agent_approval',
@@ -572,7 +572,7 @@ describe('approvalManager tool-call thread correlation', () => {
       'cua_driver:inspect:Calculator',
       'builtin-cua-driver',
       { message: 'Inspect Calculator again' },
-      'Interpreter can inspect Calculator.',
+      'Hacienda can inspect Calculator.',
       0,
       'call_second',
       'agent_approval',
@@ -625,7 +625,7 @@ describe('approvalManager tool-call thread correlation', () => {
       'cua_driver:control:Calculator',
       'builtin-cua-driver',
       { message: 'Control Calculator from hidden agent' },
-      'Interpreter can control Calculator.',
+      'Hacienda can control Calculator.',
       0,
       'call_hidden_session',
       'codex-agent-session-hidden',
@@ -640,7 +640,7 @@ describe('approvalManager tool-call thread correlation', () => {
       'cua_driver:control:Calculator',
       'builtin-cua-driver',
       { message: 'Control Calculator from parent overlay' },
-      'Interpreter can control Calculator.',
+      'Hacienda can control Calculator.',
       0,
       'call_parent_session',
       parentOwner.agentId,
@@ -656,7 +656,7 @@ describe('approvalManager tool-call thread correlation', () => {
       'cua_driver:discover:list_windows',
       'builtin-cua-driver',
       { message: 'List windows' },
-      'Interpreter can list windows.',
+      'Hacienda can list windows.',
       0,
       'call_first',
       'agent_approval',
@@ -672,7 +672,7 @@ describe('approvalManager tool-call thread correlation', () => {
       'cua_driver:discover:list_windows',
       'builtin-cua-driver',
       { message: 'List windows again' },
-      'Interpreter can list windows.',
+      'Hacienda can list windows.',
       0,
       'call_second',
       'agent_approval',
@@ -694,7 +694,7 @@ describe('approvalManager tool-call thread correlation', () => {
       'cua_driver:inspect:Calculator',
       'builtin-cua-driver',
       { message: 'Inspect Calculator' },
-      'Interpreter can inspect Calculator.',
+      'Hacienda can inspect Calculator.',
       0,
       'call_workspace_a',
       'agent_workspace_scope',
@@ -717,7 +717,7 @@ describe('approvalManager tool-call thread correlation', () => {
       'cua_driver:inspect:Calculator',
       'builtin-cua-driver',
       { message: 'Inspect Calculator in other workspace' },
-      'Interpreter can inspect Calculator.',
+      'Hacienda can inspect Calculator.',
       0,
       'call_workspace_b',
       'agent_workspace_scope',
@@ -734,7 +734,7 @@ describe('approvalManager tool-call thread correlation', () => {
       'cua_driver:control:Calculator',
       'builtin-cua-driver',
       { message: 'Control Calculator' },
-      'Interpreter can control Calculator.',
+      'Hacienda can control Calculator.',
       0,
       'call_first',
       'agent_one',
@@ -743,7 +743,7 @@ describe('approvalManager tool-call thread correlation', () => {
       'cua_driver:control:Calculator',
       'builtin-cua-driver',
       { message: 'Control Calculator' },
-      'Interpreter can control Calculator.',
+      'Hacienda can control Calculator.',
       0,
       'call_second',
       'agent_two',

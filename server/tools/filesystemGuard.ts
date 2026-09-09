@@ -33,12 +33,12 @@ export const FS_GUARD_CATEGORIES = {
 type FsGuardCategory = typeof FS_GUARD_CATEGORIES[keyof typeof FS_GUARD_CATEGORIES];
 
 const WARNING_MESSAGES: Record<FsGuardCategory, string> = {
-  [FS_GUARD_CATEGORIES.WRITE]: 'Interpreter wants to change files in this workspace.',
-  [FS_GUARD_CATEGORIES.READ_OUTSIDE]: 'Interpreter wants to read a file outside your workspace.',
-  [FS_GUARD_CATEGORIES.WRITE_OUTSIDE]: 'Interpreter wants to write to a file outside your workspace.',
-  [FS_GUARD_CATEGORIES.DELETE]: 'Interpreter wants to delete a file.\n\nDeleted files are moved to trash and can be recovered.',
-  [FS_GUARD_CATEGORIES.COPY]: 'Interpreter wants to copy files.',
-  [FS_GUARD_CATEGORIES.MOVE]: 'Interpreter wants to move or rename files.',
+  [FS_GUARD_CATEGORIES.WRITE]: 'Hacienda wants to change files in this workspace.',
+  [FS_GUARD_CATEGORIES.READ_OUTSIDE]: 'Hacienda wants to read a file outside your workspace.',
+  [FS_GUARD_CATEGORIES.WRITE_OUTSIDE]: 'Hacienda wants to write to a file outside your workspace.',
+  [FS_GUARD_CATEGORIES.DELETE]: 'Hacienda wants to delete a file.\n\nDeleted files are moved to trash and can be recovered.',
+  [FS_GUARD_CATEGORIES.COPY]: 'Hacienda wants to copy files.',
+  [FS_GUARD_CATEGORIES.MOVE]: 'Hacienda wants to move or rename files.',
 };
 
 async function canonicalizeRoot(rootPath: string): Promise<string> {
@@ -140,7 +140,7 @@ export async function requestFilesystemApproval(
   if (args.category === FS_GUARD_CATEGORIES.DELETE) {
     const warning = WARNING_MESSAGES[args.category];
     const context: Record<string, any> = {
-      message: 'Let Interpreter delete this file?',
+      message: 'Let Hacienda delete this file?',
       warning,
       paths: approvalPaths,
     };

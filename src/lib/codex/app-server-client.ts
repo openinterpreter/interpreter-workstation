@@ -2693,7 +2693,7 @@ export class CodexAppServerClient {
     await this.rpcRequest(CLIENT_METHOD.initialize, {
       clientInfo: {
         name: "codex_ui",
-        title: "Interpreter",
+        title: "Hacienda",
         version: "0.1.0",
       },
       capabilities: {

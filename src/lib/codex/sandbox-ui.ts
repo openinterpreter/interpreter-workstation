@@ -21,9 +21,9 @@ export const CODEX_SANDBOX_MODE_OPTIONS: Array<{
   label: string;
   description: string;
 }> = [
-  { value: 'read-only', label: 'Read Only', description: 'Interpreter can inspect files but cannot write.' },
-  { value: 'workspace-write', label: 'Workspace Write', description: 'Interpreter can write in the active folder.' },
-  { value: 'danger-full-access', label: 'Full Access', description: 'Interpreter can read and write outside your open folder.' },
+  { value: 'read-only', label: 'Read Only', description: 'Hacienda can inspect files but cannot write.' },
+  { value: 'workspace-write', label: 'Workspace Write', description: 'Hacienda can write in the active folder.' },
+  { value: 'danger-full-access', label: 'Full Access', description: 'Hacienda can read and write outside your open folder.' },
 ];
 
 export const CODEX_READ_ACCESS_MODE_OPTIONS: Array<{
@@ -31,8 +31,8 @@ export const CODEX_READ_ACCESS_MODE_OPTIONS: Array<{
   label: string;
   description: string;
 }> = [
-  { value: 'workspace-only', label: 'Folder Only', description: 'Interpreter reads files from the active folder only.' },
-  { value: 'full-system', label: 'Full System', description: 'Interpreter can inspect files outside your open folder.' },
+  { value: 'workspace-only', label: 'Folder Only', description: 'Hacienda reads files from the active folder only.' },
+  { value: 'full-system', label: 'Full System', description: 'Hacienda can inspect files outside your open folder.' },
 ];
 
 export function getCodexReadAccessNotice(
@@ -57,7 +57,7 @@ export function getCodexReadAccessNotice(
 
   return {
     label: 'Folder-only reads',
-    description: 'Interpreter reads user files from the active folder only.',
+    description: 'Hacienda reads user files from the active folder only.',
     tone: 'neutral',
   };
 }
@@ -74,14 +74,14 @@ export function getCodexSandboxNotice(mode: CodexSandboxMode | null | undefined)
   if (mode === 'read-only') {
     return {
       label: 'Read only',
-      description: 'Interpreter can inspect files but cannot write.',
+      description: 'Hacienda can inspect files but cannot write.',
       tone: 'neutral',
     };
   }
 
   return {
     label: 'Full access',
-    description: 'Interpreter can read and write outside your open folder.',
+    description: 'Hacienda can read and write outside your open folder.',
     tone: 'warning',
   };
 }

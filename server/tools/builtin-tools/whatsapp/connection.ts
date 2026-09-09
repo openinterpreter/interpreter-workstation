@@ -374,7 +374,7 @@ export async function initializeSocket(): Promise<void> {
     version,
     logger,
     printQRInTerminal: false,
-    browser: ['Interpreter', 'Desktop', '1.0.0'],
+    browser: ['Hacienda', 'Desktop', '1.0.0'],
     syncFullHistory: false,
     shouldSyncHistoryMessage: () => true,
     markOnlineOnConnect: false,

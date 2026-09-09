@@ -6,7 +6,7 @@ import { OnboardingProvider, useOnboarding } from '../OnboardingContext';
 const i18nMocks = vi.hoisted(() => {
   const labels: Record<string, string> = {
     'onboarding.overlayFirstUse.title': 'Start with the overlay',
-    'onboarding.overlayFirstUse.description': 'Interpreter works best when it can see the exact app, page, or selection you want help with.',
+    'onboarding.overlayFirstUse.description': 'Hacienda works best when it can see the exact app, page, or selection you want help with.',
     'onboarding.overlayFirstUse.stepSelectTitle': 'Select the current target',
     'onboarding.overlayFirstUse.stepSelectDescription': 'Use a screen region, selected text, a browser tab, or the active app as the starting context.',
     'onboarding.overlayFirstUse.stepAskTitle': 'Ask for the outcome',

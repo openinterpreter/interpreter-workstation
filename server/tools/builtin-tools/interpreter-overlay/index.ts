@@ -12,7 +12,7 @@ import {
 
 export const interpreterOverlayServerDefinition: BuiltinServerDefinition = {
   id: 'builtin-interpreter-overlay',
-  name: 'Interpreter Overlay',
+  name: 'Hacienda Overlay',
   description: 'Scoped live access to a user-approved square on the operating system desktop.',
   isBuiltin: true,
   tools: [

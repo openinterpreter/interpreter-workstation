@@ -28,14 +28,14 @@ describe("getGitHubMcpAuthSetupErrorMessage", () => {
   test("explains how to configure GitHub MCP auth when GitHub CLI is missing", () => {
     assert.equal(
       getGitHubMcpAuthSetupErrorMessage(false),
-      'GitHub CLI is not installed or not authenticated. Run "gh auth login" in a terminal, or set GH_TOKEN/GITHUB_TOKEN before starting Interpreter.',
+      'GitHub CLI is not installed or not authenticated. Run "gh auth login" in a terminal, or set GH_TOKEN/GITHUB_TOKEN before starting Hacienda.',
     );
   });
 
   test("explains how to configure GitHub MCP auth when GitHub CLI is signed out", () => {
     assert.equal(
       getGitHubMcpAuthSetupErrorMessage(true),
-      'GitHub CLI is installed but not authenticated. Run "gh auth login" in a terminal, or set GH_TOKEN/GITHUB_TOKEN before starting Interpreter.',
+      'GitHub CLI is installed but not authenticated. Run "gh auth login" in a terminal, or set GH_TOKEN/GITHUB_TOKEN before starting Hacienda.',
     );
   });
 });

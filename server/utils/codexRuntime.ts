@@ -403,8 +403,8 @@ export async function ensureOpenAIOAuthAccountReady(
 
 function buildAttachedOverlayContinuationMessage(attempt: number): string {
   const prefix = attempt <= 1
-    ? 'The live Interpreter Overlay session is still attached.'
-    : `The live Interpreter Overlay session is still attached after reminder ${attempt - 1}.`;
+    ? 'The live Hacienda Overlay session is still attached.'
+    : `The live Hacienda Overlay session is still attached after reminder ${attempt - 1}.`;
 
   return `${prefix} Do not finish this turn while the live overlay session remains attached. Re-read the granted square if needed. If the task is not actually complete, keep using overlay tools until the visible UI matches the request. If this is a form or other UI-completion task and a final visible action such as Save, Submit, Send, Create, or Continue is still required, activate that control before detaching. Once live overlay work is truly done, call \`overlay_complete\` (or \`overlay_detach\` if you intentionally need to continue without the live overlay) before you end the turn.`;
 }
@@ -2214,12 +2214,12 @@ export async function runCodexAgentTurn(
       continuationAttempt += 1;
       if (continuationAttempt > ATTACHED_OVERLAY_COMPLETION_RETRY_LIMIT) {
         throw new Error(
-          `Live Interpreter Overlay session remained attached after ${ATTACHED_OVERLAY_COMPLETION_RETRY_LIMIT} completed turn(s). The agent must call overlay_complete or overlay_detach before finishing.`,
+          `Live Hacienda Overlay session remained attached after ${ATTACHED_OVERLAY_COMPLETION_RETRY_LIMIT} completed turn(s). The agent must call overlay_complete or overlay_detach before finishing.`,
         );
       }
 
       console.warn(
-        '[Agent Runtime] Live Interpreter Overlay session is still attached after a completed turn; requesting continuation.',
+        '[Agent Runtime] Live Hacienda Overlay session is still attached after a completed turn; requesting continuation.',
         {
           agentId: runtimeBinding.agentId,
           threadId: completion.threadId,
@@ -2240,7 +2240,7 @@ export async function runCodexAgentTurn(
       );
       if (activeOverlaySession) {
         console.warn(
-          '[Agent Runtime] Preserving agent binding because the live Interpreter Overlay session is still attached and must be cleared explicitly.',
+          '[Agent Runtime] Preserving agent binding because the live Hacienda Overlay session is still attached and must be cleared explicitly.',
           {
             agentId: runtimeBinding.agentId,
             callerToken,

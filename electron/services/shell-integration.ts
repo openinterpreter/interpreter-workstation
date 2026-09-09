@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
-const MENU_LABEL = 'Ask Interpreter to Edit This';
+const MENU_LABEL = 'Ask Hacienda to Edit This';
 const WINDOWS_VERB = 'AskInterpreterAboutSelection';
 const MAC_FINDER_SYNC_BUNDLE_ID = 'interpreter.finder-sync';
 

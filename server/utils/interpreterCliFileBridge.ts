@@ -286,7 +286,7 @@ async function handleRequestDirectory(bridgeDir: string, requestId: string): Pro
     writeFileSync(responseBodyPath, JSON.stringify(result), 'utf8');
     writeFileSync(responseStatusPath, 'ok', 'utf8');
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Interpreter CLI bridge request failed.';
+    const message = error instanceof Error ? error.message : 'Hacienda CLI bridge request failed.';
     writeFileSync(responseBodyPath, message, 'utf8');
     writeFileSync(responseStatusPath, 'error', 'utf8');
   } finally {

@@ -194,7 +194,7 @@ describe('callHiddenAgentTool', () => {
       session,
       parentOwner: calls.createSession[0].parentOwner,
     });
-    expect(calls.runSubagent[0].system).toContain('You are a hidden Interpreter delegate called by the overlay controller.');
+    expect(calls.runSubagent[0].system).toContain('You are a hidden Hacienda delegate called by the overlay controller.');
     expect(calls.runSubagent[0].system).toContain('builtin-interpreter-overlay__overlay_read_context');
     expect(calls.runSubagent[0].system).toContain('The same live overlay session is attached to you.');
     expect(calls.runSubagent[0].system).toContain('Treat element_id values as snapshot-scoped.');

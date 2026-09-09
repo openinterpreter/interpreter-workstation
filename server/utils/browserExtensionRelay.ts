@@ -349,7 +349,7 @@ function clearRelayStateChangeListener(): void {
 export function formatBrowserExtensionRelayStartupFailureMessage(error: unknown): string {
   const status = getBrowserExtensionRelayStatus();
   const lines = [
-    'Interpreter could not start browser control.',
+    'Hacienda could not start browser control.',
     '',
     'The app launched, but browser control is unavailable until this is fixed.',
     '',

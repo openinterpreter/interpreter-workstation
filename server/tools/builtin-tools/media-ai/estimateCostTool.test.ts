@@ -16,7 +16,7 @@ afterEach(() => {
 });
 
 describe('estimateMediaCostTool', () => {
-  test('returns raw fal and Interpreter-balance estimates', async () => {
+  test('returns raw fal and Hacienda-balance estimates', async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async (input: string | URL | Request) => {
       const url = typeof input === 'string'

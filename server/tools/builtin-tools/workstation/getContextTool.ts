@@ -1,7 +1,7 @@
 /**
  * Get Context Tool
  *
- * Retrieves the full Interpreter context including open tabs,
+ * Retrieves the full Hacienda context including open tabs,
  * current selection, workspace path, and sidebar states.
  */
 
@@ -11,7 +11,7 @@ import { workstationService } from '../../../../electron/services/workstation';
 export const getContextTool: BuiltinToolDefinition = {
   name: 'interpreter_get_context',
   description:
-    'Get the full Interpreter context including all open tabs (files, browsers, emails), current selection, workspace path, and sidebar states. Use this to understand what the user is currently working on.',
+    'Get the full Hacienda context including all open tabs (files, browsers, emails), current selection, workspace path, and sidebar states. Use this to understand what the user is currently working on.',
   inputSchema: {
     type: 'object',
     properties: {},
@@ -29,7 +29,7 @@ export const getContextTool: BuiltinToolDefinition = {
           content: [
             {
               type: 'text',
-              text: 'Interpreter context is not available. The window may not be ready.',
+              text: 'Hacienda context is not available. The window may not be ready.',
             },
           ],
           isError: true,

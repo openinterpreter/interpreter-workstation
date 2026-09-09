@@ -405,20 +405,20 @@ describe('modelConfigTomlStore recovery', () => {
     expect(state.profiles).toMatchObject([
       {
         id: 'onboarding:interpreter-smart',
-        name: 'Interpreter Smart',
+        name: 'Hacienda Smart',
         provider: 'hosted',
         modelId: 'interpreter-smart',
       },
       {
         id: 'onboarding:interpreter-fast',
-        name: 'Interpreter Fast',
+        name: 'Hacienda Fast',
         provider: 'hosted',
         modelId: 'interpreter-fast',
       },
     ]);
     expect(issues).toContain('Removed profile "Broken Hosted A" because it could not be repaired from the saved configuration.');
     expect(issues).toContain('Removed profile "Broken Hosted B" because it could not be repaired from the saved configuration.');
-    expect(issues).toContain('Restored Interpreter hosted fallback profiles so the app remains usable.');
+    expect(issues).toContain('Restored Hacienda hosted fallback profiles so the app remains usable.');
   });
 
   test('repairs malformed local baseURL values to the default local URL', () => {
@@ -531,19 +531,19 @@ describe('modelConfigTomlStore recovery', () => {
       expect(state.profiles).toMatchObject([
         {
           id: 'onboarding:interpreter-smart',
-          name: 'Interpreter Smart',
+          name: 'Hacienda Smart',
           provider: 'hosted',
           modelId: 'interpreter-smart',
         },
         {
           id: 'onboarding:interpreter-fast',
-          name: 'Interpreter Fast',
+          name: 'Hacienda Fast',
           provider: 'hosted',
           modelId: 'interpreter-fast',
         },
       ]);
       expect(issues).toContain('Removed profile "Broken API URL" because it could not be repaired from the saved configuration.');
-      expect(issues).toContain('Restored Interpreter hosted fallback profiles so the app remains usable.');
+      expect(issues).toContain('Restored Hacienda hosted fallback profiles so the app remains usable.');
     }
   });
 

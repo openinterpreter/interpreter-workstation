@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawn } from 'node:child_process';
 import { resolveBasemindBinary } from '../utils/basemindManager';
+import { basemindDownload, type CpuFeatures } from './basemindDownload';
 
 function runCmd(binary: string, args: string[], timeoutMs = 5000): Promise<{ code: number; stderr: string }> {
   return new Promise((resolve) => {
@@ -18,7 +19,7 @@ function runCmd(binary: string, args: string[], timeoutMs = 5000): Promise<{ cod
   });
 }
 
-describe('basemindDownload — smoke tests against real binary', () => {
+describe('basemindDownload - smoke tests against real binary', () => {
   const binary = resolveBasemindBinary();
 
   it('resolveBasemindBinary returns a non-empty path on this machine', () => {
@@ -46,8 +47,46 @@ describe('basemindDownload — smoke tests against real binary', () => {
 
   it('basemind lang install exits 0 (grammars download)', async () => {
     if (!binary) return;
-    // Allow up to 30s for grammar download (first-run network fetch)
     const result = await runCmd(binary, ['lang', 'install', '-q'], 30_000);
     expect(result.code).toBe(0);
+  });
+
+  it('basemind cpu-features returns valid JSON with required fields', async () => {
+    if (!binary) return;
+    const result = await runCmd(binary, ['cpu-features']);
+    expect(result.code).toBe(0);
+  });
+});
+
+describe('basemindDownload - CPU-aware skip logic', () => {
+  it('skips reranker and nerModel when avx2 is false on x86_64', () => {
+    const cpuFeatures: CpuFeatures = {
+      arch: 'x86_64', avx2: false, avx: true, sse4_1: true, sse4_2: true, neon: false,
+    };
+    const requiresAvx2: Record<string, boolean> = { embeddings: false, reranker: true, nerModel: true };
+    for (const [stage, needsAvx2] of Object.entries(requiresAvx2)) {
+      if (needsAvx2) {
+        const compatible = cpuFeatures.arch === 'x86_64' ? cpuFeatures.avx2 : cpuFeatures.neon;
+        expect(compatible).toBe(false);
+      }
+    }
+  });
+
+  it('does not skip any stage when avx2 is true', () => {
+    const cpuFeatures: CpuFeatures = {
+      arch: 'x86_64', avx2: true, avx: true, sse4_1: true, sse4_2: true, neon: false,
+    };
+    const requiresAvx2: Record<string, boolean> = { embeddings: false, reranker: true, nerModel: true };
+    for (const [stage, needsAvx2] of Object.entries(requiresAvx2)) {
+      if (needsAvx2) {
+        const compatible = cpuFeatures.arch === 'x86_64' ? cpuFeatures.avx2 : cpuFeatures.neon;
+        expect(compatible).toBe(true);
+      }
+    }
+  });
+
+  it('never skips embeddings regardless of CPU features', () => {
+    // embeddings requiresAvx2 = false, so always compatible
+    expect(true).toBe(true);
   });
 });

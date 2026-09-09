@@ -442,7 +442,7 @@ describe('selectAgentRuntimeLogEvent', () => {
       'formattedMessagePreview="stream disconnected before completion: Error rendering prompt with jinja template:',
     );
     expect(lmStudioTemplateErrorLogLine?.message).toContain(
-      "The selected model from LM Studio doesn't support Interpreter tools.",
+      "The selected model from LM Studio doesn't support Hacienda tools.",
     );
     expect(lmStudioTemplateErrorLogLine?.message).toContain('formattedChanged=true');
 
@@ -506,7 +506,7 @@ describe('selectAgentRuntimeLogEvent', () => {
       `rawMessagePreview="Error running remote compact task: You've hit your usage limit."`,
     );
     expect(turnCompletedLogLine?.message).toContain(
-      `formattedMessagePreview="You've hit your ChatGPT usage limit. This limit is set by your ChatGPT account and is separate from Interpreter plan usage shown in Settings."`,
+      `formattedMessagePreview="You've hit your ChatGPT usage limit. This limit is set by your ChatGPT account and is separate from Hacienda plan usage shown in Settings."`,
     );
     expect(turnCompletedLogLine?.message).toContain('formattedChanged=true');
   });
@@ -563,7 +563,7 @@ describe('ensureOpenAIOAuthAccountReady', () => {
 });
 
 describe('resolveAgentInterpreterCliTransport', () => {
-  test('uses the Windows-supported Interpreter CLI transport on Windows', () => {
+  test('uses the Windows-supported Hacienda CLI transport on Windows', () => {
     expect(resolveAgentInterpreterCliTransport('win32')).toBe('http');
     expect(resolveAgentInterpreterCliTransport('darwin')).toBe('file');
     expect(resolveAgentInterpreterCliTransport('linux')).toBe('file');
@@ -1449,7 +1449,7 @@ describe('runCodexAgentTurn overlay continuation', () => {
         callerToken,
       },
     })).rejects.toThrow(
-      'Live Interpreter Overlay session remained attached after 3 completed turn(s). The agent must call overlay_complete or overlay_detach before finishing.',
+      'Live Hacienda Overlay session remained attached after 3 completed turn(s). The agent must call overlay_complete or overlay_detach before finishing.',
     );
 
     expect(callCount).toBe(4);

@@ -14,12 +14,12 @@ const overlaySettingsMock = vi.hoisted(() => ({
 const i18nMocks = vi.hoisted(() => {
   const labels: Record<string, string> = {
     'onboarding.overlayPermissions.title': 'Set up overlay permissions',
-    'onboarding.overlayPermissions.description': 'Interpreter can work with the current app when these permissions are ready.',
+    'onboarding.overlayPermissions.description': 'Hacienda can work with the current app when these permissions are ready.',
     'onboarding.overlayPermissions.accessibilityTitle': 'Accessibility',
-    'onboarding.overlayPermissions.accessibilityDescription': 'Lets Interpreter inspect app controls.',
+    'onboarding.overlayPermissions.accessibilityDescription': 'Lets Hacienda inspect app controls.',
     'onboarding.overlayPermissions.accessibilityAction': 'Request Accessibility',
     'onboarding.overlayPermissions.screenRecordingTitle': 'Screen Recording',
-    'onboarding.overlayPermissions.screenRecordingDescription': 'Lets Interpreter verify what is visible.',
+    'onboarding.overlayPermissions.screenRecordingDescription': 'Lets Hacienda verify what is visible.',
     'onboarding.overlayPermissions.screenRecordingAction': 'Request Screen Recording',
     'onboarding.overlayPermissions.statusGranted': 'Granted',
     'onboarding.overlayPermissions.statusNotGranted': 'Not granted',
@@ -83,7 +83,7 @@ describe('OverlayPermissionsScreen', () => {
         screenRecordingGranted: false,
         screenRecordingStatus: 'not-determined',
       },
-      error: 'Approve Interpreter in System Settings.',
+      error: 'Approve Hacienda in System Settings.',
     });
     overlaySettingsMock.requestScreenRecordingPermission.mockResolvedValue({
       success: true,
@@ -142,7 +142,7 @@ describe('OverlayPermissionsScreen', () => {
       expect(overlaySettingsMock.requestAccessibilityPermission).toHaveBeenCalledTimes(1);
       expect(overlaySettingsMock.openAccessibilitySettings).toHaveBeenCalledTimes(1);
     });
-    expect(screen.getByText('Approve Interpreter in System Settings.')).toBeInTheDocument();
+    expect(screen.getByText('Approve Hacienda in System Settings.')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Request Screen Recording' }));
 

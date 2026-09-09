@@ -85,7 +85,7 @@ export function useApprovalNotifications() {
           toolCallId: approval.toolCallId ?? null,
           threadId: typeof approval.context?.threadId === 'string' ? approval.context.threadId : null,
         });
-        showToast('Interpreter hit an approval routing error. This request was not attached to an agent thread.', 'error', 8000);
+        showToast('Hacienda hit an approval routing error. This request was not attached to an agent thread.', 'error', 8000);
         return;
       }
 

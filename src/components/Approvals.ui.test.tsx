@@ -76,7 +76,7 @@ function runtimeRestartApproval(): QuestionRequest {
       },
     ],
     context: {
-      message: 'Interpreter wants to restart its agent runtime.',
+      message: 'Hacienda wants to restart its agent runtime.',
       runtimeRestart: true,
     },
     timestamp: Date.now(),
@@ -99,7 +99,7 @@ function permissionApproval(overrides: Partial<QuestionRequest> = {}): QuestionR
       },
     ],
     context: overrides.context ?? {
-      message: 'Let Interpreter inspect Finder?',
+      message: 'Let Hacienda inspect Finder?',
       sessionAware: true,
     },
     timestamp: overrides.timestamp ?? Date.now(),
@@ -150,7 +150,7 @@ describe('Approvals runtime restart UX', () => {
 
     renderWithApprovals([runtimeRestartApproval()]);
 
-    await screen.findByText('Interpreter wants to restart its agent runtime.');
+    await screen.findByText('Hacienda wants to restart its agent runtime.');
     await user.click(screen.getByRole('button', { name: 'Allow once' }));
 
     await waitFor(() => {
@@ -160,10 +160,10 @@ describe('Approvals runtime restart UX', () => {
       );
     });
 
-    expect(screen.queryByText('Restart Interpreter?')).not.toBeInTheDocument();
+    expect(screen.queryByText('Restart Hacienda?')).not.toBeInTheDocument();
     expect(toastMocks.showToast).toHaveBeenNthCalledWith(
       1,
-      'Interpreter is restarting the agent...',
+      'Hacienda is restarting the agent...',
       'info',
     );
     expect(toastMocks.dismissToast).not.toHaveBeenCalled();
@@ -174,7 +174,7 @@ describe('Approvals runtime restart UX', () => {
     expect(toastMocks.dismissToast).toHaveBeenCalledWith('toast-id');
     expect(toastMocks.showToast).toHaveBeenNthCalledWith(
       2,
-      'Interpreter restarted. New changes have taken effect.',
+      'Hacienda restarted. New changes have taken effect.',
       'success',
       5000,
     );
@@ -189,10 +189,10 @@ describe('Approvals runtime restart UX', () => {
 
     renderWithApprovals([runtimeRestartApproval()]);
 
-    await screen.findByText('Interpreter wants to restart its agent runtime.');
+    await screen.findByText('Hacienda wants to restart its agent runtime.');
     await user.click(screen.getByRole('button', { name: 'Allow once' }));
 
-    expect(await screen.findByText('Restart Interpreter?')).toBeVisible();
+    expect(await screen.findByText('Restart Hacienda?')).toBeVisible();
     expect(
       screen.getByText('2 conversations are still running. Restarting will stop those conversations for every agent.'),
     ).toBeVisible();
@@ -213,7 +213,7 @@ describe('Approvals runtime restart UX', () => {
       permissionApproval({
         id: 'approval-other-agent',
         context: {
-          message: 'Let Interpreter inspect another agent target?',
+          message: 'Let Hacienda inspect another agent target?',
           sessionAware: true,
         },
         owner: {
@@ -231,7 +231,7 @@ describe('Approvals runtime restart UX', () => {
       }),
     ]);
 
-    expect(await screen.findByText('Let Interpreter inspect another agent target?')).toBeInTheDocument();
+    expect(await screen.findByText('Let Hacienda inspect another agent target?')).toBeInTheDocument();
     expect(screen.getByText('Other agent')).toBeInTheDocument();
   });
 });

@@ -32,7 +32,7 @@ describe('browser page scroll tool', () => {
     setBrowserPageScrollProviderForTest(null);
   });
 
-  test('is exposed through the Interpreter builtin server', () => {
+  test('is exposed through the Hacienda builtin server', () => {
     expect(interpreterServerDefinition.tools.map((tool) => tool.name)).toContain('interpreter_browser_page_scroll');
   });
 

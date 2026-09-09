@@ -39,7 +39,7 @@ describe('AgentSettingsSectionContent', () => {
     render(<AgentSettingsSectionContent />);
 
     expect(await screen.findByText('Auto-approve low-risk media cards')).toBeInTheDocument();
-    expect(screen.getByText('Let Interpreter continue without asking for low-risk generated image previews.')).toBeInTheDocument();
+    expect(screen.getByText('Let Hacienda continue without asking for low-risk generated image previews.')).toBeInTheDocument();
 
     const switches = screen.getAllByRole('switch');
     const mediaCardSwitch = switches[switches.length - 1]!;

@@ -376,7 +376,7 @@ function demoPath(relativePath: string): string {
 const marketingDemoProfiles: Profile[] = [
   {
     id: 'demo-smart',
-    name: 'Interpreter Smart',
+    name: 'Hacienda Smart',
     modelId: 'interpreter-smart',
     provider: 'hosted',
     isBuiltin: false,
@@ -2416,7 +2416,7 @@ export function getMarketingDemoProfilesResponse(): {
 }
 
 export function getMarketingDemoUserName(): { userName: string } {
-  return { userName: 'Interpreter Team' };
+  return { userName: 'Hacienda Team' };
 }
 
 export function readMarketingDemoFile(filePath: string): { content: string } {

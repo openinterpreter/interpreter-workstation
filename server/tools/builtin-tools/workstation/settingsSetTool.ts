@@ -1,7 +1,7 @@
 /**
  * Settings Set Tool
  *
- * Set Interpreter settings using JS-style path syntax.
+ * Set Hacienda settings using JS-style path syntax.
  * Examples: "theme", "profiles[0].name", "mcpServers.my-server"
  *
  * Validates the ENTIRE config against the schema after any change.
@@ -99,7 +99,7 @@ function getApprovalRequirement(path: string): ApprovalRequirement | null {
     || normalizedPath === 'codexMacosScreenshotAccess'
   ) {
     return {
-      reason: 'This changes Interpreter runtime access or CLI execution behavior.',
+      reason: 'This changes Hacienda runtime access or CLI execution behavior.',
       settingsPath: 'Settings > Permissions > Runtime Permissions',
     };
   }
@@ -171,7 +171,7 @@ function getSettingEffect(path: string): SettingEffect | null {
       affectsRunningTurns: false,
       canRestartRuntimeNow: true,
       restartInterruptsActiveChats: true,
-      summary: 'Saved in settings and takes effect after Interpreter restarts. Running turns keep their current runtime policy until then.',
+      summary: 'Saved in settings and takes effect after Hacienda restarts. Running turns keep their current runtime policy until then.',
     };
   }
 
@@ -191,7 +191,7 @@ function getSettingEffect(path: string): SettingEffect | null {
       affectsRunningTurns: false,
       canRestartRuntimeNow: false,
       restartInterruptsActiveChats: false,
-      summary: 'Stored in settings, but the current shared Interpreter runtime does not read this setting.',
+      summary: 'Stored in settings, but the current shared Hacienda runtime does not read this setting.',
     };
   }
 
@@ -204,7 +204,7 @@ function getSettingEffect(path: string): SettingEffect | null {
       affectsRunningTurns: false,
       canRestartRuntimeNow: false,
       restartInterruptsActiveChats: false,
-      summary: 'Stored in settings for binary discovery surfaces, but the shared bundled Interpreter runtime does not use this setting.',
+      summary: 'Stored in settings for binary discovery surfaces, but the shared bundled Hacienda runtime does not use this setting.',
     };
   }
 
@@ -252,7 +252,7 @@ async function maybeRestartCodexRuntimeForSetting(params: {
   return requestInterpreterRuntimeRestart({
     approvalToolName: 'interpreter_settings_set',
     approvalServerId: 'builtin-interpreter',
-    message: `The setting "${params.path}" was updated. Restart Interpreter's agent runtime now? Restarting will stop running conversations for every agent.`,
+    message: `The setting "${params.path}" was updated. Restart Hacienda's agent runtime now? Restarting will stop running conversations for every agent.`,
     context: {
       setting: params.path,
       newValue: params.value,
@@ -293,7 +293,7 @@ const broadcastMap: Record<string, { event: string; payloadKey: string }> = {
 export const settingsSetTool: BuiltinToolDefinition = {
   name: 'interpreter_settings_set',
   description:
-    `Set Interpreter settings using JS path syntax. Start with \`${INTERPRETER_CLI_COMMAND} config --help\` to see common settings paths and which changes need approval or a restart. Path examples: "theme", "profiles[0].name", "mcpServers.my-server".`,
+    `Set Hacienda settings using JS path syntax. Start with \`${INTERPRETER_CLI_COMMAND} config --help\` to see common settings paths and which changes need approval or a restart. Path examples: "theme", "profiles[0].name", "mcpServers.my-server".`,
   inputSchema: {
     type: 'object',
     properties: {
@@ -308,7 +308,7 @@ export const settingsSetTool: BuiltinToolDefinition = {
       restart_runtime: {
         type: 'boolean',
         description:
-          'Optional. When true and the setting supports it, ask whether to restart Interpreter\'s agent runtime after applying the change.',
+          'Optional. When true and the setting supports it, ask whether to restart Hacienda\'s agent runtime after applying the change.',
       },
     },
     required: ['path', 'value'],
@@ -376,7 +376,7 @@ export const settingsSetTool: BuiltinToolDefinition = {
             {
               setting: path,
               newValue: value,
-              message: `Let Interpreter change "${path}" to "${formatApprovalValue(value)}"? ${approvalRequirement.reason}${settingsPathHint}${effectHint}`,
+              message: `Let Hacienda change "${path}" to "${formatApprovalValue(value)}"? ${approvalRequirement.reason}${settingsPathHint}${effectHint}`,
             },
             30000, // 30 second timeout
             context?.toolCallId,

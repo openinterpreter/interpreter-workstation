@@ -23,7 +23,7 @@ export const STT_MIN_FAST_SENTENCE_TIMEOUT_MS = 100;
 export const STT_MAX_FAST_SENTENCE_TIMEOUT_MS = 4000;
 export const STT_MIN_PREVIEW_BEFORE_SEND_MS = 0;
 export const STT_MAX_PREVIEW_BEFORE_SEND_MS = 4000;
-export const DEFAULT_AMBIENT_TRIGGER_PHRASES = ['Interpreter', 'Repertor'];
+export const DEFAULT_AMBIENT_TRIGGER_PHRASES = ['Hacienda', 'Repertor'];
 export const DEFAULT_AMBIENT_END_PHRASES = ['make it so', 'take it so'];
 
 export function normalizeAmbientPhrases(phrases: readonly string[], fallback: readonly string[]): string[] {

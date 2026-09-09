@@ -78,11 +78,11 @@ describe('whole computer state tool', () => {
     setWholeComputerStateBrowserPageElementProviderForTest(null);
   });
 
-  test('is exposed through the Interpreter builtin server', () => {
+  test('is exposed through the Hacienda builtin server', () => {
     expect(interpreterServerDefinition.tools.map((tool) => tool.name)).toContain('interpreter_whole_computer_state_get');
   });
 
-  test('lists bounded Interpreter and agent-window state without internal secrets', async () => {
+  test('lists bounded Hacienda and agent-window state without internal secrets', async () => {
     registerTestWindow({
       sessionKey: 'window-main',
       windowId: 101,
@@ -678,7 +678,7 @@ describe('whole computer state tool', () => {
 
     expect(result.isError).toBe(true);
     expect(textFromResult(result)).toBe(
-      'Failed to read Interpreter whole-computer state: max_windows must be a positive integer.',
+      'Failed to read Hacienda whole-computer state: max_windows must be a positive integer.',
     );
   });
 });

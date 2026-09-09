@@ -395,7 +395,7 @@ export const listTranscriptionModelsTool: BuiltinToolDefinition = {
 
 export const downloadTranscriptionModelTool: BuiltinToolDefinition = {
   name: 'download_model',
-  description: 'Download a local Whisper transcription model on the app side into Interpreter user data. Use before transcribing with a model that is not installed.',
+  description: 'Download a local Whisper transcription model on the app side into Hacienda user data. Use before transcribing with a model that is not installed.',
   inputSchema: {
     type: 'object',
     properties: {

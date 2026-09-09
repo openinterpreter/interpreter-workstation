@@ -233,7 +233,7 @@ describe('interpreterCliRuntime', () => {
       expect(script).toContain('mktemp -d "$staging_root/req-XXXXXX"');
       expect(script).toContain('query="saveToDisk=$save_to_disk"');
       expect(script).toContain('saveToDiskPath=$(url_encode "$save_to_disk_path")');
-      expect(script).toContain('Interpreter CLI bridge disconnected while waiting for response.');
+      expect(script).toContain('Hacienda CLI bridge disconnected while waiting for response.');
       expect(script).not.toContain("printf 'req-$$-");
       expect(script).not.toContain('Timed out waiting for interpreter CLI response.');
     } finally {
@@ -1499,7 +1499,7 @@ describe('interpreterCliRuntime', () => {
     const server = createServer((req, res) => {
       if (req.method === 'GET' && req.url === '/api/interpreter-cli/tools') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end('[{"id":"builtin-interpreter","name":"Interpreter"}]');
+        res.end('[{"id":"builtin-interpreter","name":"Hacienda"}]');
         return;
       }
       res.writeHead(404, { 'Content-Type': 'text/plain' });

@@ -189,7 +189,7 @@ describe('migrateConfig', () => {
     migrateConfig(config);
 
     expect(config.profiles![0].modelId).toBe('interpreter-smart');
-    expect(config.profiles![0].name).toBe('Interpreter Smart');
+    expect(config.profiles![0].name).toBe('Hacienda Smart');
   });
 
   test('should repair anthropic API sub-models that were incorrectly migrated to GPT IDs', () => {

@@ -12,7 +12,7 @@ import {
 } from "./errors";
 
 const REAL_402_NOT_ENOUGH_TOKENS_PAYLOAD =
-  'unexpected status 402 Payment Required: {"error":{"detail":"[not_enough_tokens]: Insufficient interpreter tokens"}}';
+  'unexpected status 402 Payment Required: {"error":{"detail":"[not_enough_tokens]: Insufficient Hacienda tokens"}}';
 const REAL_413_GROQ_TPM_PAYLOAD =
   "unexpected status 413 Payload Too Large: Request too large for model `openai/gpt-oss-120b` service tier `on_demand` on tokens per minute (TPM): Limit 8000, Requested 20525, please reduce your message size and try again.";
 const EXPECTED_REQUEST_TOO_LARGE_MESSAGE =
@@ -24,8 +24,8 @@ const LMSTUDIO_OTHER_TEMPLATE_ERROR =
 const EXPECTED_LMSTUDIO_TOOL_SUPPORT_GUIDANCE = [
   LMSTUDIO_SINGLE_TOOL_CALL_TEMPLATE_ERROR,
   "",
-  "The selected model from LM Studio doesn't support Interpreter tools.",
-  "Choose a tool-capable model in LM Studio, or switch to an Interpreter hosted model, then retry.",
+  "The selected model from LM Studio doesn't support Hacienda tools.",
+  "Choose a tool-capable model in LM Studio, or switch to a Hacienda-hosted model, then retry.",
 ].join("\n");
 const REAL_NESTED_GEMINI_PARTS_ERROR = JSON.stringify({
   error: {
@@ -222,7 +222,7 @@ describe("formatTurnError", () => {
     );
     assert.equal(
       result,
-      "You've hit your ChatGPT usage limit. Try again at: Mar 28th, 2026 1:52 PM. This limit is set by your ChatGPT account and is separate from Interpreter plan usage shown in Settings.",
+      "You've hit your ChatGPT usage limit. Try again at: Mar 28th, 2026 1:52 PM. This limit is set by your ChatGPT account and is separate from Hacienda plan usage shown in Settings.",
     );
   });
 
@@ -235,7 +235,7 @@ describe("formatTurnError", () => {
     );
     assert.equal(
       result,
-      "You've hit your ChatGPT usage limit. Try again at: May 31st, 2026 8:34 AM. This limit is set by your ChatGPT account and is separate from Interpreter plan usage shown in Settings.",
+      "You've hit your ChatGPT usage limit. Try again at: May 31st, 2026 8:34 AM. This limit is set by your ChatGPT account and is separate from Hacienda plan usage shown in Settings.",
     );
   });
 
@@ -371,7 +371,7 @@ describe("formatTurnError", () => {
     );
     assert.equal(
       result,
-      "Insufficient interpreter tokens. Add tokens in billing settings.",
+      "Insufficient Hacienda tokens. Add tokens in billing settings.",
     );
   });
 
@@ -479,7 +479,7 @@ describe("formatTurnError", () => {
     );
     assert.equal(
       result,
-      "gpt-oss:20b on Ollama Cloud does not support Interpreter's Responses/tool-calling contract.",
+      "gpt-oss:20b on Ollama Cloud does not support Hacienda's Responses/tool-calling contract.",
     );
   });
 
@@ -506,7 +506,7 @@ describe("formatTurnError", () => {
     );
     assert.equal(
       result,
-      "This endpoint/model does not support Interpreter's Responses/tool-calling contract.",
+      "This endpoint/model does not support Hacienda's Responses/tool-calling contract.",
     );
   });
 
@@ -669,7 +669,7 @@ describe("formatTurnError", () => {
     );
     assert.equal(
       result,
-      "This endpoint/model does not support Interpreter's Responses/tool-calling contract.",
+      "This endpoint/model does not support Hacienda's Responses/tool-calling contract.",
     );
   });
 
@@ -693,7 +693,7 @@ describe("formatTurnError", () => {
 
     assert.equal(
       result,
-      "This endpoint/model does not support Interpreter's Responses/tool-calling contract.",
+      "This endpoint/model does not support Hacienda's Responses/tool-calling contract.",
     );
   });
 
@@ -707,7 +707,7 @@ describe("formatTurnError", () => {
     );
     assert.equal(
       result,
-      "This OpenAI model does not support Interpreter's custom/freeform agent tools. Use gpt-5.4-nano, or another model that supports Responses custom tools.",
+      "This OpenAI model does not support Hacienda's custom/freeform agent tools. Use gpt-5.4-nano, or another model that supports Responses custom tools.",
     );
   });
 
@@ -721,7 +721,7 @@ describe("formatTurnError", () => {
     );
     assert.equal(
       result,
-      "This OpenAI model does not support Interpreter's custom/freeform agent tools. Use gpt-5.4-nano, or another model that supports Responses custom tools.",
+      "This OpenAI model does not support Hacienda's custom/freeform agent tools. Use gpt-5.4-nano, or another model that supports Responses custom tools.",
     );
   });
 
@@ -735,7 +735,7 @@ describe("formatTurnError", () => {
     );
     assert.equal(
       result,
-      "This OpenAI model does not support Interpreter's custom/freeform agent tools. Use gpt-5.4-nano, or another model that supports Responses custom tools.",
+      "This OpenAI model does not support Hacienda's custom/freeform agent tools. Use gpt-5.4-nano, or another model that supports Responses custom tools.",
     );
   });
 
@@ -749,7 +749,7 @@ describe("formatTurnError", () => {
     );
     assert.equal(
       result,
-      "This OpenAI model does not support Interpreter's custom/freeform agent tools. Use gpt-5.4-nano, or another model that supports Responses custom tools.",
+      "This OpenAI model does not support Hacienda's custom/freeform agent tools. Use gpt-5.4-nano, or another model that supports Responses custom tools.",
     );
   });
 
@@ -797,8 +797,8 @@ describe("formatTurnError", () => {
         'Error rendering prompt with jinja template: "No user query found in messages."',
         "local runtime returned template mismatch",
         "",
-        "The selected model from LM Studio doesn't support Interpreter tools.",
-        "Choose a tool-capable model in LM Studio, or switch to an Interpreter hosted model, then retry.",
+        "The selected model from LM Studio doesn't support Hacienda tools.",
+        "Choose a tool-capable model in LM Studio, or switch to a Hacienda-hosted model, then retry.",
       ].join("\n"),
     );
   });
@@ -844,8 +844,8 @@ describe("formatTurnError", () => {
       [
         LMSTUDIO_OTHER_TEMPLATE_ERROR,
         "",
-        "The selected model from LM Studio doesn't support Interpreter tools.",
-        "Choose a tool-capable model in LM Studio, or switch to an Interpreter hosted model, then retry.",
+        "The selected model from LM Studio doesn't support Hacienda tools.",
+        "Choose a tool-capable model in LM Studio, or switch to a Hacienda-hosted model, then retry.",
       ].join("\n"),
     );
   });
@@ -869,7 +869,7 @@ describe("formatTurnError", () => {
 
     assert.equal(
       result,
-      "The selected model on LM Studio does not support Interpreter's Responses/tool-calling contract.",
+      "The selected model on LM Studio does not support Hacienda's Responses/tool-calling contract.",
     );
   });
 
@@ -917,7 +917,7 @@ describe("formatTurnError", () => {
 
     assert.equal(
       result,
-      "The selected model on OpenRouter does not support Interpreter's Responses/tool-calling contract.",
+      "The selected model on OpenRouter does not support Hacienda's Responses/tool-calling contract.",
     );
   });
 
@@ -940,7 +940,7 @@ describe("formatTurnError", () => {
 
     assert.equal(
       result,
-      "The selected model on LM Studio does not support Interpreter's Responses/tool-calling contract.",
+      "The selected model on LM Studio does not support Hacienda's Responses/tool-calling contract.",
     );
   });
 
@@ -980,7 +980,7 @@ describe("formatTurnError", () => {
     );
     assert.equal(
       result,
-      "Insufficient interpreter tokens. Add tokens in billing settings.",
+      "Insufficient Hacienda tokens. Add tokens in billing settings.",
     );
   });
 
@@ -1101,7 +1101,7 @@ describe("formatTurnError", () => {
     );
     assert.equal(
       result,
-      "Insufficient interpreter tokens. Add tokens in billing settings.",
+      "Insufficient Hacienda tokens. Add tokens in billing settings.",
     );
   });
 
@@ -1173,7 +1173,7 @@ describe("formatTurnError", () => {
     );
     assert.equal(
       result,
-      "This model is not available through a tool-capable route, so it cannot run Interpreter agent tools.",
+      "This model is not available through a tool-capable route, so it cannot run Hacienda agent tools.",
     );
   });
 
@@ -1250,7 +1250,7 @@ describe("formatTurnError", () => {
         "stream disconnected before completion: Your account is not active, please check your billing details on our website.",
         "other",
       ),
-      { modelProvider: "interpreter", providerLabel: "Interpreter Smart" },
+      { modelProvider: "interpreter", providerLabel: "Hacienda Smart" },
     );
     assert.equal(
       result,
@@ -1270,7 +1270,7 @@ describe("formatTurnError", () => {
         ].join("\n"),
         "other",
       ),
-      { modelProvider: "interpreter", providerLabel: "Interpreter Smart" },
+      { modelProvider: "interpreter", providerLabel: "Hacienda Smart" },
     );
     assert.equal(
       result,
@@ -1329,7 +1329,7 @@ describe("formatTurnError", () => {
     );
     assert.equal(
       result,
-      "This endpoint/model does not support Interpreter's Responses/tool-calling contract.",
+      "This endpoint/model does not support Hacienda's Responses/tool-calling contract.",
     );
   });
 
@@ -1396,7 +1396,7 @@ describe("getResponsesToolCallingContractError", () => {
     );
     assert.equal(
       result,
-      "This endpoint/model does not support Interpreter's Responses/tool-calling contract.",
+      "This endpoint/model does not support Hacienda's Responses/tool-calling contract.",
     );
   });
 
@@ -1413,7 +1413,7 @@ describe("getResponsesToolCallingContractError", () => {
 
     assert.equal(
       result,
-      "This endpoint/model does not support Interpreter's Responses/tool-calling contract.",
+      "This endpoint/model does not support Hacienda's Responses/tool-calling contract.",
     );
   });
 
@@ -1441,7 +1441,7 @@ describe("getResponsesToolCallingContractError", () => {
     );
     assert.equal(
       result,
-      "gpt-oss:20b on Ollama Cloud does not support Interpreter's Responses/tool-calling contract.",
+      "gpt-oss:20b on Ollama Cloud does not support Hacienda's Responses/tool-calling contract.",
     );
   });
 
@@ -1451,7 +1451,7 @@ describe("getResponsesToolCallingContractError", () => {
     );
     assert.equal(
       result,
-      "This endpoint/model does not support Interpreter's Responses/tool-calling contract.",
+      "This endpoint/model does not support Hacienda's Responses/tool-calling contract.",
     );
   });
 });

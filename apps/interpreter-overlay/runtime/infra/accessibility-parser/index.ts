@@ -495,7 +495,7 @@ export function windowsUiaElementIntersectsScope(
 
 function isInterpreterOverlayWindow(window: WindowsUiaWindow): boolean {
   const title = trimOptionalString(window.title)?.toLowerCase() ?? '';
-  return title === 'interpreter overlay' || title === 'interpreter world overlay';
+  return title === 'hacienda overlay' || title === 'hacienda world overlay';
 }
 
 function isLikelySystemUtilityWindow(window: WindowsUiaWindow): boolean {

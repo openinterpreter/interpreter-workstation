@@ -293,7 +293,7 @@ function buildMcpApprovalActionQuestion(
       requestUrl: null,
     },
     questions: [{
-      question: params.message.trim() || 'How should Interpreter handle this request?',
+      question: params.message.trim() || 'How should Hacienda handle this request?',
       header: params.serverName,
       options,
       allowOther: false,
@@ -345,7 +345,7 @@ function buildUrlMcpQuestion(
       requestUrl: params.url,
     },
     questions: [{
-      question: params.message.trim() || 'How should Interpreter handle this request?',
+      question: params.message.trim() || 'How should Hacienda handle this request?',
       header: params.serverName,
       options: [
         {
@@ -1170,7 +1170,7 @@ function commandDecisionDescriptionWithContext(
   if (decision === 'cancel') {
     return hasExplicitDeclineDecision(decisions)
       ? 'Dismiss this request without running the command.'
-      : 'Skip this command and let Interpreter continue.';
+      : 'Skip this command and let Hacienda continue.';
   }
   if (isExecPolicyDecision(decision)) {
     const prefix = renderCommandPattern(decision.acceptWithExecpolicyAmendment.execpolicy_amendment);
@@ -1216,7 +1216,7 @@ function buildCommandDecisionQuestion(
 
   return {
     question: {
-      question: 'How should Interpreter handle this command?',
+      question: 'How should Hacienda handle this command?',
       options,
       allowOther: false,
       default: defaultValue,
@@ -1464,7 +1464,7 @@ function buildFileChangeDecisionQuestion(
     {
       label: "Don't allow",
       value: 'decision:2',
-      description: 'Skip these changes and let Interpreter continue.',
+      description: 'Skip these changes and let Hacienda continue.',
     },
     {
       label: 'Stop here',
@@ -1481,7 +1481,7 @@ function buildFileChangeDecisionQuestion(
 
   return {
     question: {
-      question: 'How should Interpreter handle these file changes?',
+      question: 'How should Hacienda handle these file changes?',
       options,
       allowOther: false,
       default: 'decision:0',
@@ -1510,7 +1510,7 @@ async function handleFileChangeApproval(
     threadId: request.params.threadId,
     turnId: request.params.turnId,
     itemId: request.params.itemId,
-    message: 'Interpreter wants to make changes to files.',
+    message: 'Hacienda wants to make changes to files.',
     description: 'Review these file changes before continuing.',
     reason: request.params.reason ?? null,
     grantRoot: request.params.grantRoot ?? null,
@@ -1549,7 +1549,7 @@ async function handleLegacyApplyPatchApproval(
     {
       threadId: request.params.conversationId,
       itemId: request.params.callId,
-      message: 'Interpreter wants to make changes to files.',
+    message: 'Hacienda wants to make changes to files.',
       description: 'Review these file changes before continuing.',
       reason: request.params.reason,
       grantRoot: request.params.grantRoot,
@@ -1591,14 +1591,14 @@ async function handleMcpServerElicitationRequest(
       approvalToolName,
       serverName,
       {
-        message: 'Interpreter wants to use an MCP tool.',
+        message: 'Hacienda wants to use an MCP tool.',
         description: 'Review this MCP tool call before continuing.',
         serverId: serverName,
         toolName,
         args: meta.tool_params ?? {},
         threadId: request.params.threadId,
       },
-      `Interpreter wants to call ${approvalToolName}.`,
+      `Hacienda wants to call ${approvalToolName}.`,
       0,
       undefined,
       agentId,
@@ -1657,8 +1657,8 @@ export async function handleCodexServerRequest(
             path,
             reason,
             threadId: request.params.threadId,
-            warning: 'Interpreter wants to view an image file.',
-            description: 'Interpreter needs permission to view this image.',
+            warning: 'Hacienda wants to view an image file.',
+            description: 'Hacienda needs permission to view this image.',
             command: request.params.command,
             cwd: request.params.cwd,
             itemId: request.params.itemId,
@@ -1691,7 +1691,7 @@ export async function handleCodexServerRequest(
         turnId: request.params.turnId,
         itemId: request.params.itemId,
         approvalId: request.params.approvalId ?? null,
-        message: 'Interpreter wants to run a command.',
+        message: 'Hacienda wants to run a command.',
         description: normalizeShellApprovalDescription(request.params.reason),
         command: request.params.command,
         cwd: request.params.cwd,
@@ -1741,7 +1741,7 @@ export async function handleCodexServerRequest(
           threadId: request.params.conversationId,
           itemId: request.params.callId,
           approvalId: request.params.approvalId,
-          message: 'Interpreter wants to run a command.',
+          message: 'Hacienda wants to run a command.',
           description: normalizeShellApprovalDescription(request.params.reason),
           command: request.params.command,
           cwd: request.params.cwd,

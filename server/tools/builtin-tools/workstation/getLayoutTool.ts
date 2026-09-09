@@ -49,7 +49,7 @@ export const getLayoutTool: BuiltinToolDefinition = {
               type: 'text',
               text: path
                 ? `No value found at path "${path}". The layout or window may not be ready.`
-                : 'Interpreter layout is not available. The window may not be ready.',
+                : 'Hacienda layout is not available. The window may not be ready.',
             },
           ],
           isError: true,

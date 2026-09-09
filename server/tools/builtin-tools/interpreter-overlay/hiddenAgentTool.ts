@@ -187,13 +187,13 @@ function latestAssistantText(messages: unknown[]): string | null {
 
 function buildHiddenAgentSystem(system: string | undefined, hasOverlaySession: boolean): string {
   const lines = [
-    'You are a hidden Interpreter delegate called by the overlay controller.',
-    'Use only the allowed Interpreter tools for this task. They are Interpreter CLI tools, not native function tools: run each one with `interpreter-app tools <server_id> <tool_name> --json \'<arguments>\'` directly in the command tool. Do NOT wrap them in `/bin/zsh -lc`, `bash -lc`, or another nested shell, and do NOT call them as functions.',
+    'You are a hidden Hacienda delegate called by the overlay controller.',
+    'Use only the allowed Hacienda tools for this task. They are Hacienda CLI tools, not native function tools: run each one with `interpreter-app tools <server_id> <tool_name> --json \'<arguments>\'` directly in the command tool. Do NOT wrap them in `/bin/zsh -lc`, `bash -lc`, or another nested shell, and do NOT call them as functions.',
     `Allowed tools (listed as <server_id>__<tool_name>): ${OVERLAY_HIDDEN_AGENT_ALLOWED_TOOL_NAMES.join(', ')}`,
     hasOverlaySession
       ? [
           'The same live overlay session is attached to you. Read the current selected-screen context first with `interpreter-app tools builtin-interpreter-overlay overlay_read_context --json \'{}\'` before acting on UI refs.',
-          'For actions inside the selected screen target, use `interpreter-app tools builtin-interpreter-overlay computer_batch` with actions shaped as { seq, tool: { name: "click"|"type"|"hotkey"|"scroll", params } }. The batch shows the Interpreter review UI and executes only after the user approves; the result reports the touched-window diff. Do not use builtin-cua-driver element-control tools such as click, type_text, set_value, select_option, scroll, press_key, or drag for selected-target work.',
+          'For actions inside the selected screen target, use `interpreter-app tools builtin-interpreter-overlay computer_batch` with actions shaped as { seq, tool: { name: "click"|"type"|"hotkey"|"scroll", params } }. The batch shows the Hacienda review UI and executes only after the user approves; the result reports the touched-window diff. Do not use builtin-cua-driver element-control tools such as click, type_text, set_value, select_option, scroll, press_key, or drag for selected-target work.',
           'For computer_batch with more than two actions or any long text value, write the args file with Node `fs.writeFileSync("/tmp/interpreter-overlay-computer-batch.json", JSON.stringify({ actions }))`, then call `interpreter-app tools builtin-interpreter-overlay computer_batch --json-file /tmp/interpreter-overlay-computer-batch.json`.',
           'To set or replace a text field, use one type action on that field with clear_first true. For a standard dropdown, use one type action on the dropdown control with the exact desired option text. For checkboxes, radios, and buttons, use click actions.',
         ].join('\n')
@@ -264,7 +264,7 @@ export function createCallHiddenAgentTool(deps: CallHiddenAgentToolDeps = defaul
   return {
     name: 'call_hidden_agent',
     description:
-      'Delegate a bounded task to a hidden Interpreter agent using the current overlay model, workspace, and overlay tool scope. Pass the relevant selected-screen/context details in the message.',
+      'Delegate a bounded task to a hidden Hacienda agent using the current overlay model, workspace, and overlay tool scope. Pass the relevant selected-screen/context details in the message.',
     inputSchema: {
       type: 'object',
       properties: {

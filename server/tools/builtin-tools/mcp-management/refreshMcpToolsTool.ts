@@ -24,7 +24,7 @@ export const refreshMcpToolsTool: BuiltinToolDefinition = {
       const response = {
         success: true,
         reason,
-        message: 'Interpreter refreshed MCP servers. Call the changed MCP tools through interpreter-app tools when they are visible.',
+        message: 'Hacienda refreshed MCP servers. Call the changed MCP tools through interpreter-app tools when they are visible.',
         currentTurnToolsAvailable: true,
         nextTurnRequired: false,
       };

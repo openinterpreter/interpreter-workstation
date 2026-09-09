@@ -44,8 +44,8 @@ function getHostedBillingBaseUrl(): string {
   return baseUrl;
 }
 const INTERPRETER_HOSTED_PROFILES = [
-  { name: 'Interpreter Smart', modelId: PROVIDER_MODEL_DEFAULTS.hosted.main },
-  { name: 'Interpreter Fast', modelId: PROVIDER_MODEL_DEFAULTS.hosted.fast },
+  { name: 'Hacienda Smart', modelId: PROVIDER_MODEL_DEFAULTS.hosted.main },
+  { name: 'Hacienda Fast', modelId: PROVIDER_MODEL_DEFAULTS.hosted.fast },
 ] as const;
 
 interface SubscriptionPriceInfo {
@@ -607,7 +607,7 @@ export function PlanSectionContent() {
             onToggle={() => setAdvancedUsageExpanded((expanded) => !expanded)}
           >
             <UsageBreakdownRow
-              label="Interpreter"
+              label="Hacienda"
               percentage={percentLeft}
               summary={`${Math.round(percentLeft)}% ${t('settings.plan.remaining')}`}
               icon={(

@@ -47,7 +47,7 @@ function buildWorkspaceConfirmationEvent(workspacePath: string): WorkspaceConfir
     workspacePath,
     title: 'Change Workspace',
     message: 'Are you sure you want to change to this workspace?',
-    permissionNote: 'Interpreter will have the ability to modify and delete files in:',
+    permissionNote: 'Hacienda will have the ability to modify and delete files in:',
     backupNote: 'Please make sure your files are backed up before proceeding.',
     confirmLabel: 'Open Workspace',
     cancelLabel: 'Cancel',

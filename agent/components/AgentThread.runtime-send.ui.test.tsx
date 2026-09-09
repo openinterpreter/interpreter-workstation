@@ -239,7 +239,7 @@ describe('AgentThread runtime sends', () => {
     );
   });
 
-  test('shows a toast when the thread reports exhausted Interpreter tokens', async () => {
+  test('shows a toast when the thread reports exhausted Hacienda tokens', async () => {
     useChatState.current = {
       ...useChatState.current,
       isStreaming: false,

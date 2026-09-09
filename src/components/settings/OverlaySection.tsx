@@ -487,7 +487,7 @@ export function OverlaySectionContent() {
   async function resolveStripeCustomerId(): Promise<string | null> {
     if (!session?.access_token) {
       showToast(
-        "Sign in before upgrading to unlock Interpreter Overlay.",
+        "Sign in before upgrading to unlock Hacienda Overlay.",
         "error",
         7000,
       );
@@ -955,10 +955,10 @@ export function OverlaySectionContent() {
                   {isReadyToEnable
                     ? "Overlay has the system access it needs. Turn it on now, then use the global shortcut right away."
                     : requiresAccessibilityPermission
-                      ? "Interpreter needs system access before Overlay can work in other apps. Grant both permissions, then finish setup."
+                      ? "Hacienda needs system access before Overlay can work in other apps. Grant both permissions, then finish setup."
                       : isLinuxPlatform
-                        ? "Interpreter needs screen-capture access from your desktop environment before Overlay can work in other apps. Approve the screen-share prompt, then finish setup."
-                        : "Interpreter needs to verify that screen capture works in this Windows session before Overlay can be enabled."}
+                        ? "Hacienda needs screen-capture access from your desktop environment before Overlay can work in other apps. Approve the screen-share prompt, then finish setup."
+                        : "Hacienda needs to verify that screen capture works in this Windows session before Overlay can be enabled."}
                 </AlertDialogDescription>
                 <p className="text-ui-sm text-muted-foreground">
                   {isReadyToEnable

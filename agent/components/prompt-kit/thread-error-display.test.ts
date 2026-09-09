@@ -34,7 +34,7 @@ function assertInterpreterCreditsExhausted(
 ) {
   assertShape(result);
   assert.equal(result.type, "interpreter_credits_exhausted");
-  assert.equal(result.title, "Interpreter tokens exhausted");
+  assert.equal(result.title, "Hacienda tokens exhausted");
   assert.equal(result.message, buildInterpreterCreditsExhaustedMessage(planStatus));
   assert.equal(result.suggestion, buildInterpreterCreditsExhaustedSuggestion(planStatus));
 }
@@ -59,10 +59,10 @@ describe("splitTextIntoLinkParts", () => {
 
   test("strips_trailing_period_from_clickable_url", () => {
     const parts = splitTextIntoLinkParts(
-      "Interpreter could not connect to the LM Studio local server at http://localhost:1234.",
+      "Hacienda could not connect to the LM Studio local server at http://localhost:1234.",
     );
     assert.deepEqual(parts, [
-      { type: "text", text: "Interpreter could not connect to the LM Studio local server at " },
+      { type: "text", text: "Hacienda could not connect to the LM Studio local server at " },
       { type: "link", text: "http://localhost:1234" },
       { type: "text", text: "." },
     ]);
@@ -145,7 +145,7 @@ describe("parseError / structured objects", () => {
     assertShape(r);
     assert.equal(r.type, "service_unavailable");
     assert.equal(r.title, "Models temporarily unavailable");
-    assert.equal(r.message, "Interpreter hosted models are temporarily unavailable.");
+    assert.equal(r.message, "Hacienda hosted models are temporarily unavailable.");
   });
 
   test("status_503_with_ollama_provider_returns_local_service_unavailable", () => {
@@ -190,7 +190,7 @@ describe("parseError / structured objects", () => {
     const r = parseError({ error_type: "authentication_error" }, "hosted");
     assertShape(r);
     assert.equal(r.type, "auth");
-    assert.equal(r.title, "Interpreter authentication failed");
+    assert.equal(r.title, "Hacienda authentication failed");
   });
 
   test("type_unauthorized_returns_auth", () => {
@@ -231,7 +231,7 @@ describe("parseError / structured objects", () => {
   test("type_payment_required_with_explicit_user_credit_signal_returns_interpreter_credits_exhausted", () => {
     const r = parseError({
       type: "payment_required",
-      message: "[not_enough_tokens]: User has insufficient interpreter tokens. Please buy more interpreter tokens",
+      message: "[not_enough_tokens]: User has insufficient hacienda tokens. Please buy more interpreter tokens",
     }, undefined, undefined, false);
     assertInterpreterCreditsExhausted(r, "free");
   });
@@ -272,7 +272,7 @@ describe("parseError / string patterns", () => {
     assert.equal(r.message, "The custom profile URL points to cerebras.ai, which does not support the OpenAI Responses format.");
     assert.equal(
       r.suggestion,
-      "Try switching to a natively supported provider in Settings > Profiles, such as Interpreter, Groq, OpenRouter, or OpenAI.",
+      "Try switching to a natively supported provider in Settings > Profiles, such as Hacienda, Groq, OpenRouter, or OpenAI.",
     );
   });
 
@@ -352,7 +352,7 @@ describe("parseError / string patterns", () => {
     assert.equal(r.title, "Model does not support tools");
     assert.equal(
       r.message,
-      "Interpreter does not serve this model as tool-capable, so it cannot run agent tools.",
+      "Hacienda does not serve this model as tool-capable, so it cannot run agent tools.",
     );
     assert.equal(
       r.suggestion,
@@ -362,7 +362,7 @@ describe("parseError / string patterns", () => {
 
   test("should_explain_openrouter_no_tool_capable_route_as_model_tool_support", () => {
     const formatted =
-      "This model is not available through a tool-capable route, so it cannot run Interpreter agent tools.";
+      "This model is not available through a tool-capable route, so it cannot run Hacienda agent tools.";
 
     const r = parseError(formatted, 'openrouter');
 
@@ -395,7 +395,7 @@ describe("parseError / string patterns", () => {
     assert.equal(r.title, "Model does not support images");
     assert.equal(
       r.message,
-      "Interpreter does not serve this model as image-capable, so it cannot inspect screenshots or images.",
+      "Hacienda does not serve this model as image-capable, so it cannot inspect screenshots or images.",
     );
     assert.equal(
       r.suggestion,
@@ -414,7 +414,7 @@ describe("parseError / string patterns", () => {
     assert.equal(r.title, "Model does not support images");
     assert.equal(
       r.message,
-      "Interpreter does not serve this model as image-capable, so it cannot inspect screenshots or images.",
+      "Hacienda does not serve this model as image-capable, so it cannot inspect screenshots or images.",
     );
     assert.equal(
       r.suggestion,
@@ -435,7 +435,7 @@ describe("parseError / string patterns", () => {
     assert.equal(r.message, "The custom profile URL points to 192.168.0.115, which does not support the OpenAI Responses format.");
     assert.equal(
       r.suggestion,
-      "Try switching to a natively supported provider in Settings > Profiles, such as Interpreter, Groq, OpenRouter, or OpenAI.",
+      "Try switching to a natively supported provider in Settings > Profiles, such as Hacienda, Groq, OpenRouter, or OpenAI.",
     );
   });
 
@@ -449,7 +449,7 @@ describe("parseError / string patterns", () => {
     assert.equal(r.title, "Endpoint/model incompatible");
     assert.equal(
       r.message,
-      "This endpoint/model does not support Interpreter's Responses/tool-calling contract.",
+      "This endpoint/model does not support Hacienda's Responses/tool-calling contract.",
     );
   });
 
@@ -479,14 +479,14 @@ describe("parseError / string patterns", () => {
 
     assertShape(r);
     assert.equal(r.type, "responses_contract_incompatible");
-    assert.equal(r.title, "Local API server cannot run Interpreter agents");
+    assert.equal(r.title, "Local API server cannot run Hacienda agents");
     assert.equal(
       r.message,
-      "The local or self-hosted API server at 127.0.0.1 rejected Interpreter's agent tool format. It appears to accept only function tools, but Interpreter agents require Responses API custom tools.",
+      "The local or self-hosted API server at 127.0.0.1 rejected Hacienda's agent tool format. It appears to accept only function tools, but Hacienda agents require Responses API custom tools.",
     );
     assert.equal(
       r.suggestion,
-      "For local models, use the Local (Ollama / LM Studio) profile in Settings > Profiles. It has the best-supported local model path. Custom servers such as llama.cpp need Responses API custom tool support before they can run Interpreter agents.",
+      "For local models, use the Local (Ollama / LM Studio) profile in Settings > Profiles. It has the best-supported local model path. Custom servers such as llama.cpp need Responses API custom tool support before they can run Hacienda agents.",
     );
   });
 
@@ -510,20 +510,20 @@ describe("parseError / string patterns", () => {
 
     assertShape(r);
     assert.equal(r.type, "responses_contract_incompatible");
-    assert.equal(r.title, "Local API server cannot run Interpreter agents");
+    assert.equal(r.title, "Local API server cannot run Hacienda agents");
     assert.equal(
       r.message,
-      "The local or self-hosted API server at 127.0.0.1 rejected Interpreter's agent tool format. It appears to accept only function tools, but Interpreter agents require Responses API custom tools.",
+      "The local or self-hosted API server at 127.0.0.1 rejected Hacienda's agent tool format. It appears to accept only function tools, but Hacienda agents require Responses API custom tools.",
     );
     assert.equal(
       r.suggestion,
-      "For local models, use the Local (Ollama / LM Studio) profile in Settings > Profiles. It has the best-supported local model path. Custom servers such as llama.cpp need Responses API custom tool support before they can run Interpreter agents.",
+      "For local models, use the Local (Ollama / LM Studio) profile in Settings > Profiles. It has the best-supported local model path. Custom servers such as llama.cpp need Responses API custom tool support before they can run Hacienda agents.",
     );
   });
 
   test("should_keep_remote_custom_function_tool_endpoint_guidance_provider_focused", () => {
     const r = parseError(
-      "This endpoint/model does not support Interpreter's Responses/tool-calling contract.",
+      "This endpoint/model does not support Hacienda's Responses/tool-calling contract.",
       "api",
       null,
       null,
@@ -532,14 +532,14 @@ describe("parseError / string patterns", () => {
 
     assertShape(r);
     assert.equal(r.type, "responses_contract_incompatible");
-    assert.equal(r.title, "Custom endpoint cannot run Interpreter agents");
+    assert.equal(r.title, "Custom endpoint cannot run Hacienda agents");
     assert.equal(
       r.message,
-      "The custom API server at example.com does not support the Responses API tool format required by Interpreter agents.",
+      "The custom API server at example.com does not support the Responses API tool format required by Hacienda agents.",
     );
     assert.equal(
       r.suggestion,
-      "Open Settings > Profiles and switch to Interpreter, OpenRouter, OpenAI, or another provider with Responses API custom tool support.",
+      "Open Settings > Profiles and switch to Hacienda, OpenRouter, OpenAI, or another provider with Responses API custom tool support.",
     );
   });
 
@@ -559,7 +559,7 @@ describe("parseError / string patterns", () => {
     assert.equal(r.type, "responses_contract_incompatible");
     assert.equal(
       r.message,
-      "This OpenAI model does not support Interpreter's custom/freeform agent tools. Use gpt-5.4-nano, or another model that supports Responses custom tools.",
+      "This OpenAI model does not support Hacienda's custom/freeform agent tools. Use gpt-5.4-nano, or another model that supports Responses custom tools.",
     );
   });
 
@@ -897,7 +897,7 @@ describe("parseError / string patterns", () => {
     const r = parseError(formatted, "hosted");
     assertShape(r);
     assert.equal(r.type, "auth");
-    assert.equal(r.title, "Interpreter authentication failed");
+    assert.equal(r.title, "Hacienda authentication failed");
     assert.equal(r.message, "The request was not authorized.");
   });
 
@@ -905,7 +905,7 @@ describe("parseError / string patterns", () => {
     const r = parseError("Authentication failed for this request", "hosted");
     assertShape(r);
     assert.equal(r.type, "auth");
-    assert.equal(r.title, "Interpreter authentication failed");
+    assert.equal(r.title, "Hacienda authentication failed");
   });
 
   test("sign_in_string_returns_auth", () => {
@@ -964,7 +964,7 @@ describe("parseError / string patterns", () => {
     assert.equal(r.message, "Groq has reached its usage limit.");
     assert.equal(
       r.suggestion,
-      "Wait for Groq limits to reset, or switch to a profile that does not use Groq. Groq limits are separate from Interpreter credits shown in Settings > Plan.",
+      "Wait for Groq limits to reset, or switch to a profile that does not use Groq. Groq limits are separate from Hacienda credits shown in Settings > Plan.",
     );
   });
 
@@ -981,7 +981,7 @@ describe("parseError / string patterns", () => {
       assert.equal(r.title, `${name} usage limit reached`);
       assert.equal(
         r.suggestion,
-        `Wait for ${name} limits to reset, or switch to a profile that does not use ${name}. ${name} limits are separate from Interpreter credits shown in Settings > Plan.`,
+        `Wait for ${name} limits to reset, or switch to a profile that does not use ${name}. ${name} limits are separate from Hacienda credits shown in Settings > Plan.`,
       );
     });
   }
@@ -991,10 +991,10 @@ describe("parseError / string patterns", () => {
       const r = parseError("You have reached your usage limit", provider);
       assertShape(r);
       assert.equal(r.type, "provider_usage_limit");
-      assert.equal(r.title, "Interpreter usage limit reached");
+      assert.equal(r.title, "Hacienda usage limit reached");
       assert.equal(
         r.suggestion,
-        "Wait for Interpreter limits to reset, or switch to a profile that does not use Interpreter. Interpreter provider limits are separate from external provider account limits.",
+        "Wait for Hacienda limits to reset, or switch to a profile that does not use Hacienda. Hacienda provider limits are separate from external provider account limits.",
       );
     });
   }
@@ -1008,7 +1008,7 @@ describe("parseError / string patterns", () => {
     assert.equal(r.message, detailedMessage);
     assert.equal(
       r.suggestion,
-      "Wait for ChatGPT limits to reset, or switch to a profile that does not use ChatGPT. ChatGPT limits are separate from Interpreter credits shown in Settings > Plan.",
+      "Wait for ChatGPT limits to reset, or switch to a profile that does not use ChatGPT. ChatGPT limits are separate from Hacienda credits shown in Settings > Plan.",
     );
   });
 
@@ -1021,7 +1021,7 @@ describe("parseError / string patterns", () => {
     assert.equal(r.message, "You've hit your ChatGPT usage limit. Try again at: May 31st, 2026 8:34 AM.");
     assert.equal(
       r.suggestion,
-      "Wait for ChatGPT limits to reset, or switch to a profile that does not use ChatGPT. ChatGPT limits are separate from Interpreter credits shown in Settings > Plan.",
+      "Wait for ChatGPT limits to reset, or switch to a profile that does not use ChatGPT. ChatGPT limits are separate from Hacienda credits shown in Settings > Plan.",
     );
   });
 
@@ -1041,10 +1041,10 @@ describe("parseError / string patterns", () => {
     );
     assertShape(r);
     assert.equal(r.type, "service_unavailable");
-    assert.equal(r.title, "Interpreter hosted models temporarily unavailable");
+    assert.equal(r.title, "Hacienda hosted models temporarily unavailable");
     assert.equal(
       r.message,
-      "Some Interpreter hosted models are temporarily unavailable.",
+      "Some Hacienda hosted models are temporarily unavailable.",
     );
     assert.equal(
       r.suggestion,
@@ -1060,10 +1060,10 @@ describe("parseError / string patterns", () => {
 
     assertShape(r);
     assert.equal(r.type, "service_unavailable");
-    assert.equal(r.title, "Interpreter hosted models temporarily unavailable");
+    assert.equal(r.title, "Hacienda hosted models temporarily unavailable");
     assert.equal(
       r.message,
-      "Interpreter hosted models are temporarily unavailable because servers are overloaded.",
+      "Hacienda hosted models are temporarily unavailable because servers are overloaded.",
     );
     assert.equal(
       r.suggestion,
@@ -1079,10 +1079,10 @@ describe("parseError / string patterns", () => {
 
     assertShape(r);
     assert.equal(r.type, "service_unavailable");
-    assert.equal(r.title, "Interpreter hosted models temporarily unavailable");
+    assert.equal(r.title, "Hacienda hosted models temporarily unavailable");
     assert.equal(
       r.message,
-      "Interpreter hosted models are temporarily unavailable because servers are overloaded.",
+      "Hacienda hosted models are temporarily unavailable because servers are overloaded.",
     );
     assert.equal(
       r.suggestion,
@@ -1097,7 +1097,7 @@ describe("parseError / string patterns", () => {
     );
 
     assertShape(r);
-    assert.notEqual(r.title, "Interpreter hosted models temporarily unavailable");
+    assert.notEqual(r.title, "Hacienda hosted models temporarily unavailable");
   });
 
   test("issue_1364_wrapped_high_demand_error_returns_infrastructure_copy", () => {
@@ -1114,10 +1114,10 @@ describe("parseError / string patterns", () => {
 
     assertShape(r);
     assert.equal(r.type, "service_unavailable");
-    assert.equal(r.title, "Interpreter hosted models temporarily unavailable");
+    assert.equal(r.title, "Hacienda hosted models temporarily unavailable");
     assert.equal(
       r.message,
-      "Interpreter hosted models are temporarily unavailable because servers are overloaded.",
+      "Hacienda hosted models are temporarily unavailable because servers are overloaded.",
     );
     assert.equal(
       r.suggestion,
@@ -1130,10 +1130,10 @@ describe("parseError / string patterns", () => {
 
     assertShape(r);
     assert.equal(r.type, "service_unavailable");
-    assert.equal(r.title, "Interpreter hosted models temporarily unavailable");
+    assert.equal(r.title, "Hacienda hosted models temporarily unavailable");
     assert.equal(
       r.message,
-      "Interpreter hosted models are temporarily unavailable because servers are overloaded.",
+      "Hacienda hosted models are temporarily unavailable because servers are overloaded.",
     );
     assert.equal(
       r.suggestion,
@@ -1146,10 +1146,10 @@ describe("parseError / string patterns", () => {
 
     assertShape(r);
     assert.equal(r.type, "service_unavailable");
-    assert.equal(r.title, "Interpreter hosted models temporarily unavailable");
+    assert.equal(r.title, "Hacienda hosted models temporarily unavailable");
     assert.equal(
       r.message,
-      "Some Interpreter hosted models are temporarily unavailable.",
+      "Some Hacienda hosted models are temporarily unavailable.",
     );
     assert.equal(
       r.suggestion,
@@ -1170,10 +1170,10 @@ describe("parseError / string patterns", () => {
     );
     assertShape(r);
     assert.equal(r.type, "service_unavailable");
-    assert.equal(r.title, "Interpreter hosted models temporarily unavailable");
+    assert.equal(r.title, "Hacienda hosted models temporarily unavailable");
     assert.equal(
       r.message,
-      "Some Interpreter hosted models are temporarily unavailable.",
+      "Some Hacienda hosted models are temporarily unavailable.",
     );
     assert.equal(
       r.suggestion,
@@ -1193,10 +1193,10 @@ describe("parseError / string patterns", () => {
     const r = parseError(formatted, "hosted");
     assertShape(r);
     assert.equal(r.type, "service_unavailable");
-    assert.equal(r.title, "Interpreter hosted models temporarily unavailable");
+    assert.equal(r.title, "Hacienda hosted models temporarily unavailable");
     assert.equal(
       r.message,
-      "Some Interpreter hosted models are temporarily unavailable.",
+      "Some Hacienda hosted models are temporarily unavailable.",
     );
   });
 
@@ -1206,7 +1206,7 @@ describe("parseError / string patterns", () => {
       "ollama",
     );
     assertShape(r);
-    assert.notEqual(r.title, "Interpreter hosted models temporarily unavailable");
+    assert.notEqual(r.title, "Hacienda hosted models temporarily unavailable");
   });
 
   test("quota_exceeded_returns_provider_usage_limit", () => {
@@ -1248,14 +1248,14 @@ describe("parseError / string patterns", () => {
     const r = parseError("unexpected status 402 Payment Required, url: https://hosted.example.test/v0/openrouter/responses", "hosted");
     assertShape(r);
     assert.equal(r.type, "provider_error");
-    assert.equal(r.title, "Interpreter payment error");
-    assert.equal(r.message, "Interpreter returned a payment-required response.");
-    assert.equal(r.suggestion, "This may be temporary. Try again, or switch to a profile that does not use Interpreter.");
+    assert.equal(r.title, "Hacienda payment error");
+    assert.equal(r.message, "Hacienda returned a payment-required response.");
+    assert.equal(r.suggestion, "This may be temporary. Try again, or switch to a profile that does not use Hacienda.");
   });
 
   test("payment_required_openrouter_with_explicit_user_credit_signal_returns_interpreter_credits_exhausted", () => {
     const r = parseError(
-      "unexpected status 402 Payment Required: [not_enough_tokens]: User has insufficient interpreter tokens, url: https://hosted.example.test/v0/openrouter/responses",
+      "unexpected status 402 Payment Required: [not_enough_tokens]: User has insufficient hacienda tokens, url: https://hosted.example.test/v0/openrouter/responses",
       undefined,
       undefined,
       true,
@@ -1264,7 +1264,7 @@ describe("parseError / string patterns", () => {
   });
 
   test("formatted_insufficient_interpreter_tokens_message_returns_interpreter_credits_exhausted", () => {
-    const r = parseError("Insufficient interpreter tokens. Add tokens in billing settings.");
+    const r = parseError("Insufficient Hacienda tokens. Add tokens in billing settings.");
     assertInterpreterCreditsExhausted(r);
   });
 
@@ -1369,7 +1369,7 @@ describe("parseError / string patterns", () => {
   });
 
   test("503_interpreter_models_unavailable_returns_service_unavailable", () => {
-    const r = parseError('unexpected status 503 Service Unavailable: {"error":{"detail":"Interpreter models temporarily unavailable"}}, url: http://localhost:8000/v0/openrouter/responses');
+    const r = parseError('unexpected status 503 Service Unavailable: {"error":{"detail":"Hacienda models temporarily unavailable"}}, url: http://localhost:8000/v0/openrouter/responses');
     assertShape(r);
     assert.equal(r.type, "service_unavailable");
     assert.equal(r.title, "Models temporarily unavailable");
@@ -1383,7 +1383,7 @@ describe("parseError / string patterns", () => {
     const r = parseError("unexpected status 503 Service Unavailable");
     assertShape(r);
     assert.equal(r.type, "service_unavailable");
-    assert.equal(r.message, "Interpreter hosted models are temporarily unavailable.");
+    assert.equal(r.message, "Hacienda hosted models are temporarily unavailable.");
   });
 
   test("503_local_endpoint_url_without_provider_returns_local_service_unavailable", () => {
@@ -1465,10 +1465,10 @@ describe("parseError / string patterns", () => {
     const r = parseError(formatted, "hosted");
     assertShape(r);
     assert.equal(r.type, "service_unavailable");
-    assert.equal(r.title, "Interpreter hosted models temporarily unavailable");
+    assert.equal(r.title, "Hacienda hosted models temporarily unavailable");
     assert.equal(
       r.message,
-      "Interpreter hosted models are temporarily unavailable because servers are overloaded.",
+      "Hacienda hosted models are temporarily unavailable because servers are overloaded.",
     );
     assert.equal(
       r.suggestion,
@@ -1799,7 +1799,7 @@ describe("parseError / edge cases", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4. Interpreter token exhaustion copy
+// 4. Hacienda token exhaustion copy
 // ---------------------------------------------------------------------------
 
 describe("interpreter token exhaustion copy", () => {
@@ -1807,7 +1807,7 @@ describe("interpreter token exhaustion copy", () => {
     const message = buildInterpreterCreditsExhaustedMessage("free");
     assert.equal(
       message,
-      "You've exhausted your free Interpreter tokens.",
+      "You've exhausted your free Hacienda tokens.",
     );
   });
 
@@ -1815,7 +1815,7 @@ describe("interpreter token exhaustion copy", () => {
     const message = buildInterpreterCreditsExhaustedMessage("paid");
     assert.equal(
       message,
-      "You've exhausted the Interpreter tokens included with this plan.",
+      "You've exhausted the Hacienda tokens included with this plan.",
     );
   });
 
@@ -1823,7 +1823,7 @@ describe("interpreter token exhaustion copy", () => {
     const message = buildInterpreterCreditsExhaustedMessage("paid", "April 30, 2026");
     assert.equal(
       message,
-      "You've exhausted the Interpreter tokens included with this plan. Your included usage refreshes on April 30, 2026.",
+      "You've exhausted the Hacienda tokens included with this plan. Your included usage refreshes on April 30, 2026.",
     );
   });
 
@@ -1831,7 +1831,7 @@ describe("interpreter token exhaustion copy", () => {
     const suggestion = buildInterpreterCreditsExhaustedSuggestion("paid");
     assert.equal(
       suggestion,
-      "Upgrade for more included usage, or switch to a custom provider to keep using Interpreter.",
+      "Upgrade for more included usage, or switch to a custom provider to keep using Hacienda.",
     );
   });
 
@@ -1839,14 +1839,14 @@ describe("interpreter token exhaustion copy", () => {
     await i18n.changeLanguage("ru");
 
     try {
-      const result = parseError("Insufficient interpreter tokens. Add tokens in billing settings.");
+      const result = parseError("Insufficient Hacienda tokens. Add tokens in billing settings.");
 
       assert.equal(result.type, "interpreter_credits_exhausted");
-      assert.equal(result.title, "Токены Interpreter исчерпаны");
-      assert.equal(result.message, "Вы исчерпали токены Interpreter, доступные для этой учётной записи.");
+      assert.equal(result.title, "Токены Hacienda исчерпаны");
+      assert.equal(result.message, "Вы исчерпали токены Hacienda, доступные для этой учётной записи.");
       assert.equal(
         result.suggestion,
-        "Перейдите на план с большим включённым использованием или переключитесь на пользовательского провайдера, чтобы продолжить использовать Interpreter.",
+        "Перейдите на план с большим включённым использованием или переключитесь на пользовательского провайдера, чтобы продолжить использовать Hacienda.",
       );
     } finally {
       await i18n.changeLanguage("en");
@@ -1875,7 +1875,7 @@ describe("parseError / return value structure", () => {
     { label: "auth (unauthorized)", input: "unauthorized" },
     { label: "session_expired", input: "session expired" },
     { label: "provider_usage_limit", input: "usage limit reached" },
-    { label: "interpreter_credits_exhausted", input: "[not_enough_tokens]: User has insufficient interpreter tokens" },
+    { label: "interpreter_credits_exhausted", input: "[not_enough_tokens]: User has insufficient hacienda tokens" },
     { label: "content_filter", input: "Output blocked by content filtering policy" },
     { label: "rate_limit (string)", input: "rate limit exceeded" },
     { label: "network", input: "failed to fetch" },
@@ -1909,11 +1909,11 @@ describe("parseError / invalid model ID", () => {
     const r = parseError('{"error":{"message":"qwen3.5:9b is not a valid model ID","code":400},"user_id":"user_abc123"}', "hosted");
     assertShape(r);
     assert.equal(r.type, "invalid_model");
-    assert.equal(r.title, "Invalid Interpreter model ID");
+    assert.equal(r.title, "Invalid Hacienda model ID");
     assert.equal(r.message, "qwen3.5:9b is not a valid model ID");
     assert.equal(
       r.suggestion,
-      "Check the model ID in Settings > Models for your Interpreter profile. Hosted model IDs must be `interpreter-smart`, `interpreter-fast`, or `<provider>/<model_id>`.",
+      "Check the model ID in Settings > Models for your Hacienda profile. Hosted model IDs must be `interpreter-smart`, `interpreter-fast`, or `<provider>/<model_id>`.",
     );
   });
 
@@ -1943,7 +1943,7 @@ describe("parseError / invalid model ID", () => {
     assert.equal(r.type, "unknown");
     assert.equal(
       r.message,
-      "Interpreter did not receive a readable error message for this failed request.",
+      "Hacienda did not receive a readable error message for this failed request.",
     );
   });
 });

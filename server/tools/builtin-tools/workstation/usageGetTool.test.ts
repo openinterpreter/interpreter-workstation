@@ -71,7 +71,7 @@ describe('usageGetTool', () => {
 
     expect(result.isError).toBe(true);
     expect(String(result.content?.[0]?.text)).toContain(
-      'You must be signed in to view Interpreter usage.',
+      'You must be signed in to view Hacienda usage.',
     );
   });
 });

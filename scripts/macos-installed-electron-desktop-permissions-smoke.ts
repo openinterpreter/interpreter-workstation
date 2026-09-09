@@ -201,7 +201,7 @@ async function stopDesktopHelper(binary: string): Promise<void> {
 }
 
 async function quitInterpreterApp(): Promise<void> {
-  await execFile('/usr/bin/osascript', ['-e', 'tell application "Interpreter" to quit'])
+  await execFile('/usr/bin/osascript', ['-e', 'tell application "Hacienda" to quit'])
     .catch(() => undefined);
   await new Promise((resolve) => setTimeout(resolve, 1_000));
 }

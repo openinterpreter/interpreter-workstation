@@ -219,7 +219,7 @@
     "newChatCommand": "new chat",
     "voiceMode": "conversational",
     "ambientTriggerPhrases": [
-      "Interpreter",
+      "Hacienda",
       "Repertor"
     ],
     "ambientEndPhrases": [

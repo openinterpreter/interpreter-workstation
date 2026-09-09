@@ -1,7 +1,7 @@
 /**
  * Set Layout Tool
  *
- * Mutates the Interpreter layout at a given path using reconciliation.
+ * Mutates the Hacienda layout at a given path using reconciliation.
  * The reconciler handles tab reuse, creation, movement, and auto-collapse.
  */
 
@@ -67,7 +67,7 @@ function collectFilePaths(value: any): string[] {
 export const setLayoutTool: BuiltinToolDefinition = {
   name: 'interpreter_set',
   description:
-    'Set a value in the Interpreter layout at the given path. Uses reconciliation to handle tab creation, movement, and pane management. ' +
+    'Set a value in the Hacienda layout at the given path. Uses reconciliation to handle tab creation, movement, and pane management. ' +
     'Tab entries with `tab_id` reuse existing tabs. Entries with `path`, `url`, `email_id`, `agent_tab_id`, or `settings_section` look up or create tabs — type is inferred automatically, you do NOT need to specify it. ' +
     'Tabs not mentioned in the new layout are appended to the first pane (never silently deleted — use interpreter_close_tab for that). ' +
     'Empty panes are auto-collapsed. Returns the resulting layout after reconciliation.\n\n' +
@@ -219,7 +219,7 @@ export const setLayoutTool: BuiltinToolDefinition = {
         content: [
           {
             type: 'text',
-            text: `Failed to set Interpreter layout: ${error.message}`,
+            text: `Failed to set Hacienda layout: ${error.message}`,
           },
         ],
         isError: true,

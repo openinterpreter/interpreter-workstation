@@ -20,7 +20,7 @@ vi.mock('react-i18next', () => ({
         'common.loading': 'Loading',
         'common.save': 'Save',
         'settings.general.customInstructionsLabel': 'Custom Instructions',
-        'settings.general.customInstructionsDescription': 'Saved instructions inserted into Interpreter developer instructions on every turn.',
+        'settings.general.customInstructionsDescription': 'Saved instructions inserted into Hacienda developer instructions on every turn.',
         'settings.general.customInstructionsPlaceholder': 'Example: Keep responses concise. Prefer numbered lists.',
         'settings.general.customInstructionsDraftTitle': 'Review onboarding draft',
         'settings.general.customInstructionsDraftDescription': 'Onboarding generated these working preferences. Review them, then apply the draft if you want to save it.',

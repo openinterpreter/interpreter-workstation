@@ -24,7 +24,7 @@ const apiMocks = vi.hoisted(() => ({
 
 const i18nMocks = vi.hoisted(() => {
   const labels: Record<string, string> = {
-    'onboarding.aiSetup.title': 'Tell Interpreter how you use AI',
+    'onboarding.aiSetup.title': 'Tell Hacienda how you use AI',
     'onboarding.aiSetup.description': 'This creates a reviewable working-preferences draft. You can edit or ignore it later in Settings.',
     'onboarding.aiSetup.modelsLabel': 'Which models do you use now?',
     'onboarding.aiSetup.modelsPlaceholder': 'Example: GPT-5 for coding, Claude for writing, local Ollama models for private files',
@@ -190,7 +190,7 @@ describe('AiSetupScreen', () => {
     ipcMocks.startWindowVoiceMode
       .mockResolvedValueOnce({
         success: false,
-        error: 'Interpreter Overlay is not ready.',
+        error: 'Hacienda Overlay is not ready.',
       })
       .mockResolvedValueOnce({ success: true });
     renderAiSetupScreen();

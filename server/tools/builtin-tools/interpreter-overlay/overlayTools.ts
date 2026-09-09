@@ -63,7 +63,7 @@ function buildScreenshotFileMention(context: OverlaySessionCapturedContext): str
 
 export function buildContextText(context: OverlaySessionCapturedContext): string {
   const header = [
-    'Interpreter Overlay live context',
+    'Hacienda Overlay live context',
     `Capture bounds: ${formatBounds(context.captureBoundsDIP ?? context.displayBoundsDIP ?? null)}`,
     `Element count: ${context.elementCount}`,
   ].join('\n');
@@ -154,7 +154,7 @@ function overlayError(message: string) {
 
 function requireAgentId(context?: BuiltinToolContext): string {
   if (!context?.agentId) {
-    throw new Error('Overlay tools require an Interpreter Overlay agent session.');
+    throw new Error('Overlay tools require a Hacienda Overlay agent session.');
   }
   return context.agentId;
 }
@@ -207,7 +207,7 @@ function parseOverlayDrawingAnnotations(args: Record<string, unknown>): OverlayD
 
 export const overlayReadContextTool: BuiltinToolDefinition = {
   name: 'overlay_read_context',
-  description: `Refresh the granted Interpreter Overlay square and return the latest saved screenshot file reference, plus structured accessibility text when available.
+  description: `Refresh the granted Hacienda Overlay square and return the latest saved screenshot file reference, plus structured accessibility text when available.
 
 Use this after the underlying app changes, after you click/type/scroll, or before choosing an element_id to interact with.`,
   inputSchema: {
@@ -234,7 +234,7 @@ Use this after the underlying app changes, after you click/type/scroll, or befor
 
 export const overlayScreenshotTool: BuiltinToolDefinition = {
   name: 'overlay_screenshot',
-  description: 'Capture a fresh screenshot of the granted Interpreter Overlay square without performing any interaction, and return its saved file reference.',
+  description: 'Capture a fresh screenshot of the granted Hacienda Overlay square without performing any interaction, and return its saved file reference.',
   inputSchema: {
     type: 'object',
     properties: {},
@@ -459,7 +459,7 @@ The result is per-action outcomes plus the before/after DIFF of the windows the 
 
 export const overlayShowDrawingsTool: BuiltinToolDefinition = {
   name: 'overlay_show_drawings',
-  description: `Show visual-only rectangle annotations inside the granted Interpreter Overlay square.
+  description: `Show visual-only rectangle annotations inside the granted Hacienda Overlay square.
 
 This replaces any previous overlay drawings. Coordinates are screen DIP coordinates, matching bounds returned by overlay_read_context. This tool only draws; it must not click, type, read, retry, or execute user-level actions.`,
   inputSchema: {
@@ -502,7 +502,7 @@ This replaces any previous overlay drawings. Coordinates are screen DIP coordina
 
 export const overlayClearDrawingsTool: BuiltinToolDefinition = {
   name: 'overlay_clear_drawings',
-  description: 'Clear visual-only drawings from the granted Interpreter Overlay square without reading or interacting with the underlying app.',
+  description: 'Clear visual-only drawings from the granted Hacienda Overlay square without reading or interacting with the underlying app.',
   inputSchema: {
     type: 'object',
     properties: {},
@@ -522,7 +522,7 @@ export const overlayClearDrawingsTool: BuiltinToolDefinition = {
 
 export const overlayClickTool: BuiltinToolDefinition = {
   name: 'overlay_click',
-  description: `Click inside the granted Interpreter Overlay square.
+  description: `Click inside the granted Hacienda Overlay square.
 
 Prefer element_id from overlay_read_context. You may also use element_description or normalized x/y coordinates between 0 and 1 inside the granted square.`,
   inputSchema: {
@@ -557,7 +557,7 @@ Prefer element_id from overlay_read_context. You may also use element_descriptio
 
 export const overlayTypeTool: BuiltinToolDefinition = {
   name: 'overlay_type',
-  description: `Type into the granted Interpreter Overlay square.
+  description: `Type into the granted Hacienda Overlay square.
 
 If you provide element_id or element_description, the overlay will focus that target first. If you omit both, it types into the currently focused control inside the granted square.`,
   inputSchema: {
@@ -593,7 +593,7 @@ If you provide element_id or element_description, the overlay will focus that ta
 
 export const overlayHotkeyTool: BuiltinToolDefinition = {
   name: 'overlay_hotkey',
-  description: 'Press a hotkey against the app inside the granted Interpreter Overlay square.',
+  description: 'Press a hotkey against the app inside the granted Hacienda Overlay square.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -621,7 +621,7 @@ export const overlayHotkeyTool: BuiltinToolDefinition = {
 
 export const overlayScrollTool: BuiltinToolDefinition = {
   name: 'overlay_scroll',
-  description: `Scroll inside the granted Interpreter Overlay square.
+  description: `Scroll inside the granted Hacienda Overlay square.
 
 Prefer element_id from overlay_read_context. You may also use element_description or normalized x/y coordinates between 0 and 1 inside the granted square.`,
   inputSchema: {
@@ -661,7 +661,7 @@ Prefer element_id from overlay_read_context. You may also use element_descriptio
 
 export const overlayDetachTool: BuiltinToolDefinition = {
   name: 'overlay_detach',
-  description: `Release the granted Interpreter Overlay square and remove the on-screen overlay box.
+  description: `Release the granted Hacienda Overlay square and remove the on-screen overlay box.
 
 This is terminal for the live overlay session. After detaching, you no longer have live inspection or control of that granted square.
 Do not use this until the live UI work in the square is actually finished, unless you intentionally plan to continue without any more live overlay control.
@@ -675,7 +675,7 @@ For fill/submit tasks, do not detach before the final visible Save/Submit/Send/C
       const agentId = requireAgentId(context);
       await overlaySessionManager.detach(agentId);
       return {
-        content: [{ type: 'text', text: 'Detached from the granted Interpreter Overlay square.' }],
+        content: [{ type: 'text', text: 'Detached from the granted Hacienda Overlay square.' }],
       };
     } catch (error) {
       return overlayError(error instanceof Error ? error.message : String(error));
@@ -685,7 +685,7 @@ For fill/submit tasks, do not detach before the final visible Save/Submit/Send/C
 
 export const overlayCompleteTool: BuiltinToolDefinition = {
   name: 'overlay_complete',
-  description: `Mark the live Interpreter Overlay session complete and close the on-screen overlay box.
+  description: `Mark the live Hacienda Overlay session complete and close the on-screen overlay box.
 
 This is terminal for the live overlay session. After completion, you no longer have live inspection or control of that granted square.
 Use this only once the requested live UI work in the square is fully complete.
@@ -699,7 +699,7 @@ For fill/submit tasks, do not complete the session before the final visible Save
       const agentId = requireAgentId(context);
       await overlaySessionManager.complete(agentId);
       return {
-        content: [{ type: 'text', text: 'Completed the granted Interpreter Overlay session.' }],
+        content: [{ type: 'text', text: 'Completed the granted Hacienda Overlay session.' }],
       };
     } catch (error) {
       return overlayError(error instanceof Error ? error.message : String(error));

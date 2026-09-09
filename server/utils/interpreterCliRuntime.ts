@@ -685,7 +685,7 @@ file_bridge_request() {
 
   while [ ! -f "$response_status_path" ]; do
     if [ ! -d "$bridge_dir" ]; then
-      echo "Interpreter CLI bridge disconnected while waiting for response." >&2
+      echo "Hacienda CLI bridge disconnected while waiting for response." >&2
       rm -rf "$request_dir" "$response_dir"
       exit 1
     fi
@@ -802,7 +802,7 @@ stream_tool_call_request() {
   fi
 
   rm -rf "$stream_dir"
-  echo "Interpreter CLI stream ended without a result." >&2
+  echo "Hacienda CLI stream ended without a result." >&2
   return 1
 }
 
@@ -910,7 +910,7 @@ request_json() {
   if [ -n "$body" ]; then
     printf '%s\n' "$body" >&2
   else
-    printf 'Interpreter CLI request failed with HTTP %s.\n' "$response_status" >&2
+    printf 'Hacienda CLI request failed with HTTP %s.\n' "$response_status" >&2
   fi
   return 1
 }
@@ -1915,7 +1915,7 @@ async function streamToolRequest(url, options) {
             return;
           }
           if (finalResult === null) {
-            fail('Interpreter CLI stream ended without a result.');
+            fail('Hacienda CLI stream ended without a result.');
             return;
           }
           fs.writeSync(1, finalResult);
@@ -2517,7 +2517,7 @@ function Invoke-InterpreterCliFileBridgeRequest([string]$bridgeDir, [string]$req
     if (-not (Test-Path -LiteralPath $bridgeDir)) {
       Remove-Item -LiteralPath $requestDir -Recurse -Force -ErrorAction SilentlyContinue
       Remove-Item -LiteralPath $responseDir -Recurse -Force -ErrorAction SilentlyContinue
-      throw 'Interpreter CLI bridge disconnected while waiting for response.'
+      throw 'Hacienda CLI bridge disconnected while waiting for response.'
     }
 
     Flush-InterpreterCliFileBridgeProgress
@@ -2645,7 +2645,7 @@ function Invoke-InterpreterCliToolStream([string]$uri, [string]$body) {
     }
 
     if ($null -eq $finalResult) {
-      throw 'Interpreter CLI stream ended without a result.'
+      throw 'Hacienda CLI stream ended without a result.'
     }
 
     [Console]::Out.Write($finalResult)
@@ -3273,7 +3273,7 @@ export function buildInterpreterCliShellEnvironmentPolicy(
   // adding bundled CLIs only to the app-server spawn env in app-server-client.ts
   // is not enough: /bin/zsh -lc 'pdfcpu help' will still say command not found
   // if this policy-level PATH does not include the bundled pdfcpu directory.
-  // Keep bundled CLI PATH entries here, next to the Interpreter CLI launcher
+  // Keep bundled CLI PATH entries here, next to the Hacienda CLI launcher
   // path, because this is the environment shell tool executions actually see.
   // This does not let js_repl directly spawn binaries; js_repl still blocks
   // node:child_process by design.

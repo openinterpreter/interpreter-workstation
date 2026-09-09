@@ -68,10 +68,10 @@ const DEFAULT_HOSTED_VISION = 'interpreter-smart';
 
 function getHostedAliasName(modelId: string): string | null {
   if (modelId === DEFAULT_HOSTED_MAIN) {
-    return 'Interpreter Smart';
+    return 'Hacienda Smart';
   }
   if (modelId === DEFAULT_HOSTED_FAST) {
-    return 'Interpreter Fast';
+    return 'Hacienda Fast';
   }
   return null;
 }

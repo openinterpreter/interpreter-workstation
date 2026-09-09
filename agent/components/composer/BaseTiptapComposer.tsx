@@ -20,6 +20,10 @@ import { createSkillMentionSuggestion, setSkillItemRegistry, getSkillItemById } 
 import type { SkillMentionDropdownData, SkillMentionItem } from './mention/SkillMentionDropdown';
 import { ToolKeywordHighlight } from './ToolKeywordHighlight';
 import { VoiceDiffMark } from './VoiceDiffMark';
+import { PiiLabel } from '../../../src/extensions/PiiLabel';
+import { detectRegex } from '../../../src/lib/pii/regex-detector';
+import { buildRedactedText, mergeDetections } from '../../../src/lib/pii/labels';
+import { pii as piiIpc } from '@/ipc';
 import { parseDragData, isFileDragData, isBrowserTabDragData } from '../../../shared/types/drag';
 import { MAIN_COMPOSER_INPUT_ID, MAIN_COMPOSER_SEND_BUTTON_ID } from '../../../shared/element-ids';
 import { humanizeSkillName } from '../../../shared/utils/skillDisplay';
@@ -498,6 +502,10 @@ export const BaseTiptapComposer = forwardRef<BaseTiptapComposerRef, BaseTiptapCo
   const composerRef = useRef<HTMLDivElement>(null);
   const voiceDiffClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attachmentStoreRef = useRef<AttachmentStore>(createAttachmentStore());
+  // Session-scoped token→original entries for messages sent from this composer
+  // instance. Kept in memory only: vault file persistence waits on the
+  // passphrase UX decision, and nothing here ever writes raw PII to disk.
+  const sessionRehydrationMapRef = useRef<Record<string, string>>({});
   const resolveAttachmentRecord = useCallback(
     (attachmentId: string) => attachmentStoreRef.current.get(attachmentId),
     [],
@@ -641,6 +649,7 @@ export const BaseTiptapComposer = forwardRef<BaseTiptapComposerRef, BaseTiptapCo
     },
     getContent: () => getSerializedSubmission(editorInstance).text,
     getSubmission: () => getSerializedSubmission(editorInstance),
+    getRehydrationMap: () => ({ ...sessionRehydrationMapRef.current }),
     clearContent: () => {
       if (editorInstance) {
         editorInstance.commands.clearContent();
@@ -683,6 +692,7 @@ export const BaseTiptapComposer = forwardRef<BaseTiptapComposerRef, BaseTiptapCo
       ...(highlightToolKeywords ? [ToolKeywordHighlight] : []),
       VoiceDiffMark,
       AttachmentChip,
+      PiiLabel.configure({ mode: 'compose' }),
     ],
     content: parseContentWithMentions(initialContent),
     editable,
@@ -1199,13 +1209,29 @@ export const BaseTiptapComposer = forwardRef<BaseTiptapComposerRef, BaseTiptapCo
   }, []);
 
   // Handle send action
+  // PII redaction runs at this boundary: regex detections are instant and
+  // always available, full NER merges in when the IPC path answers. The model
+  // only ever receives the redacted text. The rehydration map is kept in the
+  // session ref; vault file persistence waits on the passphrase UX decision.
   const handleSend = useCallback(async () => {
     if (!editor) return;
 
     const submission = getSerializedSubmission(editor);
     if (!hasSubmissionContent(submission)) return;
 
-    const handled = await onSend(submission.text, submission);
+    const fallback = detectRegex(submission.text);
+    let detections = fallback;
+    try {
+      const ner = await piiIpc.detectPii(submission.text);
+      detections = mergeDetections(ner, fallback);
+    } catch {
+      detections = fallback;
+    }
+    const { redactedText, rehydrationMap } = buildRedactedText(submission.text, detections);
+    sessionRehydrationMapRef.current = { ...sessionRehydrationMapRef.current, ...rehydrationMap };
+    const redactedSubmission = { ...submission, text: redactedText };
+
+    const handled = await onSend(redactedSubmission.text, redactedSubmission);
     if (handled === false) {
       return;
     }

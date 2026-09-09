@@ -9,7 +9,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 const PNPM_BIN = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
 const DIST_DIR = path.join(ROOT, 'dist');
-const PRODUCT_NAME = 'Interpreter';
+const PRODUCT_NAME = 'Hacienda';
 const PACKAGE_SMOKE_SENTINEL = '[package-smoke] js_repl runtime ok';
 const PACKAGE_SMOKE_SENTRY_SENTINEL = '[package-smoke] sentry runtime ok';
 const REQUIRED_LICENSE_RESOURCES = [

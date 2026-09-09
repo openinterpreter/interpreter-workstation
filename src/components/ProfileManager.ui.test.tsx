@@ -331,7 +331,7 @@ describe('ProfileManager', () => {
     });
   });
 
-  test('builds the preset list from the Interpreter app-server provider list', async () => {
+  test('builds the preset list from the Hacienda app-server provider list', async () => {
     render(<ProfileManager startInNewProfile />);
 
     // API presets come from the runtime list (openai, groq, deepseek...).
@@ -345,7 +345,7 @@ describe('ProfileManager', () => {
     expect(screen.getByText('Custom API')).toBeVisible();
 
     // Documented gap presets stay present (hosted + terminals via synthetic entries).
-    expect(screen.getByText('Interpreter Models')).toBeVisible();
+    expect(screen.getByText('Hacienda Models')).toBeVisible();
     expect(screen.getByText('Claude Code (Terminal)')).toBeVisible();
     expect(screen.getByText('Codex (Terminal)')).toBeVisible();
 

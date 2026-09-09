@@ -555,7 +555,7 @@ class AgentTabManager {
   requestAgentWindowMessage(request: AgentWindowSendRequest): AgentThreadBinding {
     const binding = this.agentIdBindings.get(request.agentId);
     if (!binding) {
-      throw new Error(`No Interpreter agent window is registered for agent_id=${JSON.stringify(request.agentId)}.`);
+      throw new Error(`No Hacienda agent window is registered for agent_id=${JSON.stringify(request.agentId)}.`);
     }
     if (request.threadId && binding.threadId && binding.threadId !== request.threadId) {
       throw new Error(`Agent ${request.agentId} is bound to thread ${binding.threadId}, not ${request.threadId}.`);
@@ -580,7 +580,7 @@ class AgentTabManager {
   requestAgentWindowReveal(agentId: string): AgentThreadBinding {
     const binding = this.agentIdBindings.get(agentId);
     if (!binding) {
-      throw new Error(`No Interpreter agent window is registered for agent_id=${JSON.stringify(agentId)}.`);
+      throw new Error(`No Hacienda agent window is registered for agent_id=${JSON.stringify(agentId)}.`);
     }
 
     const scope = binding.windowSessionKey
@@ -596,7 +596,7 @@ class AgentTabManager {
   requestAgentWindowStop(agentId: string): AgentThreadBinding {
     const binding = this.agentIdBindings.get(agentId);
     if (!binding) {
-      throw new Error(`No Interpreter agent window is registered for agent_id=${JSON.stringify(agentId)}.`);
+      throw new Error(`No Hacienda agent window is registered for agent_id=${JSON.stringify(agentId)}.`);
     }
 
     const scope = binding.windowSessionKey
@@ -615,7 +615,7 @@ class AgentTabManager {
   requestAgentWindowClose(agentId: string): AgentThreadBinding {
     const binding = this.agentIdBindings.get(agentId);
     if (!binding) {
-      throw new Error(`No Interpreter agent window is registered for agent_id=${JSON.stringify(agentId)}.`);
+      throw new Error(`No Hacienda agent window is registered for agent_id=${JSON.stringify(agentId)}.`);
     }
 
     const scope = binding.windowSessionKey

@@ -985,7 +985,7 @@ export function ModelSetupScreen({
       pack.defaultProfileId,
       getHostedOnboardingFastProfileId(pack),
       undefined,
-      t('onboarding.modelSetup.failedProvider', { provider: 'Interpreter' }),
+      t('onboarding.modelSetup.failedProvider', { provider: 'Hacienda' }),
     );
   }, [openPackReview, t]);
 
@@ -1155,7 +1155,7 @@ export function ModelSetupScreen({
       hostedPack.defaultProfileId,
       getHostedOnboardingFastProfileId(hostedPack),
       undefined,
-      t('onboarding.modelSetup.failedProvider', { provider: 'Interpreter Managed' }),
+      t('onboarding.modelSetup.failedProvider', { provider: 'Hacienda Managed' }),
     );
   }, [hostedPackProfiles, openPackReview]);
 

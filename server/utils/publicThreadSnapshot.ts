@@ -7,7 +7,7 @@ import type {
 } from '../../shared/types/publicThread';
 
 const RUNTIME_RESTART_CONTINUE_MESSAGE =
-  'Continue the previous task now that Interpreter restarted. Continue from where you left off and verify the MCP/tool changes are available.';
+  'Continue the previous task now that Hacienda restarted. Continue from where you left off and verify the MCP/tool changes are available.';
 
 const SECRET_MARKERS = [
   /\bBearer\s+[A-Za-z0-9._~-]+/giu,

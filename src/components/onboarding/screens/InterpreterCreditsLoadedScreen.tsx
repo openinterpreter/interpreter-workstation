@@ -88,8 +88,8 @@ export function InterpreterCreditsLoadedScreen({ onNext }: InterpreterCreditsLoa
     >
       <div className="flex w-full flex-col items-center space-y-4 py-6">
         <OnboardingHeading
-          title="Interpreter usage ready"
-          description="Your account now includes Interpreter-managed usage."
+          title="Hacienda usage ready"
+          description="Your account now includes Hacienda-managed usage."
           className="space-y-1.5 pb-1.5"
           descriptionClassName="max-w-[30rem] text-ui-sm leading-5"
         />

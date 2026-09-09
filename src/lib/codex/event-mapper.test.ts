@@ -13,8 +13,8 @@ const LMSTUDIO_SINGLE_TOOL_CALL_TEMPLATE_ERROR =
 const EXPECTED_LMSTUDIO_TOOL_SUPPORT_GUIDANCE = [
   LMSTUDIO_SINGLE_TOOL_CALL_TEMPLATE_ERROR,
   "",
-  "The selected model from LM Studio doesn't support Interpreter tools.",
-  "Choose a tool-capable model in LM Studio, or switch to an Interpreter hosted model, then retry.",
+  "The selected model from LM Studio doesn't support Hacienda tools.",
+  "Choose a tool-capable model in LM Studio, or switch to a Hacienda-hosted model, then retry.",
 ].join("\n");
 const IMAGE_INPUT_ROUTE_UNAVAILABLE_MESSAGE =
   "This model is not available through an image-capable route, so it cannot inspect screenshots or images.";
@@ -442,7 +442,7 @@ describe("mapNotificationToUiEvents", () => {
     ]);
   });
 
-  test("emits error immediately when a retrying streamError reports exhausted Interpreter tokens", () => {
+  test("emits error immediately when a retrying streamError reports exhausted Hacienda tokens", () => {
     const notification: NotificationOfMethod<typeof SERVER_METHOD.streamError> =
       {
         method: SERVER_METHOD.streamError,
@@ -452,7 +452,7 @@ describe("mapNotificationToUiEvents", () => {
           willRetry: true,
           error: {
             message:
-              'unexpected status 402 Payment Required: {"error":{"detail":"[not_enough_tokens]: Insufficient interpreter tokens"}}',
+              'unexpected status 402 Payment Required: {"error":{"detail":"[not_enough_tokens]: Insufficient Hacienda tokens"}}',
             codexErrorInfo: null,
             additionalDetails: null,
           },
@@ -660,7 +660,7 @@ describe("mapNotificationToUiEvents", () => {
     if (events[0]?.event === "error") {
       assert.equal(
         eventPayloadMessage(events[0]),
-        "The selected model on OpenRouter does not support Interpreter's Responses/tool-calling contract.",
+        "The selected model on OpenRouter does not support Hacienda's Responses/tool-calling contract.",
       );
     }
   });
@@ -915,7 +915,7 @@ describe("mapNotificationToUiEvents", () => {
     if (events[0]?.event === "error") {
       assert.equal(
         eventPayloadMessage(events[0]),
-        "You've hit your ChatGPT usage limit. Try again at: Mar 28th, 2026 1:52 PM. This limit is set by your ChatGPT account and is separate from Interpreter plan usage shown in Settings.",
+        "You've hit your ChatGPT usage limit. Try again at: Mar 28th, 2026 1:52 PM. This limit is set by your ChatGPT account and is separate from Hacienda plan usage shown in Settings.",
       );
     }
   });

@@ -96,7 +96,7 @@ describe('ApprovalQueueCard', () => {
     expect(card).toHaveStyle({ boxShadow: `inset 3px 0 0 ${item.owner.color}` });
     expect(screen.getByText('Research agent')).toBeInTheDocument();
     expect(screen.getByText('builtin-shell')).toBeInTheDocument();
-    expect(screen.getByText('Interpreter wants to run a command.')).toBeInTheDocument();
+    expect(screen.getByText('Hacienda wants to run a command.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Allow for this session' })).toBeInTheDocument();
   });
 
@@ -217,7 +217,7 @@ describe('ApprovalQueueCard', () => {
         ],
         context: {
           message: 'Browser permission needed',
-          description: 'Interpreter browser settings blocked this request.',
+          description: 'Hacienda browser settings blocked this request.',
           permissionCard: {
             version: 1,
             blocks: [

@@ -133,21 +133,21 @@ class ApprovalManager {
 
   private getOwnerDisplayName(ownerKind: ApprovalOwnerKind, identity: ApprovalOwnerSnapshot['identity']): string {
     if (ownerKind === 'cli') {
-      return 'Interpreter CLI';
+      return 'Hacienda CLI';
     }
     if (ownerKind === 'overlay-agent') {
-      return 'Interpreter Overlay';
+      return 'Hacienda Overlay';
     }
     if (ownerKind === 'hidden-agent') {
       return identity.toolProfileId ? `Hidden agent (${identity.toolProfileId})` : 'Hidden agent';
     }
     if (ownerKind === 'extension-action') {
-      return identity.toolProfileId ? `Interpreter extension (${identity.toolProfileId})` : 'Interpreter extension';
+      return identity.toolProfileId ? `Hacienda extension (${identity.toolProfileId})` : 'Hacienda extension';
     }
     if (identity.toolProfileId) {
-      return `Interpreter agent (${identity.toolProfileId})`;
+      return `Hacienda agent (${identity.toolProfileId})`;
     }
-    return 'Interpreter agent';
+    return 'Hacienda agent';
   }
 
   private getOwnerColor(ownerKind: ApprovalOwnerKind, identity: ApprovalOwnerSnapshot['identity']): string {

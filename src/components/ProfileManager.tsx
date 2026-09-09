@@ -240,7 +240,7 @@ type PresetKey =
 const PRESET_SCAFFOLDING: Record<PresetKey, ProfilePreset> = {
   hosted: {
     id: 'hosted',
-    title: 'Interpreter Models',
+    title: 'Hacienda Models',
     description: 'Access top models with no setup required.',
     icon: <InterpreterLogoMark fitSquare size={20} segmentClassName="bg-current" className="text-muted-foreground" />,
     group: 'recommended',

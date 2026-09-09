@@ -88,11 +88,11 @@ vi.mock('../OnboardingContext', () => ({
 
 const hostedReviewState: ModelPackReviewState = {
   packId: 'hosted',
-  title: 'Interpreter Managed',
+  title: 'Hacienda Managed',
   subtitle: 'Choose which models to add from this provider.',
   defaultProfileId: 'onboarding:interpreter-smart',
   fastProfileId: 'onboarding:interpreter-fast',
-  errorMessage: 'Unable to add Interpreter Managed models.',
+  errorMessage: 'Unable to add Hacienda Managed models.',
   profiles: [
     {
       id: 'onboarding:interpreter-smart',

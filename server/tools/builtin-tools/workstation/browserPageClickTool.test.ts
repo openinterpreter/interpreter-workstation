@@ -34,7 +34,7 @@ describe('browser page click tool', () => {
     setBrowserPermissionReviewPromptProviderForTest(null);
   });
 
-  test('is exposed through the Interpreter builtin server', () => {
+  test('is exposed through the Hacienda builtin server', () => {
     expect(interpreterServerDefinition.tools.map((tool) => tool.name)).toContain('interpreter_browser_page_click');
   });
 
@@ -109,7 +109,7 @@ describe('browser page click tool', () => {
     setBrowserPageClickRelayEnsureProviderForTest(async () => {});
     setBrowserPageClickProviderForTest(async () => {
       throw new Error(
-        'Interpreter browser settings blocked this request. Cannot use "https://shop.example.test/checkout" because it does not match the allowed page rules (no allowed page rules). Change this in Settings > Browser.',
+        'Hacienda browser settings blocked this request. Cannot use "https://shop.example.test/checkout" because it does not match the allowed page rules (no allowed page rules). Change this in Settings > Browser.',
       );
     });
     setBrowserPermissionReviewPromptProviderForTest(async (input) => {
@@ -143,11 +143,11 @@ describe('browser page click tool', () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(textFromResult(result)).toContain('Interpreter browser settings blocked this request');
+    expect(textFromResult(result)).toContain('Hacienda browser settings blocked this request');
     expect(prompts).toHaveLength(1);
     expect(prompts[0].toolName).toBe('interpreter_browser_page_click');
     expect(prompts[0].tabRef).toBe('install:work:chrome-tab:91');
-    expect(prompts[0].message).toContain('Interpreter browser settings blocked this request');
+    expect(prompts[0].message).toContain('Hacienda browser settings blocked this request');
     expect(prompts[0].attemptedAction).toBe('Click ref browser-element:rev-1:0 in frame 0.');
     expect(prompts[0].contextAgentId).toBe('agent-1');
     expect(prompts[0].contextToolCallId).toBe('tool-call-1');
@@ -160,7 +160,7 @@ describe('browser page click tool', () => {
       calls.push({ refId: input.refId });
       if (calls.length === 1) {
         throw new Error(
-          'Interpreter browser settings blocked this request. Cannot use "https://shop.example.test/checkout" because it does not match the allowed page rules (no allowed page rules). Change this in Settings > Browser.',
+          'Hacienda browser settings blocked this request. Cannot use "https://shop.example.test/checkout" because it does not match the allowed page rules (no allowed page rules). Change this in Settings > Browser.',
         );
       }
       return {

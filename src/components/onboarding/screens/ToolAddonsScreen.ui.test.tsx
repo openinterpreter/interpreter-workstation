@@ -48,7 +48,7 @@ const ipcMocks = vi.hoisted(() => ({
       success: false,
       installed: false,
       loggedIn: false,
-      error: 'GitHub CLI is not installed or not authenticated. Run "gh auth login" in a terminal, or set GH_TOKEN/GITHUB_TOKEN before starting Interpreter.',
+      error: 'GitHub CLI is not installed or not authenticated. Run "gh auth login" in a terminal, or set GH_TOKEN/GITHUB_TOKEN before starting Hacienda.',
     })),
   },
   servers: {
@@ -129,7 +129,7 @@ describe('ToolAddonsScreen', () => {
       success: false,
       installed: false,
       loggedIn: false,
-      error: 'GitHub CLI is not installed or not authenticated. Run "gh auth login" in a terminal, or set GH_TOKEN/GITHUB_TOKEN before starting Interpreter.',
+      error: 'GitHub CLI is not installed or not authenticated. Run "gh auth login" in a terminal, or set GH_TOKEN/GITHUB_TOKEN before starting Hacienda.',
     });
     ipcMocks.servers.list.mockResolvedValue({ servers: [] });
     ipcMocks.toolServers.getSnapshot.mockResolvedValue({ servers: [] });
@@ -171,11 +171,11 @@ describe('ToolAddonsScreen', () => {
 
     render(<ToolAddonsScreen bucket="developer" onNext={() => {}} />);
 
-    expect(await screen.findByText('Interpreter Chrome extension')).toBeVisible();
+    expect(await screen.findByText('Hacienda Chrome extension')).toBeVisible();
     expect(screen.getByText('No browser profile is connected yet.')).toBeVisible();
-    expect(screen.getByText('Installing does not grant actions. Browser permissions still decide whether Interpreter asks, denies, or allows read, write, and control.')).toBeVisible();
+    expect(screen.getByText('Installing does not grant actions. Browser permissions still decide whether Hacienda asks, denies, or allows read, write, and control.')).toBeVisible();
 
-    const browserCard = screen.getByText('Interpreter Chrome extension').closest('.relative');
+    const browserCard = screen.getByText('Hacienda Chrome extension').closest('.relative');
     expect(browserCard).not.toBeNull();
     expect(browserCard).toHaveClass('md:col-span-2');
 
@@ -285,7 +285,7 @@ describe('ToolAddonsScreen', () => {
 
     render(<ToolAddonsScreen bucket="developer" onNext={() => {}} />);
 
-    const profileToggle = await screen.findByRole('checkbox', { name: 'Allow Interpreter on Chrome Work' });
+    const profileToggle = await screen.findByRole('checkbox', { name: 'Allow Hacienda on Chrome Work' });
     expect(profileToggle).toBeChecked();
 
     await user.click(profileToggle);
@@ -368,7 +368,7 @@ describe('ToolAddonsScreen', () => {
 
     render(<ToolAddonsScreen bucket="developer" onNext={() => {}} />);
 
-    const profileToggle = await screen.findByRole('checkbox', { name: 'Allow Interpreter on Chrome Personal' });
+    const profileToggle = await screen.findByRole('checkbox', { name: 'Allow Hacienda on Chrome Personal' });
     expect(profileToggle).not.toBeChecked();
 
     await user.click(profileToggle);

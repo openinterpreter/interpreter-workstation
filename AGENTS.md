@@ -89,3 +89,17 @@ the real pinned submodule path in addition to unit coverage.
 
 Never claim an end-to-end path works from typechecking alone. Prove the actual
 boundary and report any platform or credential-dependent step that was not run.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as GitHub issues via `gh`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five canonical labels as-is. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context with root `CONTEXT.md`. See `docs/agents/domain.md`.
