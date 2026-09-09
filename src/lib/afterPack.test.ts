@@ -46,6 +46,7 @@ const LICENSE_RESOURCE_FILES = [
   'licenses/THIRD_PARTY_NOTICES.md',
   'licenses/sharp-libvips-v1.2.4-THIRD-PARTY-NOTICES.md',
   'licenses/sharp-libvips-v1.3.2-THIRD-PARTY-NOTICES.md',
+  'licenses/sharp-libvips-v1.3.3-THIRD-PARTY-NOTICES.md',
   'licenses/LGPL-3.0.txt',
   'licenses/GPL-3.0.txt',
   'licenses/release-policy.json',
