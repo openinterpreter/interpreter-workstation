@@ -197,6 +197,29 @@ describe('useChat telemetry', () => {
     });
   });
 
+  test('accepts only one send when the composer is activated twice in one render', async () => {
+    const { result } = renderHook(() =>
+      useChat('interpreter', {
+        agentId: 'agent-1',
+        callerToken: 'caller-token',
+        model: 'interpreter-smart',
+      }),
+    );
+
+    act(() => {
+      result.current.sendMessage('submit exactly once');
+      result.current.sendMessage('submit exactly once');
+    });
+
+    expect(messageTexts(result.current.messages)).toEqual(['submit exactly once']);
+    await waitFor(() => {
+      const streamRequests = vi.mocked(fetch).mock.calls.filter(([input]) =>
+        String(input).includes('/api/agent/chat/stream'),
+      );
+      expect(streamRequests).toHaveLength(1);
+    });
+  });
+
   test('keeps existing messages when stopping an active turn', async () => {
     const threadId = 'thread-1';
 
