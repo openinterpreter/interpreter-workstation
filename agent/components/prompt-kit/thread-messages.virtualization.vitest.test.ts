@@ -19,6 +19,7 @@ import {
   isMountedUserMessageFullyOutOfView,
   isUserMessageFullyOutOfView,
   mountedMessageRowSelector,
+  observeStickyUserMessageLayout,
   resolveMeasuredUserMessageSize,
   type MessageBubbleProps,
 } from './thread-messages';
@@ -243,6 +244,70 @@ describe('grouping helpers used by the virtualized list', () => {
 });
 
 describe('sticky user-message visibility', () => {
+  test('recomputes sticky state when a mounted message row changes size', async () => {
+    const originalResizeObserver = globalThis.ResizeObserver;
+    const originalMutationObserver = globalThis.MutationObserver;
+    const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
+    const originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
+    let resizeCallback: (() => void) | null = null;
+    let disconnected = 0;
+
+    class TestResizeObserver {
+      constructor(callback: () => void) {
+        resizeCallback = callback;
+      }
+      observe() {}
+      disconnect() { disconnected += 1; }
+    }
+    class TestMutationObserver {
+      observe() {}
+      disconnect() { disconnected += 1; }
+    }
+
+    globalThis.ResizeObserver = TestResizeObserver as unknown as typeof ResizeObserver;
+    globalThis.MutationObserver = TestMutationObserver as unknown as typeof MutationObserver;
+    let nextFrameId = 0;
+    const frameTimers = new Map<number, ReturnType<typeof setTimeout>>();
+    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+      const id = ++nextFrameId;
+      frameTimers.set(id, setTimeout(() => {
+        frameTimers.delete(id);
+        callback(0);
+      }, 0));
+      return id;
+    }) as typeof requestAnimationFrame;
+    globalThis.cancelAnimationFrame = ((id: number) => {
+      const timer = frameTimers.get(id);
+      if (timer) clearTimeout(timer);
+      frameTimers.delete(id);
+    }) as typeof cancelAnimationFrame;
+
+    const row = document.createElement('div');
+    row.dataset.index = '0';
+    const container = document.createElement('div');
+    container.appendChild(row);
+    let recomputes = 0;
+
+    try {
+      const cleanup = observeStickyUserMessageLayout({
+        scrollContainer: container,
+        onLayoutChange: () => { recomputes += 1; },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(recomputes).toBe(1);
+      resizeCallback?.();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(recomputes).toBe(2);
+      cleanup();
+      expect(disconnected).toBe(2);
+    } finally {
+      globalThis.ResizeObserver = originalResizeObserver;
+      globalThis.MutationObserver = originalMutationObserver;
+      globalThis.requestAnimationFrame = originalRequestAnimationFrame;
+      globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
+    }
+  });
+
   test('does not treat the virtualizer estimate as a measured long bubble', () => {
     expect(resolveMeasuredUserMessageSize({
       cachedSize: 240,

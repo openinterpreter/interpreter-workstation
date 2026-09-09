@@ -854,6 +854,44 @@ export function mountedMessageRowSelector(index: number): string {
   return `[data-index="${index}"]`;
 }
 
+export function observeStickyUserMessageLayout({
+  scrollContainer,
+  onLayoutChange,
+}: {
+  scrollContainer: HTMLElement;
+  onLayoutChange: () => void;
+}): () => void {
+  let rafId: number | null = null;
+  const scheduleLayoutChange = () => {
+    if (rafId !== null) return;
+    rafId = requestAnimationFrame(() => {
+      rafId = null;
+      onLayoutChange();
+    });
+  };
+
+  const resizeObserver = new ResizeObserver(scheduleLayoutChange);
+  const observeMountedRows = () => {
+    scrollContainer.querySelectorAll<HTMLElement>('[data-index]').forEach((row) => {
+      resizeObserver.observe(row);
+    });
+  };
+
+  observeMountedRows();
+  const mutationObserver = new MutationObserver(() => {
+    observeMountedRows();
+    scheduleLayoutChange();
+  });
+  mutationObserver.observe(scrollContainer, { childList: true, subtree: true });
+  scheduleLayoutChange();
+
+  return () => {
+    mutationObserver.disconnect();
+    resizeObserver.disconnect();
+    if (rafId !== null) cancelAnimationFrame(rafId);
+  };
+}
+
 export function resolveMeasuredUserMessageSize({
   mountedSize,
   cachedSize,
@@ -1013,6 +1051,19 @@ function useStickyUserMessageHeader({
         rafIdRef.current = null;
       }
     };
+  }, [scrollContainer, computePinned]);
+
+  // A newly submitted message can mount at an estimated height, trigger the
+  // sticky header, and then grow once Markdown has laid out. That correction
+  // does not necessarily emit another scroll event. Follow mounted-row layout
+  // changes so the sticky copy disappears as soon as the source bubble is
+  // visible again.
+  useEffect(() => {
+    if (!scrollContainer) return;
+    return observeStickyUserMessageLayout({
+      scrollContainer,
+      onLayoutChange: computePinned,
+    });
   }, [scrollContainer, computePinned]);
 
   const scrollToMessage = useCallback(() => {
