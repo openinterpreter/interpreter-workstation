@@ -518,6 +518,13 @@ export const BaseTiptapComposer = forwardRef<BaseTiptapComposerRef, BaseTiptapCo
   const [hasContent, setHasContent] = useState(false);
   const [hasAttachments, setHasAttachments] = useState(false);
   const hasAttachmentsRef = useRef(false);
+  const syncHasAttachments = useCallback((targetEditor: Editor) => {
+    const nextHasAttachments = docHasAttachments(targetEditor);
+    if (nextHasAttachments !== hasAttachmentsRef.current) {
+      hasAttachmentsRef.current = nextHasAttachments;
+      setHasAttachments(nextHasAttachments);
+    }
+  }, []);
   const [composerPreviewText, setComposerPreviewText] = useState<string | null>(null);
   const hasContentRef = useRef(false);
   const { showToast } = useToast();
@@ -1050,9 +1057,7 @@ export const BaseTiptapComposer = forwardRef<BaseTiptapComposerRef, BaseTiptapCo
       const nextHasContent = hasSubmissionContent(getSerializedSubmission(editor));
       hasContentRef.current = nextHasContent;
       setHasContent(nextHasContent);
-      const nextHasAttachments = docHasAttachments(editor);
-      hasAttachmentsRef.current = nextHasAttachments;
-      setHasAttachments(nextHasAttachments);
+      syncHasAttachments(editor);
       if (autoFocus) {
         editor.commands.focus();
       }
@@ -1083,11 +1088,7 @@ export const BaseTiptapComposer = forwardRef<BaseTiptapComposerRef, BaseTiptapCo
         hasContentRef.current = nextHasContent;
         setHasContent(nextHasContent);
       }
-      const nextHasAttachments = docHasAttachments(editor);
-      if (nextHasAttachments !== hasAttachmentsRef.current) {
-        hasAttachmentsRef.current = nextHasAttachments;
-        setHasAttachments(nextHasAttachments);
-      }
+      syncHasAttachments(editor);
       applyMentionCompactClasses(editor.view.dom);
       // Drop attachment records whose chips were removed from the document.
       const liveIds = new Set<string>();
@@ -1108,6 +1109,7 @@ export const BaseTiptapComposer = forwardRef<BaseTiptapComposerRef, BaseTiptapCo
     getSerializedSubmission,
     hasSubmissionContent,
     highlightToolKeywords,
+    syncHasAttachments,
   ]);
 
   const lastAppliedInitialContentRef = useRef<string | null>(null);

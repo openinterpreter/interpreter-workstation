@@ -23,6 +23,7 @@ const deterministicSpecs = [
   "**/pdf-annotation-interactions.spec.ts",
   "**/office-preview.spec.ts",
   "**/reasoning-profile-switch.spec.ts",
+  "**/composer-file-redaction.spec.ts",
 ];
 const externalSpecs = [
   "**/agent-shell-permissions.spec.ts",

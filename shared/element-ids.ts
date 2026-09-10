@@ -83,6 +83,7 @@ export const VOICE_OVERLAY_TEXT_ID = 'voice-overlay-text' as const;
 export const SEND_BUTTON_ICON_ID = 'send-button-icon' as const;
 export const MENTION_POPUP_ID = 'mention-popup' as const;
 export const MENTION_NODE_VIEW_CLASS = 'mention-node-view' as const;
+export const COMPOSER_ATTACHMENT_CHIP_ID = 'composer-attachment-chip' as const;
 
 // =============================================================================
 // QUEUED MESSAGES
@@ -367,6 +368,7 @@ export const ELEMENT_IDS = {
   sendButtonIcon: SEND_BUTTON_ICON_ID,
   mentionPopup: MENTION_POPUP_ID,
   mentionNodeView: `.${MENTION_NODE_VIEW_CLASS}`,
+  composerAttachmentChip: COMPOSER_ATTACHMENT_CHIP_ID,
   queuedMessagesContainer: QUEUED_MESSAGES_CONTAINER_ID,
   queuedMessagesClearAll: QUEUED_MESSAGES_CLEAR_ALL_ID,
   userMessageContent: USER_MESSAGE_CONTENT_ID,

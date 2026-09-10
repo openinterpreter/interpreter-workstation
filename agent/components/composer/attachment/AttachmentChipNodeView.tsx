@@ -8,6 +8,7 @@
 
 import { useCallback } from 'react';
 import { NodeViewWrapper } from '@tiptap/react';
+import { COMPOSER_ATTACHMENT_CHIP_ID } from '../../../../shared/element-ids';
 import { AttachmentChipBody } from './AttachmentChipBody';
 import type { ComposerAttachmentAttrs } from './types';
 import { useAttachmentPreviewTrigger } from './useAttachmentPreviewTrigger';
@@ -40,6 +41,7 @@ export function AttachmentChipNodeView({
     <NodeViewWrapper
       as="span"
       ref={wrapperRef}
+      data-testid={COMPOSER_ATTACHMENT_CHIP_ID}
       data-attachment-preview-key={previewSourceKey}
       data-attachment-kind={attrs.kind}
       className="composer-attachment-chip"
