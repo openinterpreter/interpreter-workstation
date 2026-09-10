@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
+import { detectRegex } from './regex-detector';
+
 import {
   buildPiiLabelAttributes,
   buildRedactedText,
@@ -52,6 +54,16 @@ describe('buildRedactedText', () => {
       { category: 'email', start: 5, end: 10, text: 'hn@ex', confidence: 0.4 },
     ]);
     expect(result.redactedText).toBe('[EMAIL_0]');
+  });
+
+  test('redacts PII inside inlined pasted-text attachment bodies', () => {
+    // Mirrors the send boundary: serializeEditorWithAttachments inlines
+    // pasted-text bodies into submission.text, which handleSend redacts.
+    const text = 'see notes\n<pasted-content label="notes">\nCall john@example.com\n</pasted-content>';
+    const { redactedText, rehydrationMap } = buildRedactedText(text, detectRegex(text));
+    expect(redactedText).toContain('[EMAIL_0]');
+    expect(redactedText).not.toContain('john@example.com');
+    expect(rehydrationMap['[EMAIL_0]']).toBe('john@example.com');
   });
 });
 

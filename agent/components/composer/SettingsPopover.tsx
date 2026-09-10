@@ -92,7 +92,7 @@ function resolveRuntimeModelProviderFromExplicitSelection(options: {
     : getRuntimeProfile(options.codexProfileId).modelProvider;
 }
 
-function resolveRuntimeModelProviderFromModelConfig(
+export function resolveRuntimeModelProviderFromModelConfig(
   modelConfig: AgentModelConfig,
 ): string | null {
   if (modelConfig.codexProfileId) {

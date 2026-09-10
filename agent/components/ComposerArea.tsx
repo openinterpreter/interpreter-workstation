@@ -28,6 +28,7 @@ import {
 } from './ComposerArea.helpers';
 import { ContextPreview, calculateContextDiff, formatContextDiffForMessage, getLastSentContext, setLastSentContext, isContextEnabled } from './composer/ContextPreview';
 import { WorkspacePopover } from './composer/WorkspacePopover';
+import { resolveRuntimeModelProviderFromModelConfig } from './composer/SettingsPopover';
 import { QueuedMessagesDisplay } from './composer/QueuedMessagesDisplay';
 import { SuggestionChips } from './composer/SuggestionChips';
 import { ComposerSecondaryButton } from './composer/ComposerSecondaryButton';
@@ -263,7 +264,7 @@ function resolveManagedSttBackend(backend: SttBackend): SttBackend {
 export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerAreaProps>(function ComposerArea({
   isTerminal,
   agentId,
-  modelConfig: _modelConfig, // Reserved for future use
+  modelConfig,
   workspacePath,
   isStreaming = false,
   autoStartVoiceMode = false,
@@ -289,6 +290,9 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
   "use no memo";
 
   const { t, i18n } = useTranslation();
+  const modelProvider = modelConfig
+    ? resolveRuntimeModelProviderFromModelConfig(modelConfig)
+    : null;
   const layout = useContext(LayoutContext);
   const { showToast } = useToast();
   const marketingDemoMode = !isTerminal && isMarketingDemoMode();
@@ -3889,6 +3893,7 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
         renderSendButton={renderSendButton}
         settingsContent={settingsContent}
         skillsWorkspacePath={effectiveWorkspacePath ?? null}
+        modelProvider={modelProvider}
       />
     </div>
   );

@@ -1809,6 +1809,8 @@
   "basemind.shield.tooltip": "Your documents are pseudonymized before being sent to {{provider}}.",
   "basemind.shield.errorTooltip": "PII redaction is unavailable. Your documents may be sent to {{provider}} without redaction.",
   "basemind.privacyHint": "PII redacted",
+  "basemind.filesWillBeRedacted": "Files will be redacted before sending to {{provider}} via basemind",
+  "basemind.attachmentRedactionUnavailable": "Attachment redaction is unavailable. Your files were not sent.",
   "basemind.indexing.progress_one": "Indexing {{count}} file…",
   "basemind.indexing.progress_other": "Indexing {{count}} files…",
   "basemind.indexing.ready": "Ready",

@@ -5,6 +5,7 @@ import { workspaceScan } from '../../src/ipc';
 import type { WorkspaceScanStatus } from '../../src/ipc';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../src/components/ui/tooltip';
 import { cn } from '../../src/lib/utils';
+import { needsRedactionForProvider } from '../../src/lib/pii/redaction';
 
 export type ShieldState = 'hidden' | 'active' | 'error';
 
@@ -28,7 +29,7 @@ export function usePrivacyShieldState(modelProvider: string | null | undefined):
 
   if (!status || !modelProvider) return 'hidden';
 
-  const needsRedaction = !['mistral', 'local'].includes(modelProvider.toLowerCase());
+  const needsRedaction = needsRedactionForProvider(modelProvider);
   if (!needsRedaction) return 'hidden';
   if (!status.xbergAvailable) return 'error';
   if (!status.redactionActive) return 'error';

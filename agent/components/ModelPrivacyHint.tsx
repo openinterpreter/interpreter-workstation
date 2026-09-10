@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { Lock } from 'lucide-react';
 import { cn } from '../../src/lib/utils';
+import { needsRedactionForProvider } from '../../src/lib/pii/redaction';
 
 interface ModelPrivacyHintProps {
   provider: string;
@@ -10,7 +11,7 @@ interface ModelPrivacyHintProps {
 export function ModelPrivacyHint({ provider, className }: ModelPrivacyHintProps) {
   const { t } = useTranslation();
 
-  const needsRedaction = !['mistral', 'local'].includes(provider.toLowerCase());
+  const needsRedaction = needsRedactionForProvider(provider);
   if (!needsRedaction) return null;
 
   return (
