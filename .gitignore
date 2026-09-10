@@ -123,3 +123,6 @@ scenario-runs/
 public/file-viewer/
 public/vendor/
 public/flyfish-viewer-*.json
+
+# Git worktrees (isolated workspaces, never commit contents)
+.worktrees/
