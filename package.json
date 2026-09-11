@@ -320,7 +320,7 @@
     "semver": "7.7.3",
     "sherpa-onnx": "1.12.29",
     "sign-pdf-lib": "2.0.3",
-    "smol-toml": "^1.6.1",
+    "smol-toml": "^1.8.0",
     "tailwind-merge": "3.4.0",
     "tailwindcss-animate": "1.0.7",
     "tar-stream": "3.1.8",
