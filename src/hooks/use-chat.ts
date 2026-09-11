@@ -472,6 +472,8 @@ export type ChatMessage = {
   role: "user" | "assistant";
   parts: ChatMessagePart[];
   serverMessageId?: string;
+  /** Exact outbound text while an optimistic user row awaits its server echo. */
+  pendingServerEchoText?: string;
   attachments?: StreamImageAttachment[];
 };
 
@@ -1532,6 +1534,7 @@ export function useChat(
         id: crypto.randomUUID(),
         role: "user",
         parts: [{ kind: "text", content: buildUserMessagePreview(message) }],
+        pendingServerEchoText: cleanedMessage,
         ...(pendingAttachments.length > 0
           ? { attachments: pendingAttachments }
           : {}),

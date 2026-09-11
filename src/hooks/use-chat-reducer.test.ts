@@ -486,6 +486,42 @@ describe("applyChatEvent", () => {
       assert.equal(textContent(state.draft!), "after follow-up");
     });
 
+    test("should_replace_the_matching_optimistic_user_message_with_its_server_echo", () => {
+      const attachment = {
+        id: "attachment-1",
+        kind: "image" as const,
+        name: "brief.pdf",
+        mimeType: "application/pdf",
+        dataUrl: "data:application/pdf;base64,AA==",
+      };
+      const state: ChatState = {
+        ...createInitialChatState(),
+        messages: [{
+          id: "optimistic-user",
+          role: "user",
+          parts: [{ kind: "text", content: "Create the brief" }],
+          pendingServerEchoText: "Create the brief",
+          attachments: [attachment],
+        }],
+      };
+
+      const next = apply(state, userMessageEvent("Create the brief", "server-user-1")).state;
+
+      assert.equal(next.messages.length, 1);
+      assert.equal(next.messages[0]?.id, "server-user-1");
+      assert.equal(next.messages[0]?.pendingServerEchoText, undefined);
+      assert.deepEqual(next.messages[0]?.attachments, [attachment]);
+    });
+
+    test("should_not_append_the_same_server_user_message_twice", () => {
+      let state = createInitialChatState();
+      state = apply(state, userMessageEvent("Create the brief", "server-user-1")).state;
+      state = apply(state, userMessageEvent("Create the brief", "server-user-1")).state;
+
+      assert.equal(state.messages.length, 1);
+      assert.equal(state.messages[0]?.id, "server-user-1");
+    });
+
     test("should_preserve_post_tool_reasoning_order_after_split", () => {
       let state = createInitialChatState();
       state = apply(state, deltaEvent("Checking.", "msg_1")).state;

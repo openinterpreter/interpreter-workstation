@@ -156,6 +156,35 @@ function commitDraft(
   };
 }
 
+function reconcileCommittedUserMessage(
+  messages: ChatMessage[],
+  incoming: ChatMessage,
+  echoedText: string,
+): ChatMessage[] {
+  if (messages.some((message) => message.id === incoming.id)) {
+    return messages;
+  }
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const candidate = messages[index];
+    if (!candidate || candidate.role !== "user") {
+      break;
+    }
+    if (candidate.pendingServerEchoText !== echoedText) {
+      continue;
+    }
+
+    const next = [...messages];
+    next[index] = {
+      ...incoming,
+      ...(candidate.attachments ? { attachments: candidate.attachments } : {}),
+    };
+    return next;
+  }
+
+  return [...messages, incoming];
+}
+
 function updateToolInMessages(
   messages: ChatMessage[],
   item: ToolCallInfo["item"],
@@ -434,16 +463,19 @@ export function applyChatEvent(
         nextState = commitDraft(nextState, generateId);
       }
 
+      const committedUserMessage: ChatMessage = {
+        id: c.payload.itemId,
+        role: "user",
+        parts: [{ kind: "text", content: c.payload.text }],
+      };
+
       return {
         ...nextState,
-        messages: [
-          ...nextState.messages,
-          {
-            id: c.payload.itemId,
-            role: "user" as const,
-            parts: [{ kind: "text" as const, content: c.payload.text }],
-          },
-        ],
+        messages: reconcileCommittedUserMessage(
+          nextState.messages,
+          committedUserMessage,
+          c.payload.text,
+        ),
       };
     })
 
