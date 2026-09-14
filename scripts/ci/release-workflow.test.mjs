@@ -33,6 +33,13 @@ test('publishing authority is not exposed at job scope', () => {
   assert.equal((publish.match(/AWS_SECRET_ACCESS_KEY:/g) ?? []).length, 3);
   assert.equal((publish.match(/GH_TOKEN:/g) ?? []).length, 3);
 });
+test('passwordless Apple certificate is protected before electron-builder imports it', () => {
+  const build = section('  build:', '  publish:');
+  assert.match(build, /openssl pkcs12 -in "\$original" -passin pass: -nodes/);
+  assert.match(build, /openssl pkcs12 -export[^\n]+-passout "pass:\$password"/);
+  assert.doesNotMatch(build, /CSC_KEY_PASSWORD:\s*""/);
+});
+
 
 test('the GitHub read token is scoped to dependency installation', () => {
   const verify = section('  verify:', '  build:');

@@ -150,12 +150,25 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
       - name: Set the public package version
         run: bun scripts/ci/set-version.ts --version "${{ needs.authorize.outputs.version }}"
+      - name: Prepare the passwordless macOS signing certificate
+        if: matrix.os == 'macos'
+        env:
+          SOURCE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+        run: |
+          original="$RUNNER_TEMP/apple-certificate.p12"
+          pem="$RUNNER_TEMP/apple-certificate.pem"
+          protected="$RUNNER_TEMP/apple-certificate-protected.p12"
+          printf '%s' "$SOURCE_CERTIFICATE" | base64 --decode > "$original"
+          openssl pkcs12 -in "$original" -passin pass: -nodes -out "$pem"
+          password=$(openssl rand -hex 32)
+          echo "::add-mask::$password"
+          openssl pkcs12 -export -in "$pem" -out "$protected" -passout "pass:$password"
+          echo "CSC_LINK=$protected" >> "$GITHUB_ENV"
+          echo "CSC_KEY_PASSWORD=$password" >> "$GITHUB_ENV"
       - name: Build signed and notarized macOS package
         if: matrix.os == 'macos'
         env:
           PYTHON: /usr/bin/python3
-          CSC_LINK: ${{ secrets.APPLE_CERTIFICATE }}
-          CSC_KEY_PASSWORD: ""
           CSC_NAME: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
