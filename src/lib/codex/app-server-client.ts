@@ -70,7 +70,8 @@ import { resolveInterpreterHome } from "../../../shared/interpreterHome";
 async function getConfigApprovalPolicy(): Promise<string> {
   try {
     const { getCodexApprovalPolicy } = await import("../../../server/configStore");
-    return await getCodexApprovalPolicy();
+    const policy = await getCodexApprovalPolicy();
+    return policy === "untrusted" ? "on-request" : policy;
   } catch {
     return "never";
   }
