@@ -355,7 +355,9 @@ function isProfileValid(profile: Profile, providers: Record<string, Provider>): 
       const apiKey = trimToUndefined(profile.apiKey ?? referencedProvider?.apiKey);
       const environmentKey = trimToUndefined(profile.environmentKey);
       const hasValidDeepSeekRuntime = !isDeepSeekApiBaseURL(baseURL)
-        || (profile.codexProfileId === 'deepseek' && profile.wireApi === 'chat' && profile.useResponsesApi === false);
+        || (profile.codexProfileId === 'deepseek'
+          && ((profile.wireApi === 'chat' && profile.useResponsesApi === false)
+            || (profile.wireApi === 'responses' && profile.useResponsesApi === true)));
       return Boolean(
         baseURL
         && isApiModelValid(profile.modelId, baseURL)
@@ -594,8 +596,13 @@ function repairProfile(profile: Profile, providers: Record<string, Provider>): P
         apiFormat: 'openai',
         codexProfileId,
         providerConfig: undefined,
-        wireApi: profile.wireApi === 'chat' || codexProfileId === 'deepseek' ? 'chat' : 'responses',
-        useResponsesApi: codexProfileId !== 'deepseek',
+        wireApi: profile.wireApi === 'chat'
+          ? 'chat'
+          : profile.wireApi === 'responses'
+            ? 'responses'
+            : codexProfileId === 'deepseek' ? 'chat' : 'responses',
+        useResponsesApi: profile.wireApi === 'responses'
+          || (profile.wireApi !== 'chat' && codexProfileId !== 'deepseek'),
       };
     }
     case 'agent': {

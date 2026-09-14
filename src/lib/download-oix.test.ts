@@ -14,6 +14,10 @@ import {
 } from "../../scripts/download-oix.mjs";
 
 describe("download-oix helpers", () => {
+  test("pins the public OIX runtime release", () => {
+    assert.equal(PINNED_VERSION, "rust-v0.0.43");
+  });
+
   test("maps supported app platforms to public OIX package assets", () => {
     assert.deepEqual(getArchiveConfig("darwin-arm64"), {
       target: "aarch64-apple-darwin",

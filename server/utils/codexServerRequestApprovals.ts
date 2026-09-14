@@ -763,7 +763,7 @@ function buildMcpElicitationQuestionFlow(
   // Workstation does not advertise the OpenAI-specific extended-form
   // capability. If a server sends it anyway, cancel safely rather than treating
   // arbitrary JSON as the standard MCP form schema.
-  if (params.mode === 'openai/form') {
+  if (params.mode === 'openai/form' || params.mode === 'openaiForm') {
     return null;
   }
 

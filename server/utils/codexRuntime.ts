@@ -487,7 +487,7 @@ function codexProfileFromStoredProfile(profile: AppProfile): CodexProfile {
       baseUrl: profile.baseURL,
       apiKey: profile.apiKey,
       model: profile.modelId,
-      wireApi: 'chat',
+      wireApi: profile.wireApi ?? 'chat',
     });
   }
 
@@ -739,7 +739,7 @@ export function resolveCodexProfileFromModelConfig(
         apiKey: modelConfig.apiKey,
         environmentKey: modelConfig.environmentKey,
         model: modelConfig.modelId,
-        wireApi: explicit === 'deepseek' ? 'chat' : modelConfig.wireApi,
+        wireApi: explicit === 'deepseek' ? modelConfig.wireApi ?? 'chat' : modelConfig.wireApi,
       }), modelConfig);
     }
     return withModelConfigHarness(getCodexProfile(explicit), modelConfig);
@@ -800,7 +800,7 @@ export function resolveCodexProfileFromModelConfig(
       apiKey: modelConfig.apiKey,
       environmentKey: modelConfig.environmentKey,
       model: modelConfig.modelId,
-      wireApi: presetId === 'deepseek' ? 'chat' : modelConfig.wireApi,
+      wireApi: presetId === 'deepseek' ? modelConfig.wireApi ?? 'chat' : modelConfig.wireApi,
     }), modelConfig);
   }
 

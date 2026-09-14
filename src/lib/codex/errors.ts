@@ -1233,6 +1233,8 @@ function formatTurnErrorEnglish(
     .with("usageLimitExceeded", () =>
       formatUsageLimitExceeded(error.message, error.additionalDetails, context),
     )
+    .with("rateLimitExceeded", () => "Rate limit exceeded. Try again later.")
+    .with("misalignmentPolicyViolation", () => unwrapJsonErrorMessage(error.message))
     .with(
       "contextWindowExceeded",
       () => "Context window exceeded. Start a new conversation.",

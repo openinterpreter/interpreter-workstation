@@ -3390,11 +3390,11 @@ describe("StdioJsonRpcTransport", () => {
     }
   });
 
-  test("injects bundled runtime config when spawning interpreter app-server", async () => {
+  test("maps legacy untrusted approval policy when spawning interpreter app-server", async () => {
     setConfigOverride({
       agents: {},
       globalDisabledTools: [],
-      codexApprovalPolicy: "on-request",
+      codexApprovalPolicy: "untrusted",
       codexSandboxMode: "workspace-write",
       codexNetworkAccess: false,
     });

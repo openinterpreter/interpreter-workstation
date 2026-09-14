@@ -991,7 +991,7 @@ describe('resolveCodexProfileForStreamRequest', () => {
     expect(result.requestedModel).toBe('deepseek-v4-flash');
   });
 
-  test('routes stale custom DeepSeek API profiles through Chat Completions', async () => {
+  test('honors an explicit Responses selection for stored DeepSeek API profiles', async () => {
     setConfigOverride({
       agents: {},
       profiles: [
@@ -1022,7 +1022,7 @@ describe('resolveCodexProfileForStreamRequest', () => {
 
     expect(result.profile.modelProvider).toBe(buildAppManagedModelProviderId('deepseek'));
     expect(result.profile.providerConfig?.base_url).toBe('https://api.deepseek.com');
-    expect(result.profile.providerConfig?.wire_api).toBe('chat');
+    expect(result.profile.providerConfig?.wire_api).toBe('responses');
     expect(result.requestedModel).toBe('deepseek-v4-flash');
   });
 
@@ -1061,7 +1061,7 @@ describe('resolveCodexProfileForStreamRequest', () => {
     expect(result.requestedModel).toBe('anthropic/claude-sonnet-4.6');
   });
 
-  test('routes DeepSeek model configs through Chat Completions even when replayed as custom profiles', () => {
+  test('honors an explicit Responses selection for DeepSeek model configs', () => {
     const profile = resolveCodexProfileFromModelConfig({
       provider: 'api',
       modelId: 'deepseek-v4-flash',
@@ -1075,7 +1075,7 @@ describe('resolveCodexProfileForStreamRequest', () => {
 
     expect(profile.modelProvider).toBe(buildAppManagedModelProviderId('deepseek'));
     expect(profile.providerConfig?.base_url).toBe('https://api.deepseek.com');
-    expect(profile.providerConfig?.wire_api).toBe('chat');
+    expect(profile.providerConfig?.wire_api).toBe('responses');
   });
 
   test('honors an explicit Responses override for local Ollama model configs', () => {
