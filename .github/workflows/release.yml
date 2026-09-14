@@ -150,6 +150,9 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
       - name: Set the public package version
         run: bun scripts/ci/set-version.ts --version "${{ needs.authorize.outputs.version }}"
+      - name: Patch electron-builder temporary keychain authentication
+        if: matrix.os == 'macos'
+        run: node scripts/ci/patch-electron-builder-keychain.mjs
       - name: Prepare the passwordless macOS signing certificate
         if: matrix.os == 'macos'
         env:
@@ -273,11 +276,9 @@ jobs:
             printf '# Interpreter Workstation v%s\n\n' "$RELEASE_VERSION"
             printf 'Official Interpreter build from [%s@%s](%s/%s/commit/%s).\n\n' \
               "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_SHA"
+            cat RELEASE_NOTES.md
             cat <<'EOF'
-          This release is built from the public repository, uses the checked-in official distribution profile, includes the checksummed OIX runtime named in `RELEASE-MANIFEST.json`, and is published through the protected production release environment.
-
           Verify file hashes with `SHA256SUMS` and GitHub build provenance with:
-
           ```sh
           gh attestation verify <downloaded-file> --repo openinterpreter/interpreter-workstation
           ```

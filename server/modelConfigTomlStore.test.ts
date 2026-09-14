@@ -158,7 +158,7 @@ describe('modelConfigTomlStore recovery', () => {
     expect(issues).toEqual([]);
   });
 
-  test('repairs stale DeepSeek API profiles that were saved as custom Responses endpoints', () => {
+  test('repairs the DeepSeek preset while preserving an explicit Responses selection', () => {
     const state = buildState([
       {
         id: 'custom:deepseek-api',
@@ -189,9 +189,9 @@ describe('modelConfigTomlStore recovery', () => {
         apiKey: 'sk-deepseek',
         apiFormat: 'openai',
         codexProfileId: 'deepseek',
-        wireApi: 'chat',
+        wireApi: 'responses',
         isBuiltin: false,
-        useResponsesApi: false,
+        useResponsesApi: true,
       },
     ]);
     expect(issues).toContain('Repaired profile "DeepSeek API" from the saved configuration.');
