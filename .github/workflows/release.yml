@@ -19,7 +19,7 @@ jobs:
   authorize:
     name: Authorize release
     if: >-
-      github.actor == 'interpreterwork' &&
+      github.actor == 'interpreterwork-automation[bot]' &&
       github.ref == 'refs/heads/main' &&
       inputs.confirm == 'release'
     runs-on: ubuntu-latest

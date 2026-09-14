@@ -13,9 +13,9 @@ function section(start, end) {
   return workflow.slice(startIndex, endIndex);
 }
 
-test('official release is dispatched only by InterpreterWork from main', () => {
+test('official release is dispatched only by the InterpreterWork App from main', () => {
   const authorize = section('  authorize:', '  verify:');
-  assert.match(authorize, /github\.actor == 'interpreterwork'/);
+  assert.match(authorize, /github\.actor == 'interpreterwork-automation\[bot\]'/);
   assert.match(authorize, /github\.ref == 'refs\/heads\/main'/);
   assert.match(authorize, /inputs\.confirm == 'release'/);
 });
