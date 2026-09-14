@@ -159,7 +159,7 @@ jobs:
           pem="$RUNNER_TEMP/apple-certificate.pem"
           protected="$RUNNER_TEMP/apple-certificate-protected.p12"
           printf '%s' "$SOURCE_CERTIFICATE" | base64 --decode > "$original"
-          openssl pkcs12 -in "$original" -passin pass: -nodes -out "$pem"
+          openssl pkcs12 -legacy -in "$original" -passin pass: -nodes -out "$pem"
           password=$(openssl rand -hex 32)
           echo "::add-mask::$password"
           openssl pkcs12 -export -in "$pem" -out "$protected" -passout "pass:$password"

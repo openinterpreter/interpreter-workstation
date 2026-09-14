@@ -35,7 +35,7 @@ test('publishing authority is not exposed at job scope', () => {
 });
 test('passwordless Apple certificate is protected before electron-builder imports it', () => {
   const build = section('  build:', '  publish:');
-  assert.match(build, /openssl pkcs12 -in "\$original" -passin pass: -nodes/);
+  assert.match(build, /openssl pkcs12 -legacy -in "\$original" -passin pass: -nodes/);
   assert.match(build, /openssl pkcs12 -export[^\n]+-passout "pass:\$password"/);
   assert.doesNotMatch(build, /CSC_KEY_PASSWORD:\s*""/);
 });
