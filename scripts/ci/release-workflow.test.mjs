@@ -38,7 +38,7 @@ test('passwordless Apple certificate is protected before electron-builder import
   const build = section('  build:', '  publish:');
   assert.match(build, /brew install openssl@3/);
   assert.match(build, /"\$openssl_bin" pkcs12 -legacy -in "\$original" -passin pass: -nodes/);
-  assert.match(build, /"\$openssl_bin" pkcs12 -export[^\n]+-passout "pass:\$password"/);
+  assert.match(build, /"\$openssl_bin" pkcs12 -legacy -export[^\n]+-passout "pass:\$password"/);
   assert.doesNotMatch(build, /CSC_KEY_PASSWORD:\s*""/);
 });
 

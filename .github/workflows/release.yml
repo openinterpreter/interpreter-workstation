@@ -164,7 +164,7 @@ jobs:
           "$openssl_bin" pkcs12 -legacy -in "$original" -passin pass: -nodes -out "$pem"
           password=$("$openssl_bin" rand -hex 32)
           echo "::add-mask::$password"
-          "$openssl_bin" pkcs12 -export -in "$pem" -out "$protected" -passout "pass:$password"
+          "$openssl_bin" pkcs12 -legacy -export -in "$pem" -out "$protected" -passout "pass:$password"
           echo "CSC_LINK=$protected" >> "$GITHUB_ENV"
           echo "CSC_KEY_PASSWORD=$password" >> "$GITHUB_ENV"
       - name: Build signed and notarized macOS package
