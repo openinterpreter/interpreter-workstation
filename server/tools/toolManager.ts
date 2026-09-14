@@ -331,7 +331,7 @@ export class ToolManager {
 
   private buildDisplayMcpStatusFromCliAuth(
     persistedConfig: Awaited<ReturnType<typeof configStore.listMcpServers>>[number],
-    authStatus?: "unsupported" | "notLoggedIn" | "bearerToken" | "oAuth",
+    authStatus?: "unknown" | "unsupported" | "notLoggedIn" | "bearerToken" | "oAuth",
   ): ToolServerStatus {
     const baseStatus = this.disconnectedPersistedMcpStatus(persistedConfig);
 
@@ -350,7 +350,7 @@ export class ToolManager {
       return baseStatus;
     }
 
-    if (authStatus) {
+    if (authStatus && authStatus !== "unknown") {
       return {
         ...baseStatus,
         state: {

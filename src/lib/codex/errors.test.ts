@@ -168,6 +168,18 @@ describe("formatTurnError", () => {
     );
   });
 
+  test("should_return_friendly_message_when_rate_limit_exceeded", () => {
+    const result = formatTurnError(makeTurnError("raw", "rateLimitExceeded"));
+    assert.equal(result, "Rate limit exceeded. Try again later.");
+  });
+
+  test("should_preserve_message_when_misalignment_policy_violated", () => {
+    const result = formatTurnError(
+      makeTurnError("Policy guidance", "misalignmentPolicyViolation"),
+    );
+    assert.equal(result, "Policy guidance");
+  });
+
   test("should_map_chatgpt_account_unsupported_model_to_profile_settings_guidance", () => {
     const result = formatTurnError(
       makeTurnError(
