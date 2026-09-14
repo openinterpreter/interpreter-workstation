@@ -155,14 +155,16 @@ jobs:
         env:
           SOURCE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
         run: |
+          brew install openssl@3
+          openssl_bin="$(brew --prefix openssl@3)/bin/openssl"
           original="$RUNNER_TEMP/apple-certificate.p12"
           pem="$RUNNER_TEMP/apple-certificate.pem"
           protected="$RUNNER_TEMP/apple-certificate-protected.p12"
           printf '%s' "$SOURCE_CERTIFICATE" | base64 --decode > "$original"
-          openssl pkcs12 -legacy -in "$original" -passin pass: -nodes -out "$pem"
-          password=$(openssl rand -hex 32)
+          "$openssl_bin" pkcs12 -legacy -in "$original" -passin pass: -nodes -out "$pem"
+          password=$("$openssl_bin" rand -hex 32)
           echo "::add-mask::$password"
-          openssl pkcs12 -export -in "$pem" -out "$protected" -passout "pass:$password"
+          "$openssl_bin" pkcs12 -export -in "$pem" -out "$protected" -passout "pass:$password"
           echo "CSC_LINK=$protected" >> "$GITHUB_ENV"
           echo "CSC_KEY_PASSWORD=$password" >> "$GITHUB_ENV"
       - name: Build signed and notarized macOS package
