@@ -385,7 +385,8 @@
     "patchedDependencies": {
       "whatsapp-rust-bridge@0.6.0-alpha.42": "patches/whatsapp-rust-bridge@0.6.0-alpha.42.patch",
       "@oxidezap/baileyrs@0.0.32": "patches/@oxidezap__baileyrs@0.0.32.patch",
-      "@jimp/core@0.22.12": "patches/@jimp__core@0.22.12.patch"
+      "@jimp/core@0.22.12": "patches/@jimp__core@0.22.12.patch",
+      "app-builder-lib@26.15.0": "patches/app-builder-lib@26.15.0.patch"
     }
   }
 }
