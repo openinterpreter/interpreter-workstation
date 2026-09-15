@@ -853,9 +853,46 @@ export function mergeChatHistory(
   direction: 'older' | 'newer',
 ): ChatMessage[] {
   const incomingById = new Map(incoming.map((message) => [message.id, message]));
-  const updatedCurrent = current.map((message) => incomingById.get(message.id) ?? message);
+  const consumedIncomingIds = new Set<string>();
+  const updatedCurrent = current.map((message) => {
+    const matchingId = incomingById.get(message.id);
+    if (matchingId) {
+      consumedIncomingIds.add(matchingId.id);
+      return matchingId;
+    }
+
+    if (
+      direction === 'newer'
+      && message.role === 'user'
+      && message.pendingServerEchoText
+    ) {
+      const visibleText = textContent(message);
+      const matchingEcho = incoming.find((candidate) => {
+        if (
+          candidate.role !== 'user'
+          || consumedIncomingIds.has(candidate.id)
+        ) {
+          return false;
+        }
+        const incomingText = textContent(candidate);
+        return incomingText === message.pendingServerEchoText
+          || incomingText === visibleText;
+      });
+      if (matchingEcho) {
+        consumedIncomingIds.add(matchingEcho.id);
+        return {
+          ...matchingEcho,
+          ...(message.attachments ? { attachments: message.attachments } : {}),
+        };
+      }
+    }
+
+    return message;
+  });
   const currentIds = new Set(current.map((message) => message.id));
-  const additions = incoming.filter((message) => !currentIds.has(message.id));
+  const additions = incoming.filter(
+    (message) => !currentIds.has(message.id) && !consumedIncomingIds.has(message.id),
+  );
   return direction === 'older'
     ? [...additions, ...updatedCurrent]
     : [...updatedCurrent, ...additions];
