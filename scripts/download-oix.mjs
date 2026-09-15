@@ -18,7 +18,7 @@ const ROOT = path.join(__dirname, '..');
 export const OIX_DIR_NAME = 'oix';
 const OIX_DIR = path.join(ROOT, 'resources', OIX_DIR_NAME);
 export const OIX_REPO = 'openinterpreter/openinterpreter';
-export const PINNED_VERSION = 'rust-v0.0.43';
+export const PINNED_VERSION = 'rust-v0.0.44';
 
 const PLATFORMS = {
   'darwin-arm64': {

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, test } from "bun:test";
 import assert from "node:assert/strict";
 import { rmSync } from "node:fs";
+import { createServer } from "node:http";
 
 import {
   CodexAppServerClient,
@@ -32,6 +33,8 @@ describeIf("Thread history persistence (integration)", () => {
   let transport: StdioJsonRpcTransport;
   let client: CodexAppServerClient;
   let threadId: string;
+  let providerServer: ReturnType<typeof createServer>;
+  let providerRequests = 0;
 
   async function waitForThreadInList(params: Parameters<typeof client.threadList>[0]) {
     return pollUntil(
@@ -44,21 +47,43 @@ describeIf("Thread history persistence (integration)", () => {
   beforeAll(async () => {
     rmSync(TEST_CODEX_HOME, { recursive: true, force: true });
 
+    // History persistence does not require a live provider or real credentials.
+    providerServer = createServer((_request, response) => {
+      providerRequests += 1;
+      response.writeHead(401, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { message: "History-only test fixture" } }));
+    });
+    await new Promise<void>((resolve) => providerServer.listen(0, "127.0.0.1", resolve));
+    const address = providerServer.address();
+    assert.ok(address && typeof address !== "string");
+    const providerBaseUrl = `http://127.0.0.1:${address.port}/v1`;
+
     transport = new StdioJsonRpcTransport(
-      (_command, args, env) => spawnInterpreterAppServerForTest(args, env),
+      (_command, args, env) => spawnInterpreterAppServerForTest(args, env, {
+        OPENAI_API_KEY: "history-only-test-key",
+      }),
       TEST_CODEX_HOME,
     );
     client = new CodexAppServerClient(transport, null);
     await client.ensureConnected();
 
-    threadId = await client.startThread("gpt-5.3-codex");
+    threadId = await client.startThreadWithConfig(
+      "gpt-5.3-codex", "history_fixture", null, null, {
+        "model_providers.history_fixture": {
+          name: "History fixture",
+          base_url: providerBaseUrl,
+          wire_api: "chat",
+          env_key: "OPENAI_API_KEY",
+        },
+      },
+    );
     assert.ok(threadId, "thread should be created");
 
     const turn = await client.startTurn({ threadId, message: TEST_MESSAGE });
     assert.ok(turn.id, "turn should have an id");
 
-    // NOTE(victor): Turn will fail (no API key) but the userMessage item is
-    // persisted before the LLM call, making the thread visible in thread/list.
+    // The local fixture rejects the turn, but the userMessage is persisted
+    // before the provider call, making the thread visible in thread/list.
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => resolve(), 15_000);
       client.subscribe((n: AppServerNotification) => {
@@ -72,16 +97,21 @@ describeIf("Thread history persistence (integration)", () => {
         }
       });
     });
+    assert.ok(providerRequests > 0, "history turn must use the local provider fixture");
   }, 70_000);
 
   afterAll(async () => {
     await transport.stop();
+    providerServer.closeAllConnections();
+    await new Promise<void>((resolve) => providerServer.close(() => resolve()));
     rmSync(TEST_CODEX_HOME, { recursive: true, force: true });
   });
 
   test("should_list_thread_with_vscode_and_appServer_source_kinds", async () => {
     const result = await waitForThreadInList({
       sourceKinds: THREAD_LIST_DEFAULTS.sourceKinds,
+      // Include the local fixture provider rather than the implicit OpenAI default.
+      modelProviders: THREAD_LIST_DEFAULTS.modelProviders,
     });
     assert.ok(
       result.data.some((t) => t.id === threadId),
