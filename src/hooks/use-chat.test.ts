@@ -41,6 +41,75 @@ describe("mergeChatHistory", () => {
     assert.deepEqual(merged.map((entry) => entry.id), ["m1", "m2", "m3", "m4"]);
   });
 
+  test("reconciles an optimistic user message during newer history refresh", () => {
+    const optimistic: ChatMessage = {
+      id: "local-user",
+      role: "user",
+      parts: [{ kind: "text", content: "Create the report" }],
+      pendingServerEchoText: "Create the report",
+      attachments: [{
+        id: "brief",
+        kind: "image",
+        name: "brief.png",
+        mimeType: "image/png",
+        dataUrl: "data:image/png;base64,AA==",
+      }],
+    };
+    const confirmed: ChatMessage = {
+      id: "server-user",
+      role: "user",
+      parts: [{ kind: "text", content: "Create the report" }],
+    };
+
+    const merged = mergeChatHistory([optimistic], [confirmed], "newer");
+
+    assert.equal(merged.length, 1);
+    assert.equal(merged[0]?.id, "server-user");
+    assert.equal(merged[0]?.pendingServerEchoText, undefined);
+    assert.deepEqual(merged[0]?.attachments, optimistic.attachments);
+  });
+
+  test("matches the visible preview when the submitted echo contains hidden context", () => {
+    const optimistic: ChatMessage = {
+      id: "local-user",
+      role: "user",
+      parts: [{ kind: "text", content: "Create the report" }],
+      pendingServerEchoText: "<workstation-context>hidden</workstation-context>\nCreate the report",
+    };
+    const confirmed: ChatMessage = {
+      id: "server-user",
+      role: "user",
+      parts: [{ kind: "text", content: "Create the report" }],
+    };
+
+    const merged = mergeChatHistory([optimistic], [confirmed], "newer");
+
+    assert.deepEqual(merged.map((entry) => entry.id), ["server-user"]);
+  });
+
+  test("preserves a second intentional identical server message", () => {
+    const optimistic: ChatMessage = {
+      id: "local-user",
+      role: "user",
+      parts: [{ kind: "text", content: "Repeat" }],
+      pendingServerEchoText: "Repeat",
+    };
+    const first: ChatMessage = {
+      id: "server-user-1",
+      role: "user",
+      parts: [{ kind: "text", content: "Repeat" }],
+    };
+    const second: ChatMessage = {
+      id: "server-user-2",
+      role: "user",
+      parts: [{ kind: "text", content: "Repeat" }],
+    };
+
+    const merged = mergeChatHistory([optimistic], [first, second], "newer");
+
+    assert.deepEqual(merged.map((entry) => entry.id), ["server-user-1", "server-user-2"]);
+  });
+
   test("updates overlapping live messages and appends new messages", () => {
     const merged = mergeChatHistory(
       [message("m1", "partial")],
