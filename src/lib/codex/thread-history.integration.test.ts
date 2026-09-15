@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, test } from "bun:test";
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
 import { rmSync } from "node:fs";
+import { createServer } from "node:http";
 
 import {
   CodexAppServerClient,
@@ -60,16 +60,23 @@ describeIf("Thread history persistence (integration)", () => {
 
     transport = new StdioJsonRpcTransport(
       (_command, args, env) => spawnInterpreterAppServerForTest(args, env, {
-        OPENAI_BASE_URL: providerBaseUrl,
         OPENAI_API_KEY: "history-only-test-key",
-        CODEX_API_KEY: "history-only-test-key",
       }),
       TEST_CODEX_HOME,
     );
     client = new CodexAppServerClient(transport, null);
     await client.ensureConnected();
 
-    threadId = await client.startThread("gpt-5.3-codex");
+    threadId = await client.startThreadWithConfig(
+      "gpt-5.3-codex", "history_fixture", null, null, {
+        "model_providers.history_fixture": {
+          name: "History fixture",
+          base_url: providerBaseUrl,
+          wire_api: "chat",
+          env_key: "OPENAI_API_KEY",
+        },
+      },
+    );
     assert.ok(threadId, "thread should be created");
 
     const turn = await client.startTurn({ threadId, message: TEST_MESSAGE });
@@ -103,6 +110,8 @@ describeIf("Thread history persistence (integration)", () => {
   test("should_list_thread_with_vscode_and_appServer_source_kinds", async () => {
     const result = await waitForThreadInList({
       sourceKinds: THREAD_LIST_DEFAULTS.sourceKinds,
+      // Include the local fixture provider rather than the implicit OpenAI default.
+      modelProviders: THREAD_LIST_DEFAULTS.modelProviders,
     });
     assert.ok(
       result.data.some((t) => t.id === threadId),
