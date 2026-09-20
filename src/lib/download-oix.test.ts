@@ -15,7 +15,7 @@ import {
 
 describe("download-oix helpers", () => {
   test("pins the public OIX runtime release", () => {
-    assert.equal(PINNED_VERSION, "rust-v0.0.44");
+    assert.equal(PINNED_VERSION, "rust-v0.0.45");
   });
 
   test("maps supported app platforms to public OIX package assets", () => {
