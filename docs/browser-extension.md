@@ -328,6 +328,12 @@ The current app integration assumes:
 - The bundled `browser-control` skill is available to Interpreter.
 - The desktop app starts the bundled relay automatically from `resources/browser-extension-relay`.
 - If the relay cannot start, app startup continues and Interpreter logs the failure instead of showing a blocking startup error.
+
+Headless and always-on runtimes use the same contract. Restoring an existing
+thread must rebind its caller identity and reapply the `interpreter-app` shell
+environment before OIX resumes it. This matters for native Goal continuation:
+the next turn may begin without another Workstation chat request, but it must
+still be able to call `builtin-js-repl` and control the already-running browser.
 - Browser code uses normal Playwright-over-CDP:
 
 ```js
