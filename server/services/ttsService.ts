@@ -19,8 +19,7 @@ import {
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { Worker } from 'node:worker_threads';
-// @ts-ignore - no type declarations for tar-stream
-import tar, { type Headers as TarHeader } from 'tar-stream';
+import tar from 'tar-stream';
 // @ts-ignore - no type declarations for unbzip2-stream
 import unbzip2Stream from 'unbzip2-stream';
 import {
@@ -323,11 +322,35 @@ function resolveArchiveEntry(baseDir: string, entryName: string): string {
   return destinationPath;
 }
 
+interface TarEntryStream {
+  on(event: 'end', listener: () => void): this;
+  on(event: 'error', listener: (error: Error) => void): this;
+  pipe(destination: NodeJS.WritableStream): NodeJS.WritableStream;
+  resume(): this;
+}
+
+interface TarEntryHeader {
+  name: string;
+  type: string;
+  mode?: number;
+}
+
+interface TarExtractEventHandlers {
+  on(
+    event: 'entry',
+    listener: (header: TarEntryHeader, stream: TarEntryStream, next: (error?: Error | null) => void) => void,
+  ): this;
+  on(event: 'finish', listener: () => void): this;
+  on(event: 'error', listener: (error: Error) => void): this;
+}
+
 async function extractTarBz2Archive(archivePath: string, destinationDir: string): Promise<void> {
-  const extract = tar.extract();
+  // tar-stream 3.2.1's Extract type inherits from streamx, which has no declarations,
+  // although the runtime exposes the event methods used by the extractor.
+  const extract = tar.extract() as ReturnType<typeof tar.extract> & TarExtractEventHandlers;
 
   const extractDone = new Promise<void>((resolvePromise, rejectPromise) => {
-    extract.on('entry', (header: TarHeader, stream: Readable, next: () => void) => {
+    extract.on('entry', (header, stream, next) => {
       let destinationPath: string;
       try {
         destinationPath = resolveArchiveEntry(destinationDir, header.name);
