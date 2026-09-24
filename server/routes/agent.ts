@@ -81,6 +81,7 @@ import {
   type NormalizedStreamRequest,
 } from './agentStreamRequest';
 import { resolveLocalModelToolUseSupport } from '../handlers/providers';
+import { renameThread } from '../handlers/agentThreads';
 
 import { appendCustomInstructionsToPrompt } from '../utils/customInstructions';
 import { isReasoningEffort } from '../../shared/types/reasoning';
@@ -736,6 +737,29 @@ router.get('/threads/:threadId', async (req: Request, res: Response) => {
     }
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to read thread.',
+    });
+  }
+});
+
+router.put('/threads/:threadId/name', async (req: Request, res: Response) => {
+  const threadId = req.params.threadId.trim();
+  if (!threadId) {
+    return res.status(400).json({ error: 'threadId is required.' });
+  }
+
+  const name = typeof req.body?.name === 'string' ? req.body.name : '';
+  if (!name.trim()) {
+    return res.status(400).json({ error: 'name is required.' });
+  }
+  if (name.trim().length > 200) {
+    return res.status(400).json({ error: 'name must be 200 characters or fewer.' });
+  }
+
+  try {
+    return res.json(await renameThread(threadId, name));
+  } catch (error) {
+    return res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to rename thread.',
     });
   }
 });
