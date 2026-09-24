@@ -104,21 +104,25 @@ function notifyProgrammaticTaskStarted(options: StartAgentTaskOptions, mode: Age
   });
 }
 
-async function resolveAgentModelConfig(
+export async function resolveAgentModelConfig(
   explicitModelConfig?: AgentModelConfig,
+  overrides?: { modelId?: string; reasoningEffort?: AgentModelConfig['reasoningEffort'] },
 ): Promise<AgentModelConfig> {
+  let resolved: AgentModelConfig;
   if (explicitModelConfig) {
-    return explicitModelConfig;
-  }
-
-  const selectedProfile = await getDefaultProfile();
-  if (selectedProfile) {
-    return profileToModelConfig(selectedProfile, {
+    resolved = explicitModelConfig;
+  } else {
+    const selectedProfile = await getDefaultProfile();
+    resolved = selectedProfile ? profileToModelConfig(selectedProfile, {
       reasoningEffort: selectedProfile.reasoningEffort,
-    });
+    }) : getDefaultModelConfig();
   }
 
-  return getDefaultModelConfig();
+  return {
+    ...resolved,
+    ...(overrides?.modelId ? { modelId: overrides.modelId } : {}),
+    ...(overrides?.reasoningEffort ? { reasoningEffort: overrides.reasoningEffort } : {}),
+  };
 }
 
 /** Restore a persisted OIX thread without manufacturing a model turn. */
