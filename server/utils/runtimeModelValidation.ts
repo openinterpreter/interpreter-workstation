@@ -1,10 +1,4 @@
 import { isValidHostedModelId } from '../../shared/utils/modelIdValidation';
-import {
-  DEFAULT_OPENAI_RESPONSES_CUSTOM_TOOL_MODEL_ID,
-  isOpenAiModelId,
-  isOpenAiApiModelProvider,
-  supportsOpenAiResponsesCustomTools,
-} from '../../shared/utils/openAiResponsesTools';
 
 export function validateRuntimeModelId(
   modelProvider: string | null | undefined,
@@ -23,14 +17,7 @@ export function validateRuntimeModelId(
     return `Invalid OpenRouter model ID '${trimmedModelId}'. Expected format: <provider>/<model_id> (e.g. 'anthropic/claude-sonnet-4.6'). If this is a local model, switch to a Local profile in Settings > Models.`;
   }
 
-  if (
-    (isOpenAiApiModelProvider(modelProvider)
-      || ((modelProvider === 'interpreter' || modelProvider === 'openrouter')
-        && isOpenAiModelId(trimmedModelId))) &&
-    !supportsOpenAiResponsesCustomTools(trimmedModelId)
-  ) {
-    return `OpenAI model '${trimmedModelId}' does not support Interpreter's custom/freeform agent tools. Use ${DEFAULT_OPENAI_RESPONSES_CUSTOM_TOOL_MODEL_ID}, or another model that supports Responses custom tools.`;
-  }
-
+  // Do not infer model capabilities from the model name. The selected
+  // provider's Responses API is authoritative for tool compatibility.
   return null;
 }

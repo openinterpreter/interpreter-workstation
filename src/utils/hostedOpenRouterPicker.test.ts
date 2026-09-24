@@ -112,6 +112,20 @@ describe('buildHostedModelPickerGroups', () => {
         label: 'openai',
         items: [
           {
+            id: 'openai/gpt-4.1',
+            name: 'GPT-4.1',
+            secondaryLabel: 'openai/gpt-4.1',
+            provider: 'openai',
+            description: 'Legacy OpenAI model',
+          },
+          {
+            id: 'openai/gpt-4o-mini',
+            name: 'GPT-4o-mini',
+            secondaryLabel: 'openai/gpt-4o-mini',
+            provider: 'openai',
+            description: 'Legacy small OpenAI model',
+          },
+          {
             id: 'openai/gpt-5.4',
             name: 'GPT-5.4',
             secondaryLabel: 'openai/gpt-5.4',
@@ -127,8 +141,20 @@ describe('buildHostedModelPickerGroups', () => {
     const groups = buildHostedModelPickerGroups(interpreterModels, openRouterModels);
     const allIds = groups.flatMap((group) => group.items.map((item) => item.id));
     expect(allIds).toContain('openai/gpt-5.4');
-    expect(allIds).not.toContain('openai/gpt-4o-mini');
-    expect(allIds).not.toContain('openai/gpt-4.1');
+    expect(allIds).toContain('openai/gpt-4o-mini');
+    expect(allIds).toContain('openai/gpt-4.1');
+  });
+
+  test('keeps newly released OpenAI models without a catalog update', () => {
+    expect(filterHostedToolCapableModels([
+      { id: 'openai/gpt-6-astra', name: 'GPT-6 Astra', provider: 'openai' },
+      { id: 'openai/gpt-6-sol', name: 'GPT-6 Sol', provider: 'openai' },
+      { id: 'openai/gpt-6-luna', name: 'GPT-6 Luna', provider: 'openai' },
+    ]).map((model) => model.id)).toEqual([
+      'openai/gpt-6-astra',
+      'openai/gpt-6-sol',
+      'openai/gpt-6-luna',
+    ]);
   });
 });
 
@@ -138,8 +164,8 @@ describe('filterHostedToolCapableModels', () => {
     const ids = results.map((model) => model.id);
     expect(ids).toContain('openai/gpt-5.4');
     expect(ids).toContain('anthropic/claude-sonnet-4.6');
-    expect(ids).not.toContain('openai/gpt-4o-mini');
-    expect(ids).not.toContain('openai/gpt-4.1');
+    expect(ids).toContain('openai/gpt-4o-mini');
+    expect(ids).toContain('openai/gpt-4.1');
   });
 });
 

@@ -1,8 +1,5 @@
 import { getApiEndpointKind, type ApiEndpointKind, type OpenRouterModel } from '../../shared/types/provider';
 import { getDefaultApiProviderModelId } from '../../shared/types/modelDefaults';
-import {
-  supportsOpenAiResponsesCustomTools,
-} from '../../shared/utils/openAiResponsesTools';
 
 export interface ApiProviderModelOption {
   id: string;
@@ -85,9 +82,7 @@ export function buildApiModelFieldConfig(
   }
 
   if (endpointKind === 'openai') {
-    const options = normalizeApiModelOptions(providerModels).filter((option) =>
-      supportsOpenAiResponsesCustomTools(option.id),
-    );
+    const options = normalizeApiModelOptions(providerModels);
     return {
       kind: 'select',
       provider: 'openai',

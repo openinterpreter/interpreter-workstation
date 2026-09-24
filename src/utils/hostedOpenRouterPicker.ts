@@ -1,9 +1,5 @@
 import Fuse from 'fuse.js';
 import type { OpenRouterModel, SupportedOpenAIOAuthModel } from '../../shared/types/provider';
-import {
-  isOpenAiModelId,
-  supportsOpenAiResponsesCustomTools,
-} from '../../shared/utils/openAiResponsesTools';
 
 interface InterpreterModelOption {
   id: string;
@@ -81,10 +77,7 @@ export function shouldSuppressHostedModelInDefaultBrowse(input: {
 }
 
 export function isHostedModelToolCapable(model: Pick<OpenRouterModel, 'id' | 'provider'>): boolean {
-  if (normalizeHostedModelText(model.provider) !== 'openai' && !isOpenAiModelId(model.id)) {
-    return true;
-  }
-  return supportsOpenAiResponsesCustomTools(model.id);
+  return Boolean(model.id.trim());
 }
 
 export function filterHostedToolCapableModels(models: OpenRouterModel[]): OpenRouterModel[] {
