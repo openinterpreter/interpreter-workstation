@@ -6,6 +6,10 @@ type Metadata = { email: string; message: string; version: string; platform: str
 const MAX_FILE = 200 * 1024 * 1024;
 const ID = /^[0-9a-f]{32}$/;
 
+export function needsSignedFeedback(originals: FeedbackOriginal[]): boolean {
+  return originals.reduce((total, original) => total + original.blob.size, 0) > 7 * 1024 * 1024;
+}
+
 function endpoint(feedbackUrl: string): string {
   const parsed = new URL(feedbackUrl);
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash ||

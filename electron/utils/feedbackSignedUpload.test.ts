@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { submitSignedFeedback, supportsSignedFeedback } from './feedbackSignedUpload';
+import { needsSignedFeedback, submitSignedFeedback, supportsSignedFeedback } from './feedbackSignedUpload';
 
 const endpoint = 'https://feedback.example.test/v0/feedback';
 const id = 'a'.repeat(32);
@@ -8,6 +8,11 @@ const path = `${id}/${'b'.repeat(32)}`;
 const metadata = { email: 'test@example.org', message: 'private issue', version: '0.0.52', platform: 'linux', arch: 'x64' };
 
 describe('private feedback signed upload', () => {
+  test('large originals choose direct upload without changing small legacy payloads', () => {
+    const original = (size: number) => ({ name: 'log', contentType: 'text/plain', blob: new Blob([Buffer.alloc(size)]) });
+    expect(needsSignedFeedback([original(4 * 1024 * 1024)])).toBe(false);
+    expect(needsSignedFeedback([original(4 * 1024 * 1024), original(4 * 1024 * 1024)])).toBe(true);
+  });
   test('retains legacy multipart only when the configured endpoint explicitly returns 404', async () => {
     const unsupported = async () => new Response(null, { status: 404 });
     expect(await supportsSignedFeedback(endpoint, unsupported as typeof fetch)).toBe(false);
