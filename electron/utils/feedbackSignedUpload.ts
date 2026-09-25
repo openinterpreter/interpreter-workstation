@@ -26,7 +26,7 @@ async function json(response: Response): Promise<Record<string, unknown>> {
   return value as Record<string, unknown>;
 }
 
-/** Only a known legacy endpoint without the feature may receive the old multipart body. */
+/** Capability discovery is never permission to proxy large originals through legacy multipart. */
 export async function supportsSignedFeedback(feedbackUrl: string, fetchImpl: typeof fetch = fetch): Promise<boolean> {
   const response = await fetchImpl(endpoint(feedbackUrl) + '/capabilities', { method: 'GET', redirect: 'error' });
   if (response.status === 404) return false;
@@ -35,6 +35,12 @@ export async function supportsSignedFeedback(feedbackUrl: string, fetchImpl: typ
     throw new Error('Invalid feedback upload capabilities');
   }
   return true;
+}
+
+export async function requireSignedFeedback(feedbackUrl: string, fetchImpl: typeof fetch = fetch): Promise<void> {
+  if (!await supportsSignedFeedback(feedbackUrl, fetchImpl)) {
+    throw new Error('Large feedback requires a signed-upload endpoint');
+  }
 }
 
 export async function submitSignedFeedback(
@@ -76,8 +82,7 @@ export async function submitSignedFeedback(
     } catch {
       throw new Error('Invalid signed feedback upload URL');
     }
-    if (url.protocol !== 'https:' || url.username || url.password ||
-        !(url.hostname === 'storage.googleapis.com' || /^[a-z0-9.-]+\.storage\.googleapis\.com$/.test(url.hostname))) {
+    if (url.protocol !== 'https:' || url.username || url.password || url.hostname !== 'storage.googleapis.com') {
       throw new Error('Signed feedback URL has an unexpected destination');
     }
     // Never expose a signed URL in an exception, log, or diagnostic response.
