@@ -8,6 +8,7 @@
 import { ipcMain, dialog, shell, BrowserWindow, systemPreferences, clipboard, WebContents, app, Notification, desktopCapturer, screen, type IpcMainInvokeEvent } from 'electron';
 import { BOOLEAN_UI_SETTING_IDS, BOOLEAN_UI_SETTINGS, booleanSettingChannels, type BooleanSettingGetResponse, type BooleanSettingSetResult } from '../../shared/booleanSettings';
 import { getInterpreterFeedbackUrl } from '../../shared/hostedApi';
+import { needsSignedFeedback, submitSignedFeedback, supportsSignedFeedback, type FeedbackOriginal } from '../utils/feedbackSignedUpload';
 
 // Type extension for WebContents.getOwnerBrowserWindow (exists at runtime but missing from types)
 type WebContentsWithOwner = WebContents & { getOwnerBrowserWindow(): BrowserWindow | null };
@@ -3431,6 +3432,7 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
     async (_event, request: FeedbackSubmitRequest): Promise<FeedbackSubmitResponse> => {
       try {
         const formData = new FormData();
+        const originals: FeedbackOriginal[] = [];
 
         formData.append('email', request.email);
         formData.append('message', request.message);
@@ -3459,11 +3461,13 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
               })),
             });
             if (feedbackLogAttachment) {
+              const logBlob = new Blob([feedbackLogAttachment.content], { type: 'text/plain' });
               formData.append(
                 'logs',
-                new Blob([feedbackLogAttachment.content], { type: 'text/plain' }),
+                logBlob,
                 feedbackLogAttachment.filename
               );
+              originals.push({ name: feedbackLogAttachment.filename, contentType: 'text/plain', blob: logBlob });
             }
           } catch {
             // Logs not available
@@ -3475,8 +3479,23 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
             const imageBuffer = Buffer.from(image.data, 'base64');
             const ext = image.name.split('.').pop()?.toLowerCase() || 'png';
             const contentType = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : `image/${ext}`;
-            formData.append('images', new Blob([imageBuffer], { type: contentType }), image.name);
+            const imageBlob = new Blob([imageBuffer], { type: contentType });
+            formData.append('images', imageBlob, image.name);
+            originals.push({ name: image.name, contentType, blob: imageBlob });
           }
+        }
+
+        // The existing multipart wire format remains the default. Large bodies
+        // go directly to GCS only when the configured endpoint advertises the
+        // signed-upload protocol; a legacy 404 preserves old installed clients.
+        if (needsSignedFeedback(originals) &&
+            await supportsSignedFeedback(FEEDBACK_URL)) {
+          const id = await submitSignedFeedback(FEEDBACK_URL, {
+            email: request.email, message: request.message, version: app.getVersion(),
+            platform: process.platform, arch: process.arch,
+          }, originals);
+          console.log('[FEEDBACK] Submitted successfully:', id);
+          return { success: true, id };
         }
 
         const response = await fetch(FEEDBACK_URL, {
