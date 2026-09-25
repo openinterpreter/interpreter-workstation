@@ -166,7 +166,7 @@ export async function runCodexSubagent(options: RunCodexSubagentOptions): Promis
 
     const normalizedReasoningEffort = normalizeReasoningEffortForModel(
       runtimeModel,
-      options.reasoningEffort,
+      options.reasoningEffort ?? options.modelConfig.reasoningEffort,
     );
 
     // Programmatic/headless turns use the same persisted ChatGPT account as
