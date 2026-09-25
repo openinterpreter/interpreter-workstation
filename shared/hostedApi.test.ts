@@ -9,11 +9,13 @@ import {
   INTERPRETER_HOSTED_API_BASE_URL_ENV_VAR,
   INTERPRETER_OVERLAY_SERVER_URL_ENV_VAR,
 } from './hostedApi';
+import { distributionProductConfig } from './productConfig';
 
 const ORIGINAL_USE_LOCAL_API = process.env.USE_LOCAL_API;
 const ORIGINAL_PYTHON_API_PORT = process.env.PYTHON_API_PORT;
 const ORIGINAL_HOSTED_API_BASE_URL = process.env.INTERPRETER_HOSTED_API_BASE_URL;
 const ORIGINAL_OVERLAY_SERVER_URL = process.env.INTERPRETER_OVERLAY_SERVER_URL;
+const ORIGINAL_FEEDBACK_URL = distributionProductConfig.feedbackUrl;
 
 function restoreEnv(name: string, value: string | undefined) {
   if (value === undefined) {
@@ -29,6 +31,7 @@ afterEach(() => {
   restoreEnv('PYTHON_API_PORT', ORIGINAL_PYTHON_API_PORT);
   restoreEnv(INTERPRETER_HOSTED_API_BASE_URL_ENV_VAR, ORIGINAL_HOSTED_API_BASE_URL);
   restoreEnv(INTERPRETER_OVERLAY_SERVER_URL_ENV_VAR, ORIGINAL_OVERLAY_SERVER_URL);
+  distributionProductConfig.feedbackUrl = ORIGINAL_FEEDBACK_URL;
 });
 
 describe('hostedApi', () => {
@@ -75,5 +78,15 @@ describe('hostedApi', () => {
     process.env[INTERPRETER_OVERLAY_SERVER_URL_ENV_VAR] = 'https://overlay.example.test/custom/';
 
     expect(getInterpreterOverlayBaseUrl()).toBe('https://overlay.example.test/custom');
+  });
+
+  test('keeps the old hosted API for unrelated routes when feedback moves independently', () => {
+    process.env[INTERPRETER_HOSTED_API_BASE_URL_ENV_VAR] = 'https://legacy.example.test';
+    distributionProductConfig.feedbackUrl = 'https://feedback.example.test/v0/feedback';
+    expect(getInterpreterFeedbackUrl()).toBe('https://feedback.example.test/v0/feedback');
+    expect(getInterpreterOpenRouterBaseUrl()).toBe('https://legacy.example.test/v0/openrouter');
+    expect(getInterpreterTelemetryUrl()).toBe('https://legacy.example.test/v0/telemetry');
+    distributionProductConfig.feedbackUrl = 'https://feedback.example.test.evil.test/v0/feedback?token=unsafe';
+    expect(() => getInterpreterFeedbackUrl()).toThrow('Invalid distribution feedback endpoint');
   });
 });

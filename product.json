@@ -35,6 +35,7 @@
 	"distribution": {
 		"id": "community",
 		"hostedApiBaseUrl": "",
+		"feedbackUrl": "",
 		"auth": {
 			"provider": "none",
 			"url": "",
