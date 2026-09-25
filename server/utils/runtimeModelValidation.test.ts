@@ -34,17 +34,18 @@ describe('validateRuntimeModelId', () => {
     assert.equal(validateRuntimeModelId('interpreter', 'openai/gpt-5.5'), null);
   });
 
-  test('rejects hosted OpenAI models that do not support custom/freeform tools', () => {
-    for (const provider of ['interpreter', 'openrouter'] as const) {
-      for (const modelId of ['openai/gpt-4o-mini', 'openai/gpt-4.1'] as const) {
-        const error = validateRuntimeModelId(provider, modelId);
-        assert.ok(error);
-        assert.match(error!, new RegExp(modelId.replace('.', '\\.')));
-        assert.match(error!, /custom\/freeform agent tools/i);
-        assert.match(error!, /gpt-5\.4-nano/);
-      }
+  test('accepts GPT-6 and unknown future provider model IDs', () => {
+    for (const modelId of [
+      'openai/gpt-6-astra',
+      'openai/gpt-6-sol',
+      'openai/gpt-6-luna',
+      'openai/gpt-7-future',
+    ] as const) {
+      assert.equal(validateRuntimeModelId('interpreter', modelId), null);
+      assert.equal(validateRuntimeModelId('openrouter', modelId), null);
     }
   });
+
 
   test('rejects local-style model IDs for openrouter provider', () => {
     const error = validateRuntimeModelId('openrouter', 'qwen3.5:9b');
@@ -59,15 +60,6 @@ describe('validateRuntimeModelId', () => {
     assert.equal(validateRuntimeModelId('custom-provider', 'model-name'), null);
   });
 
-  test('rejects OpenAI API models that do not support custom/freeform tools', () => {
-    for (const modelId of ['gpt-4o', 'openai/gpt-4o', 'gpt-4.1', 'gpt-4'] as const) {
-      const error = validateRuntimeModelId('openai-api', modelId);
-      assert.ok(error);
-      assert.match(error!, new RegExp(modelId));
-      assert.match(error!, /custom\/freeform agent tools/i);
-      assert.match(error!, /gpt-5\.4-nano/);
-    }
-  });
 
   test('accepts GPT-5 family OpenAI API models for custom/freeform tools', () => {
     for (const modelId of ['gpt-5', 'gpt-5-mini', 'gpt-5-nano', 'gpt-5.1', 'gpt-5.2', 'gpt-5.3-codex', 'gpt-5.4', 'gpt-5.5'] as const) {
@@ -83,5 +75,10 @@ describe('validateRuntimeModelId', () => {
   test('rejects empty model ID', () => {
     assert.equal(validateRuntimeModelId('interpreter', ''), 'Model is required.');
     assert.equal(validateRuntimeModelId('openrouter', '   '), 'Model is required.');
+  });
+
+  test('rejects malformed hosted model IDs', () => {
+    assert.match(validateRuntimeModelId('interpreter', 'not a model')!, /Invalid hosted model ID/);
+    assert.match(validateRuntimeModelId('openrouter', 'openai//gpt-6-astra')!, /Invalid OpenRouter model ID/);
   });
 });

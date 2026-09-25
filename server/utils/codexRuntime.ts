@@ -2029,6 +2029,7 @@ export async function runCodexAgentTurn(
   const threadConfig = {
     ...(profile.harness !== undefined ? { harness: profile.harness } : {}),
     ...callerConfig,
+    ...(options.reasoningEffort ? { model_reasoning_effort: options.reasoningEffort } : {}),
     ...(options.usesChatGptAuth ? { forced_login_method: 'chatgpt' } : {}),
     // App tools are discovered and executed through the shell-visible
     // interpreter-app CLI. Never expose a second direct-MCP app-tool surface.

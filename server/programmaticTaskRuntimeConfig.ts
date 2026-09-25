@@ -39,6 +39,7 @@ export function createOpenAiApiProgrammaticProfile(config?: {
   id?: string;
   name?: string;
   modelId?: string;
+  reasoningEffort?: ReasoningEffort;
   apiKey?: string;
   environmentKey?: string;
   baseURL?: string;
@@ -48,6 +49,7 @@ export function createOpenAiApiProgrammaticProfile(config?: {
     name: config?.name ?? 'Headless OpenAI API',
     provider: 'api',
     modelId: config?.modelId ?? 'gpt-5.4-mini',
+    reasoningEffort: config?.reasoningEffort,
     apiKey: config?.apiKey,
     environmentKey: config?.environmentKey,
     baseURL: config?.baseURL ?? 'https://api.openai.com/v1',

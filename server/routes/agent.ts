@@ -33,6 +33,7 @@ import {
   forkAgentTaskThread,
   resumeAgentTaskThread,
   startAgentTask,
+  resolveAgentModelConfig,
   type AgentTaskMode,
   type AgentTaskProgressEvent,
 } from '../agentTaskService';
@@ -257,6 +258,8 @@ router.post('/tasks', async (req: Request, res: Response) => {
       threadId,
       mode,
       modelConfig,
+      model,
+      reasoningEffort,
       runtimeConfig,
     } = parseProgrammaticTaskBody((req.body ?? {}) as Record<string, unknown>);
 
@@ -294,6 +297,10 @@ router.post('/tasks', async (req: Request, res: Response) => {
     }
 
     await applyProgrammaticTaskRuntimeConfigFromBody(runtimeConfig);
+    const resolvedModelConfig = await resolveAgentModelConfig(modelConfig, {
+      modelId: model,
+      reasoningEffort,
+    });
 
     const result = await startAgentTask({
       mode: 'headless',
@@ -302,7 +309,7 @@ router.post('/tasks', async (req: Request, res: Response) => {
       timeoutMs,
       idleTimeoutMs,
       workspace,
-      modelConfig,
+      modelConfig: resolvedModelConfig,
       threadId,
       notifyStarted: true,
     });
@@ -330,6 +337,8 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
     threadId,
     mode,
     modelConfig,
+    model,
+    reasoningEffort,
     runtimeConfig,
   } = parseProgrammaticTaskBody((req.body ?? {}) as Record<string, unknown>);
 
@@ -382,6 +391,10 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
 
   try {
     await applyProgrammaticTaskRuntimeConfigFromBody(runtimeConfig);
+    const resolvedModelConfig = await resolveAgentModelConfig(modelConfig, {
+      modelId: model,
+      reasoningEffort,
+    });
 
     const result = await startAgentTask({
       mode: 'headless',
@@ -390,7 +403,7 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
       timeoutMs,
       idleTimeoutMs,
       workspace,
-      modelConfig,
+      modelConfig: resolvedModelConfig,
       threadId,
       notifyStarted: true,
       onProgress: (progress) => {
@@ -572,6 +585,12 @@ export function parseProgrammaticTaskBody(body: Record<string, unknown>) {
   const modelConfig = body.modelConfig && typeof body.modelConfig === 'object'
     ? body.modelConfig as AgentModelConfig
     : undefined;
+  const model = typeof body.model === 'string' && body.model.trim()
+    ? body.model.trim()
+    : undefined;
+  const reasoningEffort = isReasoningEffort(body.reasoningEffort)
+    ? body.reasoningEffort
+    : undefined;
   const runtimeConfig = body.runtimeConfig && typeof body.runtimeConfig === 'object'
     ? body.runtimeConfig as Record<string, unknown>
     : undefined;
@@ -585,6 +604,8 @@ export function parseProgrammaticTaskBody(body: Record<string, unknown>) {
     threadId,
     mode,
     modelConfig,
+    model,
+    reasoningEffort,
     runtimeConfig,
   };
 }

@@ -116,6 +116,7 @@ describe('buildApiModelFieldConfig', () => {
     const config = buildApiModelFieldConfig('https://api.openai.com/v1', [], [
       { id: 'gpt-5.4-nano', name: 'GPT-5.4 nano' },
       { id: 'gpt-5.4', name: 'GPT-5.4' },
+      { id: 'gpt-6-astra', name: 'GPT-6 Astra' },
       { id: 'gpt-4o', name: 'GPT-4o' },
       { id: 'o4-mini', name: 'o4-mini' },
     ]);
@@ -129,8 +130,9 @@ describe('buildApiModelFieldConfig', () => {
     expect(config.defaultModelId).toBe('gpt-5.4-nano');
     expect(config.options.some((option) => option.id === 'gpt-5.4-nano')).toBe(true);
     expect(config.options.some((option) => option.id === 'gpt-5.4')).toBe(true);
-    expect(config.options.some((option) => option.id === 'gpt-4o')).toBe(false);
-    expect(config.options.some((option) => option.id === 'o4-mini')).toBe(false);
+    expect(config.options.some((option) => option.id === 'gpt-6-astra')).toBe(true);
+    expect(config.options.some((option) => option.id === 'gpt-4o')).toBe(true);
+    expect(config.options.some((option) => option.id === 'o4-mini')).toBe(true);
   });
 
   test('returns a DeepSeek dropdown config from the provided app-server models', () => {

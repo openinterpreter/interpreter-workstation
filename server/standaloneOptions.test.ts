@@ -35,6 +35,8 @@ describe('standaloneOptions', () => {
       'read notes',
       '--model',
       'gpt-5.4-mini',
+      '--reasoning',
+      'low',
     ]);
     const runtimeConfig = buildProgrammaticTaskRuntimeConfig(options);
 
@@ -43,13 +45,31 @@ describe('standaloneOptions', () => {
       name: 'Headless OpenAI API',
       provider: 'api',
       modelId: 'gpt-5.4-mini',
-      apiKey: 'sk-test',
+      reasoningEffort: 'low',
+      environmentKey: 'OPENAI_API_KEY',
       baseURL: 'https://api.openai.com/v1',
       apiFormat: 'openai',
       codexProfileId: 'openai-api',
       wireApi: 'responses',
       useResponsesApi: true,
     });
+  });
+
+  test('uses a directly supplied key instead of an environment reference', () => {
+    const options = parseCliOptions([
+      '--model',
+      'gpt-5.4-mini',
+      '--openai-api-key',
+      'sk-direct-test',
+    ]);
+    const runtimeConfig = buildProgrammaticTaskRuntimeConfig(options);
+
+    expect(runtimeConfig.defaultProfile?.apiKey).toBe('sk-direct-test');
+    expect(runtimeConfig.defaultProfile?.environmentKey).toBeUndefined();
+  });
+
+  test('rejects an unsupported reasoning effort', () => {
+    expect(() => parseCliOptions(['--reasoning', 'extreme'])).toThrow('Invalid reasoning effort');
   });
 
   test('keeps explicit runtime overrides explicit', () => {

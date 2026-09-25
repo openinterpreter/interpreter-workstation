@@ -22,6 +22,19 @@ describe('programmatic task HTTP transport', () => {
     expect(parsed.idleTimeoutMs).toBe(0);
   });
 
+  test('parses provider-preserving model overrides for the host default profile', () => {
+    const parsed = parseProgrammaticTaskBody({
+      message: 'Start work.',
+      workspace: '/tmp/science',
+      model: 'gpt-5.6-sol',
+      reasoningEffort: 'low',
+    });
+
+    expect(parsed.model).toBe('gpt-5.6-sol');
+    expect(parsed.reasoningEffort).toBe('low');
+    expect(parsed.modelConfig).toBeUndefined();
+  });
+
   test('rejects all programmatic task HTTP inside Electron', () => {
     expect(
       getProgrammaticTaskHttpError({
