@@ -58,4 +58,15 @@ describe('private feedback signed upload', () => {
       [{ name: 'x.log', contentType: 'text/plain', blob: new Blob(['x']) }], fetchMock as typeof fetch))
       .rejects.toThrow('unexpected destination');
   });
+
+  test('malformed grant URL never appears in a client error', async () => {
+    const fetchMock = async (target: string | URL): Promise<Response> => {
+      if (String(target) === endpoint + '/uploads') return Response.json({ id, upload_capability: 'c'.repeat(48) });
+      return Response.json({ path, url: 'malformed-signed-url-PRIVATE-CAPABILITY', method: 'PUT', expires_in: 600,
+        content_type: 'application/octet-stream', content_length: 1 });
+    };
+    await expect(submitSignedFeedback(endpoint, metadata,
+      [{ name: 'x.log', contentType: 'text/plain', blob: new Blob(['x']) }], fetchMock as typeof fetch))
+      .rejects.toThrow('Invalid signed feedback upload URL');
+  });
 });
