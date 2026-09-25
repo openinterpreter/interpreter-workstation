@@ -8,7 +8,7 @@
 import { ipcMain, dialog, shell, BrowserWindow, systemPreferences, clipboard, WebContents, app, Notification, desktopCapturer, screen, type IpcMainInvokeEvent } from 'electron';
 import { BOOLEAN_UI_SETTING_IDS, BOOLEAN_UI_SETTINGS, booleanSettingChannels, type BooleanSettingGetResponse, type BooleanSettingSetResult } from '../../shared/booleanSettings';
 import { getInterpreterFeedbackUrl } from '../../shared/hostedApi';
-import { needsSignedFeedback, submitSignedFeedback, supportsSignedFeedback, type FeedbackOriginal } from '../utils/feedbackSignedUpload';
+import { needsSignedFeedback, requireSignedFeedback, submitSignedFeedback, type FeedbackOriginal } from '../utils/feedbackSignedUpload';
 
 // Type extension for WebContents.getOwnerBrowserWindow (exists at runtime but missing from types)
 type WebContentsWithOwner = WebContents & { getOwnerBrowserWindow(): BrowserWindow | null };
@@ -3577,11 +3577,10 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
           }
         }
 
-        // The existing multipart wire format remains the default. Large bodies
-        // go directly to GCS only when the configured endpoint advertises the
-        // signed-upload protocol; a legacy 404 preserves old installed clients.
-        if (needsSignedFeedback(originals) &&
-            await supportsSignedFeedback(FEEDBACK_URL)) {
+        // Keep small multipart requests unchanged, but never proxy a large
+        // original if an older endpoint does not support direct signed uploads.
+        if (needsSignedFeedback(originals)) {
+          await requireSignedFeedback(FEEDBACK_URL);
           const id = await submitSignedFeedback(FEEDBACK_URL, {
             email: request.email, message: request.message, version: app.getVersion(),
             platform: process.platform, arch: process.arch,

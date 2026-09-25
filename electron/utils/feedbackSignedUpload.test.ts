@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { needsSignedFeedback, submitSignedFeedback, supportsSignedFeedback } from './feedbackSignedUpload';
+import { needsSignedFeedback, requireSignedFeedback, submitSignedFeedback, supportsSignedFeedback } from './feedbackSignedUpload';
 
 const endpoint = 'https://feedback.example.test/v0/feedback';
 const id = 'a'.repeat(32);
@@ -13,9 +13,10 @@ describe('private feedback signed upload', () => {
     expect(needsSignedFeedback([original(4 * 1024 * 1024)])).toBe(false);
     expect(needsSignedFeedback([original(4 * 1024 * 1024), original(4 * 1024 * 1024)])).toBe(true);
   });
-  test('retains legacy multipart only when the configured endpoint explicitly returns 404', async () => {
+  test('legacy 404 cannot silently proxy large originals; small requests retain multipart', async () => {
     const unsupported = async () => new Response(null, { status: 404 });
     expect(await supportsSignedFeedback(endpoint, unsupported as typeof fetch)).toBe(false);
+    await expect(requireSignedFeedback(endpoint, unsupported as typeof fetch)).rejects.toThrow('requires a signed-upload endpoint');
     const supported = async () => Response.json({ schema: 1, signed_upload: true });
     expect(await supportsSignedFeedback(endpoint, supported as typeof fetch)).toBe(true);
     const unavailable = async () => new Response(null, { status: 503 });
@@ -58,6 +59,17 @@ describe('private feedback signed upload', () => {
       if (String(target) === endpoint + '/uploads') return Response.json({ id, upload_capability: 'c'.repeat(48) });
       return Response.json({ path, url: 'https://attacker.example/steal', method: 'PUT', expires_in: 600,
         content_type: 'application/octet-stream', content_length: 1 });
+    };
+    await expect(submitSignedFeedback(endpoint, metadata,
+      [{ name: 'x.log', contentType: 'text/plain', blob: new Blob(['x']) }], fetchMock as typeof fetch))
+      .rejects.toThrow('unexpected destination');
+  });
+
+  test('rejects an unexpected Google Storage subdomain before direct upload', async () => {
+    const fetchMock = async (target: string | URL): Promise<Response> => {
+      if (String(target) === endpoint + '/uploads') return Response.json({ id, upload_capability: 'c'.repeat(48) });
+      return Response.json({ path, url: 'https://other.storage.googleapis.com/private?X-Goog-Signature=dummy',
+        method: 'PUT', expires_in: 600, content_type: 'application/octet-stream', content_length: 1 });
     };
     await expect(submitSignedFeedback(endpoint, metadata,
       [{ name: 'x.log', contentType: 'text/plain', blob: new Blob(['x']) }], fetchMock as typeof fetch))
