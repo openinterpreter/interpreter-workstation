@@ -40,16 +40,19 @@ import {
   materializeInterpreterCliLauncher,
 } from "./utils/interpreterCliRuntime";
 import {
+  applyMachineRuntimeDefaults,
   getHeadlessTaskCliWorkspaceError,
   hasHeadlessTaskRequest,
   printHeadlessTaskHelp,
   runHeadlessTaskCli,
 } from "./headlessTaskCli";
 import {
+  buildProgrammaticTaskRuntimeConfig,
   getWorkstationHostingError,
   parseCliOptions,
   type CliOptions,
 } from "./standaloneOptions";
+import { applyProgrammaticTaskRuntimeConfig } from "./programmaticTaskRuntimeConfig";
 import {
   ensureBrowserExtensionRelayRunning,
   formatOptionalBrowserExtensionRelayStartupFailureLog,
@@ -130,6 +133,17 @@ export async function runStandaloneCli(argv: string[] = process.argv.slice(2)) {
     const resolvedHome = path.resolve(cliOptions.home);
     process.env.HOME = resolvedHome;
     setInterpreterHomeDir(resolvedHome);
+  }
+  // A persistent sidecar must honor the same explicit model and sandbox flags
+  // as a one-shot task. This makes the configured profile available to later
+  // HTTP-created turns without manufacturing a startup conversation.
+  if (!hasTaskRequest) {
+    const runtimeConfig = applyMachineRuntimeDefaults(
+      buildProgrammaticTaskRuntimeConfig(cliOptions),
+    );
+    if (Object.values(runtimeConfig).some((value) => value !== undefined)) {
+      await applyProgrammaticTaskRuntimeConfig(runtimeConfig);
+    }
   }
   // Headless Bun sidecars do not need workspace file watching, and on Windows
   // the native watcher crashes reliably enough to break browser-control flows.

@@ -74,6 +74,35 @@ pnpm headless -- \
   --auth password
 ```
 
+For a retained loopback-only agent host, explicit runtime flags configure the
+default profile when the sidecar starts, even though it does not manufacture an
+immediate task or conversation:
+
+```bash
+export OPENAI_API_KEY='...'
+
+pnpm sidecar:node -- \
+  --home /srv/workstation/home \
+  --workspace /srv/workstation/workspace \
+  --port 5177 \
+  --profile-id retained-worker \
+  --profile-name 'Retained worker' \
+  --model gpt-5.6-sol \
+  --reasoning low \
+  --openai-api-key-env OPENAI_API_KEY \
+  --approval-policy never \
+  --sandbox danger-full-access \
+  --network-access \
+  --quiet-startup
+```
+
+The persisted profile records the environment-variable name rather than its
+secret value. Subsequent tasks created through Workstation's HTTP API inherit
+the profile. Subscription-backed hosts omit the programmatic OpenAI API flags
+and use the OAuth profile already authenticated in their persistent home. In
+both cases OIX remains Workstation's bundled execution runtime, not a parallel
+host service.
+
 When launching from source, the sidecar serves `dist/` if it contains the
 built renderer. Set `INTERPRETER_WORKSTATION_RENDERER_DIR` to an absolute build
 directory when the service starts from another working directory. A packaged

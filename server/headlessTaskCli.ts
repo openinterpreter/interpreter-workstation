@@ -59,6 +59,7 @@ Config options (writes the real app config before starting the task):
   --profile-id <id>                Write and use a programmatic profile for the run
   --profile-name <name>            Programmatic profile name for the run
   --model <id>                     Model ID for the programmatic profile
+  --reasoning <effort>             Reasoning effort for the programmatic profile
   --openai-api-key <key>           OpenAI API key for the programmatic profile
   --openai-api-key-env <name>      Environment variable to read for the OpenAI API key
 `.trim());

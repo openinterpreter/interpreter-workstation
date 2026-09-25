@@ -1,4 +1,5 @@
 import type { CodexApprovalPolicy, CodexSandboxMode } from './configStore';
+import type { ReasoningEffort } from '../shared/types/reasoning';
 import {
   createOpenAiApiProgrammaticProfile,
   type ProgrammaticTaskRuntimeConfig,
@@ -32,6 +33,7 @@ export type CliOptions = {
   profileId?: string;
   profileName?: string;
   modelId?: string;
+  reasoningEffort?: ReasoningEffort;
   openAIApiKey?: string;
   openAIApiKeyEnv?: string;
   baseURL?: string;
@@ -116,6 +118,15 @@ export function parseCliOptions(argv: string[]): CliOptions {
         options.modelId = nextValue(index, arg);
         index += 1;
         break;
+      case '--reasoning': {
+        const reasoning = nextValue(index, arg);
+        if (!['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(reasoning)) {
+          throw new Error(`Invalid reasoning effort: ${reasoning}`);
+        }
+        options.reasoningEffort = reasoning as ReasoningEffort;
+        index += 1;
+        break;
+      }
       case '--openai-api-key':
         options.openAIApiKey = nextValue(index, arg);
         index += 1;
@@ -245,6 +256,7 @@ function shouldOverrideDefaultProfile(cliOptions: CliOptions): boolean {
     cliOptions.profileId !== undefined
     || cliOptions.profileName !== undefined
     || cliOptions.modelId !== undefined
+    || cliOptions.reasoningEffort !== undefined
     || cliOptions.openAIApiKey !== undefined
     || cliOptions.openAIApiKeyEnv !== undefined
     || cliOptions.baseURL !== undefined
@@ -257,9 +269,10 @@ function resolveDefaultProfileForCliTask(cliOptions: CliOptions) {
   }
 
   const envName = cliOptions.openAIApiKeyEnv ?? 'OPENAI_API_KEY';
-  const apiKey = cliOptions.openAIApiKey ?? process.env[envName] ?? undefined;
+  const apiKey = cliOptions.openAIApiKey;
+  const environmentKey = apiKey ? undefined : envName;
 
-  if (!apiKey) {
+  if (!apiKey && !process.env[envName]) {
     throw new Error(`Missing OpenAI API key. Set ${envName} or pass --openai-api-key.`);
   }
 
@@ -267,7 +280,9 @@ function resolveDefaultProfileForCliTask(cliOptions: CliOptions) {
     id: cliOptions.profileId,
     name: cliOptions.profileName,
     modelId: cliOptions.modelId,
+    reasoningEffort: cliOptions.reasoningEffort,
     apiKey,
+    environmentKey,
     baseURL: cliOptions.baseURL,
   });
 }

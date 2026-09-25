@@ -97,7 +97,8 @@ describe('runCodexSubagent', () => {
 
     const modelConfig: AgentModelConfig = {
       provider: 'openai-oauth',
-      modelId: 'gpt-5.3-codex',
+      modelId: 'gpt-6-sol',
+      reasoningEffort: 'medium',
       profileId: 'profile-main',
     };
 
@@ -128,6 +129,17 @@ describe('runCodexSubagent', () => {
       expect(accountRefreshCalls).toEqual([true]);
       expect(runTurnCalls).toHaveLength(1);
       expect(runTurnCalls[0].config.reasoning_summary).toBe('none');
+      expect(runTurnCalls[0].effort).toBe('medium');
+      expect(runTurnCalls[0].config.model_reasoning_effort).toBe('medium');
+      await runCodexSubagent({
+        message: 'Continue at maximum reasoning',
+        modelConfig,
+        workspace: '/tmp/workspace',
+        session,
+        reasoningEffort: 'max',
+      });
+      expect(runTurnCalls[1].effort).toBe('max');
+      expect(runTurnCalls[1].config.model_reasoning_effort).toBe('max');
       expect(runTurnCalls[0].config.forced_login_method).toBe('chatgpt');
       expect(runTurnCalls[0].config.shell_environment_policy).toBeDefined();
       expect(runTurnCalls[0].config['mcp_servers.interpreter']).toBeUndefined();
