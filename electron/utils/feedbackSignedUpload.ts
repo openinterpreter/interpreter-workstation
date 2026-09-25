@@ -66,7 +66,12 @@ export async function submitSignedFeedback(
         grant.content_type !== 'application/octet-stream' || typeof grant.url !== 'string') {
       throw new Error('Invalid signed feedback upload grant');
     }
-    const url = new URL(grant.url);
+    let url: URL;
+    try {
+      url = new URL(grant.url);
+    } catch {
+      throw new Error('Invalid signed feedback upload URL');
+    }
     if (url.protocol !== 'https:' || url.username || url.password ||
         !(url.hostname === 'storage.googleapis.com' || /^[a-z0-9.-]+\.storage\.googleapis\.com$/.test(url.hostname))) {
       throw new Error('Signed feedback URL has an unexpected destination');
