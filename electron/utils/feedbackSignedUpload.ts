@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export type FeedbackOriginal = { name: string; contentType: string; blob: Blob };
-type Metadata = { email: string; message: string; version: string; platform: string; arch: string };
+type Metadata = { email: string; message: string; version: string; platform: string; arch: string; reportPasscode?: string };
 
 const MAX_FILE = 200 * 1024 * 1024;
 const ID = /^[0-9a-f]{32}$/;
@@ -56,7 +56,8 @@ export async function submitSignedFeedback(
   const created = await json(await fetchImpl(base, {
     method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ origin: 'workstation', reason: metadata.message, version: metadata.version,
-      email: metadata.email, platform: metadata.platform, arch: metadata.arch }),
+      email: metadata.email, platform: metadata.platform, arch: metadata.arch,
+      ...(metadata.reportPasscode ? { report_passcode: metadata.reportPasscode } : {}) }),
   }));
   const id = created.id;
   const capability = created.upload_capability;

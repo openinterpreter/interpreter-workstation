@@ -2076,6 +2076,8 @@ export interface SimpleInterfaceAgentStartResponse {
 export interface FeedbackSubmitRequest {
   email: string;
   message: string;
+  /** Dedicated feedback receiver only; never sent to the legacy endpoint. */
+  reportPasscode?: string;
   includeLogs: boolean;
   images?: Array<{ data: string; name: string }>;
 }
