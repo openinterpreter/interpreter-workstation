@@ -493,7 +493,7 @@ export class CodexService {
     if (!activeTurnId) return; // A turn still starting cannot be reconciled.
     try {
       const { thread } = await this.client.threadRead({ threadId, includeTurns: true });
-      const last = thread.turns.at(-1);
+      const last = thread.turns[thread.turns.length - 1];
       if (
         thread.id === threadId &&
         thread.status.type === "idle" &&
