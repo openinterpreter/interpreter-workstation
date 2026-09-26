@@ -488,6 +488,24 @@ export class CodexService {
     throw new Error(`Interpreter is already responding in this thread.${suffix}`);
   }
 
+  private async reconcileTerminalTurn(threadId: string): Promise<void> {
+    const activeTurnId = this.activeTurns.get(threadId);
+    if (!activeTurnId) return; // A turn still starting cannot be reconciled.
+    try {
+      const { thread } = await this.client.threadRead({ threadId, includeTurns: true });
+      const last = thread.turns[thread.turns.length - 1];
+      if (
+        thread.id === threadId &&
+        thread.status.type === "idle" &&
+        last?.id === activeTurnId &&
+        (last.status === "completed" || last.status === "failed" || last.status === "interrupted") &&
+        this.activeTurns.get(threadId) === activeTurnId
+      ) this.activeTurns.delete(threadId);
+    } catch {
+      // A failed or ambiguous authoritative read must not clear the guard.
+    }
+  }
+
   async loginWithChatGPT() { return this.client.loginWithChatGPT(); }
   async getAccount(refreshToken?: boolean) { return this.client.getAccount(refreshToken); }
   async cancelLogin(loginId: string) { await this.client.cancelLogin(loginId); }
@@ -642,6 +660,7 @@ export class CodexService {
 
   async runTurn(options: RunTurnOptions) {
     if (options.threadId) {
+      await this.reconcileTerminalTurn(options.threadId);
       this.assertNoActiveTurn(options.threadId);
     }
 
@@ -668,6 +687,7 @@ export class CodexService {
       runConfig,
       options.dynamicTools,
     );
+    await this.reconcileTerminalTurn(threadId);
     this.assertNoActiveTurn(threadId);
     this.activeTurns.set(threadId, null);
     options.onEvent({ kind: "thread", threadId });
@@ -698,7 +718,9 @@ export class CodexService {
       removeAbortListener();
       unsubscribe();
       unsubscribeDisconnect();
-      this.activeTurns.delete(threadId);
+      if (this.activeTurns.get(threadId) === (turnId || null)) {
+        this.activeTurns.delete(threadId);
+      }
     };
 
     const settleTurn = (
@@ -871,7 +893,7 @@ export class CodexService {
 
       if (options.signal) {
         const interruptOnAbort = () => {
-          void this.interrupt(threadId).catch(() => {});
+          void this.interrupt(threadId, turnId).catch(() => {});
         };
 
         if (options.signal.aborted) {
