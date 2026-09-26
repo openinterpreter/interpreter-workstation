@@ -12,6 +12,7 @@ import { isBrowserDevMode } from '@/ipc';
 import { FEEDBACK_BUTTON_ID, FEEDBACK_POPOVER_ID } from '../../shared/element-ids';
 import { FEEDBACK_BUTTON_FLASH_EVENT, FEEDBACK_POPOVER_OPEN_EVENT } from '../utils/feedback';
 import { isMeaningfulFeedbackMessage } from '../utils/feedbackValidation';
+import { distributionProductConfig } from '../../shared/productConfig';
 import { trackFeedbackSubmitted, trackFeedbackOpened } from '../utils/telemetry';
 import { cn } from '@/lib/utils';
 import { formatPrimaryShortcut } from '../utils/platformShortcuts';
@@ -80,6 +81,8 @@ export function FeedbackPopover({ className, iconOnly = false, onOpenChange, ope
     }
   }, [openRequested]);
   const [message, setMessage] = useState('');
+  const [reportPasscode, setReportPasscode] = useState('');
+  const requiresReportPasscode = Boolean(distributionProductConfig.feedbackUrl?.trim());
 
   useEffect(() => {
     if (!email && session?.user?.email) {
@@ -166,18 +169,26 @@ export function FeedbackPopover({ className, iconOnly = false, onOpenChange, ope
       return;
     }
 
+    if (requiresReportPasscode && (new TextEncoder().encode(reportPasscode).length < 12 ||
+        new TextEncoder().encode(reportPasscode).length > 128)) {
+      setSubmitError(t('feedback.reportPasscodeError', { defaultValue: 'Enter a report passcode of 12–128 bytes.' }));
+      return;
+    }
+
     if (isBrowserDevMode() || !window.electron?.feedback) {
       setSubmitError(t('feedback.errorDesktopOnly'));
       return;
     }
 
     const imagesToSubmit = images;
+    const passcodeToSubmit = requiresReportPasscode ? reportPasscode : undefined;
     const includeLogsToSubmit = includeLogs;
     setIsSubmitting(true);
     setSubmitError(null);
     const sendingToastId = showToast(t('feedback.sendingToast'), 'info');
     setIsOpen(false);
     setMessage('');
+    setReportPasscode('');
     setImages([]);
     setIncludeLogs(DEFAULT_INCLUDE_LOGS);
 
@@ -208,6 +219,7 @@ export function FeedbackPopover({ className, iconOnly = false, onOpenChange, ope
       const result = await window.electron.feedback.submit({
         email: trimmedEmail,
         message: trimmedMessage,
+        reportPasscode: passcodeToSubmit,
         includeLogs: includeLogsToSubmit,
         images: encodedImages,
       });
@@ -248,7 +260,11 @@ export function FeedbackPopover({ className, iconOnly = false, onOpenChange, ope
 
   return (
 // we use the popover component here over dropdownmenu as it is makes we the form fields keyboard navigatable
-    <Popover open={isOpen} onOpenChange={(open) => { setIsOpen(open); onOpenChange?.(open); }}>
+    <Popover open={isOpen} onOpenChange={(open) => {
+      setIsOpen(open);
+      if (!open) setReportPasscode('');
+      onOpenChange?.(open);
+    }}>
       <Tooltip>
         <TooltipTrigger asChild>
           <span>
@@ -352,6 +368,27 @@ export function FeedbackPopover({ className, iconOnly = false, onOpenChange, ope
                 required
               />
             </div>
+
+            {requiresReportPasscode && (
+              <div className="space-y-1.5">
+                <Label htmlFor="feedback-report-passcode" className="text-ui-sm text-muted-foreground">
+                  {t('feedback.reportPasscodeLabel', { defaultValue: 'Report passcode' })}
+                </Label>
+                <Input
+                  id="feedback-report-passcode"
+                  type="password"
+                  autoComplete="new-password"
+                  spellCheck={false}
+                  value={reportPasscode}
+                  onChange={(e) => setReportPasscode(e.target.value)}
+                  className="h-9 rounded-[12px] text-ui-sm shadow-none"
+                  required
+                />
+                <p className="text-ui-xs text-muted-foreground">
+                  {t('feedback.reportPasscodeHelp', { defaultValue: 'Keep this separate from your message. Support needs it to retrieve this report.' })}
+                </p>
+              </div>
+            )}
 
             <div
               className="space-y-1.5 rounded-[12px] px-3 py-2.5"

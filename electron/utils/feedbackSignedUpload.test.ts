@@ -39,11 +39,13 @@ describe('private feedback signed upload', () => {
       if (url.endsWith('/complete')) return Response.json({ success: true, id });
       throw new Error('unexpected request');
     };
-    const reportId = await submitSignedFeedback(endpoint, metadata,
+    const reportId = await submitSignedFeedback(endpoint, { ...metadata, reportPasscode: 'operator-report-passcode' },
       [{ name: 'session.log', contentType: 'text/plain', blob: new Blob([original]) }], fetchMock as typeof fetch);
     expect(reportId).toBe(id);
     expect(JSON.parse(calls[0].options.body as string)).toMatchObject({ origin: 'workstation', reason: metadata.message,
-      email: metadata.email, platform: metadata.platform, arch: metadata.arch });
+      email: metadata.email, platform: metadata.platform, arch: metadata.arch,
+      report_passcode: 'operator-report-passcode' });
+    expect(calls.slice(1).every(call => !JSON.stringify(call).includes('operator-report-passcode'))).toBe(true);
     expect(JSON.parse(calls[1].options.body as string)).toEqual({
       name: 'session.log', content_type: 'text/plain', bytes: original.length, sha256,
     });

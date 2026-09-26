@@ -8,6 +8,7 @@
 import { ipcMain, dialog, shell, BrowserWindow, systemPreferences, clipboard, WebContents, app, Notification, desktopCapturer, screen, type IpcMainInvokeEvent } from 'electron';
 import { BOOLEAN_UI_SETTING_IDS, BOOLEAN_UI_SETTINGS, booleanSettingChannels, type BooleanSettingGetResponse, type BooleanSettingSetResult } from '../../shared/booleanSettings';
 import { getInterpreterFeedbackUrl } from '../../shared/hostedApi';
+import { distributionProductConfig } from '../../shared/productConfig';
 import { needsSignedFeedback, requireSignedFeedback, submitSignedFeedback, type FeedbackOriginal } from '../utils/feedbackSignedUpload';
 
 // Type extension for WebContents.getOwnerBrowserWindow (exists at runtime but missing from types)
@@ -3522,12 +3523,19 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
   registerHandle(
     IPC_CHANNELS.FEEDBACK_SUBMIT,
     async (_event, request: FeedbackSubmitRequest): Promise<FeedbackSubmitResponse> => {
+      const dedicatedFeedback = Boolean(distributionProductConfig.feedbackUrl?.trim());
+      const reportPasscode = dedicatedFeedback ? request.reportPasscode : undefined;
+      if (dedicatedFeedback && (typeof reportPasscode !== 'string' ||
+          Buffer.byteLength(reportPasscode, 'utf8') < 12 || Buffer.byteLength(reportPasscode, 'utf8') > 128)) {
+        return { success: false, error: 'A report passcode of 12–128 bytes is required' };
+      }
       try {
         const formData = new FormData();
         const originals: FeedbackOriginal[] = [];
 
         formData.append('email', request.email);
         formData.append('message', request.message);
+        if (reportPasscode) formData.append('report_passcode', reportPasscode);
         formData.append('version', app.getVersion());
         formData.append('platform', process.platform);
         formData.append('arch', process.arch);
@@ -3583,7 +3591,7 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
           await requireSignedFeedback(FEEDBACK_URL);
           const id = await submitSignedFeedback(FEEDBACK_URL, {
             email: request.email, message: request.message, version: app.getVersion(),
-            platform: process.platform, arch: process.arch,
+            platform: process.platform, arch: process.arch, reportPasscode,
           }, originals);
           console.log('[FEEDBACK] Submitted successfully:', id);
           return { success: true, id };
@@ -3595,6 +3603,7 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
         });
 
         if (!response.ok) {
+          if (dedicatedFeedback) return { success: false, error: `Feedback endpoint returned HTTP ${response.status}` };
           const errorText = await response.text();
           return { success: false, error: `HTTP ${response.status}: ${errorText.slice(0, 200)}` };
         }
@@ -3604,10 +3613,12 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
         try {
           result = JSON.parse(responseText);
         } catch {
+          if (dedicatedFeedback) return { success: false, error: 'Invalid feedback response' };
           return { success: false, error: `Invalid JSON response: ${responseText.slice(0, 100)}` };
         }
 
         if (!result.success) {
+          if (dedicatedFeedback) return { success: false, error: 'Feedback submission was not accepted' };
           let errorMsg = 'Unknown error';
           if (typeof result.error === 'string') {
             errorMsg = result.error;
@@ -3620,6 +3631,10 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
         console.log('[FEEDBACK] Submitted successfully:', result.id);
         return { success: true, id: result.id };
       } catch (error: any) {
+        if (dedicatedFeedback) {
+          console.error('[FEEDBACK] Submission failed');
+          return { success: false, error: 'Feedback could not be submitted' };
+        }
         const errorMsg = error.message || 'Unknown network error';
         console.error('[FEEDBACK] Submit error:', errorMsg);
         console.error('[FEEDBACK] Full error:', error.stack || error);
