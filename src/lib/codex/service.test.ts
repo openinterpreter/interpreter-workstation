@@ -825,6 +825,45 @@ describe("CodexService", () => {
     assert.equal(result.status, "completed");
   });
 
+  test("reconciles only an exact terminal persisted turn before resuming", async () => {
+    let startCount = 0;
+    const fake = createFakeClient({
+      startTurn: async () => createTurn(`turn_${++startCount}`),
+      threadRead: async () => ({ thread: {
+        id: "thr_existing", status: { type: "idle" },
+        turns: [createTurn("turn_1", "completed")],
+      } } as v2.ThreadReadResponse),
+    });
+    const service = new CodexService(fake.client);
+    void service.runTurn({ threadId: "thr_existing", message: "first", model: "test-model", onEvent: () => {} });
+    await waitFor(() => fake.calls.startTurn === 1);
+
+    const second = service.runTurn({ threadId: "thr_existing", message: "second", model: "test-model", onEvent: () => {} });
+    await waitFor(() => fake.calls.startTurn === 2);
+    fake.emit({ method: SERVER_METHOD.turnCompleted, params: {
+      threadId: "thr_existing", turn: createTurn("turn_2", "completed"),
+    } });
+    assert.equal((await second).status, "completed");
+    assert.equal(fake.calls.startTurn, 2);
+  });
+
+  test("retains the active guard when persisted turn identity does not match", async () => {
+    const fake = createFakeClient({
+      threadRead: async () => ({ thread: {
+        id: "thr_existing", status: { type: "idle" },
+        turns: [createTurn("different_turn", "completed")],
+      } } as v2.ThreadReadResponse),
+    });
+    const service = new CodexService(fake.client);
+    void service.runTurn({ threadId: "thr_existing", message: "first", model: "test-model", onEvent: () => {} });
+    await waitFor(() => fake.calls.startTurn === 1);
+    await assert.rejects(
+      service.runTurn({ threadId: "thr_existing", message: "second", model: "test-model", onEvent: () => {} }),
+      /already responding in this thread/,
+    );
+    assert.equal(fake.calls.startTurn, 1);
+  });
+
   test("rejects an overlapping turn while the first runtime turn is still starting", async () => {
     const pendingStart = deferred<v2.Turn>();
     const fake = createFakeClient({
