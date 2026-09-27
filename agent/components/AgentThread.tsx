@@ -1,6 +1,7 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { tr } from '../../src/i18n';
 import { AgentModelConfig } from '../../shared/types/model';
+import { ThreadWakeIndicator } from './ThreadWakeSources';
 import { BUILTIN_PROVIDER_IDS, findSupportedResponsesApiBaseUrlOption } from '../../shared/types/provider';
 import { useAuth } from '@/contexts/AuthContext';
 import { useInterpreterTokenUsage } from '@/hooks/useInterpreterTokenUsage';
@@ -1245,6 +1246,7 @@ function AgentThreadWithRuntime({
       data-active={isVisible.toString()}
       style={{
         display: isVisible ? 'flex' : 'none',
+        position: 'relative',
         flexDirection: 'column',
         height: '100%',
         minHeight: 0,
@@ -1256,6 +1258,7 @@ function AgentThreadWithRuntime({
       data-agent-id={agentId}
       data-read-only={readOnly ? 'true' : undefined}
     >
+      {threadId ? <ThreadWakeIndicator threadId={threadId} /> : null}
       <ThreadMessages
         agentId={agentId}
         messages={messages}

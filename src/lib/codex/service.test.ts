@@ -1231,6 +1231,26 @@ describe("CodexService", () => {
     await run;
   });
 
+  test("wake admission starts only the exact existing thread and keeps its active-turn guard", async () => {
+    const fake = createFakeClient();
+    const service = new CodexService(fake.client);
+    assert.equal(await service.startExistingThreadTurn("thr_existing", "wake input", "/workspace"), "turn_1");
+    assert.equal(fake.calls.resumeThread, 1);
+    assert.equal(fake.calls.startThread, 0);
+    assert.equal(fake.calls.startTurn, 1);
+    assert.equal(fake.calls.resumeThreadModel[0], null);
+    await assert.rejects(service.startExistingThreadTurn("thr_existing", "duplicate"), /already responding/);
+    assert.equal(fake.calls.startTurn, 1);
+  });
+
+  test("wake admission never replaces a missing thread", async () => {
+    const fake = createFakeClient();
+    const service = new CodexService(fake.client);
+    await assert.rejects(service.startExistingThreadTurn("missing", "wake input"), /missing thread/);
+    assert.equal(fake.calls.startThread, 0);
+    assert.equal(fake.calls.startTurn, 0);
+  });
+
   test("rethrows non-stale resumeThread errors instead of starting a fresh thread", async () => {
     const fake = createFakeClient({
       async resumeThread() {
