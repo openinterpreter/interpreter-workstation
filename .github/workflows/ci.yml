@@ -67,6 +67,8 @@ jobs:
   electron-e2e:
     runs-on: macos-26
     timeout-minutes: 75
+    env:
+      INTERPRETER_E2E_OUTCOME_FILE: ${{ runner.temp }}/e2e-outcome.json
     steps:
       - uses: actions/checkout@v7
         with:
@@ -86,6 +88,16 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run download:oix -- --current-platform
       - run: pnpm run test:e2e:ci
+      - name: Emit schema-only E2E outcome annotation
+        if: always()
+        run: pnpm exec tsx scripts/ci/emit-e2e-outcome.ts
+      - name: Upload schema-only E2E outcome
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: electron-e2e-outcome
+          path: ${{ runner.temp }}/e2e-outcome.json
+          if-no-files-found: warn
 
   voice-e2e:
     runs-on: windows-latest

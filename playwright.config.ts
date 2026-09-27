@@ -108,6 +108,7 @@ export default defineConfig({
   reporter: [
     ["list", { printSteps: false }],
     ["./tests/log-reporter.ts"],
+    ["./tests/opaque-outcome-reporter.ts"],
     ...(canUseMonocartReporter
       ? [
           [
