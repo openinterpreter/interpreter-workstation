@@ -936,6 +936,7 @@ const RETRYABLE_RPC_METHODS = new Set<keyof RequestMap>([
   CLIENT_METHOD.interpreterHarnessSet,
   CLIENT_METHOD.threadList,
   CLIENT_METHOD.threadRead,
+  CLIENT_METHOD.threadQueueList,
 ]);
 
 export function resolveDefaultCodexHome(
@@ -2351,6 +2352,10 @@ export class CodexAppServerClient {
 
   async threadRead(params: v2.ThreadReadParams): Promise<v2.ThreadReadResponse> {
     return this.rpcRequest(CLIENT_METHOD.threadRead, params);
+  }
+
+  async threadQueueList(params: RequestMap[typeof CLIENT_METHOD.threadQueueList]['params']): Promise<RequestMap[typeof CLIENT_METHOD.threadQueueList]['result']> {
+    return this.rpcRequest(CLIENT_METHOD.threadQueueList, params);
   }
 
   async threadSetName(params: v2.ThreadSetNameParams): Promise<v2.ThreadSetNameResponse> {

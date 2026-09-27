@@ -28,6 +28,56 @@ function createTurn(id: string, status: v2.TurnStatus = "inProgress"): v2.Turn {
   };
 }
 
+describe('native custody metadata', () => {
+  test('pages native queue through the existing client without returning input', async () => {
+    const fake = createFakeClient({});
+    const client = fake.client;
+    const requested: Array<string | null | undefined> = [];
+    client.threadQueueList = async ({ cursor }) => {
+      requested.push(cursor);
+      return cursor
+        ? { data: [{ id: 'queue_2', clientUserMessageId: 'message_2', input: [{ text: 'private-two' }] }], nextCursor: null }
+        : { data: [{ id: 'queue_1', clientUserMessageId: 'message_1', input: [{ text: 'private-one' }] }], nextCursor: '1' };
+    };
+    const result = await new CodexService(client).readNativeCustody('thr_new');
+    assert.deepEqual(requested, [null, '1']);
+    assert.equal(result.queuedSubmissionCount, 2);
+    assert.deepEqual(result.queuedSubmissions, [
+      { id: 'queue_1', clientUserMessageId: 'message_1' },
+      { id: 'queue_2', clientUserMessageId: 'message_2' },
+    ]);
+    assert.doesNotMatch(JSON.stringify(result), /private-one|private-two/);
+  });
+
+  test('fails closed on malformed or cyclic pagination', async () => {
+    const client = createFakeClient({}).client;
+    client.threadQueueList = async () => ({ data: [], nextCursor: '1' });
+    await assert.rejects(new CodexService(client).readNativeCustody('thr_new'), /cursor/);
+  });
+
+  test('fails closed when native queue inspection is unsupported', async () => {
+    const client = createFakeClient({}).client;
+    client.threadQueueList = async () => { throw new Error('experimental method unavailable'); };
+    await assert.rejects(new CodexService(client).readNativeCustody('thr_new'), /unavailable/);
+  });
+  test('reports native pending approval flags without transcript content', async () => {
+    const client = createFakeClient({}).client;
+    const read = client.threadRead.bind(client);
+    client.threadRead = async (params) => {
+      const result = await read(params);
+      return { thread: {
+        ...result.thread,
+        status: { type: 'active', activeFlags: ['waitingOnApproval'] },
+        turns: [{ ...createTurn('turn_1'), items: [] }],
+      } };
+    };
+    const result = await new CodexService(client).readNativeCustody('thr_new');
+    assert.equal(result.status, 'active');
+    assert.deepEqual(result.activeFlags, ['waitingOnApproval']);
+    assert.equal(result.lastTurnStatus, 'inProgress');
+  });
+});
+
 function createFakeClient(overrides: {
   startTurn?: (params: Parameters<CodexClient["startTurn"]>[0]) => Promise<v2.Turn>;
   steerTurn?: (params: Parameters<CodexClient["steerTurn"]>[0]) => Promise<v2.TurnSteerResponse>;
@@ -260,6 +310,9 @@ function createFakeClient(overrides: {
           turns: [],
         },
       };
+    },
+    async threadQueueList() {
+      return { data: [], nextCursor: null };
     },
     async threadSetName(params) {
       calls.threadSetNameParams.push(params);

@@ -153,6 +153,23 @@ router.post('/threads/:threadId/wake-events', async (req: Request, res: Response
   }
 });
 
+// Local operator diagnostic through the *existing* native client. Return only
+// bounded queue identifiers and status, never the queued input or transcript.
+router.get('/threads/:threadId/native-custody', async (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(req.params.threadId)) {
+    return res.status(400).json({ error: 'Invalid thread ID.' });
+  }
+  try {
+    res.json(await getCodexService().readNativeCustody(req.params.threadId));
+  } catch {
+    res.status(503).json({ error: 'Native custody inspection unavailable.' });
+  }
+});
+
 router.get('/threads/:threadId/wake-sources', async (req: Request, res: Response) => {
   try { await readyWakeSources(); res.json(wakeSources.list(req.params.threadId)); }
   catch { res.status(503).json({ error: 'Wake sources unavailable.' }); }

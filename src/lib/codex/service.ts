@@ -328,6 +328,10 @@ export type CodexClient = {
   ): Promise<v2.WindowsSandboxSetupStartResponse>;
   threadList(params?: v2.ThreadListParams): Promise<v2.ThreadListResponse>;
   threadRead(params: v2.ThreadReadParams): Promise<v2.ThreadReadResponse>;
+  threadQueueList(params: { threadId: string; cursor?: string | null; limit?: number | null }): Promise<{
+    data: Array<{ id: string; clientUserMessageId: string; input: unknown[] }>;
+    nextCursor: string | null;
+  }>;
   threadSetName(params: v2.ThreadSetNameParams): Promise<v2.ThreadSetNameResponse>;
   threadGoalSet(params: v2.ThreadGoalSetParams): Promise<v2.ThreadGoalSetResponse>;
   threadGoalGet(params: v2.ThreadGoalGetParams): Promise<v2.ThreadGoalGetResponse>;
@@ -920,6 +924,48 @@ export class CodexService {
   async readThread(threadId: string): Promise<v2.Thread> {
     const result = await this.client.threadRead({ threadId, includeTurns: true });
     return result.thread;
+  }
+
+  async readNativeCustody(threadId: string) {
+    const thread = await this.readThread(threadId);
+    if (thread.id !== threadId) throw new Error('Native thread ID mismatch');
+    const submissions: Array<{ id: string; clientUserMessageId: string }> = [];
+    let cursor: string | null = null;
+    const seen = new Set<string>();
+    const seenItems = new Set<string>();
+    do {
+      const page = await this.client.threadQueueList({ threadId, cursor, limit: 100 });
+      if (!Array.isArray(page.data) || page.data.length > 100) throw new Error('Invalid native queue page');
+      for (const item of page.data) {
+        if (typeof item.id !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(item.id) ||
+          typeof item.clientUserMessageId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(item.clientUserMessageId)) {
+          throw new Error('Invalid native queue identifier');
+        }
+        if (seenItems.has(item.id)) throw new Error('Duplicate native queue identifier');
+        seenItems.add(item.id);
+        submissions.push({ id: item.id, clientUserMessageId: item.clientUserMessageId });
+      }
+      if (page.nextCursor !== null && typeof page.nextCursor !== 'string') {
+        throw new Error('Invalid native queue cursor');
+      }
+      cursor = page.nextCursor;
+      if (cursor !== null && (typeof cursor !== 'string' || !/^[0-9]{1,12}$/.test(cursor) || seen.has(cursor))) {
+        throw new Error('Invalid native queue cursor');
+      }
+      if (cursor) seen.add(cursor);
+      if (submissions.length > 2000) throw new Error('Native queue exceeds inspection bound');
+    } while (cursor);
+    const lastTurn = thread.turns[thread.turns.length - 1];
+    const status = thread.status;
+    return {
+      threadId,
+      status: status.type,
+      activeFlags: status.type === 'active' ? status.activeFlags : [],
+      lastTurnId: lastTurn?.id ?? null,
+      lastTurnStatus: lastTurn?.status ?? null,
+      queuedSubmissionCount: submissions.length,
+      queuedSubmissions: submissions,
+    };
   }
 
   /** Admit an input only to an existing idle thread, retaining its native model/config. */

@@ -11,6 +11,7 @@ import type { JsonValue } from "../../../server/handlers/codex-generated-types/s
 
 type ClientMethod =
   | ClientRequest["method"]
+  | "thread/queue/list"
   | "thread/backgroundTerminals/clean"
   | "mcpServer/tool/call"
   | "mcpServer/resource/read";
@@ -46,6 +47,7 @@ export const CLIENT_METHOD = {
   mcpResourceRead: "mcpServer/resource/read",
   threadList: "thread/list",
   threadRead: "thread/read",
+  threadQueueList: "thread/queue/list",
   modelList: "model/list",
   interpreterProviderList: "interpreter/provider/list",
   interpreterProviderSet: "interpreter/provider/set",
@@ -243,6 +245,10 @@ export type RequestMap = {
   [CLIENT_METHOD.threadRead]: {
     params: v2.ThreadReadParams;
     result: v2.ThreadReadResponse;
+  };
+  [CLIENT_METHOD.threadQueueList]: {
+    params: { threadId: string; cursor?: string | null; limit?: number | null };
+    result: { data: Array<{ id: string; clientUserMessageId: string; input: unknown[] }>; nextCursor: string | null };
   };
   [CLIENT_METHOD.modelList]: {
     params: v2.ModelListParams;
