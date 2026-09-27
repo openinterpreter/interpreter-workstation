@@ -31,6 +31,7 @@ import { AgentThread } from '../../../agent/components/AgentThread';
 import { RemoteThreadViewer } from '../../../agent/components/RemoteThreadViewer';
 import { ThreadAccessoryStack } from '../../../agent/components/ThreadAccessoryStack';
 import { ThreadGoalBar } from '../../../agent/components/ThreadGoalBar';
+import { ThreadWakeSources } from '../../../agent/components/ThreadWakeSources';
 import { AgentMetadataProvider } from '../../../agent/contexts/AgentMetadataContext';
 import { AgentErrorProvider } from '../../../agent/contexts/AgentErrorContext';
 import { ComposerArea } from '../../../agent/components/ComposerArea';
@@ -664,6 +665,7 @@ const EditorAgentPane = React.memo(function EditorAgentPane({ agentId, threadId,
   const accessoryStack = (
     <ThreadAccessoryStack>
       {threadId ? <ThreadGoalBar threadId={threadId} readOnly={readOnlyWorkstation} /> : null}
+      {threadId ? <ThreadWakeSources threadId={threadId} readOnly={readOnlyWorkstation} /> : null}
       {!showEditorEmptyState && visiblePlan && planKey ? (
         <PlanChecklistCard
           plan={visiblePlan}

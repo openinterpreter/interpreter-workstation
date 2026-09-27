@@ -1,0 +1,351 @@
+import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { mkdir, readFile, open, rename, rm } from 'node:fs/promises';
+import path from 'node:path';
+import { getInterpreterAppDataDir } from '../configStore';
+
+// A wake source belongs to an ordinary conversation. These records only keep
+// custody until the native transcript contains the input; they do not track
+// completion or outbound delivery.
+export type WakeSource = {
+  id: string;
+  threadId: string;
+  kind: 'schedule' | 'command';
+  message?: string;
+  at?: string;
+  everyMs?: number;
+  argv?: string[];
+  status: 'waiting' | 'running' | 'delivered' | 'error' | 'cancelled';
+  nextAt?: string;
+  error?: string;
+  sequence: number;
+};
+export type WakeEvent = {
+  threadId: string;
+  sourceId: string;
+  eventId: string;
+  message: string;
+  status: 'pending' | 'offered' | 'admitted';
+  createdAt: string;
+  offeredAt?: string;
+  turnId?: string;
+  nextAttemptAt?: string;
+  error?: string;
+};
+type State = { sources: WakeSource[]; events: WakeEvent[] };
+const EMPTY: State = { sources: [], events: [] };
+const ID = /^[a-zA-Z0-9_-]{1,160}$/;
+const MAX_MESSAGE = 32_000;
+const MAX_STDOUT = 64_000;
+const MIN_INTERVAL = 60_000;
+const COMMAND_REARM_MS = 30_000;
+const marker = (source: string, id: string) => `[Wake event ${source}/${id}]`;
+export const wakeInput = (event: WakeEvent) => `${marker(event.sourceId, event.eventId)}\n${event.message}`;
+function safeError(error: unknown): string {
+  const message = error instanceof Error ? error.message.toLowerCase() : '';
+  if (/usage|quota|credit|billing|limit/.test(message)) return 'Usage limit reached; operator action required';
+  if (/oauth|token|credential|authentication|unauthoriz|login/.test(message)) return 'Authentication unavailable; operator action required';
+  if (/overload|capacity|unavailable|timeout|disconnect/.test(message)) return 'Runtime temporarily unavailable';
+  if (/command exited/.test(message)) return 'Command exited nonzero or exceeded limits';
+  return 'Wake source failed; check local service diagnostics';
+}
+export function wakeTokenValid(actual: string | undefined, supplied: string | undefined): boolean {
+  if (!actual || !supplied) return false;
+  const a = Buffer.from(actual);
+  const b = Buffer.from(supplied);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+export interface WakeNative {
+  inspect(threadId: string): Promise<{ activeTurnId?: string; messages: string[] }>;
+  steer(threadId: string, turnId: string, message: string): Promise<string>;
+  start(threadId: string, message: string): Promise<string>;
+}
+
+/** One owner per application process; all transitions use an atomic, mode-0600 replace. */
+export class WakeSources {
+  private state: State = structuredClone(EMPTY);
+  private chain = Promise.resolve();
+  private timer?: ReturnType<typeof setInterval>;
+  private inFlight = new Set<string>();
+  private commands = new Map<string, ReturnType<typeof spawn>>();
+  private commandTasks = new Set<Promise<void>>();
+  private ticking = false;
+  private readonly file: string;
+  private readonly lock: string;
+  private readonly owner = randomUUID();
+
+  constructor(private readonly native: WakeNative, root = getInterpreterAppDataDir()) {
+    this.file = path.join(root, 'wake-sources.json');
+    this.lock = `${this.file}.owner`;
+  }
+
+  async initialize(): Promise<void> {
+    await mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 });
+    await this.claimOwner();
+    try {
+    try {
+      const raw = JSON.parse(await readFile(this.file, 'utf8')) as State;
+      if (!Array.isArray(raw.sources) || !Array.isArray(raw.events)) throw new Error('Invalid wake source state');
+      this.state = raw;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    // Never launch a second command when it has an unadmitted output event.
+    for (const source of this.state.sources) {
+      if (source.status === 'running') {
+        source.status = 'waiting';
+        source.nextAt = new Date(Date.now() + COMMAND_REARM_MS).toISOString();
+      }
+    }
+    await this.save();
+    this.timer = setInterval(() => { void this.tick().catch(console.error); }, 2000);
+    this.timer.unref?.();
+    } catch (error) { await this.stop(); throw error; }
+  }
+
+  private async claimOwner(): Promise<void> {
+    try {
+      await mkdir(this.lock, { mode: 0o700 });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      // A stopped application may leave a stale PID. A recovery lock keeps
+      // simultaneous starters from deleting one another's ownership record.
+      const recovery = `${this.lock}.recovery`;
+      await mkdir(recovery, { mode: 0o700 });
+      try {
+        const prior = JSON.parse(await readFile(path.join(this.lock, 'owner.json'), 'utf8')) as { pid: number; owner: string };
+        if (!Number.isInteger(prior.pid) || typeof prior.owner !== 'string') throw new Error('Invalid wake owner');
+        try { process.kill(prior.pid, 0); throw new Error('Another Workstation owns wake dispatch'); }
+        catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ESRCH') throw e; }
+        await rm(this.lock, { recursive: true });
+        await mkdir(this.lock, { mode: 0o700 });
+      } finally { await rm(recovery, { recursive: true, force: true }); }
+    }
+    const handle = await open(path.join(this.lock, 'owner.json'), 'wx', 0o600);
+    try { await handle.writeFile(JSON.stringify({ pid: process.pid, owner: this.owner })); await handle.sync(); }
+    finally { await handle.close(); }
+  }
+
+  async stop(): Promise<void> {
+    if (this.timer) clearInterval(this.timer);
+    for (const child of this.commands.values()) child.kill('SIGKILL');
+    await Promise.allSettled([...this.commandTasks]);
+    try {
+      const current = JSON.parse(await readFile(path.join(this.lock, 'owner.json'), 'utf8')) as { owner: string };
+      if (current.owner === this.owner) await rm(this.lock, { recursive: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  list(threadId: string): { sources: WakeSource[]; events: WakeEvent[] } {
+    return structuredClone({
+      sources: this.state.sources.filter(s => s.threadId === threadId),
+      events: this.state.events.filter(e => e.threadId === threadId),
+    });
+  }
+
+  private async save(): Promise<void> {
+    await mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 });
+    const temp = `${this.file}.${randomUUID()}.tmp`;
+    const handle = await open(temp, 'wx', 0o600);
+    try { await handle.writeFile(JSON.stringify(this.state)); await handle.sync(); }
+    finally { await handle.close(); }
+    await rename(temp, this.file);
+    const directory = await open(path.dirname(this.file), 'r');
+    try { await directory.sync(); } finally { await directory.close(); }
+  }
+
+  private async exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const previous = this.chain;
+    let release!: () => void;
+    this.chain = new Promise<void>(resolve => { release = resolve; });
+    await previous;
+    try { return await fn(); } finally { release(); }
+  }
+
+  async put(source: Omit<WakeSource, 'status' | 'sequence' | 'nextAt' | 'error'>): Promise<WakeSource> {
+    if (!ID.test(source.threadId) || !ID.test(source.id)) throw new Error('Invalid thread or source ID');
+    if (source.kind !== 'schedule' && source.kind !== 'command') throw new Error('Unknown wake source kind');
+    if (Object.keys(source).some(key => !['id', 'threadId', 'kind', 'message', 'at', 'everyMs', 'argv'].includes(key))) {
+      throw new Error('Unknown wake source field');
+    }
+    if (source.kind === 'schedule') {
+      if (!source.message?.trim() || source.message.length > MAX_MESSAGE || !source.at ||
+          !Number.isFinite(Date.parse(source.at)) ||
+          (source.everyMs !== undefined && (!Number.isInteger(source.everyMs) || source.everyMs < MIN_INTERVAL))) {
+        throw new Error('Schedule needs a message, valid time, and interval of at least one minute');
+      }
+    } else if (!Array.isArray(source.argv) || !source.argv.length || source.argv.length > 32 ||
+      source.argv.some(arg => typeof arg !== 'string' || !arg || arg.length > 4096) ||
+      !path.isAbsolute(source.argv[0])) {
+      throw new Error('Command requires an absolute executable and bounded arguments');
+    }
+    return this.exclusive(async () => {
+      const old = this.state.sources.find(s => s.id === source.id && s.threadId === source.threadId);
+      if (old && this.state.events.some(e => e.sourceId === old.id && e.threadId === old.threadId && e.status !== 'admitted')) {
+        throw new Error('Cannot change a source while its input awaits native admission');
+      }
+      if (old) this.state.sources.splice(this.state.sources.indexOf(old), 1);
+      if (!old && this.state.sources.filter(s => s.threadId === source.threadId && s.status !== 'cancelled').length >= 32) {
+        throw new Error('Thread wake source limit reached');
+      }
+      const result: WakeSource = { ...source, sequence: old?.sequence ?? 0, status: 'waiting', nextAt: source.at ?? new Date().toISOString() };
+      this.state.sources.push(result);
+      await this.save();
+      return structuredClone(result);
+    });
+  }
+
+  async cancel(threadId: string, id: string): Promise<void> {
+    await this.exclusive(async () => {
+      const source = this.state.sources.find(s => s.threadId === threadId && s.id === id);
+      if (!source) throw new Error('Source not found');
+      source.status = 'cancelled';
+      this.commands.get(`${threadId}:${id}`)?.kill('SIGKILL');
+      // Offered input may already be in the native turn; never retract or replay it.
+      this.state.events = this.state.events.filter(e => e.sourceId !== id || e.threadId !== threadId || e.status !== 'pending');
+      await this.save();
+    });
+  }
+
+  async ingest(threadId: string, sourceId: string, eventId: string, message: string): Promise<WakeEvent> {
+    if (![threadId, sourceId, eventId].every(x => ID.test(x)) || !message.trim() || message.length > MAX_MESSAGE) {
+      throw new Error('Invalid wake event');
+    }
+    return this.exclusive(async () => {
+      const existing = this.state.events.find(e => e.threadId === threadId && e.sourceId === sourceId && e.eventId === eventId);
+      if (existing) return structuredClone(existing);
+      if (this.state.events.filter(e => e.threadId === threadId).length >= 10_000) {
+        throw new Error('Thread wake event retention limit reached; operator cleanup required');
+      }
+      const event: WakeEvent = { threadId, sourceId, eventId, message, status: 'pending', createdAt: new Date().toISOString() };
+      this.state.events.push(event);
+      await this.save();
+      return structuredClone(event);
+    });
+  }
+
+  async tick(now = Date.now()): Promise<void> {
+    if (this.ticking) return;
+    this.ticking = true;
+    try {
+    for (const source of this.state.sources) {
+      if (source.status !== 'waiting' || !source.nextAt || Date.parse(source.nextAt) > now ||
+          this.state.events.some(e => e.threadId === source.threadId && e.sourceId === source.id && e.status !== 'admitted')) continue;
+      if (source.kind === 'schedule') {
+        await this.ingest(source.threadId, source.id, `${source.id}-${source.sequence + 1}`, source.message!);
+        await this.exclusive(async () => { source.sequence++; source.nextAt = undefined; await this.save(); });
+      } else if (!this.inFlight.has(`${source.threadId}:${source.id}`)) {
+        const task = this.runCommand(source);
+        this.commandTasks.add(task);
+        void task.finally(() => this.commandTasks.delete(task));
+      }
+    }
+    // An ambiguous RPC result is never automatically resubmitted while its
+    // original turn is still running. The marker in native history is the receipt.
+    for (const event of this.state.events.filter(e => e.status !== 'admitted')) {
+      if (this.inFlight.has(`${event.threadId}:${event.eventId}`)) continue;
+      this.inFlight.add(`${event.threadId}:${event.eventId}`);
+      try { await this.deliver(event, now); }
+      finally { this.inFlight.delete(`${event.threadId}:${event.eventId}`); }
+    }
+    } finally { this.ticking = false; }
+  }
+
+  private async deliver(event: WakeEvent, now: number): Promise<void> {
+    if (event.nextAttemptAt && Date.parse(event.nextAttemptAt) > now) return;
+    try {
+      const source = this.state.sources.find(s => s.id === event.sourceId && s.threadId === event.threadId);
+      if (source?.status === 'cancelled' && event.status === 'pending') return;
+      const state = await this.native.inspect(event.threadId);
+      if (state.messages.some(message => message === wakeInput(event) || message.startsWith(`${wakeInput(event)}\n`))) {
+        await this.exclusive(async () => {
+          event.status = 'admitted';
+          const source = this.state.sources.find(s => s.id === event.sourceId && s.threadId === event.threadId);
+          if (source && source.status !== 'cancelled') {
+            source.status = 'delivered';
+            if (source.kind === 'schedule' && source.everyMs) {
+              source.nextAt = new Date(now + source.everyMs).toISOString();
+              source.status = 'waiting';
+            } else if (source.kind === 'command') {
+              source.nextAt = new Date(now + COMMAND_REARM_MS).toISOString();
+              source.status = 'waiting';
+            }
+          }
+          await this.save();
+        });
+        return;
+      }
+      // An offered RPC is ambiguous even after a process crash: elapsed time
+      // alone cannot prove the native service rejected it. Never submit it a
+      // second time without an explicit native receipt or operator action.
+      if (event.status === 'offered') return;
+      if (source?.status === 'cancelled' && event.status === 'pending') return;
+      // Mark intent before the RPC: a crash between RPC and response must be
+      // reconciled against native history, rather than immediately retried.
+      await this.exclusive(async () => { event.status = 'offered'; event.offeredAt = new Date(now).toISOString(); await this.save(); });
+      const turnId = state.activeTurnId
+        ? await this.native.steer(event.threadId, state.activeTurnId, wakeInput(event))
+        : await this.native.start(event.threadId, wakeInput(event));
+      await this.exclusive(async () => { event.turnId = turnId; await this.save(); });
+    } catch (error) {
+      const explanation = safeError(error);
+      const source = this.state.sources.find(s => s.id === event.sourceId && s.threadId === event.threadId);
+      if (source && source.status !== 'cancelled') {
+        source.status = 'error';
+        source.error = explanation;
+      }
+      event.error = explanation;
+      event.nextAttemptAt = new Date(now + (/operator action/.test(explanation) ? 300_000 : 60_000)).toISOString();
+      await this.exclusive(async () => { await this.save(); });
+      // Do not hammer auth, allowance, or transport errors. Explicit intervention
+      // or restart can reconcile the retained event.
+    }
+  }
+
+  private async runCommand(source: WakeSource): Promise<void> {
+    const key = `${source.threadId}:${source.id}`;
+    this.inFlight.add(key);
+    try {
+      await this.exclusive(async () => { source.status = 'running'; await this.save(); });
+      const stdout = await new Promise<string>((resolve, reject) => {
+        const child = spawn(source.argv![0], source.argv!.slice(1), { shell: false, stdio: ['ignore', 'pipe', 'ignore'] });
+        this.commands.set(key, child);
+        let data = '';
+        const timeout = setTimeout(() => child.kill('SIGKILL'), 120_000);
+        child.stdout.on('data', chunk => {
+          data += chunk.toString('utf8');
+          if (Buffer.byteLength(data) > MAX_STDOUT) child.kill('SIGKILL');
+        });
+        child.on('error', reject);
+        child.on('close', code => { this.commands.delete(key); clearTimeout(timeout); code === 0 && Buffer.byteLength(data) <= MAX_STDOUT ? resolve(data) : reject(new Error(`Command exited ${code ?? 'after timeout or output limit'}`)); });
+      });
+      if (source.status === 'cancelled') return;
+      const output = JSON.parse(stdout) as { id?: string; message?: string; status?: string };
+      if (output.status === 'waiting') {
+        await this.exclusive(async () => {
+          if (source.status !== 'cancelled') {
+            source.status = 'waiting';
+            source.nextAt = new Date(Date.now() + COMMAND_REARM_MS).toISOString();
+          }
+          await this.save();
+        });
+        return;
+      }
+      if (!output.id || !output.message) throw new Error('Command must output JSON with stable id and message');
+      await this.ingest(source.threadId, source.id, output.id, output.message);
+      await this.exclusive(async () => {
+        if (source.status !== 'cancelled') { source.status = 'waiting'; source.nextAt = undefined; }
+        await this.save();
+      });
+    } catch (error) {
+      await this.exclusive(async () => {
+        if (source.status === 'cancelled') return;
+        source.status = 'error';
+        source.error = safeError(error);
+        await this.save();
+      });
+    } finally { this.commands.delete(key); this.inFlight.delete(key); }
+  }
+}

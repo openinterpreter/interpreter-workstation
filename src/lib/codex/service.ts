@@ -900,6 +900,14 @@ export class CodexService {
     return result.thread;
   }
 
+  /** Admit an input only to an existing idle thread, retaining its native model/config. */
+  async startExistingThreadTurn(threadId: string, message: string, cwd?: string): Promise<string> {
+    const resumedId = await this.client.resumeThread(threadId, null, null, cwd);
+    if (resumedId !== threadId) throw new Error('Existing thread identity changed');
+    const turn = await this.client.startTurn({ threadId, message, cwd });
+    return turn.id;
+  }
+
   async setThreadName(threadId: string, name: string): Promise<void> {
     await this.client.threadSetName({ threadId, name });
   }
