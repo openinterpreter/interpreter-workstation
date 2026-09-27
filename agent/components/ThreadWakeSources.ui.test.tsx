@@ -32,3 +32,23 @@ test('schedule edit preserves the same instant in a non-UTC timezone', async () 
     else process.env.TZ = oldTimezone;
   }
 });
+
+test('daily civil-time row edits without converting its clock into a fixed UTC interval', async () => {
+  const fetchMock = vi.fn(async (_url: string, options?: RequestInit) => {
+    if (options?.method === 'PUT') return { ok: true, json: async () => ({}) };
+    return { ok: true, json: async () => ({ sources: [{ id: 'morning', kind: 'schedule',
+      status: 'waiting', nextAt: '2026-11-01T15:00:00.000Z', message: 'check',
+      dailyAt: '07:00', timeZone: 'America/Los_Angeles' }], events: [] }) };
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  render(<ThreadWakeSources threadId="thread-one" />);
+  fireEvent.click(await screen.findByText('Edit'));
+  expect(screen.getByLabelText('Repeat mode')).toHaveValue('daily');
+  expect(screen.getByLabelText('Daily local time')).toHaveValue('07:00');
+  expect(screen.getByLabelText('IANA time zone')).toHaveValue('America/Los_Angeles');
+  await act(async () => { fireEvent.click(screen.getByText('Save')); });
+  await waitFor(() => expect(fetchMock.mock.calls.some(([, options]) => options?.method === 'PUT')).toBe(true));
+  const put = fetchMock.mock.calls.find(([, options]) => options?.method === 'PUT');
+  expect(JSON.parse(String(put?.[1]?.body))).toEqual({ kind: 'schedule', message: 'check',
+    dailyAt: '07:00', timeZone: 'America/Los_Angeles' });
+});

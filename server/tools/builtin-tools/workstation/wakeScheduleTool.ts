@@ -5,7 +5,7 @@ import { readyWakeSources, wakeSources } from '../../../utils/wakeSourcesRuntime
 /** This tool only edits the caller's own ordinary thread. */
 export const wakeScheduleTool: BuiltinToolDefinition = {
   name: 'interpreter_wake_schedule',
-  description: 'List, add, change, or cancel a time-based user input for this conversation. One-time and recurring schedules wake the same thread; a missed recurrence coalesces to one input.',
+  description: 'List, add, change, or cancel a time-based user input for this conversation. One-time, interval, and IANA-zone daily schedules wake the same thread; missed occurrences coalesce.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -14,6 +14,8 @@ export const wakeScheduleTool: BuiltinToolDefinition = {
       message: { type: 'string', description: 'User input to send when due.' },
       at: { type: 'string', description: 'ISO-8601 date and time of first occurrence.' },
       everyMs: { type: 'integer', minimum: 60000, description: 'Optional recurring interval in milliseconds; omit for one-time.' },
+      dailyAt: { type: 'string', description: 'Optional daily local wall time in HH:mm, paired with timeZone instead of at/everyMs.' },
+      timeZone: { type: 'string', description: 'IANA time zone, e.g. America/Los_Angeles, paired with dailyAt.' },
     },
     required: ['action'],
   },
@@ -39,6 +41,8 @@ export const wakeScheduleTool: BuiltinToolDefinition = {
         id: typeof args.id === 'string' ? args.id : randomUUID(),
         threadId, kind: 'schedule', message: args.message, at: args.at,
         ...(args.everyMs === undefined ? {} : { everyMs: args.everyMs }),
+        ...(args.dailyAt === undefined ? {} : { dailyAt: args.dailyAt }),
+        ...(args.timeZone === undefined ? {} : { timeZone: args.timeZone }),
       });
       return { content: [{ type: 'text', text: JSON.stringify(source) }] };
     } catch (error) {

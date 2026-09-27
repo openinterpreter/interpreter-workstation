@@ -6,7 +6,10 @@ Automations are inputs to an ordinary persistent thread, not a separate agent or
 
 Set an ISO-8601 first time and a message. A repeat interval, if present, must be at least one minute. At most one occurrence per source awaits admission. After confirmed native transcript admission, the next recurrence is calculated from the current time, not the original due time. A restart coalesces missed occurrences into one input; it never catches up an unbounded backlog. Cancelling stops future runs and removes inputs not yet offered. An already offered or admitted turn is not interrupted.
 
+For a daily **civil clock** instead of a fixed elapsed interval, provide `dailyAt` (`HH:mm`) and an IANA `timeZone` such as `America/Los_Angeles`, without `at` or `everyMs`. The next eligible local calendar day is recalculated after admission; the clock time remains stable across daylight-saving changes. On a spring-forward day when that wall time does not exist, that day is skipped. On a fall-back day when a wall time occurs twice, only the first occurrence is used. Restarts coalesce missed days to at most one input and resume on the next eligible local day after admission.
+
 From the conversation itself, `interpreter-app tools builtin-interpreter interpreter_wake_schedule --json '{"action":"list"}'` lists schedules. Use `{"action":"upsert","message":"...","at":"2026-10-01T09:00:00Z"}` to create one, add `everyMs` for recurrence, and supply an existing `id` to change or cancel (`{"action":"cancel","id":"..."}`). This supported tool is scoped to its calling thread; it cannot schedule another conversation.
+For daily local time use `{"action":"upsert","message":"...","dailyAt":"07:00","timeZone":"America/Los_Angeles"}` instead of `at`/`everyMs`.
 
 ## Trusted command
 
