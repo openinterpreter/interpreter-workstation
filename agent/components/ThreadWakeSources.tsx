@@ -7,6 +7,13 @@ type Source = {
 };
 type Event = { eventId: string; sourceId: string; status: string; error?: string };
 
+export function wakeLocalDateTime(iso?: string): string {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (!Number.isFinite(date.getTime())) return '';
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+}
+
 export function ThreadWakeIndicator({ threadId }: { threadId: string }) {
   const [count, setCount] = useState(0);
   useEffect(() => {
@@ -54,7 +61,7 @@ export function ThreadWakeSources({ threadId, readOnly = false }: { threadId: st
   const reset = () => { setEditing(null); setMessage(''); setWhen(''); setIntervalValue(''); setCommand(''); };
   const edit = (source: Source) => {
     setEditing(source.id); setKind(source.kind); setMessage(source.message ?? '');
-    setWhen((source.nextAt ?? source.at)?.slice(0, 16) ?? '');
+    setWhen(wakeLocalDateTime(source.nextAt ?? source.at));
     setIntervalValue(source.everyMs ? String(source.everyMs / 60_000) : '');
     setCommand(JSON.stringify(source.argv ?? []));
   };

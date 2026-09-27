@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { WakeSources, wakeInput, wakeTokenValid, type WakeNative } from './wakeSources';
@@ -101,6 +101,47 @@ describe('durable thread wake sources', () => {
     } finally { await f.cleanup(); }
   });
 
+  test('schedule custody and sequence persist together, including legacy crash recovery', async () => {
+    const f = await fixture();
+    try {
+      const w = await f.make();
+      await w.put({ id: 'daily', threadId: 'thread-1', kind: 'schedule', message: 'check',
+        at: new Date(Date.now() - 90_000).toISOString(), everyMs: 60_000 });
+      await w.tick();
+      const persisted = JSON.parse(await readFile(path.join(f.root, 'wake-sources.json'), 'utf8'));
+      expect(persisted.events[0].eventId).toBe('daily-1');
+      expect(persisted.sources[0].sequence).toBe(1);
+      await w.stop();
+
+      // An old two-write dispatcher could persist the admitted event but not
+      // the source transition. Recovery must not replay daily-1 or stop forever.
+      persisted.sources[0].sequence = 0;
+      persisted.sources[0].nextAt = new Date(Date.now() - 90_000).toISOString();
+      persisted.events[0].status = 'admitted';
+      await writeFile(path.join(f.root, 'wake-sources.json'), JSON.stringify(persisted));
+      const recovered = await f.make();
+      expect(recovered.list('thread-1').sources[0]?.sequence).toBe(1);
+      expect(Date.parse(recovered.list('thread-1').sources[0]!.nextAt!)).toBeGreaterThan(Date.now());
+      await recovered.tick();
+      expect(recovered.list('thread-1').events.map(e => e.eventId)).toEqual(['daily-1']);
+      await recovered.tick(Date.now() + 120_000);
+      expect(recovered.list('thread-1').events.map(e => e.eventId)).toEqual(['daily-1', 'daily-2']);
+    } finally { await f.cleanup(); }
+  });
+
+  test('schedule IDs reserve space for generated event sequence', async () => {
+    const f = await fixture();
+    try {
+      const w = await f.make();
+      const at = new Date(Date.now() - 1000).toISOString();
+      await expect(w.put({ id: 's'.repeat(160), threadId: 'thread-1', kind: 'schedule', message: 'check', at }))
+        .rejects.toThrow('Schedule ID is too long');
+      await w.put({ id: 's'.repeat(143), threadId: 'thread-1', kind: 'schedule', message: 'check', at });
+      await w.tick();
+      expect(w.list('thread-1').events[0]?.eventId.length).toBeLessThanOrEqual(160);
+    } finally { await f.cleanup(); }
+  });
+
   test('trusted command stdout creates one event and rearms only after admission', async () => {
     const f = await fixture();
     try {
@@ -115,6 +156,20 @@ describe('durable thread wake sources', () => {
       expect(w.list('thread-1').sources[0]?.status).toBe('waiting');
       await w.tick();
       expect(w.list('thread-1').events).toHaveLength(1);
+    } finally { await f.cleanup(); }
+  });
+
+  test('command output preserves a UTF-8 code point split across pipe chunks', async () => {
+    const f = await fixture();
+    try {
+      const w = await f.make();
+      const script = `const b=Buffer.from(JSON.stringify({id:'split',message:'hello 😀'}));
+const i=b.indexOf(Buffer.from([0xf0])); process.stdout.write(b.subarray(0,i+2));
+setTimeout(()=>process.stdout.write(b.subarray(i+2)),30);`;
+      await w.put({ id: 'utf8', threadId: 'thread-1', kind: 'command', argv: [process.execPath, '-e', script] });
+      await w.tick();
+      for (let i = 0; i < 100 && !w.list('thread-1').events.length; i++) await new Promise(resolve => setTimeout(resolve, 10));
+      expect(w.list('thread-1').events[0]?.message).toBe('hello 😀');
     } finally { await f.cleanup(); }
   });
 

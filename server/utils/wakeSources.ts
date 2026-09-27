@@ -38,6 +38,8 @@ const ID = /^[a-zA-Z0-9_-]{1,160}$/;
 const MAX_MESSAGE = 32_000;
 const MAX_STDOUT = 64_000;
 const MIN_INTERVAL = 60_000;
+// Leave room for a hyphen and the full decimal safe-integer sequence.
+const MAX_SCHEDULE_ID = 143;
 const COMMAND_REARM_MS = 30_000;
 const marker = (source: string, id: string) => `[Wake event ${source}/${id}]`;
 export const wakeInput = (event: WakeEvent) => `${marker(event.sourceId, event.eventId)}\n${event.message}`;
@@ -96,6 +98,22 @@ export class WakeSources {
       if (source.status === 'running') {
         source.status = 'waiting';
         source.nextAt = new Date(Date.now() + COMMAND_REARM_MS).toISOString();
+      }
+      if (source.kind === 'schedule' && source.status === 'waiting') {
+        // Reconcile state written by an older, two-write schedule transition.
+        // A persisted event is authoritative even when its sequence did not
+        // make it into the source record before a crash.
+        const latest = this.state.events.filter(e => e.threadId === source.threadId &&
+          e.sourceId === source.id && e.eventId.startsWith(`${source.id}-`))
+          .map(e => ({ event: e, sequence: Number(e.eventId.slice(source.id.length + 1)) }))
+          .filter(e => Number.isSafeInteger(e.sequence) && e.sequence > source.sequence)
+          .sort((a, b) => b.sequence - a.sequence)[0];
+        if (latest) {
+          source.sequence = latest.sequence;
+          if (latest.event.status !== 'admitted') source.nextAt = undefined;
+          else if (source.everyMs) source.nextAt = new Date(Date.now() + source.everyMs).toISOString();
+          else { source.status = 'delivered'; source.nextAt = undefined; }
+        }
       }
     }
     await this.save();
@@ -171,6 +189,7 @@ export class WakeSources {
       throw new Error('Unknown wake source field');
     }
     if (source.kind === 'schedule') {
+      if (source.id.length > MAX_SCHEDULE_ID) throw new Error('Schedule ID is too long');
       if (!source.message?.trim() || source.message.length > MAX_MESSAGE || !source.at ||
           !Number.isFinite(Date.parse(source.at)) ||
           (source.everyMs !== undefined && (!Number.isInteger(source.everyMs) || source.everyMs < MIN_INTERVAL))) {
@@ -235,8 +254,32 @@ export class WakeSources {
       if (source.status !== 'waiting' || !source.nextAt || Date.parse(source.nextAt) > now ||
           this.state.events.some(e => e.threadId === source.threadId && e.sourceId === source.id && e.status !== 'admitted')) continue;
       if (source.kind === 'schedule') {
-        await this.ingest(source.threadId, source.id, `${source.id}-${source.sequence + 1}`, source.message!);
-        await this.exclusive(async () => { source.sequence++; source.nextAt = undefined; await this.save(); });
+        await this.exclusive(async () => {
+          // Commit event custody and its sequence in the same atomic replace.
+          if (source.status !== 'waiting' || !source.nextAt || Date.parse(source.nextAt) > now) return;
+          if (!Number.isSafeInteger(source.sequence + 1)) throw new Error('Schedule sequence limit reached');
+          const sequence = source.sequence + 1;
+          const eventId = `${source.id}-${sequence}`;
+          if (!ID.test(eventId)) {
+            source.status = 'error'; source.error = 'Schedule ID is too long';
+            await this.save(); return;
+          }
+          const existing = this.state.events.find(e => e.threadId === source.threadId &&
+            e.sourceId === source.id && e.eventId === eventId);
+          if (!existing) {
+            if (this.state.events.filter(e => e.threadId === source.threadId).length >= 10_000) {
+              source.status = 'error'; source.error = 'Thread wake event retention limit reached';
+              await this.save(); return;
+            }
+            this.state.events.push({ threadId: source.threadId, sourceId: source.id, eventId,
+              message: source.message!, status: 'pending', createdAt: new Date(now).toISOString() });
+          }
+          source.sequence = sequence;
+          source.nextAt = existing?.status === 'admitted' && source.everyMs
+            ? new Date(now + source.everyMs).toISOString() : undefined;
+          if (existing?.status === 'admitted' && !source.everyMs) source.status = 'delivered';
+          await this.save();
+        });
       } else if (!this.inFlight.has(`${source.threadId}:${source.id}`)) {
         const task = this.runCommand(source);
         this.commandTasks.add(task);
@@ -313,14 +356,16 @@ export class WakeSources {
       const stdout = await new Promise<string>((resolve, reject) => {
         const child = spawn(source.argv![0], source.argv!.slice(1), { shell: false, stdio: ['ignore', 'pipe', 'ignore'] });
         this.commands.set(key, child);
-        let data = '';
+        const chunks: Buffer[] = [];
+        let size = 0;
         const timeout = setTimeout(() => child.kill('SIGKILL'), 120_000);
-        child.stdout.on('data', chunk => {
-          data += chunk.toString('utf8');
-          if (Buffer.byteLength(data) > MAX_STDOUT) child.kill('SIGKILL');
+        child.stdout.on('data', (chunk: Buffer) => {
+          size += chunk.length;
+          if (size > MAX_STDOUT) child.kill('SIGKILL');
+          else chunks.push(chunk);
         });
         child.on('error', reject);
-        child.on('close', code => { this.commands.delete(key); clearTimeout(timeout); code === 0 && Buffer.byteLength(data) <= MAX_STDOUT ? resolve(data) : reject(new Error(`Command exited ${code ?? 'after timeout or output limit'}`)); });
+        child.on('close', code => { this.commands.delete(key); clearTimeout(timeout); code === 0 && size <= MAX_STDOUT ? resolve(Buffer.concat(chunks, size).toString('utf8')) : reject(new Error(`Command exited ${code ?? 'after timeout or output limit'}`)); });
       });
       if (source.status === 'cancelled') return;
       const output = JSON.parse(stdout) as { id?: string; message?: string; status?: string };
