@@ -3,7 +3,7 @@ import { getApiUrl } from '../../src/ipc';
 
 type Source = {
   id: string; kind: 'schedule' | 'command'; status: string;
-  nextAt?: string; message?: string; argv?: string[]; everyMs?: number; error?: string;
+  nextAt?: string; at?: string; message?: string; argv?: string[]; everyMs?: number; error?: string;
 };
 type Event = { eventId: string; sourceId: string; status: string; error?: string };
 
@@ -54,7 +54,7 @@ export function ThreadWakeSources({ threadId, readOnly = false }: { threadId: st
   const reset = () => { setEditing(null); setMessage(''); setWhen(''); setIntervalValue(''); setCommand(''); };
   const edit = (source: Source) => {
     setEditing(source.id); setKind(source.kind); setMessage(source.message ?? '');
-    setWhen(source.nextAt?.slice(0, 16) ?? '');
+    setWhen((source.nextAt ?? source.at)?.slice(0, 16) ?? '');
     setIntervalValue(source.everyMs ? String(source.everyMs / 60_000) : '');
     setCommand(JSON.stringify(source.argv ?? []));
   };

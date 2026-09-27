@@ -183,6 +183,7 @@ export class WakeSources {
     }
     return this.exclusive(async () => {
       const old = this.state.sources.find(s => s.id === source.id && s.threadId === source.threadId);
+      if (old?.status === 'running') throw new Error('Wait for the running command before changing it');
       if (old && this.state.events.some(e => e.sourceId === old.id && e.threadId === old.threadId && e.status !== 'admitted')) {
         throw new Error('Cannot change a source while its input awaits native admission');
       }
