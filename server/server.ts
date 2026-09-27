@@ -49,6 +49,7 @@ import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import { join as pathJoin, dirname, normalize as pathNormalize, resolve as pathResolve, sep as pathSep } from "node:path";
 import os from "node:os";
 import agentRouter from "./routes/agent";
+import { startWakeSources } from './utils/wakeSourcesRuntime';
 import authRouter from "./routes/auth";
 import workspaceRouter from "./routes/workspace";
 import activityRouter from "./routes/activity";
@@ -68,6 +69,8 @@ import { broadcastEvent } from './handlers/broadcast';
 import { initializeWhatsAppBridge } from './services/whatsappBridge';
 import { refreshImportedAiSetup } from './handlers/importedAiSetup';
 import { PRELAUNCH_SECURITY_DISABLE_HTTP_TOOL_EXECUTION } from './securityFlags';
+// Resume due schedules and retained inputs even with no conversation tab open.
+if (process.env.NODE_ENV !== 'test') startWakeSources();
 // normalizePath intentionally not used here - it converts Unicode chars to ASCII,
 // breaking paths with smart quotes etc. Use path.normalize (pathNormalize) instead.
 import { enterWorkspaceOverride } from "./utils/workspace";

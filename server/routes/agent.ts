@@ -1,6 +1,8 @@
 import { Router, Request, Response, raw } from 'express';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { wakeTokenValid } from '../utils/wakeSources';
+import { readyWakeSources, wakeSources } from '../utils/wakeSourcesRuntime';
 import { stat } from 'node:fs/promises';
 import { getCustomInstructions } from '../configStore';
 import { getServerJWT } from '../lib/jwtStore';
@@ -122,6 +124,55 @@ import {
 } from '../utils/threadHistoryPagination';
 
 const router = Router();
+
+function wakeMutationAllowed(req: Request): boolean {
+  const address = req.socket.remoteAddress;
+  if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address ?? '')) return false;
+  const origin = req.header('origin');
+  if (!origin) return true; // local CLI; remote hosts remain subject to workstationAccessMiddleware
+  try { return new URL(origin).host === req.get('host'); }
+  catch { return false; }
+}
+
+// Inbound producers know the explicit secret; a normal browser session never
+// receives it. This is not a public desktop or network ingress endpoint.
+router.post('/threads/:threadId/wake-events', async (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  try {
+    const { sourceId, eventId, message } = req.body ?? {};
+    await readyWakeSources();
+    await getCodexService().readThread(req.params.threadId);
+    const event = await wakeSources.ingest(req.params.threadId, sourceId, eventId, message);
+    res.status(202).json({ eventId: event.eventId, status: event.status });
+    void wakeSources.tick().catch(console.error);
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid event.' });
+  }
+});
+
+router.get('/threads/:threadId/wake-sources', async (req: Request, res: Response) => {
+  try { await readyWakeSources(); res.json(wakeSources.list(req.params.threadId)); }
+  catch { res.status(503).json({ error: 'Wake sources unavailable.' }); }
+});
+
+router.put('/threads/:threadId/wake-sources/:sourceId', async (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req)) return res.status(403).json({ error: 'Local same-origin request required.' });
+  try {
+    await readyWakeSources();
+    await getCodexService().readThread(req.params.threadId);
+    const source = await wakeSources.put({ ...req.body, id: req.params.sourceId, threadId: req.params.threadId });
+    res.json({ source });
+  } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid source.' }); }
+});
+
+router.delete('/threads/:threadId/wake-sources/:sourceId', async (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req)) return res.status(403).json({ error: 'Local same-origin request required.' });
+  try { await readyWakeSources(); await wakeSources.cancel(req.params.threadId, req.params.sourceId); res.json({ ok: true }); }
+  catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid source.' }); }
+});
 
 function isAgentTaskMode(value: unknown): value is AgentTaskMode {
   return value === 'headed' || value === 'headless';
