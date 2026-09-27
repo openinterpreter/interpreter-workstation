@@ -63,8 +63,33 @@ describe('durable thread wake sources', () => {
       const again = await f.make();
       await again.tick();
       expect(again.list('thread-1').events[0]?.status).toBe('admitted');
+      expect(again.list('thread-1').events[0]?.message).toBe('');
+      expect((await again.ingest('thread-1', 'source', 'event-1', 'replayed')).status).toBe('admitted');
+      expect(again.list('thread-1').events).toHaveLength(1);
       expect(f.counts()).toEqual({ starts: 1, steers: 0 });
       expect(f.messages[0]).toContain('hello');
+    } finally { await f.cleanup(); }
+  });
+
+  test('more than ten thousand compact admitted IDs do not block future events or schedules', async () => {
+    const f = await fixture();
+    try {
+      const w = await f.make();
+      await w.stop();
+      const file = path.join(f.root, 'wake-sources.json');
+      const state = JSON.parse(await readFile(file, 'utf8'));
+      state.events = Array.from({ length: 10_001 }, (_, i) => ({ threadId: 'thread-1',
+        sourceId: 'external', eventId: `stable-${i}`, message: 'old full body',
+        status: 'admitted', createdAt: '2026-01-01T00:00:00.000Z' }));
+      await writeFile(file, JSON.stringify(state));
+      const recovered = await f.make();
+      expect(recovered.list('thread-1').events[0]?.message).toBe('');
+      expect((await recovered.ingest('thread-1', 'external', 'stable-0', 'duplicate')).status).toBe('admitted');
+      await recovered.ingest('thread-1', 'external', 'new', 'request');
+      await recovered.put({ id: 'daily', threadId: 'thread-1', kind: 'schedule', message: 'check',
+        at: new Date(Date.now() - 1000).toISOString() });
+      await recovered.tick();
+      expect(recovered.list('thread-1').events.at(-1)?.eventId).toBe('daily-1');
     } finally { await f.cleanup(); }
   });
 

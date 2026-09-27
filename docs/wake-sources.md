@@ -24,6 +24,8 @@ For an approved external producer on the same host, configure `WORKSTATION_WAKE_
 
 The input begins with `[Wake event source/id]`. On restart, the dispatcher checks native history for this marker. If a submission remains ambiguous without a native receipt, it stays offered for operator inspection rather than risking a duplicate user turn; elapsed time alone does not prove rejection. It does not promise exactly-once tool side effects or message delivery. The provider-specific reply tool remains the way to answer; scheduling and input custody are not an outbound queue.
 
+Once admitted, the original message body and transient error are erased from the wake-source state; the compact `(thread, source, event ID)` receipt remains for durable deduplication and status queries. The 10,000-event guard applies only to inputs still awaiting admission, not lifetime admitted messages. Receipts intentionally remain until the thread's data is retired; the private state file grows with unique IDs and should be included in normal Workstation backups. Do not hand-edit it to clear a limit: removing IDs can cause old upstream redeliveries to appear as new input.
+
 ## Headless operation
 
 Persist the thread ID on disk and resume that exact native thread after service restart. A missing thread must be repaired explicitly rather than silently replaced. Configure a command source through the same per-thread endpoint or through the Automations editor; do not run a second foreground polling consumer. Use an absolute executable with stable event IDs, and keep source-specific authentication in the provider's private configuration. There is no requirement to keep a Goal or turn running just to receive future input.

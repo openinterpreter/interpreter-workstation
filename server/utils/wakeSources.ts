@@ -93,6 +93,16 @@ export class WakeSources {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
+    // A native receipt is permanent for deduplication, but the original
+    // message body is not needed once admitted. Migrate older state as well.
+    for (const event of this.state.events) {
+      if (event.status === 'admitted') {
+        event.message = '';
+        delete event.error;
+        delete event.offeredAt;
+        delete event.nextAttemptAt;
+      }
+    }
     // Never launch a second command when it has an unadmitted output event.
     for (const source of this.state.sources) {
       if (source.status === 'running') {
@@ -236,8 +246,11 @@ export class WakeSources {
     return this.exclusive(async () => {
       const existing = this.state.events.find(e => e.threadId === threadId && e.sourceId === sourceId && e.eventId === eventId);
       if (existing) return structuredClone(existing);
-      if (this.state.events.filter(e => e.threadId === threadId).length >= 10_000) {
-        throw new Error('Thread wake event retention limit reached; operator cleanup required');
+      // Keep stable IDs as compact admission receipts indefinitely. Bound only
+      // inputs still awaiting admission, so a long-running thread cannot hit
+      // a permanent lifetime event ceiling.
+      if (this.state.events.filter(e => e.threadId === threadId && e.status !== 'admitted').length >= 10_000) {
+        throw new Error('Thread pending wake event limit reached; operator action required');
       }
       const event: WakeEvent = { threadId, sourceId, eventId, message, status: 'pending', createdAt: new Date().toISOString() };
       this.state.events.push(event);
@@ -267,8 +280,8 @@ export class WakeSources {
           const existing = this.state.events.find(e => e.threadId === source.threadId &&
             e.sourceId === source.id && e.eventId === eventId);
           if (!existing) {
-            if (this.state.events.filter(e => e.threadId === source.threadId).length >= 10_000) {
-              source.status = 'error'; source.error = 'Thread wake event retention limit reached';
+            if (this.state.events.filter(e => e.threadId === source.threadId && e.status !== 'admitted').length >= 10_000) {
+              source.status = 'error'; source.error = 'Thread pending wake event limit reached';
               await this.save(); return;
             }
             this.state.events.push({ threadId: source.threadId, sourceId: source.id, eventId,
@@ -306,6 +319,10 @@ export class WakeSources {
       if (state.messages.some(message => message === wakeInput(event) || message.startsWith(`${wakeInput(event)}\n`))) {
         await this.exclusive(async () => {
           event.status = 'admitted';
+          event.message = '';
+          delete event.error;
+          delete event.offeredAt;
+          delete event.nextAttemptAt;
           const source = this.state.sources.find(s => s.id === event.sourceId && s.threadId === event.threadId);
           if (source && source.status !== 'cancelled') {
             source.status = 'delivered';
