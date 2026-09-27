@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, readFile, open, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { getInterpreterAppDataDir } from '../configStore';
+import { nextCivilDaily } from './civilSchedule';
 
 // A wake source belongs to an ordinary conversation. These records only keep
 // custody until the native transcript contains the input; they do not track
@@ -14,6 +15,8 @@ export type WakeSource = {
   message?: string;
   at?: string;
   everyMs?: number;
+  dailyAt?: string;
+  timeZone?: string;
   argv?: string[];
   status: 'waiting' | 'running' | 'delivered' | 'error' | 'cancelled';
   nextAt?: string;
@@ -130,6 +133,7 @@ export class WakeSources {
         if (latest) {
           source.sequence = latest.sequence;
           if (latest.event.status !== 'admitted') source.nextAt = undefined;
+          else if (source.dailyAt && source.timeZone) source.nextAt = nextCivilDaily(Date.now(), source.timeZone, source.dailyAt);
           else if (source.everyMs) source.nextAt = new Date(Date.now() + source.everyMs).toISOString();
           else { source.status = 'delivered'; source.nextAt = undefined; }
         }
@@ -210,17 +214,23 @@ export class WakeSources {
     if (this.stopping) throw new Error('Wake admission is draining for restart');
     if (!ID.test(source.threadId) || !ID.test(source.id)) throw new Error('Invalid thread or source ID');
     if (source.kind !== 'schedule' && source.kind !== 'command') throw new Error('Unknown wake source kind');
-    if (Object.keys(source).some(key => !['id', 'threadId', 'kind', 'message', 'at', 'everyMs', 'argv'].includes(key))) {
+    if (Object.keys(source).some(key => !['id', 'threadId', 'kind', 'message', 'at', 'everyMs', 'dailyAt', 'timeZone', 'argv'].includes(key))) {
       throw new Error('Unknown wake source field');
     }
+    const civil = source.kind === 'schedule' && (source.dailyAt !== undefined || source.timeZone !== undefined);
     if (source.kind === 'schedule') {
       if (source.id.length > MAX_SCHEDULE_ID) throw new Error('Schedule ID is too long');
-      if (!source.message?.trim() || source.message.length > MAX_MESSAGE || !source.at ||
-          !Number.isFinite(Date.parse(source.at)) ||
+      if (!source.message?.trim() || source.message.length > MAX_MESSAGE ||
+          (civil && (typeof source.dailyAt !== 'string' || typeof source.timeZone !== 'string' ||
+            source.at !== undefined || source.everyMs !== undefined)) ||
+          (!civil && (!source.at || !Number.isFinite(Date.parse(source.at)))) ||
           (source.everyMs !== undefined && (!Number.isInteger(source.everyMs) || source.everyMs < MIN_INTERVAL))) {
-        throw new Error('Schedule needs a message, valid time, and interval of at least one minute');
+        throw new Error('Schedule needs a message and a valid one-time, interval, or civil daily time');
       }
-    } else if (!Array.isArray(source.argv) || !source.argv.length || source.argv.length > 32 ||
+      if (civil) nextCivilDaily(Date.now(), source.timeZone!, source.dailyAt!);
+    } else if (source.dailyAt !== undefined || source.timeZone !== undefined || source.at !== undefined ||
+      source.everyMs !== undefined || source.message !== undefined ||
+      !Array.isArray(source.argv) || !source.argv.length || source.argv.length > 32 ||
       source.argv.some(arg => typeof arg !== 'string' || !arg || arg.length > 4096) ||
       !path.isAbsolute(source.argv[0])) {
       throw new Error('Command requires an absolute executable and bounded arguments');
@@ -235,7 +245,10 @@ export class WakeSources {
       if (!old && this.state.sources.filter(s => s.threadId === source.threadId && s.status !== 'cancelled').length >= 32) {
         throw new Error('Thread wake source limit reached');
       }
-      const result: WakeSource = { ...source, sequence: old?.sequence ?? 0, status: 'waiting', nextAt: source.at ?? new Date().toISOString() };
+      const result: WakeSource = { ...source, sequence: old?.sequence ?? 0, status: 'waiting',
+        nextAt: civil && source.kind === 'schedule'
+          ? nextCivilDaily(Date.now(), source.timeZone!, source.dailyAt!)
+          : source.at ?? new Date().toISOString() };
       this.state.sources.push(result);
       await this.save();
       return structuredClone(result);
@@ -308,9 +321,11 @@ export class WakeSources {
               message: source.message!, status: 'pending', createdAt: new Date(now).toISOString() });
           }
           source.sequence = sequence;
-          source.nextAt = existing?.status === 'admitted' && source.everyMs
-            ? new Date(now + source.everyMs).toISOString() : undefined;
-          if (existing?.status === 'admitted' && !source.everyMs) source.status = 'delivered';
+          source.nextAt = existing?.status === 'admitted'
+            ? source.dailyAt && source.timeZone ? nextCivilDaily(now, source.timeZone, source.dailyAt)
+              : source.everyMs ? new Date(now + source.everyMs).toISOString() : undefined
+            : undefined;
+          if (existing?.status === 'admitted' && !source.everyMs && !source.dailyAt) source.status = 'delivered';
           await this.save();
         });
       } else if (!this.inFlight.has(`${source.threadId}:${source.id}`)) {
@@ -359,7 +374,10 @@ export class WakeSources {
           if (source && source.status !== 'cancelled') {
             delete source.error;
             source.status = 'delivered';
-            if (source.kind === 'schedule' && source.everyMs) {
+            if (source.kind === 'schedule' && source.dailyAt && source.timeZone) {
+              source.nextAt = nextCivilDaily(now, source.timeZone, source.dailyAt);
+              source.status = 'waiting';
+            } else if (source.kind === 'schedule' && source.everyMs) {
               source.nextAt = new Date(now + source.everyMs).toISOString();
               source.status = 'waiting';
             } else if (source.kind === 'command') {

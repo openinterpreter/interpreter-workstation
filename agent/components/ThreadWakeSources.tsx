@@ -3,7 +3,8 @@ import { getApiUrl } from '../../src/ipc';
 
 type Source = {
   id: string; kind: 'schedule' | 'command'; status: string;
-  nextAt?: string; at?: string; message?: string; argv?: string[]; everyMs?: number; error?: string;
+  nextAt?: string; at?: string; message?: string; argv?: string[]; everyMs?: number;
+  dailyAt?: string; timeZone?: string; error?: string;
 };
 type Event = { eventId: string; sourceId: string; status: string; error?: string };
 
@@ -41,6 +42,9 @@ export function ThreadWakeSources({ threadId, readOnly = false }: { threadId: st
   const [message, setMessage] = useState('');
   const [when, setWhen] = useState('');
   const [interval, setIntervalValue] = useState('');
+  const [repeatMode, setRepeatMode] = useState<'once' | 'interval' | 'daily'>('once');
+  const [dailyAt, setDailyAt] = useState('07:00');
+  const [timeZone, setTimeZone] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC');
   const [command, setCommand] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -62,18 +66,23 @@ export function ThreadWakeSources({ threadId, readOnly = false }: { threadId: st
     return () => window.clearInterval(timer);
   }, [refresh]);
 
-  const reset = () => { setEditing(null); setMessage(''); setWhen(''); setIntervalValue(''); setCommand(''); };
+  const reset = () => { setEditing(null); setMessage(''); setWhen(''); setIntervalValue(''); setCommand(''); setRepeatMode('once'); };
   const edit = (source: Source) => {
     setEditing(source.id); setKind(source.kind); setMessage(source.message ?? '');
     setWhen(wakeLocalDateTime(source.nextAt ?? source.at));
     setIntervalValue(source.everyMs ? String(source.everyMs / 60_000) : '');
+    setRepeatMode(source.dailyAt ? 'daily' : source.everyMs ? 'interval' : 'once');
+    setDailyAt(source.dailyAt ?? '07:00');
+    setTimeZone(source.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC');
     setCommand(JSON.stringify(source.argv ?? []));
   };
   const save = async () => {
     try {
       const id = editing ?? crypto.randomUUID();
       const body = kind === 'schedule'
-        ? { kind, message, at: new Date(when).toISOString(), ...(interval ? { everyMs: Number(interval) * 60_000 } : {}) }
+        ? repeatMode === 'daily' ? { kind, message, dailyAt, timeZone }
+          : { kind, message, at: new Date(when).toISOString(),
+            ...(repeatMode === 'interval' ? { everyMs: Number(interval) * 60_000 } : {}) }
         : { kind, argv: JSON.parse(command) };
       const response = await fetch(await getApiUrl(`/api/agent/threads/${encodeURIComponent(threadId)}/wake-sources/${encodeURIComponent(id)}`), {
         method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -96,7 +105,7 @@ export function ThreadWakeSources({ threadId, readOnly = false }: { threadId: st
       <div className="mt-2 space-y-2">
         {sources.filter(s => s.status !== 'cancelled').map(source => <div key={source.id} className="flex items-center gap-2 rounded border border-border p-2">
           <span className="min-w-0 flex-1 truncate">{source.kind === 'schedule'
-            ? `Schedule · ${source.nextAt ? new Date(source.nextAt).toLocaleString() : 'done'} · ${source.message}`
+            ? `Schedule · ${source.nextAt ? new Date(source.nextAt).toLocaleString() : 'done'}${source.dailyAt ? ` · daily ${source.dailyAt} ${source.timeZone}` : ''} · ${source.message}`
             : `Command · ${source.argv?.join(' ')}`}</span>
           <span title={source.error} className={source.status === 'error' ? 'text-red-500' : 'text-muted-foreground'}>{source.status}{source.error ? ` · ${source.error}` : ''}</span>
           {!readOnly && <><button type="button" onClick={() => edit(source)}>Edit</button><button type="button" onClick={() => void cancel(source.id)}>Cancel</button></>}
@@ -104,7 +113,12 @@ export function ThreadWakeSources({ threadId, readOnly = false }: { threadId: st
         {events.filter(e => e.status !== 'admitted').map(e => <div key={`${e.sourceId}:${e.eventId}`} className="text-muted-foreground">Input {e.eventId}: {e.error ?? (e.status === 'offered' ? 'waiting for native admission' : 'waiting')}</div>)}
         {!readOnly && <div className="space-y-1">
           <select aria-label="Wake source type" value={kind} onChange={e => setKind(e.target.value as 'schedule' | 'command')}><option value="schedule">Schedule</option><option value="command">Command</option></select>
-          {kind === 'schedule' ? <div className="flex gap-1"><input aria-label="Upcoming time" type="datetime-local" value={when} onChange={e => setWhen(e.target.value)} /><input aria-label="Message" placeholder="Message" value={message} onChange={e => setMessage(e.target.value)} /><input aria-label="Repeat minutes" type="number" min="1" placeholder="Repeat minutes (optional)" value={interval} onChange={e => setIntervalValue(e.target.value)} /></div>
+          {kind === 'schedule' ? <div className="flex flex-wrap gap-1">
+            <select aria-label="Repeat mode" value={repeatMode} onChange={e => setRepeatMode(e.target.value as 'once' | 'interval' | 'daily')}><option value="once">Once</option><option value="interval">Interval</option><option value="daily">Daily local time</option></select>
+            {repeatMode !== 'daily' ? <input aria-label="Upcoming time" type="datetime-local" value={when} onChange={e => setWhen(e.target.value)} /> : <><input aria-label="Daily local time" type="time" value={dailyAt} onChange={e => setDailyAt(e.target.value)} /><input aria-label="IANA time zone" value={timeZone} onChange={e => setTimeZone(e.target.value)} /></>}
+            <input aria-label="Message" placeholder="Message" value={message} onChange={e => setMessage(e.target.value)} />
+            {repeatMode === 'interval' && <input aria-label="Repeat minutes" type="number" min="1" placeholder="Repeat minutes" value={interval} onChange={e => setIntervalValue(e.target.value)} />}
+          </div>
             : <input aria-label="Command arguments" className="w-full" placeholder={'["/absolute/executable", "argument"]'} value={command} onChange={e => setCommand(e.target.value)} />}
           <button type="button" onClick={() => void save()}>{editing ? 'Save' : 'Add source'}</button> {editing && <button type="button" onClick={reset}>Discard</button>}
         </div>}

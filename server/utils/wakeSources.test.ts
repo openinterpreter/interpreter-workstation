@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { WakeSources, wakeInput, wakeTokenValid, type WakeNative } from './wakeSources';
+import { nextCivilDaily } from './civilSchedule';
 
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), 'wake-test-'));
@@ -238,6 +239,25 @@ describe('durable thread wake sources', () => {
       expect(Date.parse(w.list('thread-1').sources[0]!.nextAt!)).toBeGreaterThan(Date.now());
       await w.cancel('thread-1', 'daily');
       await w.tick(Date.now() + 10_000_000);
+      expect(w.list('thread-1').events).toHaveLength(1);
+    } finally { await f.cleanup(); }
+  });
+
+  test('civil daily source coalesces missed dates and rearms by local wall clock', async () => {
+    const f = await fixture();
+    try {
+      const w = await f.make();
+      const beforePut = Date.now();
+      const source = await w.put({ id: 'morning', threadId: 'thread-1', kind: 'schedule',
+        message: 'check', dailyAt: '07:00', timeZone: 'America/Los_Angeles' });
+      expect(source.nextAt).toBe(nextCivilDaily(beforePut, 'America/Los_Angeles', '07:00'));
+      const simulatedRestartAfterMissedDays = Date.parse(source.nextAt!) + 4 * 86_400_000;
+      await w.tick(simulatedRestartAfterMissedDays);
+      expect(w.list('thread-1').events).toHaveLength(1);
+      await w.tick(simulatedRestartAfterMissedDays + 1000);
+      expect(w.list('thread-1').events[0]?.status).toBe('admitted');
+      expect(w.list('thread-1').sources[0]?.nextAt).toBe(nextCivilDaily(simulatedRestartAfterMissedDays + 1000,
+        'America/Los_Angeles', '07:00'));
       expect(w.list('thread-1').events).toHaveLength(1);
     } finally { await f.cleanup(); }
   });
