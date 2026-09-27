@@ -405,7 +405,7 @@ describe('PersistentLayer editor empty state layout', () => {
     expect(screen.getByTestId('mock-composer')).toHaveAttribute('data-show-suggestion-chips', 'false');
   });
 
-  test('renders goal and plan as sibling cards in one accessory stack', async () => {
+  test('renders goal, wake sources, and plan as sibling cards in one accessory stack', async () => {
     const tab = createAgentTab();
     const agent = tab.agent;
     if (!agent) throw new Error('Expected an agent tab');
@@ -433,7 +433,8 @@ describe('PersistentLayer editor empty state layout', () => {
     const stack = goalCard.closest('[data-thread-accessory-stack]');
     expect(stack).not.toBeNull();
     expect(stack).toContainElement(planCard);
-    expect(stack?.children).toHaveLength(2);
+    expect(stack?.querySelector('[data-testid="thread-wake-sources"]')).not.toBeNull();
+    expect(stack?.children).toHaveLength(3);
   });
 
   test('waits_for_conversation_history_before_revealing_the_empty_agent_surface', async () => {
