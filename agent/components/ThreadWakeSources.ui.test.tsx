@@ -32,3 +32,10 @@ test('schedule edit preserves the same instant in a non-UTC timezone', async () 
     else process.env.TZ = oldTimezone;
   }
 });
+
+test('a thread-shaped response cannot crash the wake rows', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ thread: { id: 'thread-one' } }) })));
+  render(<ThreadWakeSources threadId="thread-one" />);
+  expect(await screen.findByRole('alert')).toHaveTextContent('Invalid wake source response');
+  expect(screen.getByText(/Automations · 0/)).toBeInTheDocument();
+});

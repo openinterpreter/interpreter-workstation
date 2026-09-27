@@ -23,7 +23,7 @@ export function ThreadWakeIndicator({ threadId }: { threadId: string }) {
         const response = await fetch(await getApiUrl(`/api/agent/threads/${encodeURIComponent(threadId)}/wake-sources`), { credentials: 'include' });
         if (!response.ok) return;
         const data = await response.json() as { sources: Source[] };
-        if (live) setCount(data.sources.filter(source => source.status !== 'cancelled').length);
+        if (live && Array.isArray(data.sources)) setCount(data.sources.filter(source => source.status !== 'cancelled').length);
       } catch { /* Passive indicator; detailed error stays in the editor. */ }
     };
     void refresh();
@@ -47,9 +47,13 @@ export function ThreadWakeSources({ threadId, readOnly = false }: { threadId: st
   const refresh = useCallback(async () => {
     const response = await fetch(await getApiUrl(`/api/agent/threads/${encodeURIComponent(threadId)}/wake-sources`), { credentials: 'include' });
     if (!response.ok) throw new Error(`Wake sources unavailable (${response.status})`);
-    const data = await response.json() as { sources: Source[]; events: Event[] };
+    const data = await response.json() as Partial<{ sources: Source[]; events: Event[] }>;
+    if (!Array.isArray(data.sources) || !Array.isArray(data.events)) {
+      throw new Error('Invalid wake source response');
+    }
     setSources(data.sources);
     setEvents(data.events);
+    setError('');
   }, [threadId]);
 
   useEffect(() => {
