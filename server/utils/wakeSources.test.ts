@@ -110,6 +110,53 @@ describe('durable thread wake sources', () => {
     } finally { await f.cleanup(); }
   });
 
+  test('later provider or scheduled input cannot overtake an ambiguous native receipt', async () => {
+    const f = await fixture();
+    try {
+      const wake = await f.make();
+      await wake.ingest('thread-1', 'provider', 'provider-first', 'first');
+      await wake.put({ id: 'daily', threadId: 'thread-1', kind: 'schedule', message: 'second',
+        at: new Date(Date.now() - 1000).toISOString() });
+      await wake.tick(); // creates due scheduled event, offers only earliest provider input
+      expect(f.counts().starts).toBe(1);
+      expect(wake.list('thread-1').events.map(e => e.status)).toEqual(['offered', 'pending']);
+      f.messages.splice(0); // ambiguous offer has no history receipt yet
+      await wake.tick(Date.now() + 120_000);
+      expect(f.counts().starts).toBe(1);
+      f.messages.push(wakeInput(wake.list('thread-1').events[0]!));
+      await wake.tick();
+      expect(wake.list('thread-1').events.map(e => e.status)).toEqual(['admitted', 'pending']);
+      await wake.tick();
+      expect(f.counts().starts).toBe(2);
+    } finally { await f.cleanup(); }
+  });
+
+  test('a definitively rejected steer can wake the SAME idle thread after the turn ends', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-race-'));
+    let active = true;
+    let steers = 0;
+    let starts = 0;
+    const history: string[] = [];
+    const wake = new WakeSources({
+      inspect: async () => ({ activeTurnId: active ? 'finished-turn' : undefined, messages: history }),
+      steer: async () => { steers++; active = false; throw new Error('no active turn to steer'); },
+      start: async (threadId, message) => {
+        expect(threadId).toBe('thread-1'); starts++; history.push(message); return 'new-turn';
+      },
+    }, root);
+    try {
+      await wake.initialize();
+      await wake.ingest('thread-1', 'provider', 'stable-id', 'approved message');
+      await wake.tick();
+      expect(wake.list('thread-1').events[0]?.status).toBe('pending');
+      expect(wake.list('thread-1').events[0]?.error).toBeDefined();
+      await wake.tick(Date.now() + 61_000);
+      expect({ steers, starts }).toEqual({ steers: 1, starts: 1 });
+      await wake.tick(Date.now() + 62_000);
+      expect(wake.list('thread-1').events[0]?.status).toBe('admitted');
+    } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
   test('coalesces missed recurring schedules and cancellation stops future inputs', async () => {
     const f = await fixture();
     try {
@@ -198,16 +245,33 @@ setTimeout(()=>process.stdout.write(b.subarray(i+2)),30);`;
     } finally { await f.cleanup(); }
   });
 
-  test('command errors surface without a retry loop', async () => {
+  test('command transport errors stay visible, retry on a bounded timer and recover after restart', async () => {
     const f = await fixture();
     try {
       const w = await f.make();
-      await w.put({ id: 'bad', threadId: 'thread-1', kind: 'command', argv: ['/bin/false'] });
+      const output = path.join(f.root, 'result');
+      await w.put({ id: 'poll', threadId: 'thread-1', kind: 'command',
+        argv: ['/bin/cat', output] });
       await w.tick();
       for (let i = 0; i < 50 && w.list('thread-1').sources[0]?.status !== 'error'; i++) await new Promise(resolve => setTimeout(resolve, 10));
       expect(w.list('thread-1').sources[0]?.status).toBe('error');
-      await w.tick(Date.now() + 1_000_000);
+      const retryAt = Date.parse(w.list('thread-1').sources[0]!.nextAt!);
+      expect(retryAt).toBeGreaterThan(Date.now());
+      await w.tick(retryAt - 1);
       expect(w.list('thread-1').sources[0]?.status).toBe('error');
+      await w.stop();
+      await writeFile(output, '{"id":"stable-world-id","message":"approved envelope"}\n');
+      const recovered = await f.make();
+      await recovered.tick(retryAt + 1);
+      for (let i = 0; i < 50 && recovered.list('thread-1').events.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 10));
+      expect(recovered.list('thread-1').events[0]?.eventId).toBe('stable-world-id');
+      for (let i = 0; i < 50 && recovered.list('thread-1').sources[0]?.status !== 'waiting'; i++) await new Promise(resolve => setTimeout(resolve, 10));
+      expect(recovered.list('thread-1').sources[0]?.status).toBe('waiting');
+      expect(recovered.list('thread-1').sources[0]?.error).toBeUndefined();
+      await recovered.tick();
+      await recovered.tick();
+      expect(recovered.list('thread-1').events[0]?.status).toBe('admitted');
+      expect(f.counts()).toEqual({ starts: 1, steers: 0 });
     } finally { await f.cleanup(); }
   });
 
