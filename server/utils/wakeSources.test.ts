@@ -146,14 +146,18 @@ describe('durable thread wake sources', () => {
     }, root);
     try {
       await wake.initialize();
+      await wake.put({ id: 'provider', threadId: 'thread-1', kind: 'schedule', message: 'unused',
+        at: new Date(Date.now() + 1_000_000).toISOString() });
       await wake.ingest('thread-1', 'provider', 'stable-id', 'approved message');
       await wake.tick();
       expect(wake.list('thread-1').events[0]?.status).toBe('pending');
       expect(wake.list('thread-1').events[0]?.error).toBeDefined();
+      expect(wake.list('thread-1').sources[0]?.status).toBe('error');
       await wake.tick(Date.now() + 61_000);
       expect({ steers, starts }).toEqual({ steers: 1, starts: 1 });
       await wake.tick(Date.now() + 62_000);
       expect(wake.list('thread-1').events[0]?.status).toBe('admitted');
+      expect(wake.list('thread-1').sources[0]?.error).toBeUndefined();
     } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
   });
 

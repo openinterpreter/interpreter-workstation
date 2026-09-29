@@ -338,6 +338,7 @@ export class WakeSources {
           delete event.nextAttemptAt;
           const source = this.state.sources.find(s => s.id === event.sourceId && s.threadId === event.threadId);
           if (source && source.status !== 'cancelled') {
+            delete source.error;
             source.status = 'delivered';
             if (source.kind === 'schedule' && source.everyMs) {
               source.nextAt = new Date(now + source.everyMs).toISOString();
