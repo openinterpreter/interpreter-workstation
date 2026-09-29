@@ -109,6 +109,12 @@ export class WakeSources {
         source.status = 'waiting';
         source.nextAt = new Date(Date.now() + COMMAND_REARM_MS).toISOString();
       }
+      // Older command sources stopped permanently on a transient World or
+      // scanner error. Keep the diagnostic visible, but recover on a bounded
+      // timer after a restart without creating a second consumer.
+      if (source.kind === 'command' && source.status === 'error' && !source.nextAt) {
+        source.nextAt = new Date(Date.now() + 300_000).toISOString();
+      }
       if (source.kind === 'schedule' && source.status === 'waiting') {
         // Reconcile state written by an older, two-write schedule transition.
         // A persisted event is authoritative even when its sequence did not
@@ -264,7 +270,8 @@ export class WakeSources {
     this.ticking = true;
     try {
     for (const source of this.state.sources) {
-      if (source.status !== 'waiting' || !source.nextAt || Date.parse(source.nextAt) > now ||
+      if (!(source.status === 'waiting' || (source.kind === 'command' && source.status === 'error')) ||
+          !source.nextAt || Date.parse(source.nextAt) > now ||
           this.state.events.some(e => e.threadId === source.threadId && e.sourceId === source.id && e.status !== 'admitted')) continue;
       if (source.kind === 'schedule') {
         await this.exclusive(async () => {
@@ -301,7 +308,13 @@ export class WakeSources {
     }
     // An ambiguous RPC result is never automatically resubmitted while its
     // original turn is still running. The marker in native history is the receipt.
+    const seenThreads = new Set<string>();
     for (const event of this.state.events.filter(e => e.status !== 'admitted')) {
+      // Preserve durable per-thread input order. An ambiguous offered event or
+      // a backoff must fence later inputs on that thread, not let them overtake
+      // the missing native receipt. Other threads can continue independently.
+      if (seenThreads.has(event.threadId)) continue;
+      seenThreads.add(event.threadId);
       if (this.inFlight.has(`${event.threadId}:${event.eventId}`)) continue;
       this.inFlight.add(`${event.threadId}:${event.eventId}`);
       try { await this.deliver(event, now); }
@@ -352,6 +365,14 @@ export class WakeSources {
       await this.exclusive(async () => { event.turnId = turnId; await this.save(); });
     } catch (error) {
       const explanation = safeError(error);
+      // The native steer endpoint explicitly rejected this input before
+      // admission: the inspected turn ended between inspect and steer. Unlike
+      // a timeout/disconnect, this is not an ambiguous accepted RPC; retry by
+      // inspecting the SAME thread, which can now be idle.
+      if (event.status === 'offered' && error instanceof Error && error.message === 'no active turn to steer') {
+        event.status = 'pending';
+        delete event.offeredAt;
+      }
       const source = this.state.sources.find(s => s.id === event.sourceId && s.threadId === event.threadId);
       if (source && source.status !== 'cancelled') {
         source.status = 'error';
@@ -390,6 +411,7 @@ export class WakeSources {
         await this.exclusive(async () => {
           if (source.status !== 'cancelled') {
             source.status = 'waiting';
+            delete source.error;
             source.nextAt = new Date(Date.now() + COMMAND_REARM_MS).toISOString();
           }
           await this.save();
@@ -399,7 +421,7 @@ export class WakeSources {
       if (!output.id || !output.message) throw new Error('Command must output JSON with stable id and message');
       await this.ingest(source.threadId, source.id, output.id, output.message);
       await this.exclusive(async () => {
-        if (source.status !== 'cancelled') { source.status = 'waiting'; source.nextAt = undefined; }
+        if (source.status !== 'cancelled') { source.status = 'waiting'; delete source.error; source.nextAt = undefined; }
         await this.save();
       });
     } catch (error) {
@@ -407,6 +429,7 @@ export class WakeSources {
         if (source.status === 'cancelled') return;
         source.status = 'error';
         source.error = safeError(error);
+        source.nextAt = new Date(Date.now() + (/operator action/.test(source.error) ? 300_000 : 60_000)).toISOString();
         await this.save();
       });
     } finally { this.commands.delete(key); this.inFlight.delete(key); }
