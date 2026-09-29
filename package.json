@@ -195,7 +195,7 @@
     "builder-util-runtime": "9.7.0",
     "concurrently": "9.2.1",
     "cross-env": "10.1.0",
-    "electron": "42.5.1",
+    "electron": "42.10.0",
     "electron-builder": "26.15.3",
     "electron-builder-squirrel-windows": "26.15.3",
     "esbuild": "0.28.2",
@@ -360,7 +360,7 @@
       "picomatch@>=4 <5": "4.0.4",
       "shell-quote": "1.10.0",
       "tmp@<0.2.7": "0.2.7",
-      "undici": "7.29.0",
+      "undici": "7.29.1",
       "ws": "8.21.3",
       "underscore@<1.13.8": "1.13.8"
     },
