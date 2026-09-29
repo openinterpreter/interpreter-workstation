@@ -495,8 +495,8 @@ importers:
         specifier: 10.1.0
         version: 10.1.0
       electron:
-        specifier: 42.5.1
-        version: 42.5.1
+        specifier: 42.10.0
+        version: 42.10.0
       electron-builder:
         specifier: 26.15.3
         version: 26.15.3(electron-builder-squirrel-windows@26.15.3)
@@ -884,8 +884,8 @@ packages:
     resolution: {integrity: sha512-F+nKc0xW+kVbBRhFzaMgPy3KwmuNTYX1fx6+FxxoSnNgwYX6LD7AKBTWkU0MQ6IBoe7dz069CNkR673sPAgkCQ==}
     engines: {node: '>=14'}
 
-  '@electron/get@5.0.0':
-    resolution: {integrity: sha512-pjoBpru1KdEtcExBnuHAP1cAc/5faoedw0hzJkL3o4/IJp7HNF1+fbrdxT3gMYRX2oJfvnA/WXeCTVQpYYxyJA==}
+  '@electron/get@5.1.0':
+    resolution: {integrity: sha512-3kSBtG8ObcTVfXanm5vVJ6UnBLEVmVsRk1M+vGqCuMBV+XLCbJYuWQful+yIy0GQDsSlK0kHEriEHn7SPk4EnA==}
     engines: {node: '>=22.12.0'}
 
   '@electron/notarize@2.5.0':
@@ -5289,8 +5289,8 @@ packages:
     resolution: {integrity: sha512-bO3y10YikuUwUuDUQRM4KfwNkKhnpVO7IPdbsrejwN9/AABJzzTQ4GeHwyzNSrVO+tEH3/Np255a3sVZpZDjvg==}
     engines: {node: '>=8.0.0'}
 
-  electron@42.5.1:
-    resolution: {integrity: sha512-2VFNJcHHbrhIpGsJHdkLoi/nWPZPxN3GHVPe+9At3Oz3/TJRwpr+7JL97ddBDbKyLmHGx3GfI2jvzcEQL28uFw==}
+  electron@42.10.0:
+    resolution: {integrity: sha512-yBWnZO8tKId0ADvGa4+imPmm3+8Kfs8MtkUPhQQJz1AjTnUUDwCTWkQEU0CrArVVL97Jo4Q/0mVcLHciicBDGQ==}
     engines: {node: '>= 22.12.0'}
     hasBin: true
 
@@ -9439,7 +9439,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@electron/get@5.0.0':
+  '@electron/get@5.1.0':
     dependencies:
       debug: 4.4.3
       env-paths: 3.0.0
@@ -14052,10 +14052,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  electron@42.5.1:
+  electron@42.10.0:
     dependencies:
       '@electron-internal/extract-zip': 1.0.5
-      '@electron/get': 5.0.0
+      '@electron/get': 5.1.0
       '@types/node': 24.9.1
     transitivePeerDependencies:
       - supports-color
