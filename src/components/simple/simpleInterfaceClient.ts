@@ -1,4 +1,5 @@
-import { apiRequest, getApiUrl, isWorkstationReadOnly } from '@/ipc';
+import { apiRequest, getApiUrl } from '@/ipc';
+import { isWorkstationReadOnly } from '../../remote/workstationConnection';
 import type { SimpleActionEvent, SimpleInterfaceSnapshot } from '../../../shared/simpleInterface';
 
 async function request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { isWorkstationReadOnly } from '@/ipc';
+import { isWorkstationReadOnly } from '../../remote/workstationConnection';
 import type { SimpleBlock, SimpleInterfaceSnapshot } from '../../../shared/simpleInterface';
 import { simpleInterfaceClient } from './simpleInterfaceClient';
 
