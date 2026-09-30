@@ -62,7 +62,8 @@ import type {
 import { getMarketingDemoSurface, isMarketingDemoMode, isMarketingDemoWindowChromeEnabled } from "./demo/marketingDemo";
 import { isWorkstationReadOnly } from "./remote/workstationConnection";
 import { WorkstationConnectionGate } from './components/WorkstationConnectionGate';
-import { SimpleShell } from './components/simple/SimpleShell';
+import { SimpleShell, sendSimpleMessage } from './components/simple/SimpleShell';
+import { SimpleInterface } from './components/simple/SimpleInterface';
 import { uiSettings, workspace as workspaceIpc, quickActions } from '@/ipc';
 import * as workstationIpc from '@/ipc';
 
@@ -926,10 +927,7 @@ function AppContent() {
             }}
             settingsOpen={simpleSettingsOpen} onOpenSettings={() => setSimpleSettingsOpen(true)}
             onCloseSettings={() => setSimpleSettingsOpen(false)}
-            canvas={<div className="mx-auto flex min-h-screen max-w-3xl flex-col items-center justify-center px-8 pb-44 text-center">
-              <h1 className="text-3xl font-medium">Interpreter</h1>
-              <p className="mt-3 text-ui-base text-muted-foreground">Ask me to make this space yours.</p>
-            </div>} />
+            canvas={<SimpleInterface onMessage={(text) => sendSimpleMessage(text, simpleWorkspacePath)} />} />
         ) : advancedMode === false || advancedMode === null ? (
           <div role={simpleError ? 'alert' : 'status'} className="flex h-full items-center justify-center px-8 text-ui-sm text-muted-foreground">
             {simpleError ?? 'Opening Interpreter…'}

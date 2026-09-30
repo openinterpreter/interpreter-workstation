@@ -10,6 +10,7 @@ import { getDefaultModelConfig, profileToModelConfig } from '../../../shared/typ
 import type { AgentModelConfig } from '../../../shared/types/model';
 import { isWorkstationReadOnly } from '../../remote/workstationConnection';
 import { ExperienceSectionContent } from '../settings/ExperienceSection';
+import { simplePrimaryThread } from '@/ipc';
 
 /** A fixed identity names the one conversation even when the shell is remounted. */
 export const SIMPLE_PRIMARY_AGENT_ID = 'simple-primary-agent';
@@ -47,12 +48,23 @@ export function SimpleShell({ workspacePath, initialThreadId, onBindThread, onOp
   const [isStreaming, setIsStreaming] = useState(false);
   const [messageCount, setMessageCount] = useState(0);
   const [persistenceError, setPersistenceError] = useState(false);
+  const [overlayError, setOverlayError] = useState<string | null>(null);
   const callerToken = useMemo(() => createAgentCallerToken(), []);
   const readOnly = isWorkstationReadOnly();
 
   useEffect(() => {
     setThreadId(initialThreadId);
   }, [initialThreadId]);
+
+  useEffect(() => simplePrimaryThread.onOverlaySubmit(({ text }) => {
+    try {
+      sendSimpleMessage(text, workspacePath);
+      setOverlayError(null);
+    } catch (error) {
+      setOverlayError(error instanceof Error ? error.message : 'Could not send from the overlay.');
+      setExpanded(true);
+    }
+  }), [workspacePath]);
 
   useEffect(() => {
     let cancelled = false;
@@ -130,6 +142,7 @@ export function SimpleShell({ workspacePath, initialThreadId, onBindThread, onOp
                 The primary conversation could not be saved. Reload Interpreter to recover before sending again.
                 <button type="button" className="ml-2 underline" onClick={() => window.location.reload()}>Reload</button>
               </div>}
+              {overlayError && <div role="alert" className="mb-2 rounded-md bg-destructive/10 px-3 py-2 text-ui-sm text-destructive">{overlayError}</div>}
               {!expanded && <button type="button" aria-label="Expand conversation" aria-expanded="false"
                 onClick={() => setExpanded(true)} className="mb-1 flex w-full items-center justify-between px-3 py-1 text-ui-xs text-muted-foreground">
                 <span>{isStreaming ? 'Interpreter is working…' : messageCount > 0 ? 'Show conversation' : 'Ask Interpreter anything'}</span>

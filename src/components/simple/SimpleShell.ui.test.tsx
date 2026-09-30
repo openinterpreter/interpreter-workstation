@@ -23,6 +23,7 @@ vi.mock('../../../agent/contexts/AgentErrorContext', () => ({
 }));
 vi.mock('../../api', () => ({ getProfiles: async () => ({ profiles: [], defaultProfileId: null }) }));
 vi.mock('../../remote/workstationConnection', () => ({ isWorkstationReadOnly: () => false }));
+vi.mock('@/ipc', () => ({ simplePrimaryThread: { onOverlaySubmit: () => () => {} } }));
 vi.mock('../../utils/layoutHelpers', () => ({ createAgentCallerToken: () => 'token-for-test' }));
 vi.mock('../settings/ExperienceSection', () => ({ ExperienceSectionContent: () => <div>Experience choices</div> }));
 
