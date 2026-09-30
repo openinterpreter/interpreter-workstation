@@ -120,7 +120,7 @@ export function SimpleShell({ workspacePath, initialThreadId, onBindThread, onOp
       <AgentMetadataProvider agent={agent}>
         <AgentErrorProvider>
           <section aria-label="Primary conversation" data-simple-conversation="true"
-            className="absolute inset-x-3 bottom-5 z-30 mx-auto flex w-[min(100%-1.5rem,680px)] flex-col overflow-hidden rounded-[24px] bg-background/95 shadow-xl backdrop-blur-xl transition-[height,width] duration-200"
+            className="absolute bottom-5 left-1/2 z-30 flex w-[calc(100%-1.5rem)] max-w-[680px] -translate-x-1/2 flex-col overflow-hidden rounded-[24px] bg-background/95 shadow-xl backdrop-blur-xl transition-[height,width] duration-200"
             style={{ height: expanded ? 'min(75vh,720px)' : 'auto', border: 'var(--border-width) solid var(--border)' }}>
             <div className="flex min-h-0 flex-1 flex-col" style={{ display: expanded ? 'flex' : 'none' }}>
               <header className="flex h-10 shrink-0 items-center justify-between px-5 text-ui-sm text-muted-foreground">
