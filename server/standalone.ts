@@ -58,6 +58,7 @@ import {
   formatOptionalBrowserExtensionRelayStartupFailureLog,
   shutdownBrowserExtensionRelay,
 } from "./utils/browserExtensionRelay";
+import { stopWakeSources } from "./utils/wakeSourcesRuntime";
 
 const DEFAULT_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 5177;
 const DEFAULT_WORKSPACE = process.env.WORKSPACE || process.cwd();
@@ -76,6 +77,11 @@ async function shutdownServer(
   },
 ): Promise<never> {
   console.log("\n[Sidecar] Shutting down...");
+
+  // Release the durable wake dispatcher only after its in-flight native
+  // admission and fsynced receipt settle. Incoming World events remain with
+  // their approved source while this sidecar is unavailable.
+  await stopWakeSources();
 
   await deps.cleanupFileWatcher();
   await deps.cleanupSandbox();

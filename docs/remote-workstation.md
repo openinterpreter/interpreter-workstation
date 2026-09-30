@@ -238,6 +238,18 @@ public thread ID file can be updated atomically when an operator needs to
 publish a different persisted thread. See [Goals](goals.md) for Goal creation
 and lifecycle semantics.
 
+For an ordinary thread with native wake sources, a sidecar shutdown first
+fences fresh admission, allows an in-flight native steer/start and its durable
+receipt to settle, then releases the sole wake owner. A command still held by
+its external source is not acknowledged merely because it was peeked; a
+schedule's next due time survives the restart and missed recurring occurrences
+coalesce. The successor reconciles offered inputs with native thread history
+before allowing later events to overtake them. An ambiguous native RPC remains
+visible for operator reconciliation rather than being blindly duplicated.
+This is input custody, not proof that a model answered, a Goal exists, or an
+outbound channel reply was delivered. A maintenance operator must independently
+verify those facts and avoid stopping an active turn or blocked tool.
+
 ## Verification checklist
 
 1. Open the desktop build and verify conversation, Goal, Explorer, file editing,
@@ -257,6 +269,9 @@ and lifecycle semantics.
    or absolute host path.
 8. Restart the sidecar and confirm the same persisted thread, Goal, and files
    return.
+9. For native wake sources, assert one owner, stable provider IDs, deduped
+   restart recovery and ordered steer/idle-start on the saved thread; confirm
+   a due schedule is retained and offline provider input remains unacknowledged.
 
 ## Design rules
 

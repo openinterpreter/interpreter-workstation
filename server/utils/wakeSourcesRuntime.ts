@@ -22,11 +22,21 @@ export const wakeSources = new WakeSources({
   },
 });
 let initialization: Promise<void> | undefined;
+let stopping = false;
 export function readyWakeSources(): Promise<void> {
+  if (stopping) return Promise.reject(new Error('Wake admission is draining for restart'));
   return initialization ??= wakeSources.initialize().catch(error => {
     initialization = undefined;
     throw error;
   });
+}
+/** Fence new admission, finish in-flight custody, then release the sole owner. */
+export async function stopWakeSources(): Promise<void> {
+  stopping = true;
+  if (initialization) {
+    try { await initialization; } catch { return; }
+    await wakeSources.stop();
+  }
 }
 export function startWakeSources(): void {
   void readyWakeSources().catch(error => {

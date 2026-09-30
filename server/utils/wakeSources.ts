@@ -73,6 +73,9 @@ export class WakeSources {
   private commands = new Map<string, ReturnType<typeof spawn>>();
   private commandTasks = new Set<Promise<void>>();
   private ticking = false;
+  private stopping = false;
+  private tickFinished?: Promise<void>;
+  private finishTick?: () => void;
   private readonly file: string;
   private readonly lock: string;
   private readonly owner = randomUUID();
@@ -162,9 +165,14 @@ export class WakeSources {
   }
 
   async stop(): Promise<void> {
+    this.stopping = true;
     if (this.timer) clearInterval(this.timer);
     for (const child of this.commands.values()) child.kill('SIGKILL');
     await Promise.allSettled([...this.commandTasks]);
+    // Do not release the single-owner lock while an admission RPC or durable
+    // transition is still in flight. A successor must never race this owner.
+    await this.tickFinished;
+    await this.chain;
     try {
       const current = JSON.parse(await readFile(path.join(this.lock, 'owner.json'), 'utf8')) as { owner: string };
       if (current.owner === this.owner) await rm(this.lock, { recursive: true });
@@ -199,6 +207,7 @@ export class WakeSources {
   }
 
   async put(source: Omit<WakeSource, 'status' | 'sequence' | 'nextAt' | 'error'>): Promise<WakeSource> {
+    if (this.stopping) throw new Error('Wake admission is draining for restart');
     if (!ID.test(source.threadId) || !ID.test(source.id)) throw new Error('Invalid thread or source ID');
     if (source.kind !== 'schedule' && source.kind !== 'command') throw new Error('Unknown wake source kind');
     if (Object.keys(source).some(key => !['id', 'threadId', 'kind', 'message', 'at', 'everyMs', 'argv'].includes(key))) {
@@ -234,6 +243,7 @@ export class WakeSources {
   }
 
   async cancel(threadId: string, id: string): Promise<void> {
+    if (this.stopping) throw new Error('Wake admission is draining for restart');
     await this.exclusive(async () => {
       const source = this.state.sources.find(s => s.threadId === threadId && s.id === id);
       if (!source) throw new Error('Source not found');
@@ -246,6 +256,7 @@ export class WakeSources {
   }
 
   async ingest(threadId: string, sourceId: string, eventId: string, message: string): Promise<WakeEvent> {
+    if (this.stopping) throw new Error('Wake admission is draining for restart');
     if (![threadId, sourceId, eventId].every(x => ID.test(x)) || !message.trim() || message.length > MAX_MESSAGE) {
       throw new Error('Invalid wake event');
     }
@@ -266,10 +277,12 @@ export class WakeSources {
   }
 
   async tick(now = Date.now()): Promise<void> {
-    if (this.ticking) return;
+    if (this.ticking || this.stopping) return;
     this.ticking = true;
+    this.tickFinished = new Promise<void>(resolve => { this.finishTick = resolve; });
     try {
     for (const source of this.state.sources) {
+      if (this.stopping) break;
       if (!(source.status === 'waiting' || (source.kind === 'command' && source.status === 'error')) ||
           !source.nextAt || Date.parse(source.nextAt) > now ||
           this.state.events.some(e => e.threadId === source.threadId && e.sourceId === source.id && e.status !== 'admitted')) continue;
@@ -310,6 +323,7 @@ export class WakeSources {
     // original turn is still running. The marker in native history is the receipt.
     const seenThreads = new Set<string>();
     for (const event of this.state.events.filter(e => e.status !== 'admitted')) {
+      if (this.stopping) break;
       // Preserve durable per-thread input order. An ambiguous offered event or
       // a backoff must fence later inputs on that thread, not let them overtake
       // the missing native receipt. Other threads can continue independently.
@@ -320,7 +334,12 @@ export class WakeSources {
       try { await this.deliver(event, now); }
       finally { this.inFlight.delete(`${event.threadId}:${event.eventId}`); }
     }
-    } finally { this.ticking = false; }
+    } finally {
+      this.ticking = false;
+      this.finishTick?.();
+      this.finishTick = undefined;
+      this.tickFinished = undefined;
+    }
   }
 
   private async deliver(event: WakeEvent, now: number): Promise<void> {

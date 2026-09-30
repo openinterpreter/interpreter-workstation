@@ -71,6 +71,71 @@ describe('durable thread wake sources', () => {
     } finally { await f.cleanup(); }
   });
 
+  test('maintenance restart retains provider and missed schedule inputs on one thread without another owner', async () => {
+    const f = await fixture();
+    try {
+      const before = await f.make();
+      await before.put({ id: 'daily', threadId: 'thread-1', kind: 'schedule',
+        message: 'Check the existing worker version and report availability; do not activate.',
+        at: new Date(Date.now() + 30_000).toISOString(), everyMs: 86_400_000 });
+      await before.ingest('thread-1', 'provider', 'stable-provider-id', 'approved request');
+      await before.stop();
+      await expect(before.ingest('thread-1', 'provider', 'lost', 'too late')).rejects.toThrow('draining');
+      const after = await f.make();
+      f.setActive('existing-turn');
+      await after.tick(Date.now() + 31_000);
+      expect(after.list('thread-1').events.map(e => [e.eventId, e.status]))
+        .toEqual([['stable-provider-id', 'offered'], ['daily-1', 'pending']]);
+      expect(f.counts()).toEqual({ starts: 0, steers: 1 });
+      await after.tick(Date.now() + 90_000);
+      expect(f.counts().steers).toBe(1); // ordered behind the offered receipt
+      await after.tick();
+      await after.tick();
+      expect(after.list('thread-1').events.map(e => e.status)).toEqual(['admitted', 'admitted']);
+      expect(f.counts()).toEqual({ starts: 0, steers: 2 });
+      expect((await after.ingest('thread-1', 'provider', 'stable-provider-id', 'duplicate')).status)
+        .toBe('admitted');
+    } finally { await f.cleanup(); }
+  });
+
+  test('shutdown does not release custody until an in-flight native admission has settled', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-maintenance-'));
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const history: string[] = [];
+    let starts = 0;
+    const native: WakeNative = {
+      inspect: async () => ({ messages: history }),
+      steer: async () => { throw new Error('no active turn'); },
+      start: async (thread, message) => {
+        expect(thread).toBe('same-thread'); starts++;
+        await gate;
+        history.push(message);
+        return 'turn-on-same-thread';
+      },
+    };
+    const before = new WakeSources(native, root);
+    try {
+      await before.initialize();
+      await before.ingest('same-thread', 'provider', 'stable-one', 'retained');
+      const delivering = before.tick();
+      for (let n = 0; n < 50 && !starts; n++) await new Promise(resolve => setTimeout(resolve, 2));
+      expect(starts).toBe(1);
+      const stopping = before.stop();
+      const competitor = new WakeSources(native, root);
+      await expect(competitor.initialize()).rejects.toThrow('Another Workstation owns wake dispatch');
+      release();
+      await delivering;
+      await stopping;
+      const after = new WakeSources(native, root);
+      await after.initialize();
+      await after.tick();
+      expect(after.list('same-thread').events[0]?.status).toBe('admitted');
+      expect(starts).toBe(1);
+      await after.stop();
+    } finally { release(); await before.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
   test('more than ten thousand compact admitted IDs do not block future events or schedules', async () => {
     const f = await fixture();
     try {
