@@ -73,6 +73,17 @@ describe('Simple workspace', () => {
     expect(first).not.toBe(selected);
   });
 
+  test('a deleted selected folder recovers to Documents/Interpreter on relaunch', async () => {
+    const selected = join(temp, 'removable');
+    mkdirSync(selected);
+    await setSimpleWorkspacePath(selected);
+    rmSync(selected, { recursive: true });
+    await reloadConfig();
+    const fallback = join(temp, 'Documents', 'Interpreter');
+    expect(await getSimpleWorkspacePath(temp)).toBe(fallback);
+    expect(await getSimpleWorkspaceSetting()).toBe(fallback);
+  });
+
   test('rejects missing, relative, root, home, and sensitive configuration selections', async () => {
     const selected = join(temp, 'valid');
     mkdirSync(selected);

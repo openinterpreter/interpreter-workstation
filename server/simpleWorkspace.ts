@@ -126,9 +126,15 @@ function seedWorkspaceGuidance(workspacePath: string): void {
 export async function getSimpleWorkspacePath(defaultHomePath: string = homedir()): Promise<string> {
   const saved = await getSimpleWorkspaceSetting();
   if (saved) {
-    const path = validateSimpleWorkspacePath(saved);
-    seedWorkspaceGuidance(path);
-    return path;
+    // A removable/deleted workspace must not trap the entire app behind its
+    // startup error. Recover to the safe default; still reject an existing
+    // unsafe path (including a symlink) rather than following it.
+    if (existsSync(saved)) {
+      const path = validateSimpleWorkspacePath(saved);
+      seedWorkspaceGuidance(path);
+      return path;
+    }
+    console.warn('[Simple workspace] Saved folder is unavailable; selecting the default workspace.');
   }
 
   const documents = join(defaultHomePath, 'Documents');

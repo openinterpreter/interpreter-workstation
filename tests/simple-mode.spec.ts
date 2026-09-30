@@ -10,6 +10,7 @@ let root: string | null = null;
 test.afterAll(async () => { if (root) await rm(root, { recursive: true, force: true }); });
 
 test('Simple canvas is default, retains last-good edits and switches reversibly to Advanced', async ({ page }) => {
+  test.setTimeout(90_000); // A real Electron renderer reload can take >15 seconds under CI.
   await waitForAppReady(page);
   await expect(page.locator('[data-simple-shell]')).toBeVisible();
   await expect(page.getByRole('region', { name: 'Primary conversation' })).toBeVisible();
@@ -45,7 +46,11 @@ test('Simple canvas is default, retains last-good edits and switches reversibly 
   await expect(page.locator('.app-workspace-shell')).toBeVisible();
   await page.evaluate(() => (window as any).__layoutContext?.openSettings?.());
   await expect(page.locator(sel('settingsView'))).toBeVisible();
-  await page.getByRole('group', { name: 'Experience' }).getByRole('button', { name: 'Simple' }).click();
+  // The legacy Settings pane animates while the canvas is being mounted; the
+  // button is visible/enabled but Playwright's stability heuristic can wait
+  // indefinitely for a still frame in the Electron compositor.
+  await page.getByRole('group', { name: 'Experience' }).getByRole('button', { name: 'Simple' }).click({ force: true });
   await expect(page.locator('[data-simple-shell]')).toBeVisible();
+  await page.getByRole('button', { name: 'Back to interface' }).click();
   await expect(page.getByRole('heading', { name: 'Recovered canvas' })).toBeVisible();
 });
