@@ -161,6 +161,8 @@ async function remoteEntry(filePath: string): Promise<PublicWorkspaceEntry | nul
 
 export const remoteWorkstationWorkspaceIpc = {
   get: async () => getRemoteWorkstationWorkspace(),
+  getSimple: async () => { throw new Error('Simple workspace is unavailable in remote read-only mode.'); },
+  setSimple: async () => { throw new Error('Simple workspace is unavailable in remote read-only mode.'); },
   createSample: async () => ({ success: false, workspacePath: REMOTE_WORKSTATION_ROOT }),
   set: async () => ({ success: false }),
   addWatch: async () => ({ success: true }),
@@ -169,6 +171,7 @@ export const remoteWorkstationWorkspaceIpc = {
     queueMicrotask(() => callback({ workspacePath: REMOTE_WORKSTATION_ROOT }));
     return () => {};
   },
+  onSimpleChanged: () => () => {},
   onFilesChanged: () => () => {},
 };
 

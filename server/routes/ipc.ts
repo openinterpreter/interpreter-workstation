@@ -136,6 +136,14 @@ const handlers: Record<string, Record<string, HandlerFn>> = {
       const { getWorkspace } = await import('../handlers/workspace');
       return getWorkspace();
     },
+    getSimple: async () => {
+      const { getSimpleWorkspacePath } = await import('../simpleWorkspace');
+      return { workspacePath: await getSimpleWorkspacePath() };
+    },
+    setSimple: async ([arg]: [{ workspacePath: string }]) => {
+      const { setSimpleWorkspacePath } = await import('../simpleWorkspace');
+      return { workspacePath: await setSimpleWorkspacePath(arg.workspacePath) };
+    },
     createSample: async () => {
       const { createSampleWorkspace } = await import('../handlers/workspace');
       return createSampleWorkspace();

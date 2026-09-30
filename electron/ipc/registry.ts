@@ -118,9 +118,12 @@ export const IPC_CHANNELS = {
 
   // Workspace
   WORKSPACE_CHANGED: 'workspace:changed',
+  WORKSPACE_SIMPLE_CHANGED: 'workspace:simple-changed',
   WORKSPACE_FILES_CHANGED: 'workspace:files-changed',
   WORKSPACE_CONFIRMATION_REQUESTED: 'workspace:confirmation-requested',
   WORKSPACE_GET: 'workspace:get',
+  WORKSPACE_GET_SIMPLE: 'workspace:get-simple',
+  WORKSPACE_SET_SIMPLE: 'workspace:set-simple',
   WORKSPACE_CREATE_SAMPLE: 'workspace:create-sample',
   WORKSPACE_SET: 'workspace:set',
   WORKSPACE_CONFIRMATION_RESPOND: 'workspace:confirmation-respond',

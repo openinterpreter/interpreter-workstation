@@ -131,6 +131,7 @@ export interface AppConfig {
   lastWorkspace?: string | null; // Last opened workspace path
   /** The durable Simple conversation is scoped to its workspace, not an Advanced tab. */
   simplePrimaryThreads?: Record<string, string>;
+  simpleWorkspacePath?: string; // Dedicated filesystem-backed Simple workspace root
   recentFolders?: RecentFolder[]; // Recent workspace folders
   detectedNoteWorkspaces?: DetectedNoteWorkspace[]; // Results from the last user-requested note workspace scan
 
@@ -2028,6 +2029,17 @@ export async function setSttSettings(settings: SttSettings): Promise<void> {
 }
 
 // Last Workspace Functions
+
+export async function getSimpleWorkspaceSetting(): Promise<string | null> {
+  const config = await loadConfig();
+  return config.simpleWorkspacePath ?? null;
+}
+
+export async function setSimpleWorkspaceSetting(workspacePath: string): Promise<void> {
+  const config = await loadConfig();
+  config.simpleWorkspacePath = workspacePath;
+  await saveConfig(config);
+}
 
 /**
  * Get the last opened workspace path

@@ -808,6 +808,16 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
     }
   );
 
+  registerHandle(IPC_CHANNELS.WORKSPACE_GET_SIMPLE, async () => {
+    const { getSimpleWorkspacePath } = await import('../../server/simpleWorkspace');
+    return { workspacePath: await getSimpleWorkspacePath() };
+  });
+
+  registerHandle(IPC_CHANNELS.WORKSPACE_SET_SIMPLE, async (_event, request: { workspacePath: string }) => {
+    const { setSimpleWorkspacePath } = await import('../../server/simpleWorkspace');
+    return { workspacePath: await setSimpleWorkspacePath(request.workspacePath) };
+  });
+
   registerHandle(
     IPC_CHANNELS.WORKSPACE_CREATE_SAMPLE,
     async (): Promise<import('./registry').WorkspaceCreateSampleResponse> => {

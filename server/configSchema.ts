@@ -256,6 +256,7 @@ export const AppConfigSchema = z.object({
   primaryColor: PrimaryColorSchema.optional(),
   lastWorkspace: z.string().nullable().optional(),
   simplePrimaryThreads: z.record(z.string(), z.string()).optional(),
+  simpleWorkspacePath: z.string().optional(),
   recentFolders: z.array(RecentFolderSchema).optional(),
   detectedNoteWorkspaces: z.array(DetectedNoteWorkspaceSchema).optional(),
   authToken: z.string().optional(),

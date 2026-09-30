@@ -379,6 +379,8 @@ export interface ElectronAPI {
   // Workspace IPC methods
   workspace: {
     get: () => Promise<{ workspace: string | null }>;
+    getSimple: () => Promise<{ workspacePath: string }>;
+    setSimple: (request: { workspacePath: string }) => Promise<{ workspacePath: string }>;
     createSample: () => Promise<WorkspaceCreateSampleResponse>;
     set: (request: { workspacePath: string }) => Promise<{ success: boolean }>;
     respondToConfirmation: (request: WorkspaceConfirmationRespondRequest) => Promise<WorkspaceConfirmationRespondResponse>;
@@ -387,6 +389,7 @@ export interface ElectronAPI {
     removeWatch: (folderPath: string) => Promise<{ success: boolean }>;
     onConfirmationRequested: (callback: (event: WorkspaceConfirmationRequestedEvent) => void) => () => void;
     onChanged: (callback: (event: { workspacePath: string | null }) => void) => () => void;
+    onSimpleChanged: (callback: (event: { workspacePath: string }) => void) => () => void;
     onFilesChanged: (callback: (event: WorkspaceFilesChangedEvent) => void) => () => void;
   };
 
@@ -986,6 +989,9 @@ contextBridge.exposeInMainWorld('electron', {
   // Workspace IPC
   workspace: {
     get: () => ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_GET),
+    getSimple: () => ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_GET_SIMPLE),
+    setSimple: (request: { workspacePath: string }) =>
+      ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_SET_SIMPLE, request),
     createSample: () => ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_CREATE_SAMPLE),
     set: (request: { workspacePath: string }) =>
       ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_SET, request),
@@ -1006,6 +1012,11 @@ contextBridge.exposeInMainWorld('electron', {
       const listener = (_: any, event: { workspacePath: string | null }) => callback(event);
       ipcRenderer.on(IPC_CHANNELS.WORKSPACE_CHANGED, listener);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.WORKSPACE_CHANGED, listener);
+    },
+    onSimpleChanged: (callback: (event: { workspacePath: string }) => void) => {
+      const listener = (_: any, event: { workspacePath: string }) => callback(event);
+      ipcRenderer.on(IPC_CHANNELS.WORKSPACE_SIMPLE_CHANGED, listener);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.WORKSPACE_SIMPLE_CHANGED, listener);
     },
     onFilesChanged: (callback: (event: WorkspaceFilesChangedEvent) => void) => {
       const listener = (_: any, event: WorkspaceFilesChangedEvent) => callback(event);
