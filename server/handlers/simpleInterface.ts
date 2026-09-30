@@ -9,6 +9,9 @@ import { broadcastEvent } from './broadcast';
 const MAX_PAGE_BYTES = 128 * 1024;
 const MAX_DATA_BYTES = 32 * 1024;
 const MAX_EVENTS_BYTES = 4 * 1024 * 1024;
+// Multiple inputs (and windows) can save concurrently. Serialize read-modify-write
+// transactions so a later keystroke cannot overwrite another field's saved value.
+let inputWriteQueue: Promise<unknown> = Promise.resolve();
 const ID = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 const ASSET = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}\.(png|jpe?g|webp|gif|avif)$/i;
 const DEFAULT_PAGE: SimplePage = {
@@ -239,15 +242,19 @@ function findBlock(blocks: SimpleBlock[], id: string): SimpleBlock | undefined {
 
 /** Bounded form edits survive page re-promotion/relaunch without running agent code. */
 export async function saveSimpleInterfaceInput(request: { id: string; revision: string; value: string }): Promise<{ success: true }> {
-  const { workspacePath, directory } = await paths();
-  const page = await lastGood(workspacePath, directory);
-  if (revision(page) !== request.revision || findBlock(page.blocks, request.id)?.type !== 'input') throw new Error('Input belongs to an outdated interface');
-  const value = text(request.value, 'Input', 4000);
-  const statePath = join(directory, 'state.json');
-  const old = await stringMap(workspacePath, statePath);
-  old[request.id] = value;
-  await atomicJson(workspacePath, statePath, old);
-  return { success: true };
+  const write = inputWriteQueue.catch(() => {}).then(async () => {
+    const { workspacePath, directory } = await paths();
+    const page = await lastGood(workspacePath, directory);
+    if (revision(page) !== request.revision || findBlock(page.blocks, request.id)?.type !== 'input') throw new Error('Input belongs to an outdated interface');
+    const value = text(request.value, 'Input', 4000);
+    const statePath = join(directory, 'state.json');
+    const old = await stringMap(workspacePath, statePath);
+    old[request.id] = value;
+    await atomicJson(workspacePath, statePath, old);
+    return { success: true as const };
+  });
+  inputWriteQueue = write;
+  return write;
 }
 
 /** Persist before the shell submits to the primary durable thread. No renderer-provided message is trusted. */
