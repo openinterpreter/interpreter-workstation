@@ -15,8 +15,15 @@ import { ExperienceSectionContent } from '../settings/ExperienceSection';
 export const SIMPLE_PRIMARY_AGENT_ID = 'simple-primary-agent';
 
 export function sendSimpleMessage(text: string, workspacePath: string): void {
-  if (!text.trim()) return;
-  if (document.querySelector('[data-simple-shell][data-primary-thread-error="true"]')) return;
+  if (!text.trim()) throw new Error('A message is required.');
+  if (document.querySelector('[data-simple-shell][data-primary-thread-error="true"]')) {
+    throw new Error('The primary conversation needs recovery before another message can be sent.');
+  }
+  let accepted = false;
+  window.dispatchEvent(new CustomEvent('agent-runtime:get-state', {
+    detail: { tabId: SIMPLE_PRIMARY_AGENT_ID, callback: () => { accepted = true; } },
+  }));
+  if (!accepted) throw new Error('The primary conversation is not ready. Try again shortly.');
   window.dispatchEvent(new CustomEvent('agent-runtime:send', {
     detail: { tabId: SIMPLE_PRIMARY_AGENT_ID, text, workspacePath },
   }));

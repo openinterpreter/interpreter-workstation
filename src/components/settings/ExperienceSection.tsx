@@ -14,9 +14,9 @@ export function ExperienceSectionContent() {
   useEffect(() => {
     let alive = true;
     void uiSettings.getAdvancedMode()
-      .then(({ enabled }) => { if (alive) setAdvanced(enabled); })
+      .then(({ enabled }: { enabled: boolean }) => { if (alive) setAdvanced(enabled); })
       .catch(() => { if (alive) setError('Could not load the experience preference.'); });
-    const unsubscribe = uiSettings.onAdvancedModeChanged(({ enabled }) => setAdvanced(enabled));
+    const unsubscribe = uiSettings.onAdvancedModeChanged(({ enabled }: { enabled: boolean }) => setAdvanced(enabled));
     return () => { alive = false; unsubscribe(); };
   }, []);
 
@@ -24,7 +24,7 @@ export function ExperienceSectionContent() {
     let alive = true;
     const simpleWorkspace = workspace as typeof workspace & { getSimple?: () => Promise<{ workspacePath: string }> };
     if (!simpleWorkspace.getSimple) return;
-    void simpleWorkspace.getSimple().then(({ workspacePath: path }) => {
+    void simpleWorkspace.getSimple().then(({ workspacePath: path }: { workspacePath: string }) => {
       if (alive) setWorkspacePath(path);
     }).catch(() => { if (alive) setError('Could not load the Simple workspace.'); });
     return () => { alive = false; };

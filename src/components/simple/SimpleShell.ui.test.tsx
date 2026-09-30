@@ -53,7 +53,9 @@ describe('Simple shell', () => {
 
   test('chat and generated UI messages route to the same primary agent and workspace', async () => {
     const onSend = vi.fn();
+    const onState = (event: Event) => (event as CustomEvent).detail.callback({ isRunning: false });
     window.addEventListener('agent-runtime:send', onSend);
+    window.addEventListener('agent-runtime:get-state', onState);
     const user = userEvent.setup();
     render(<SimpleShell {...props} />);
     await user.click(screen.getByRole('button', { name: 'Send prompt' }));
@@ -66,6 +68,11 @@ describe('Simple shell', () => {
       });
     }
     window.removeEventListener('agent-runtime:send', onSend);
+    window.removeEventListener('agent-runtime:get-state', onState);
+  });
+
+  test('interface actions fail visibly rather than disappearing when the runtime is absent', () => {
+    expect(() => sendSimpleMessage('Choose option', '/documents/Interpreter')).toThrow('not ready');
   });
 
   test('binds assigned thread to durable backend and opens simple Settings', async () => {

@@ -286,6 +286,8 @@ export function useLayoutIpcListeners({
   // CMD+, : Open Settings
   useEffect(() => {
     const unsubscribe = quickActionsIpc.onOpenSettings(() => {
+      // Simple owns its own settings panel; do not open an invisible Advanced tab.
+      if (document.querySelector('[data-simple-shell="true"]')) return;
       trackShortcutInvoked({ shortcut: 'CmdOrCtrl+,', action: 'open_settings', source: 'menu' });
       openSettings();
     });

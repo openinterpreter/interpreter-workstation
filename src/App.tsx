@@ -84,16 +84,15 @@ function AppContent() {
   useEffect(() => {
     let alive = true;
     void uiSettings.getAdvancedMode()
-      .then(({ enabled }) => { if (alive) setAdvancedMode(enabled); })
+      .then(({ enabled }: { enabled: boolean }) => { if (alive) setAdvancedMode(enabled); })
       .catch(() => { if (alive) setSimpleError('Could not load your experience preference.'); });
-    const unsubscribe = uiSettings.onAdvancedModeChanged(({ enabled }) => setAdvancedMode(enabled));
+    const unsubscribe = uiSettings.onAdvancedModeChanged(({ enabled }: { enabled: boolean }) => setAdvancedMode(enabled));
     return () => { alive = false; unsubscribe(); };
   }, []);
 
   useEffect(() => {
-    if (advancedMode !== false || !simpleWorkspacePath) return;
+    if (advancedMode !== false) return;
     let alive = true;
-    setSimpleThreadLoaded(false);
     const simpleWorkspace = workspaceIpc as typeof workspaceIpc & {
       getSimple?: () => Promise<{ workspacePath: string }>;
     };
@@ -102,9 +101,9 @@ function AppContent() {
       return;
     }
     const load = () => {
-      void simpleWorkspace.getSimple!().then(({ workspacePath }) => {
+      void simpleWorkspace.getSimple!().then(({ workspacePath }: { workspacePath: string }) => {
         if (alive) { setSimpleWorkspacePath(workspacePath); setSimpleError(null); }
-      }).catch((error) => {
+      }).catch((error: unknown) => {
         if (alive) setSimpleError(error instanceof Error ? error.message : 'Could not open the Simple workspace.');
       });
     };
@@ -114,8 +113,9 @@ function AppContent() {
   }, [advancedMode]);
 
   useEffect(() => {
-    if (advancedMode !== false) return;
+    if (advancedMode !== false || !simpleWorkspacePath) return;
     let alive = true;
+    setSimpleThreadLoaded(false);
     // The backend is authoritative; a renderer remount never silently creates a new thread.
     const primaryThread = (workstationIpc as typeof workstationIpc & {
       simplePrimaryThread?: { get: () => Promise<{ threadId: string | null }> };
@@ -918,10 +918,10 @@ function AppContent() {
           <SimpleShell workspacePath={simpleWorkspacePath} initialThreadId={simpleThreadId}
             onBindThread={async (threadId) => {
               const primaryThread = (workstationIpc as typeof workstationIpc & {
-                simplePrimaryThread?: { bind: (request: { threadId: string }) => Promise<{ threadId: string }> };
+                simplePrimaryThread?: { bind: (request: { threadId: string; expectedThreadId?: string | null }) => Promise<{ threadId: string }> };
               }).simplePrimaryThread;
               if (!primaryThread) throw new Error('Primary conversation persistence is unavailable.');
-              await primaryThread.bind({ threadId });
+              await primaryThread.bind({ threadId, expectedThreadId: simpleThreadId });
               setSimpleThreadId(threadId);
             }}
             settingsOpen={simpleSettingsOpen} onOpenSettings={() => setSimpleSettingsOpen(true)}
