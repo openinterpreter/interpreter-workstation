@@ -6,7 +6,6 @@ mode. It intentionally does **not** implement these independent follow-ups:
 
 - iPhone/Android apps, phone pairing, QR enrollment and notification delivery;
 - Tailscale or other peer-to-peer transport, remote/mobile serving or enrollment;
-- the separate September 30 simplification addendum;
 - optional WhatsApp/voice/email/text channels and their enterprise policy,
   sender verification, consent, revocation and outbound-delivery controls;
 - multiple named interface windows, global detached pill choreography,
