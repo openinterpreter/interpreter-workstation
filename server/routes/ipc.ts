@@ -118,6 +118,18 @@ const handlers: Record<string, Record<string, HandlerFn>> = {
     },
   },
 
+  // ========== Simple primary conversation ==========
+  simplePrimaryThread: {
+    get: async () => {
+      const { getSimplePrimaryThread } = await import('../handlers/simplePrimaryThread');
+      return getSimplePrimaryThread();
+    },
+    bind: async ([request]: [{ threadId: string; expectedThreadId?: string | null }]) => {
+      const { bindSimplePrimaryThread } = await import('../handlers/simplePrimaryThread');
+      return bindSimplePrimaryThread(request);
+    },
+  },
+
   // ========== Workspace ==========
   workspace: {
     get: async () => {

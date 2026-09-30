@@ -19,6 +19,7 @@ import {
   getCuaAccessPolicy,
   getInterpreterOverlaySettings,
   getOnboardingState,
+  getBooleanUISettingSync,
   setOnboardingState,
   setInterpreterOverlaySettings,
 } from '../../../server/configStore';
@@ -219,6 +220,8 @@ import {
 import { mergeSelectedContextRefsIntoRunEngineElements } from './selected-context-run-engine-elements.js';
 import { buildOverlayTextControllerToolCatalogText } from './text-controller-tool-catalog.js';
 import { hitsOverlayDrawingAction } from './overlay-drawing-hit-test.js';
+import { buildSimpleOverlayMessage } from './simple-overlay-message.js';
+import { IPC_CHANNELS } from '../../../electron/ipc/registry';
 import {
   BrowserWindow,
   dialog,
@@ -7695,6 +7698,37 @@ ${promptBody}
             mode: this.overlayState.mode,
             textLength: action.text.trim().length,
           });
+          break;
+        }
+
+        // Simple has one durable conversation. Never launch an overlay-specific
+        // agent here: deliver to the mounted Simple composer instead, including
+        // the origin/selection envelope. Advanced keeps its existing controller.
+        if (!getBooleanUISettingSync('advancedMode')) {
+          if (action.attachments?.length) {
+            this.send({ pill: { kind: 'error', message: 'Overlay attachments are not yet supported in Simple. Open Interpreter to attach a file.' } });
+            break;
+          }
+          const overlayWindow = this.overlay.getWindow();
+          let simpleWindow: InstanceType<typeof BrowserWindow> | null = null;
+          for (const candidate of BrowserWindow.getAllWindows()) {
+            if (candidate === overlayWindow || candidate.isDestroyed() || candidate.webContents.isDestroyed() || candidate.webContents.isLoading()) continue;
+            try {
+              if (await candidate.webContents.executeJavaScript('Boolean(document.querySelector("[data-simple-shell]"))', true)) {
+                simpleWindow = candidate;
+                break;
+              }
+            } catch { /* Not the Simple renderer. */ }
+          }
+          if (!simpleWindow) {
+            this.send({ pill: { kind: 'error', message: 'Open the Simple workspace before sending from the overlay.' } });
+            break;
+          }
+          const contextItems = action.contextItems ?? this.overlayState.contextItems;
+          const text = buildSimpleOverlayMessage(action.text, contextItems);
+          if (!action.text.trim() && contextItems.length === 0) break;
+          simpleWindow.webContents.send(IPC_CHANNELS.SIMPLE_PRIMARY_OVERLAY_SUBMIT, { text });
+          await this.handleEscape();
           break;
         }
 

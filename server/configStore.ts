@@ -129,6 +129,8 @@ export interface AppConfig {
   theme?: 'light' | 'dark' | 'system'; // Theme preference
   primaryColor?: string; // Primary accent color (e.g., "blue", "purple")
   lastWorkspace?: string | null; // Last opened workspace path
+  /** The durable Simple conversation is scoped to its workspace, not an Advanced tab. */
+  simplePrimaryThreads?: Record<string, string>;
   recentFolders?: RecentFolder[]; // Recent workspace folders
   detectedNoteWorkspaces?: DetectedNoteWorkspace[]; // Results from the last user-requested note workspace scan
 

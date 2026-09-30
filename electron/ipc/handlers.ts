@@ -1620,6 +1620,19 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
     },
   );
 
+  registerHandle(IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_GET, async () => {
+    const { getSimplePrimaryThread } = await import('../../server/handlers/simplePrimaryThread');
+    return getSimplePrimaryThread();
+  });
+
+  registerHandle(
+    IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_BIND,
+    async (_event, request: { threadId: string; expectedThreadId?: string | null }) => {
+      const { bindSimplePrimaryThread } = await import('../../server/handlers/simplePrimaryThread');
+      return bindSimplePrimaryThread(request);
+    },
+  );
+
 
   // ============================================================================
   // PDF Handlers

@@ -99,6 +99,9 @@ export const IPC_CHANNELS = {
   AGENT_THREADS_RENAME: 'agentThreads:rename',
   AGENT_THREADS_ARCHIVE: 'agentThreads:archive',
   AGENT_THREADS_UNARCHIVE: 'agentThreads:unarchive',
+  SIMPLE_PRIMARY_THREAD_GET: 'simplePrimaryThread:get',
+  SIMPLE_PRIMARY_THREAD_BIND: 'simplePrimaryThread:bind',
+  SIMPLE_PRIMARY_OVERLAY_SUBMIT: 'simplePrimaryThread:overlay-submit',
 
   // Profiles (camelCase namespace for browser proxy: profiles.onDefaultChanged)
   PROFILES_LIST: 'profiles:list',

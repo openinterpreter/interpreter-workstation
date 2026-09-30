@@ -355,6 +355,12 @@ export interface ElectronAPI {
     unarchiveThread: (threadId: string) => Promise<AgentThreadsUnarchiveResponse>;
   };
 
+  simplePrimaryThread: {
+    get: () => Promise<{ threadId: string | null }>;
+    bind: (request: { threadId: string; expectedThreadId?: string | null }) => Promise<{ threadId: string }>;
+    onOverlaySubmit: (callback: (event: { text: string }) => void) => () => void;
+  };
+
   // Profiles IPC methods
   profiles: {
     list: () => Promise<{ profiles: any[]; defaultProfileId: string | null; fastProfileId: string | null }>;
@@ -937,6 +943,17 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(IPC_CHANNELS.AGENT_THREADS_ARCHIVE, { threadId }),
     unarchiveThread: (threadId: string) =>
       ipcRenderer.invoke(IPC_CHANNELS.AGENT_THREADS_UNARCHIVE, { threadId }),
+  },
+
+  simplePrimaryThread: {
+    get: () => ipcRenderer.invoke(IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_GET),
+    bind: (request: { threadId: string; expectedThreadId?: string | null }) =>
+      ipcRenderer.invoke(IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_BIND, request),
+    onOverlaySubmit: (callback: (event: { text: string }) => void) => {
+      const listener = (_: unknown, event: { text: string }) => callback(event);
+      ipcRenderer.on(IPC_CHANNELS.SIMPLE_PRIMARY_OVERLAY_SUBMIT, listener);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.SIMPLE_PRIMARY_OVERLAY_SUBMIT, listener);
+    },
   },
 
   // Profiles IPC
