@@ -16,9 +16,11 @@ describe('Simple workspace', () => {
   let originalInterpreterHome: string | undefined;
   let originalUserDataDir: string | undefined;
   let originalCodexHome: string | undefined;
+  let originalCwd: string;
 
   beforeEach(() => {
     temp = mkdtempSync(join(tmpdir(), 'interpreter-simple-workspace-'));
+    originalCwd = process.cwd();
     originalHome = process.env.HOME;
     originalInterpreterHome = process.env.INTERPRETER_HOME;
     originalUserDataDir = process.env.INTERPRETER_USER_DATA_DIR;
@@ -28,6 +30,7 @@ describe('Simple workspace', () => {
   });
 
   afterEach(() => {
+    process.chdir(originalCwd);
     for (const [key, value] of Object.entries({
       HOME: originalHome,
       INTERPRETER_HOME: originalInterpreterHome,
@@ -42,6 +45,8 @@ describe('Simple workspace', () => {
   });
 
   test('first launch creates Documents/Interpreter and guidance; relaunch retains it', async () => {
+    // Packaged applications can be launched with the user's home as cwd.
+    process.chdir(temp);
     const expected = join(temp, 'Documents', 'Interpreter');
     expect(await getSimpleWorkspacePath(temp)).toBe(expected);
     const guidance = readFileSync(join(expected, 'AGENTS.md'), 'utf8');

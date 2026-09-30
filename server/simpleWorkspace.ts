@@ -65,13 +65,19 @@ export function validateSimpleWorkspacePath(inputPath: string): string {
   if (canonical === home || isStrictChild(canonical, home)) {
     throw new Error('Choose a dedicated folder, not your home or a filesystem ancestor.');
   }
-  const protectedRoots = [resolveInterpreterHome(), process.cwd()].filter((value) => existsSync(value));
-  if (protectedRoots.some((root) => {
-    const protectedPath = realpathSync(root);
-    return canonical === protectedPath
-      || isStrictChild(canonical, protectedPath)
-      || isStrictChild(protectedPath, canonical);
-  })) {
+  const configHome = resolveInterpreterHome();
+  const configPath = existsSync(configHome) ? realpathSync(configHome) : resolve(configHome);
+  // cwd can be the user's home in a packaged app. Only treat it as an app
+  // source root when it actually contains this repository's source file.
+  const appCwd = existsSync(join(process.cwd(), 'server', 'simpleWorkspace.ts'))
+    ? realpathSync(process.cwd()) : null;
+  const appResources = process.resourcesPath && existsSync(process.resourcesPath)
+    ? realpathSync(process.resourcesPath) : null;
+  if (canonical === configPath
+    || isStrictChild(canonical, configPath)
+    || isStrictChild(configPath, canonical)
+    || (appCwd && (canonical === appCwd || isStrictChild(appCwd, canonical)))
+    || (appResources && (canonical === appResources || isStrictChild(appResources, canonical)))) {
     throw new Error('Choose a dedicated folder, not your home, app, or configuration root.');
   }
   if (canonical === parse(canonical).root) {
