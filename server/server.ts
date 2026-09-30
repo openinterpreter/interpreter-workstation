@@ -59,6 +59,7 @@ import telegramRouter from "./routes/telegram";
 import inboxRouter from "./routes/inbox";
 import pdfRouter from "./routes/pdf";
 import ipcRouter from "./routes/ipc";
+import simpleInterfaceRouter from './routes/simpleInterface';
 import mcpRouter from "./routes/mcp";
 import interpreterCliRouter from "./routes/interpreterCli";
 import publicThreadRouter from "./routes/publicThread";
@@ -280,6 +281,7 @@ app.use('/api/servers/telegram', telegramRouter);
 app.use('/api/inbox', inboxRouter);
 app.use('/api/pdf', pdfRouter); // Direct PDF API (no IPC events) for UI use
 app.use('/api/ipc', ipcRouter); // Browser mode IPC-equivalent endpoints
+app.use('/api/simple-interface', simpleInterfaceRouter); // Inert, workspace-backed generated pages
 app.use('/api/interpreter-cli', interpreterCliRouter);
 app.use('/api/public-thread', publicThreadRouter);
 app.use('/api/public-workspace', publicWorkspaceRouter);
