@@ -26,6 +26,7 @@ describe('settings snapshot helpers', () => {
       showHelpPanelPreview: false,
       reviewMarkdownEdits: true,
       launchAtLogin: false,
+      advancedMode: false,
       autoApproveLowRiskMediaCards: false,
       telemetryEnabled: false,
       allowAgentAddTools: true,
@@ -69,6 +70,14 @@ describe('settings snapshot helpers', () => {
     expect(nextConfig.profiles).toEqual(baseConfig.profiles);
     expect(nextConfig.providers).toEqual(baseConfig.providers);
     expect(nextConfig.mcpServers).toEqual(baseConfig.mcpServers);
+  });
+
+  test('Simple is the default and Advanced survives a settings snapshot round trip', () => {
+    const initial = buildSettingsSnapshot({ agents: {} });
+    expect(initial.advancedMode).toBe(false);
+    const advanced = applySettingsSnapshot({ agents: {} }, { ...initial, advancedMode: true });
+    expect(buildSettingsSnapshot(advanced).advancedMode).toBe(true);
+    expect(buildSettingsSnapshot({ agents: {} }).advancedMode).toBe(false);
   });
 
   test('assertValidSettingsSnapshot rejects invalid snapshots', () => {

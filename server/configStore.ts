@@ -176,6 +176,7 @@ export interface AppConfig {
   showHelpPanelPreview?: boolean; // Show file preview in help panel (default: false)
   reviewMarkdownEdits?: boolean; // Show accept/reject UI when agents edit markdown files (default: true)
   launchAtLogin?: boolean; // Launch the app when user logs into the OS (default: false)
+  advancedMode?: boolean; // Explicit opt-in to the existing multi-pane Advanced experience
   whatsNewDismissed?: boolean; // Whether the "What's new" video has been dismissed
   dismissedTopNoticeVersions?: Record<string, string>; // Per-notice dismissed versions for top-of-page notices
   lastDismissedReleaseNotesVersion?: number | string; // RELEASE_NOTES_VERSION string the user last dismissed (legacy: number)

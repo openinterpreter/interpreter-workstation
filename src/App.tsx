@@ -62,6 +62,9 @@ import type {
 import { getMarketingDemoSurface, isMarketingDemoMode, isMarketingDemoWindowChromeEnabled } from "./demo/marketingDemo";
 import { isWorkstationReadOnly } from "./remote/workstationConnection";
 import { WorkstationConnectionGate } from './components/WorkstationConnectionGate';
+import { SimpleShell } from './components/simple/SimpleShell';
+import { uiSettings, workspace as workspaceIpc, quickActions } from '@/ipc';
+import * as workstationIpc from '@/ipc';
 
 const FIRST_STARTUP_NUDGE_EVENT = 'onboarding:first-startup-nudge';
 const TITLEBAR_LAYOUT_CHANGED_EVENT = 'titlebar:layout-changed';
@@ -71,6 +74,64 @@ function AppContent() {
   "use no memo";
 
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
+  const [advancedMode, setAdvancedMode] = useState<boolean | null>(null);
+  const [simpleWorkspacePath, setSimpleWorkspacePath] = useState<string | null>(null);
+  const [simpleThreadId, setSimpleThreadId] = useState<string | null>(null);
+  const [simpleThreadLoaded, setSimpleThreadLoaded] = useState(false);
+  const [simpleError, setSimpleError] = useState<string | null>(null);
+  const [simpleSettingsOpen, setSimpleSettingsOpen] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    void uiSettings.getAdvancedMode()
+      .then(({ enabled }) => { if (alive) setAdvancedMode(enabled); })
+      .catch(() => { if (alive) setSimpleError('Could not load your experience preference.'); });
+    const unsubscribe = uiSettings.onAdvancedModeChanged(({ enabled }) => setAdvancedMode(enabled));
+    return () => { alive = false; unsubscribe(); };
+  }, []);
+
+  useEffect(() => {
+    if (advancedMode !== false || !simpleWorkspacePath) return;
+    let alive = true;
+    setSimpleThreadLoaded(false);
+    const simpleWorkspace = workspaceIpc as typeof workspaceIpc & {
+      getSimple?: () => Promise<{ workspacePath: string }>;
+    };
+    if (!simpleWorkspace.getSimple) {
+      setSimpleError('Simple workspace is unavailable.');
+      return;
+    }
+    const load = () => {
+      void simpleWorkspace.getSimple!().then(({ workspacePath }) => {
+        if (alive) { setSimpleWorkspacePath(workspacePath); setSimpleError(null); }
+      }).catch((error) => {
+        if (alive) setSimpleError(error instanceof Error ? error.message : 'Could not open the Simple workspace.');
+      });
+    };
+    load();
+    window.addEventListener('simple-workspace:changed', load);
+    return () => { alive = false; window.removeEventListener('simple-workspace:changed', load); };
+  }, [advancedMode]);
+
+  useEffect(() => {
+    if (advancedMode !== false) return;
+    let alive = true;
+    // The backend is authoritative; a renderer remount never silently creates a new thread.
+    const primaryThread = (workstationIpc as typeof workstationIpc & {
+      simplePrimaryThread?: { get: () => Promise<{ threadId: string | null }> };
+    }).simplePrimaryThread;
+    if (!primaryThread) { setSimpleError('Primary conversation is unavailable.'); return; }
+    void primaryThread.get().then(({ threadId }) => {
+      if (alive) { setSimpleThreadId(threadId); setSimpleThreadLoaded(true); }
+    }).catch((error) => {
+      if (alive) setSimpleError(error instanceof Error ? error.message : 'Could not restore the primary conversation.');
+    });
+    return () => { alive = false; };
+  }, [advancedMode, simpleWorkspacePath]);
+
+  useEffect(() => quickActions.onOpenSettings(() => {
+    if (advancedMode === false) setSimpleSettingsOpen(true);
+  }), [advancedMode]);
   const marketingDemoMode = isMarketingDemoMode();
   const readOnlyWorkstation = isWorkstationReadOnly();
   const marketingDemoWindowChrome = marketingDemoMode && isMarketingDemoWindowChromeEnabled();
@@ -853,7 +914,28 @@ function AppContent() {
         }`}
         style={{ transition: 'opacity 400ms ease' }}
       >
-        {/* Title bar - positioned on top */}
+        {shouldRenderMainSurfaces && advancedMode === false && simpleWorkspacePath && simpleThreadLoaded && !simpleError ? (
+          <SimpleShell workspacePath={simpleWorkspacePath} initialThreadId={simpleThreadId}
+            onBindThread={async (threadId) => {
+              const primaryThread = (workstationIpc as typeof workstationIpc & {
+                simplePrimaryThread?: { bind: (request: { threadId: string }) => Promise<{ threadId: string }> };
+              }).simplePrimaryThread;
+              if (!primaryThread) throw new Error('Primary conversation persistence is unavailable.');
+              await primaryThread.bind({ threadId });
+              setSimpleThreadId(threadId);
+            }}
+            settingsOpen={simpleSettingsOpen} onOpenSettings={() => setSimpleSettingsOpen(true)}
+            onCloseSettings={() => setSimpleSettingsOpen(false)}
+            canvas={<div className="mx-auto flex min-h-screen max-w-3xl flex-col items-center justify-center px-8 pb-44 text-center">
+              <h1 className="text-3xl font-medium">Interpreter</h1>
+              <p className="mt-3 text-ui-base text-muted-foreground">Ask me to make this space yours.</p>
+            </div>} />
+        ) : advancedMode === false || advancedMode === null ? (
+          <div role={simpleError ? 'alert' : 'status'} className="flex h-full items-center justify-center px-8 text-ui-sm text-muted-foreground">
+            {simpleError ?? 'Opening Interpreter…'}
+          </div>
+        ) : <>
+        {/* Title bar - positioned on top in Advanced mode */}
         <CustomTitleBar />
 
         {/* Full-height layout with JS-animated sidebars */}
@@ -925,6 +1007,7 @@ function AppContent() {
             </div>
           </div> : null}
         </div>
+        </>}
       </div>
 
       {/* Onboarding overlay -- renders above everything at z-50 */}
