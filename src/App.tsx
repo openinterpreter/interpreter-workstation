@@ -111,7 +111,7 @@ function AppContent() {
       });
     };
     load();
-    const unsubscribe = simpleWorkspace.onSimpleChanged?.(({ workspacePath }) => {
+    const unsubscribe = simpleWorkspace.onSimpleChanged?.(({ workspacePath }: { workspacePath: string }) => {
       if (alive) { setSimpleWorkspacePath(workspacePath); setSimpleError(null); }
     });
     window.addEventListener('simple-workspace:changed', load);

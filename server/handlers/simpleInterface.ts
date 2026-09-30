@@ -258,7 +258,7 @@ export async function recordSimpleInterfaceAction(request: { actionId: string; r
   const block = findBlock(page.blocks, request.actionId);
   if (!block || (block.type !== 'button' && block.type !== 'input')) throw new Error('Action is not present in the accepted interface');
   const value = block.type === 'input' ? text(request.value, 'Input', 4000) : undefined;
-  const message = block.type === 'input' ? block.message.replaceAll('{{value}}', value ?? '') : block.message;
+  const message = block.type === 'input' ? block.message.replace(/\{\{value\}\}/g, () => value ?? '') : block.message;
   if (message.length > 6000) throw new Error('Message exceeds size limit');
   const path = await checked(workspacePath, join(directory, 'events.jsonl'));
   try { if ((await stat(path)).size > MAX_EVENTS_BYTES) throw new Error('Interface event log is full; archive it before continuing'); }
