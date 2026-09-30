@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { getSimpleWorkspaceSetting, reloadConfig, setInterpreterHomeDir } from './configStore';
+import { clearConfigCache, getSimpleWorkspaceSetting, reloadConfig, setInterpreterHomeDir } from './configStore';
 import {
   assertSimpleWorkspaceChildPath,
   getSimpleWorkspacePath,
@@ -31,6 +31,7 @@ describe('Simple workspace', () => {
 
   afterEach(() => {
     process.chdir(originalCwd);
+    setInterpreterHomeDir(null);
     for (const [key, value] of Object.entries({
       HOME: originalHome,
       INTERPRETER_HOME: originalInterpreterHome,
@@ -40,7 +41,7 @@ describe('Simple workspace', () => {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    setInterpreterHomeDir(null);
+    clearConfigCache();
     rmSync(temp, { recursive: true, force: true });
   });
 
