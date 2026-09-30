@@ -130,7 +130,7 @@ export function SimpleShell({ workspacePath, initialThreadId, onBindThread, onOp
               <div className="min-h-0 flex-1 overflow-hidden">
                 <AgentThread agentId={SIMPLE_PRIMARY_AGENT_ID} codexThreadId={threadId ?? undefined}
                   callerToken={callerToken} workspacePath={workspacePath} modelConfig={modelConfig}
-                  isVisible={true} isEditorPane={false} readOnly={readOnly}
+                  isVisible={true} isEditorPane={false} readOnly={readOnly} allowConversationRestart={false}
                   onModelConfigUpdate={(_id, next) => setModelConfig(next)}
                   onCodexThreadIdAssigned={handleThreadAssigned}
                   onLabelUpdate={(_id, _label, running) => setIsStreaming(running)}

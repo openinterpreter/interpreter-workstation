@@ -78,6 +78,7 @@ function AppContent() {
   const [advancedMode, setAdvancedMode] = useState<boolean | null>(null);
   const [simpleWorkspacePath, setSimpleWorkspacePath] = useState<string | null>(null);
   const [simpleThreadId, setSimpleThreadId] = useState<string | null>(null);
+  const [simpleThreadWorkspacePath, setSimpleThreadWorkspacePath] = useState<string | null>(null);
   const [simpleThreadLoaded, setSimpleThreadLoaded] = useState(false);
   const [simpleError, setSimpleError] = useState<string | null>(null);
   const [simpleSettingsOpen, setSimpleSettingsOpen] = useState(false);
@@ -96,6 +97,7 @@ function AppContent() {
     let alive = true;
     const simpleWorkspace = workspaceIpc as typeof workspaceIpc & {
       getSimple?: () => Promise<{ workspacePath: string }>;
+      onSimpleChanged?: (callback: (event: { workspacePath: string }) => void) => () => void;
     };
     if (!simpleWorkspace.getSimple) {
       setSimpleError('Simple workspace is unavailable.');
@@ -109,8 +111,11 @@ function AppContent() {
       });
     };
     load();
+    const unsubscribe = simpleWorkspace.onSimpleChanged?.(({ workspacePath }) => {
+      if (alive) { setSimpleWorkspacePath(workspacePath); setSimpleError(null); }
+    });
     window.addEventListener('simple-workspace:changed', load);
-    return () => { alive = false; window.removeEventListener('simple-workspace:changed', load); };
+    return () => { alive = false; unsubscribe?.(); window.removeEventListener('simple-workspace:changed', load); };
   }, [advancedMode]);
 
   useEffect(() => {
@@ -123,7 +128,7 @@ function AppContent() {
     }).simplePrimaryThread;
     if (!primaryThread) { setSimpleError('Primary conversation is unavailable.'); return; }
     void primaryThread.get().then(({ threadId }) => {
-      if (alive) { setSimpleThreadId(threadId); setSimpleThreadLoaded(true); }
+      if (alive) { setSimpleThreadId(threadId); setSimpleThreadWorkspacePath(simpleWorkspacePath); setSimpleThreadLoaded(true); }
     }).catch((error) => {
       if (alive) setSimpleError(error instanceof Error ? error.message : 'Could not restore the primary conversation.');
     });
@@ -915,8 +920,8 @@ function AppContent() {
         }`}
         style={{ transition: 'opacity 400ms ease' }}
       >
-        {shouldRenderMainSurfaces && advancedMode === false && simpleWorkspacePath && simpleThreadLoaded && !simpleError ? (
-          <SimpleShell workspacePath={simpleWorkspacePath} initialThreadId={simpleThreadId}
+        {shouldRenderMainSurfaces && advancedMode === false && simpleWorkspacePath && simpleThreadLoaded && simpleThreadWorkspacePath === simpleWorkspacePath && !simpleError ? (
+          <SimpleShell key={simpleWorkspacePath} workspacePath={simpleWorkspacePath} initialThreadId={simpleThreadId}
             onBindThread={async (threadId) => {
               const primaryThread = (workstationIpc as typeof workstationIpc & {
                 simplePrimaryThread?: { bind: (request: { threadId: string; expectedThreadId?: string | null }) => Promise<{ threadId: string }> };
@@ -929,8 +934,10 @@ function AppContent() {
             onCloseSettings={() => setSimpleSettingsOpen(false)}
             canvas={<SimpleInterface onMessage={(text) => sendSimpleMessage(text, simpleWorkspacePath)} />} />
         ) : advancedMode === false || advancedMode === null ? (
-          <div role={simpleError ? 'alert' : 'status'} className="flex h-full items-center justify-center px-8 text-ui-sm text-muted-foreground">
-            {simpleError ?? 'Opening Interpreter…'}
+          <div role={simpleError ? 'alert' : 'status'} className="flex h-full flex-col items-center justify-center gap-3 px-8 text-ui-sm text-muted-foreground">
+            <span>{simpleError ?? 'Opening Interpreter…'}</span>
+            {simpleError && <button type="button" className="rounded-md px-3 py-1.5" style={{ border: 'var(--border-width) solid var(--border)' }}
+              onClick={() => window.location.reload()}>Retry</button>}
           </div>
         ) : <>
         {/* Title bar - positioned on top in Advanced mode */}
