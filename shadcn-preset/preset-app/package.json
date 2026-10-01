@@ -13,7 +13,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.28.0",
-    "next": "16.3.3",
+    "next": "16.3.6",
     "radix-ui": "^1.6.7",
     "react": "19.2.8",
     "react-dom": "19.2.8",
@@ -39,7 +39,9 @@
       "postcss": "8.5.25",
       "js-yaml@>=4 <4.3.2": "4.3.2",
       "sharp": "0.35.4",
-      "undici": "7.29.1"
+      "undici": "7.29.1",
+      "brace-expansion@<2": "1.1.20",
+      "brace-expansion@>=5 <6": "5.0.11"
     }
   }
 }
