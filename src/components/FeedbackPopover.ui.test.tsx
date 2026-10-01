@@ -115,10 +115,10 @@ describe('FeedbackPopover', () => {
     });
 
     await act(async () => {
-      deferred.resolve({ success: true, id: 'feedback-1' });
+      deferred.resolve({ success: true, id: 'a'.repeat(32) });
     });
 
-    expect(await screen.findByText('Feedback sent!')).toBeVisible();
+    expect(await screen.findByText(`Feedback sent! Report ID: ${'a'.repeat(32)}`)).toBeVisible();
     expect(screen.queryByText('Sending feedback...')).not.toBeInTheDocument();
   });
 
