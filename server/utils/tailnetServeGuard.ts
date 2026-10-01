@@ -1,4 +1,13 @@
 import { execFileSync } from 'node:child_process';
+import { getServerPort } from './serverPort';
+
+export function privateRemotePort(): number {
+  const configured = Number(process.env.INTERPRETER_SIMPLE_REMOTE_PORT);
+  if (!Number.isInteger(configured) || configured < 1024 || configured > 65535 || configured === getServerPort()) {
+    throw new Error('A separate private remote listener port is required');
+  }
+  return configured;
+}
 
 type ServeStatus = {
   TCP?: Record<string, { HTTPS?: boolean }>;

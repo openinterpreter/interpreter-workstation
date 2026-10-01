@@ -356,8 +356,8 @@ export interface ElectronAPI {
   };
 
   simplePrimaryThread: {
-    get: () => Promise<{ threadId: string | null }>;
-    bind: (request: { threadId: string; expectedThreadId?: string | null }) => Promise<{ threadId: string }>;
+    get: (request?: { projectId: string; windowId: string }) => Promise<{ threadId: string | null }>;
+    bind: (request: { threadId: string; expectedThreadId?: string | null; projectId?: string; windowId?: string }) => Promise<{ threadId: string }>;
     onOverlaySubmit: (callback: (event: { text: string }) => void) => () => void;
   };
 
@@ -949,8 +949,8 @@ contextBridge.exposeInMainWorld('electron', {
   },
 
   simplePrimaryThread: {
-    get: () => ipcRenderer.invoke(IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_GET),
-    bind: (request: { threadId: string; expectedThreadId?: string | null }) =>
+    get: (request?: { projectId: string; windowId: string }) => ipcRenderer.invoke(IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_GET, request),
+    bind: (request: { threadId: string; expectedThreadId?: string | null; projectId?: string; windowId?: string }) =>
       ipcRenderer.invoke(IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_BIND, request),
     onOverlaySubmit: (callback: (event: { text: string }) => void) => {
       const listener = (_: unknown, event: { text: string }) => callback(event);

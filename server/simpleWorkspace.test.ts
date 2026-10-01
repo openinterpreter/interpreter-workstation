@@ -51,9 +51,10 @@ describe('Simple workspace', () => {
     const expected = join(temp, 'Documents', 'Interpreter');
     expect(await getSimpleWorkspacePath(temp)).toBe(expected);
     const guidance = readFileSync(join(expected, 'AGENTS.md'), 'utf8');
-    expect(guidance).toContain('interface/page.json');
-    expect(guidance).toContain('interface/last-good.json');
-    expect(guidance).toContain('interface/events.jsonl');
+    expect(guidance).toContain('standalone user-selected folder');
+    expect(guidance).toContain('src/main.tsx');
+    expect(guidance).toContain('@interpreter/simple-runtime/v1');
+    expect(guidance).toContain('.interpreter/events.jsonl');
     expect(await getSimpleWorkspaceSetting()).toBe(expected);
 
     await reloadConfig();

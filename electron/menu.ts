@@ -25,9 +25,9 @@ import { ACTIVE_BRAND } from '../shared/branding';
 
 const MIN_ZOOM_LEVEL = -6;
 const MAX_ZOOM_LEVEL = 9;
-let createWindowHandler: (() => Promise<void>) | null = null;
+let createWindowHandler: ((intent?: 'interface') => Promise<void>) | null = null;
 
-export function setCreateWindowHandler(handler: (() => Promise<void>) | null): void {
+export function setCreateWindowHandler(handler: ((intent?: 'interface') => Promise<void>) | null): void {
   createWindowHandler = handler;
 }
 
@@ -183,6 +183,16 @@ export async function buildApplicationMenu(): Promise<void> {
             }
             void createWindowHandler().catch((error) => {
               console.error('[Menu] Error creating new window:', error);
+              dialog.showErrorBox(t('common.error'), (error as Error).message);
+            });
+          },
+        },
+        {
+          label: 'New Interface…',
+          accelerator: 'CmdOrCtrl+Shift+N',
+          click: () => {
+            if (!createWindowHandler) return;
+            void createWindowHandler('interface').catch(error => {
               dialog.showErrorBox(t('common.error'), (error as Error).message);
             });
           },

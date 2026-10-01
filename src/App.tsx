@@ -64,6 +64,10 @@ import { isWorkstationReadOnly } from "./remote/workstationConnection";
 import { WorkstationConnectionGate } from './components/WorkstationConnectionGate';
 import { SimpleShell, sendSimpleMessage } from './components/simple/SimpleShell';
 import { SimpleInterface } from './components/simple/SimpleInterface';
+import { SimpleProjectPicker } from './components/simple/SimpleProjectPicker';
+import { simpleInterfaceClient, type SimpleProject } from './components/simple/simpleInterfaceClient';
+import { type RemoteConnection } from './components/simple/remoteSimpleClient';
+import { RemoteSimpleShell } from './components/simple/RemoteSimpleShell';
 import { uiSettings, workspace as workspaceIpc, quickActions } from '@/ipc';
 import * as workstationIpc from '@/ipc';
 
@@ -82,11 +86,23 @@ function AppContent() {
   const [simpleThreadLoaded, setSimpleThreadLoaded] = useState(false);
   const [simpleError, setSimpleError] = useState<string | null>(null);
   const [simpleSettingsOpen, setSimpleSettingsOpen] = useState(false);
+  const [simpleProject, setSimpleProject] = useState<SimpleProject | null>(null);
+  const [remoteProject, setRemoteProject] = useState<RemoteConnection | null>(null);
+  const [simpleWindowId] = useState(() => {
+    const previous = sessionStorage.getItem('interpreter-simple-window-id');
+    if (previous && !window.opener) return previous;
+    const id = crypto.randomUUID();
+    sessionStorage.setItem('interpreter-simple-window-id', id);
+    return id;
+  });
+  const openSimpleProject = useCallback((project: SimpleProject) => setSimpleProject(project), []);
+  const openRemoteProject = useCallback((project: RemoteConnection) => setRemoteProject(project), []);
 
   useEffect(() => {
     let alive = true;
+    const newInterfaceWindow = new URLSearchParams(window.location.search).get('simple-interface') === 'new';
     void uiSettings.getAdvancedMode()
-      .then(({ enabled }: { enabled: boolean }) => { if (alive) setAdvancedMode(enabled); })
+      .then(({ enabled }: { enabled: boolean }) => { if (alive) setAdvancedMode(newInterfaceWindow ? false : enabled); })
       .catch(() => { if (alive) setSimpleError('Could not load your experience preference.'); });
     const unsubscribe = uiSettings.onAdvancedModeChanged(({ enabled }: { enabled: boolean }) => setAdvancedMode(enabled));
     return () => { alive = false; unsubscribe(); };
@@ -119,21 +135,21 @@ function AppContent() {
   }, [advancedMode]);
 
   useEffect(() => {
-    if (advancedMode !== false || !simpleWorkspacePath) return;
+    if (advancedMode !== false || !simpleWorkspacePath || !simpleProject) return;
     let alive = true;
     setSimpleThreadLoaded(false);
     // The backend is authoritative; a renderer remount never silently creates a new thread.
     const primaryThread = (workstationIpc as typeof workstationIpc & {
-      simplePrimaryThread?: { get: () => Promise<{ threadId: string | null }> };
+      simplePrimaryThread?: { get: (request: { projectId: string; windowId: string }) => Promise<{ threadId: string | null }> };
     }).simplePrimaryThread;
     if (!primaryThread) { setSimpleError('Primary conversation is unavailable.'); return; }
-    void primaryThread.get().then(({ threadId }) => {
-      if (alive) { setSimpleThreadId(threadId); setSimpleThreadWorkspacePath(simpleWorkspacePath); setSimpleThreadLoaded(true); }
+    void primaryThread.get({ projectId: simpleProject.id, windowId: simpleWindowId }).then(({ threadId }) => {
+      if (alive) { setSimpleThreadId(threadId); setSimpleThreadWorkspacePath(simpleProject.path); setSimpleThreadLoaded(true); }
     }).catch((error) => {
       if (alive) setSimpleError(error instanceof Error ? error.message : 'Could not restore the primary conversation.');
     });
     return () => { alive = false; };
-  }, [advancedMode, simpleWorkspacePath]);
+  }, [advancedMode, simpleWorkspacePath, simpleProject, simpleWindowId]);
 
   useEffect(() => quickActions.onOpenSettings(() => {
     if (advancedMode === false) setSimpleSettingsOpen(true);
@@ -920,19 +936,24 @@ function AppContent() {
         }`}
         style={{ transition: 'opacity 400ms ease' }}
       >
-        {shouldRenderMainSurfaces && advancedMode === false && simpleWorkspacePath && simpleThreadLoaded && simpleThreadWorkspacePath === simpleWorkspacePath && !simpleError ? (
-          <SimpleShell key={simpleWorkspacePath} workspacePath={simpleWorkspacePath} initialThreadId={simpleThreadId}
+        {shouldRenderMainSurfaces && advancedMode === false && remoteProject ? (
+          <RemoteSimpleShell key={remoteProject.id} connection={remoteProject} windowId={simpleWindowId} onClose={() => setRemoteProject(null)} />
+        ) : shouldRenderMainSurfaces && advancedMode === false && simpleWorkspacePath && !simpleProject && !simpleError ? (
+          <SimpleProjectPicker windowId={simpleWindowId} onOpen={openSimpleProject} onOpenRemote={openRemoteProject} />
+        ) : shouldRenderMainSurfaces && advancedMode === false && simpleWorkspacePath && simpleProject && simpleThreadLoaded && simpleThreadWorkspacePath === simpleProject.path && !simpleError ? (
+          <SimpleShell key={`${simpleWindowId}:${simpleProject.id}`} workspacePath={simpleProject.path} controlWorkspacePath={simpleWorkspacePath} projectId={simpleProject.id} windowId={simpleWindowId} projectName={simpleProject.name} initialThreadId={simpleThreadId}
+            onCloseProject={async () => { await simpleInterfaceClient.closeProject(simpleWindowId); setSimpleProject(null); setSimpleThreadLoaded(false); }}
             onBindThread={async (threadId) => {
               const primaryThread = (workstationIpc as typeof workstationIpc & {
-                simplePrimaryThread?: { bind: (request: { threadId: string; expectedThreadId?: string | null }) => Promise<{ threadId: string }> };
+                simplePrimaryThread?: { bind: (request: { threadId: string; expectedThreadId?: string | null; projectId: string; windowId: string }) => Promise<{ threadId: string }> };
               }).simplePrimaryThread;
               if (!primaryThread) throw new Error('Primary conversation persistence is unavailable.');
-              await primaryThread.bind({ threadId, expectedThreadId: simpleThreadId });
+              await primaryThread.bind({ threadId, expectedThreadId: simpleThreadId, projectId: simpleProject.id, windowId: simpleWindowId });
               setSimpleThreadId(threadId);
             }}
             settingsOpen={simpleSettingsOpen} onOpenSettings={() => setSimpleSettingsOpen(true)}
             onCloseSettings={() => setSimpleSettingsOpen(false)}
-            canvas={<SimpleInterface onMessage={(text) => sendSimpleMessage(text, simpleWorkspacePath)} />} />
+            canvas={<SimpleInterface projectId={simpleProject.id} windowId={simpleWindowId} onMessage={(text) => sendSimpleMessage(text, simpleProject.path, simpleProject.id, simpleWindowId)} />} />
         ) : advancedMode === false || advancedMode === null ? (
           <div role={simpleError ? 'alert' : 'status'} className="flex h-full flex-col items-center justify-center gap-3 px-8 text-ui-sm text-muted-foreground">
             <span>{simpleError ?? 'Opening Interpreter…'}</span>

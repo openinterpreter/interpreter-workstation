@@ -874,6 +874,8 @@ export interface CachedFileTree {
 export interface WindowCreateRequest {
   workspacePath?: string | null;
   background?: boolean;
+  /** Open a new standalone Simple project window without changing the global mode. */
+  simpleInterfacePicker?: boolean;
 }
 
 export interface WindowCreateResponse {

@@ -728,6 +728,31 @@ describe("CodexAppServerClient", () => {
     assert.equal(turn.id, "turn_override");
   });
 
+  test("grants a validated Simple control root alongside the project's primary OIX root", async () => {
+    setConfigOverride({ agents: {}, globalDisabledTools: [], codexApprovalPolicy: "never",
+      codexSandboxMode: "workspace-write", codexReadAccessMode: "workspace-only", codexNetworkAccess: false });
+    const transport = new FakeTransport();
+    const client = new CodexAppServerClient(transport, null);
+    const threadPromise = client.startThreadWithConfig("gpt-5.4-mini", null, null,
+      "/Documents/Interfaces/First", null, null, null, ["/Documents/Interpreter"]);
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await waitFor(() => transport.sent.length >= 3);
+    const threadReq = assertSentRequest(transport, 2, CLIENT_METHOD.threadStart);
+    assert.deepEqual((threadReq.params as any).runtimeWorkspaceRoots, ["/Documents/Interfaces/First"]);
+    assert.equal((threadReq.params.config as any).permissions["interpreter-workspace-scope"].filesystem["/Documents/Interpreter"], "write");
+    transport.respond(threadReq, makeThreadStartResponse("thr_simple_roots"));
+    const threadId = await threadPromise;
+    const turnPromise = client.startTurn({ threadId, message: "Edit project", cwd: "/Documents/Interfaces/First",
+      additionalWritableRoots: ["/Documents/Interpreter"] });
+    await waitFor(() => transport.sent.length >= 4);
+    const turnReq = assertSentRequest(transport, 3, CLIENT_METHOD.turnStart);
+    assert.deepEqual((turnReq.params as any).runtimeWorkspaceRoots, ["/Documents/Interfaces/First"]);
+    assert.equal(turnReq.params.sandboxPolicy, undefined);
+    transport.respond(turnReq, makeTurnStartResponse("turn_simple_roots"));
+    assert.equal((await turnPromise).id, "turn_simple_roots");
+  });
+
   test("reloads runtime access snapshot for later turns", async () => {
     setConfigOverride({
       agents: {},

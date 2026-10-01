@@ -700,8 +700,8 @@ export const agentThreads: AgentThreadsIpc = isMarketingDemoMode()
     ? window.electron.agentThreads
     : disabledAgentThreadsIpc;
 export const simplePrimaryThread: {
-  get: () => Promise<{ threadId: string | null }>;
-  bind: (request: { threadId: string; expectedThreadId?: string | null }) => Promise<{ threadId: string }>;
+  get: (request?: { projectId: string; windowId: string }) => Promise<{ threadId: string | null }>;
+  bind: (request: { threadId: string; expectedThreadId?: string | null; projectId?: string; windowId?: string }) => Promise<{ threadId: string }>;
   onOverlaySubmit: (callback: (event: { text: string }) => void) => () => void;
 } = client.simplePrimaryThread;
 export const workspace = isRemoteWorkstationMode()

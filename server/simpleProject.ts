@@ -4,20 +4,22 @@ import { constants, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync
 import { open, readFile, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, extname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
+import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { getSimpleProjectSetting, setSimpleProjectSetting } from './configStore';
 import { getSimpleWorkspacePath, validateSimpleWorkspacePath } from './simpleWorkspace';
 import { broadcastEvent } from './handlers/broadcast';
+import { SIMPLE_RUNTIME_V1 } from './simpleRuntimeV1';
 
 const INITIAL_APP = `import React from 'react';
 import { createRoot } from 'react-dom/client';
-import { send } from '@interpreter/simple';
+import { sendMessage } from '@interpreter/simple-runtime/v1';
 
 function App() {
   return <main style={{ maxWidth: 780, margin: '12vh auto', padding: 32, fontFamily: 'system-ui' }}>
     <h1>What would you like to make?</h1>
     <p>Ask Interpreter below, or choose a place to begin.</p>
-    <button onClick={() => send('Help me plan my day.')}>Plan my day</button>
+    <button onClick={() => sendMessage('Help me plan my day.')}>Plan my day</button>
   </main>;
 }
 
@@ -29,7 +31,7 @@ const PROJECT_GUIDANCE = `# Simple interface project
 This is a standalone React project, separate from the Interpreter control workspace. The primary agent may edit this project and its control workspace, but must keep application source and other directories untouched.
 
 - Edit src/main.tsx and local modules in src/. Use React and ReactDOM supplied by Interpreter; never install dependencies, fetch scripts, or modify the app bundle. The app builds this project with bundled dependencies.
-- Use import { send } from '@interpreter/simple' for a deliberate user action. send(message) returns the action to the same durable primary conversation. Do not put credentials or privileged data in the interface or action messages.
+- Use import { sendMessage, FileView, FolderView, EditorView, Motion } from '@interpreter/simple-runtime/v1' for app-provided bridges and components. sendMessage(message) returns an action to the same durable primary conversation. Do not put credentials or privileged data in interface actions.
 - Persist useful user data in project files and check .interpreter/events.jsonl and .interpreter/deliveries.jsonl to reconcile actions. UI memory is not durable across reloads.
 - The renderer executes compiled React in a sandboxed, opaque-origin frame with no direct access to the app, its filesystem, or the network. No remote imports, symlinks, traversal, browser storage, or direct IPC.
 - An edit builds as a candidate. Invalid edits leave the last working interface visible; read .interpreter/diagnostics.json, fix the source, and check the rendered interface before calling the work done. Never edit .interpreter/last-good.js yourself.
@@ -127,16 +129,23 @@ const revision = (bundle: string) => createHash('sha256').update(bundle).digest(
 
 async function compile(root: string): Promise<string> {
   const entry = checkedProjectPath(root, 'src/main.tsx');
+  const reactDomRequire = createRequire(require.resolve('react-dom/package.json'));
+  const trustedPackages = [require.resolve('react/package.json'), require.resolve('react-dom/package.json'), reactDomRequire.resolve('scheduler/package.json')]
+    .map(path => dirname(path));
   if ((await readFile(entry)).byteLength > MAX_SOURCE) throw new Error('Project entry exceeds size limit');
   const result = await build({
     entryPoints: [entry], bundle: true, write: false, platform: 'browser', format: 'iife', jsx: 'automatic',
     target: 'es2022', logLevel: 'silent', absWorkingDir: root,
     plugins: [{ name: 'simple-project-boundary', setup(buildContext) {
-      buildContext.onResolve({ filter: /^@interpreter\/simple$/ }, () => ({ path: 'simple-sdk', namespace: 'simple-sdk' }));
-      buildContext.onLoad({ filter: /.*/, namespace: 'simple-sdk' }, () => ({ contents: `export function send(message) { if (typeof message !== 'string' || !message.trim() || message.length > 6000) throw Error('Invalid action'); parent.postMessage({ type: 'interpreter-simple-action', message }, '*'); }`, loader: 'js' }));
+      buildContext.onResolve({ filter: /^@interpreter\/simple(?:-runtime\/v1)?$/ }, () => ({ path: 'simple-runtime-v1', namespace: 'simple-sdk' }));
+      buildContext.onLoad({ filter: /.*/, namespace: 'simple-sdk' }, () => ({ contents: SIMPLE_RUNTIME_V1, loader: 'js', resolveDir: join(root, 'src') }));
       buildContext.onResolve({ filter: /.*/ }, args => {
-        if (['react', 'react/jsx-runtime', 'react-dom/client'].includes(args.path)) return;
-        if (!args.path.startsWith('.')) return { errors: [{ text: 'Only bundled React and local project modules are allowed' }] };
+        if (args.kind === 'entry-point' && args.path === entry) return;
+        if (trustedPackages.some(directory => args.importer.startsWith(`${directory}${sep}`))) return;
+        if (['react', 'react/jsx-runtime', 'react-dom', 'react-dom/client'].includes(args.path)) {
+          return { path: require.resolve(args.path) };
+        }
+        if (!args.path.startsWith('.')) return { errors: [{ text: `Only bundled React and local project modules are allowed: ${args.path}` }] };
         const resolved = resolve(args.resolveDir, args.path);
         if (!child(join(root, 'src'), resolved) || !['.ts', '.tsx', '.js', '.jsx', ''].includes(extname(resolved))) return { errors: [{ text: 'Imports must stay inside project src' }] };
         const found = [resolved, `${resolved}.tsx`, `${resolved}.ts`, `${resolved}.jsx`, `${resolved}.js`].find(existsSync);
@@ -152,8 +161,8 @@ async function compile(root: string): Promise<string> {
   return bundle;
 }
 
-export async function readSimpleProject(promote = true): Promise<ProjectSnapshot> {
-  const root = await getSimpleProjectPath();
+export async function readSimpleProject(promote = true, projectRoot?: string): Promise<ProjectSnapshot> {
+  const root = projectRoot ?? await getSimpleProjectPath();
   const good = checkedProjectPath(root, '.interpreter/last-good.js');
   let bundle = await bounded(good, MAX_BUNDLE);
   let diagnostic: string | null = null;
@@ -179,8 +188,8 @@ export async function readSimpleProject(promote = true): Promise<ProjectSnapshot
   return { projectPath: root, bundle: bundle ?? '', revision: revision(bundle ?? ''), diagnostic };
 }
 
-export async function recordProjectAction(request: { revision: string; message: string }): Promise<{ id: string; message: string }> {
-  const root = await getSimpleProjectPath();
+export async function recordProjectAction(request: { revision: string; message: string }, projectRoot?: string): Promise<{ id: string; message: string }> {
+  const root = projectRoot ?? await getSimpleProjectPath();
   const good = await bounded(checkedProjectPath(root, '.interpreter/last-good.js'), MAX_BUNDLE);
   if (!good || request?.revision !== revision(good)) throw new Error('Action belongs to an outdated interface');
   if (typeof request.message !== 'string' || !request.message.trim() || request.message.length > 6000 || /[\u0000-\u0008]/.test(request.message)) throw new Error('Invalid action message');
@@ -192,9 +201,9 @@ export async function recordProjectAction(request: { revision: string; message: 
   return { id: event.id, message: event.message };
 }
 
-export async function recordProjectDelivery(id: string, status: 'dispatched' | 'failed'): Promise<void> {
+export async function recordProjectDelivery(id: string, status: 'dispatched' | 'failed', projectRoot?: string): Promise<void> {
   if (!/^[0-9a-f-]{36}$/i.test(id) || !['dispatched', 'failed'].includes(status)) throw new Error('Invalid delivery');
-  const root = await getSimpleProjectPath();
+  const root = projectRoot ?? await getSimpleProjectPath();
   const file = await open(checkedProjectPath(root, '.interpreter/deliveries.jsonl'), constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | (constants.O_NOFOLLOW ?? 0), 0o600);
   try { await file.writeFile(`${JSON.stringify({ id, status, at: new Date().toISOString() })}\n`); } finally { await file.close(); }
 }

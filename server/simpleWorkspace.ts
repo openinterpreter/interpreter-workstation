@@ -12,18 +12,20 @@ import { IPC_CHANNELS } from '../electron/ipc/registry';
 
 const SIMPLE_WORKSPACE_GUIDANCE = `# Interpreter Simple workspace
 
-This directory is your durable, user-owned workspace. The single Simple conversation works here.
+This directory is your durable, user-owned control workspace. The project's selected
+folder is the one durable Simple conversation's primary working directory; this
+control workspace is the only additional writable root when sandbox policy permits.
 Keep information that should survive an app restart on disk, not only in browser or React memory.
 
 ## Interface
 
-- The interface is an executable React project in a separate standalone folder, by default
-  \`~/Documents/Interpreter Interfaces/Home\`, NOT in this control workspace. Settings can select
-  another dedicated project folder. Read that project's AGENTS.md before editing it.
+- Each interface is an executable React project in its own standalone user-selected folder,
+  NEVER in this control workspace or nested inside another interface project.
+  Read that project's AGENTS.md before editing it.
 - Edit its \`src/main.tsx\` and local \`src/\` modules; the app supplies React/ReactDOM and builds,
   validates, and promotes a candidate automatically. Invalid edits leave the last-good UI visible.
   Inspect the project's \`.interpreter/diagnostics.json\` after editing and check the actual UI.
-- The project uses \`@interpreter/simple\` \`send(message)\` to send deliberate actions back to this
+- The project uses \`@interpreter/simple-runtime/v1\` \`sendMessage(message)\` to send deliberate actions back to this
   same primary conversation. Read its \`.interpreter/events.jsonl\` and \`deliveries.jsonl\`.
 - Do not install dependencies, run untrusted scripts, or write to the application bundle.
   The project is sandboxed without network or privileged renderer access; keep secrets out of UI.

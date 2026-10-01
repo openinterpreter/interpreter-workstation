@@ -64,7 +64,7 @@ import mcpRouter from "./routes/mcp";
 import interpreterCliRouter from "./routes/interpreterCli";
 import publicThreadRouter from "./routes/publicThread";
 import publicWorkspaceRouter from "./routes/publicWorkspace";
-import { productionSimpleRemoteRouter } from './routes/simpleRemote';
+import simpleRemoteClientRouter from './routes/simpleRemoteClient';
 import { addClient, removeClient, broadcast } from "./utils/sse";
 import { IPC_CHANNELS } from '../electron/ipc/registry';
 import { broadcastEvent } from './handlers/broadcast';
@@ -126,10 +126,6 @@ app.use((err: Error & { status?: number; type?: string }, _req: express.Request,
 });
 
 app.use('/api/workstation-connection', createWorkstationConnectionRouter());
-// This narrowly authenticated protocol has its own project-scoped bearer
-// sessions; redeeming a one-use pairing code cannot require a preexisting
-// full Workstation password cookie. Every other API keeps its existing gate.
-app.use('/api/simple-remote/v1', productionSimpleRemoteRouter());
 app.use(workstationAccessMiddleware);
 
 app.use((req, _res, next) => {
@@ -281,7 +277,8 @@ app.use('/api/servers/telegram', telegramRouter);
 app.use('/api/inbox', inboxRouter);
 app.use('/api/pdf', pdfRouter); // Direct PDF API (no IPC events) for UI use
 app.use('/api/ipc', ipcRouter); // Browser mode IPC-equivalent endpoints
-app.use('/api/simple-interface', simpleInterfaceRouter); // Inert, workspace-backed generated pages
+app.use('/api/simple-interface', simpleInterfaceRouter); // Standalone executable React projects
+app.use('/api/simple-remote-client', simpleRemoteClientRouter); // Paired, project-scoped private display proxy
 app.use('/api/interpreter-cli', interpreterCliRouter);
 app.use('/api/public-thread', publicThreadRouter);
 app.use('/api/public-workspace', publicWorkspaceRouter);

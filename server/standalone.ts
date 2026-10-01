@@ -68,6 +68,7 @@ async function shutdownServer(
   server: http.Server,
   exitCode: number,
   deps: {
+    remoteServer?: http.Server | null;
     interpreterCliFileBridge: InterpreterCliFileBridgeHandle;
     interpreterCliSocketServer: InterpreterCliSocketServerHandle | null;
     cleanupFileWatcher: () => Promise<void>;
@@ -82,6 +83,7 @@ async function shutdownServer(
   // admission and fsynced receipt settle. Incoming World events remain with
   // their approved source while this sidecar is unavailable.
   await stopWakeSources();
+  if (deps.remoteServer) await new Promise<void>(resolve => deps.remoteServer!.close(() => resolve()));
 
   await deps.cleanupFileWatcher();
   await deps.cleanupSandbox();
@@ -270,11 +272,28 @@ export async function runStandaloneCli(argv: string[] = process.argv.slice(2)) {
     });
   });
 
+  // Remote project traffic has a separate loopback-only listener. Serve must
+  // target this port, never the full operator sidecar on 5177.
+  let remoteServer: http.Server | null = null;
+  if (process.env.INTERPRETER_SIMPLE_REMOTE_ENDPOINT || process.env.INTERPRETER_SIMPLE_REMOTE_PORT) {
+    const { privateRemotePort } = await import('./utils/tailnetServeGuard');
+    const { createRemoteSimpleListener } = await import('./remoteSimpleListener');
+    if (!process.env.INTERPRETER_SIMPLE_REMOTE_ENDPOINT) throw new Error('Private remote endpoint is required');
+    const remotePort = privateRemotePort();
+    const remoteApp = createRemoteSimpleListener();
+    remoteServer = http.createServer(remoteApp);
+    await new Promise<void>((resolve, reject) => {
+      remoteServer!.once('error', reject);
+      remoteServer!.listen(remotePort, '127.0.0.1', () => { remoteServer!.off('error', reject); resolve(); });
+    });
+  }
+
   let shuttingDown = false;
   const cleanup = async (exitCode = 0) => {
     if (shuttingDown) return;
     shuttingDown = true;
     await shutdownServer(server, exitCode, {
+      remoteServer,
       interpreterCliFileBridge,
       interpreterCliSocketServer,
       cleanupFileWatcher,

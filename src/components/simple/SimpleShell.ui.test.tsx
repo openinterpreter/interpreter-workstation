@@ -26,6 +26,8 @@ vi.mock('../../remote/workstationConnection', () => ({ isWorkstationReadOnly: ()
 vi.mock('@/ipc', () => ({ simplePrimaryThread: { onOverlaySubmit: () => () => {} } }));
 vi.mock('../../utils/layoutHelpers', () => ({ createAgentCallerToken: () => 'token-for-test' }));
 vi.mock('../settings/ExperienceSection', () => ({ ExperienceSectionContent: () => <div>Experience choices</div> }));
+vi.mock('../settings/ProfilesSection', () => ({ ProfilesSectionContent: () => <div>Saved model editor</div> }));
+vi.mock('./RemoteWorkstationsSection', () => ({ RemoteWorkstationsSection: () => <div>Remote connections</div> }));
 
 import { SIMPLE_PRIMARY_AGENT_ID, SimpleShell, sendSimpleMessage } from './SimpleShell';
 
@@ -89,7 +91,10 @@ describe('Simple shell', () => {
     expect(onOpenSettings).toHaveBeenCalledOnce();
     view.rerender(<SimpleShell {...props} settingsOpen={true} />);
     expect(screen.getByText('Experience choices')).toBeVisible();
-    expect(screen.queryByRole('button', { name: 'Generated interface action' })).not.toBeInTheDocument();
+    expect(screen.getByText('Manage models')).toBeVisible();
+    await user.click(screen.getByText('Manage models'));
+    expect(await screen.findByText('Saved model editor')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Generated interface action' })).toBeInTheDocument();
   });
 
   test('failed thread binding stops composer and shows explicit recovery', async () => {

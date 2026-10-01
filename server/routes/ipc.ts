@@ -120,11 +120,13 @@ const handlers: Record<string, Record<string, HandlerFn>> = {
 
   // ========== Simple primary conversation ==========
   simplePrimaryThread: {
-    get: async () => {
+    get: async ([request]: [{ projectId?: string; windowId?: string }?] = []) => {
       const { getSimplePrimaryThread } = await import('../handlers/simplePrimaryThread');
-      return getSimplePrimaryThread();
+      if (Boolean(request?.projectId) !== Boolean(request?.windowId)) throw new Error('Project identity is incomplete');
+      return getSimplePrimaryThread(undefined, request?.projectId && request?.windowId
+        ? { projectId: request.projectId, windowId: request.windowId } : undefined);
     },
-    bind: async ([request]: [{ threadId: string; expectedThreadId?: string | null }]) => {
+    bind: async ([request]: [{ threadId: string; expectedThreadId?: string | null; projectId?: string; windowId?: string }]) => {
       const { bindSimplePrimaryThread } = await import('../handlers/simplePrimaryThread');
       return bindSimplePrimaryThread(request);
     },

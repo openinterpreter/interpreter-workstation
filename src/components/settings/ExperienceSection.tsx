@@ -75,7 +75,7 @@ export function ExperienceSectionContent() {
           onClick={() => void selectMode(true)} className={`rounded-md px-3 py-1.5 text-ui-sm ${advanced === true ? 'bg-background shadow-sm' : ''}`}>Advanced</button>
       </div>
     </SettingsRow>
-    <SettingsRow label="Simple workspace" description="The interface and its state live on disk in this folder. Interpreter checks the selected path before using it.">
+    <SettingsRow label="Simple workspace" description="Agent notes and guidance live here. Each React interface is a separate user-owned project folder, selected when opened or created.">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <span className="max-w-[320px] truncate text-ui-sm" title={workspacePath ?? undefined}>{workspacePath ?? 'Loading…'}</span>
         <button type="button" disabled={readOnly || pending || !workspacePath} onClick={() => void chooseWorkspace()}

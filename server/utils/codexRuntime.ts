@@ -372,6 +372,7 @@ export interface RunCodexAgentTurnOptions {
   threadId?: string;
   binding: AgentRuntimeBindingOptions;
   sandboxPolicy?: v2.SandboxPolicy;
+  additionalWritableRoots?: string[];
   reasoningEffort?: ReasoningEffort | null;
   reasoningSummary?: CodexReasoningSummary | null;
   system?: string;
@@ -2131,6 +2132,7 @@ export async function runCodexAgentTurn(
           attachments: nextAttachments,
           skills: nextSkills,
           sandboxPolicy: options.sandboxPolicy,
+          additionalWritableRoots: options.additionalWritableRoots,
           cwd: options.workspacePath,
           model: resolvedModel,
           modelProvider: profile.modelProvider,

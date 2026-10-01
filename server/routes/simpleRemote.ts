@@ -1,14 +1,15 @@
 import { Router } from 'express';
-import { getCodexService } from '../../src/lib/codex/service';
+import { extractNotificationThreadId, getCodexService, subscribeCodexNotifications } from '../../src/lib/codex/service';
+import { mapNotificationToUiEvents } from '../../src/lib/codex/event-mapper';
 import { resolveInterpreterHome } from '../../shared/interpreterHome';
 import { join } from 'node:path';
+import { watch } from 'node:fs';
+import { readSimpleProject } from '../simpleProject';
+import { getSimpleWorkspacePath } from '../simpleWorkspace';
 import { RemoteSimplePairing } from '../remoteSimplePairing';
 import { hostSimpleProjects, type SimpleInterfaceProjects } from '../simpleInterfaceProjects';
-import { getCurrentWorkspace } from '../utils/workspace';
-import { getServerPort } from '../utils/serverPort';
-import { assertPrivateServe } from '../utils/tailnetServeGuard';
+import { assertPrivateServe, privateRemotePort } from '../utils/tailnetServeGuard';
 import { readyWakeSources, wakeSources } from '../utils/wakeSourcesRuntime';
-import { getWorkstationHostPolicy } from '../workstationConnection';
 import type { SimpleRemoteCapability, SimpleRemoteMessage } from '../../shared/simpleRemoteProtocol';
 
 type Options = {
@@ -32,8 +33,6 @@ export function createSimpleRemoteRouter(options: Options): Router {
 
   router.use((req, res, next) => {
     try {
-      const host = getWorkstationHostPolicy();
-      if (!host.remote || host.authentication !== 'password') return res.status(503).json({ error: 'Private host unavailable' });
       options.preflight();
       // Require Serve's exact Host. Native clients without Origin must identify
       // themselves explicitly; browsers must use the paired same origin.
@@ -77,10 +76,61 @@ export function createSimpleRemoteRouter(options: Options): Router {
     const capabilities: SimpleRemoteCapability = {
       version: 1, projectId, sessionId: req.params.sessionId, threadId, host: 'remote',
       tools: { remoteFilesystem: true, remoteComputer: false, localComputer: false },
-      interface: { executableReact: false, hotReload: false, lastKnownGood: false },
+      interface: { executableReact: true, hotReload: true, lastKnownGood: true },
       commands: { send: true, steer: true, queue: true, stop: true, voiceDelegate: true, fileDrop: false },
     };
     res.set('Cache-Control', 'no-store').json(capabilities);
+  });
+
+  router.get('/sessions/:sessionId/projects/:projectId/interface', async (_req, res) => {
+    const { projectId } = res.locals.remoteSimple as { projectId: string };
+    try {
+      const project = await projects.resolve(projectId);
+      if (!project) return res.status(404).json({ error: 'Project unavailable' });
+      const { bundle, diagnostic, revision } = await readSimpleProject(true, project.path);
+      res.set('Cache-Control', 'no-store').json({ version: 1, projectId, bundle, diagnostic, revision });
+    } catch { res.status(503).json({ error: 'Interface unavailable' }); }
+  });
+
+  router.get('/sessions/:sessionId/projects/:projectId/conversation', async (_req, res) => {
+    const { projectId, threadId } = res.locals.remoteSimple as { projectId: string; threadId: string };
+    try {
+      const project = await projects.resolve(projectId);
+      const thread = await getCodexService().readThread(threadId);
+      if (!project || thread.cwd !== project.path) return res.status(409).json({ error: 'Project and conversation differ' });
+      const messages = thread.turns.flatMap(turn => turn.items.flatMap(item => item.type === 'agentMessage'
+        ? [{ role: 'agent', text: item.text }] : item.type === 'userMessage'
+          ? item.content.filter(input => input.type === 'text').map(input => ({ role: 'user', text: input.text })) : []));
+      res.set('Cache-Control', 'no-store').json({ version: 1, projectId, threadId, messages });
+    } catch { res.status(503).json({ error: 'Conversation unavailable' }); }
+  });
+
+  router.get('/sessions/:sessionId/projects/:projectId/events', async (req, res) => {
+    const { projectId, threadId } = res.locals.remoteSimple as { projectId: string; threadId: string };
+    const project = await projects.resolve(projectId);
+    const thread = await options.thread(threadId);
+    if (!project || thread.cwd !== project.path) return res.status(409).json({ error: 'Project and conversation differ' });
+    res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' });
+    res.flushHeaders();
+    let alive = true;
+    const emit = (event: string, payload: unknown) => {
+      if (alive) res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
+    };
+    emit('ready', { version: 1, projectId, threadId });
+    const unsubscribe = subscribeCodexNotifications(notification => {
+      if (extractNotificationThreadId(notification) !== threadId) return;
+      for (const event of mapNotificationToUiEvents(notification)) {
+        if (['delta', 'final', 'completed', 'userMessage'].includes(event.event)) emit(event.event, event.payload);
+      }
+    });
+    let watcher: ReturnType<typeof watch> | undefined;
+    try { watcher = watch(join(project.path, 'src'), { recursive: true }, () => {
+      void readSimpleProject(true, project.path).then(snapshot => {
+        emit('interface', { version: 1, projectId, revision: snapshot.revision, diagnostic: snapshot.diagnostic });
+      }).catch(() => emit('interface', { version: 1, projectId, diagnostic: 'Interface unavailable' }));
+    }); } catch { emit('interface', { version: 1, projectId, diagnostic: 'File watcher unavailable' }); }
+    const heartbeat = setInterval(() => { if (alive) res.write(': keepalive\n\n'); }, 20_000);
+    res.on('close', () => { alive = false; clearInterval(heartbeat); unsubscribe(); watcher?.close(); });
   });
 
   router.post('/sessions/:sessionId/projects/:projectId/messages', async (req, res) => {
@@ -128,11 +178,11 @@ export function createSimpleRemoteRouter(options: Options): Router {
 /** Production defaults; disabled unless explicitly configured and actually served privately. */
 export function productionSimpleRemoteRouter(): Router {
   const endpoint = process.env.INTERPRETER_SIMPLE_REMOTE_ENDPOINT?.trim() || null;
-  const projects = hostSimpleProjects(async () => getCurrentWorkspace() ?? '');
+  const projects = hostSimpleProjects(getSimpleWorkspacePath);
   const pairing = new RemoteSimplePairing(join(resolveInterpreterHome(), 'simple-interfaces', 'pairing'),
     async id => Boolean(await projects.resolve(id)));
   return createSimpleRemoteRouter({ endpoint, projects, pairing,
-    preflight: () => { if (!endpoint) throw new Error('Private host unavailable'); assertPrivateServe(endpoint, getServerPort()); },
+    preflight: () => { if (!endpoint) throw new Error('Private host unavailable'); assertPrivateServe(endpoint, privateRemotePort()); },
     thread: id => getCodexService().readThread(id),
     enqueue: async (threadId, eventId, message) => {
       await readyWakeSources();

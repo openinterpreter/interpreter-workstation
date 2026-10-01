@@ -21,3 +21,13 @@ export type SimpleRemoteMessage = {
   /** Explicitly supplied display-device text, never inferred from local tools. */
   selectedText?: string;
 };
+
+/** Native desktop/mobile clients share the wire contract, not desktop chrome. */
+export type SimpleRemoteSessionEvent =
+  | { version: 1; type: 'ready'; projectId: string; threadId: string }
+  | { version: 1; type: 'interface'; projectId: string; revision: string; diagnostic: string | null }
+  | { version: 1; type: 'conversation'; event: 'delta' | 'final' | 'completed' | 'userMessage'; payload: unknown };
+
+export type SimpleRemoteFileDrop = { version: 1; projectId: string; filename: string; byteLength: number;
+  /** Only valid when the server advertises fileDrop: true and grants an upload capability. */
+  authorization: 'explicit'; };

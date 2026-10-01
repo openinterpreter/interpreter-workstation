@@ -8,6 +8,7 @@ import {
 } from './interpreterCliRuntime';
 import { resolveAgentInterpreterCliTransport } from './codexRuntime';
 import { WakeSources } from './wakeSources';
+import { allowedControlRootForProject } from '../simpleProjectRoots';
 
 export async function startWakeThreadTurn(
   threadId: string,
@@ -33,12 +34,13 @@ export async function startWakeThreadTurn(
   const connection = buildInterpreterCliServerConnection(getServerPort(), {
     transport: resolveAgentInterpreterCliTransport(process.platform),
   });
+  const additionalWritableRoots = thread.cwd ? await allowedControlRootForProject(thread.cwd) : [];
   return service.startExistingThreadTurn(threadId, message, thread.cwd ?? undefined, {
     mcp_servers: {},
     shell_environment_policy: buildInterpreterCliShellEnvironmentPolicy(
       callerToken, process.env, process.platform, thread.cwd ?? undefined, connection,
     ),
-  });
+  }, additionalWritableRoots);
 }
 
 export const wakeSources = new WakeSources({

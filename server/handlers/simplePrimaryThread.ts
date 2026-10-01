@@ -1,6 +1,7 @@
 /** A single durable OIX conversation per Simple workspace. No shadow transcript. */
 import { loadConfig, saveConfig, type AppConfig } from '../configStore';
 import { getSimpleWorkspacePath } from '../simpleWorkspace';
+import { hostSimpleProjects } from '../simpleInterfaceProjects';
 
 export type SimplePrimaryThreadBinding = { threadId: string | null };
 
@@ -32,17 +33,25 @@ function validateThreadId(value: unknown): string {
   return value;
 }
 
+async function projectWorkspace(project?: { projectId: string; windowId: string }): Promise<string | null> {
+  if (!project) return null;
+  const active = await hostSimpleProjects(getSimpleWorkspacePath).active(project.windowId);
+  if (!active || active.id !== project.projectId) throw new Error('Project is not open in this window');
+  return active.path;
+}
+
 export async function getSimplePrimaryThread(
   deps: Persistence = persistence,
+  project?: { projectId: string; windowId: string },
 ): Promise<SimplePrimaryThreadBinding> {
-  const workspace = await deps.workspace();
+  const workspace = await projectWorkspace(project) ?? await deps.workspace();
   const config = await deps.load();
   return { threadId: config.simplePrimaryThreads?.[workspace] ?? null };
 }
 
 /** First claimant wins. A stale binding can be repaired only with an exact CAS. */
 export async function bindSimplePrimaryThread(
-  request: { threadId: string; expectedThreadId?: string | null },
+  request: { threadId: string; expectedThreadId?: string | null; projectId?: string; windowId?: string },
   deps: Persistence = persistence,
 ): Promise<SimplePrimaryThreadBinding> {
   const threadId = validateThreadId(request?.threadId);
@@ -50,7 +59,9 @@ export async function bindSimplePrimaryThread(
     validateThreadId(request.expectedThreadId);
   }
   return serialize(async () => {
-    const workspace = await deps.workspace();
+    if (Boolean(request.projectId) !== Boolean(request.windowId)) throw new Error('Project identity is incomplete');
+    const workspace = await projectWorkspace(request.projectId && request.windowId
+      ? { projectId: request.projectId, windowId: request.windowId } : undefined) ?? await deps.workspace();
     const config = await deps.load();
     const current = config.simplePrimaryThreads?.[workspace] ?? null;
     if (current === threadId) return { threadId };

@@ -173,8 +173,13 @@ describe('OfficeExtensionViewer', () => {
       });
       expect(await screen.findByTestId(OFFICE_EXTENSION_VIEWER_ID)).toBeInTheDocument();
 
-      const activeIframe = container.querySelector('iframe[title="report.docx"]') as HTMLIFrameElement | null;
-      expect(activeIframe).not.toBeNull();
+      // The viewer mount precedes the theme-dependent iframe effect. Assert
+      // the eventual frame rather than racing that separate render.
+      const activeIframe = await waitFor(() => {
+        const frame = container.querySelector('iframe[title="report.docx"]') as HTMLIFrameElement | null;
+        expect(frame).not.toBeNull();
+        return frame;
+      });
       expect(activeIframe?.src).toContain('filepath=%2Fworkspace%2Freport.docx');
       expect(activeIframe?.src).not.toContain('&t=');
       expect(refreshMocks.trigger).not.toBeNull();

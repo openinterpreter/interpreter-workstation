@@ -427,6 +427,7 @@ interface HandlerDependencies {
     workspacePath?: string | null;
     bootstrapLayout?: LayoutState | null;
     background?: boolean;
+    simpleInterfacePicker?: boolean;
   }) => Promise<{ success: true; windowId: number; sessionKey: string } | { success: false; error: string }>;
 }
 
@@ -736,6 +737,7 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
         sourceWindowId: senderWindowId,
         workspacePath: request?.workspacePath ?? senderWorkspace,
         background: request?.background === true,
+        simpleInterfacePicker: request?.simpleInterfacePicker === true,
       });
 
       if (!result.success) {
@@ -1630,14 +1632,14 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
     },
   );
 
-  registerHandle(IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_GET, async () => {
+  registerHandle(IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_GET, async (_event, request?: { projectId: string; windowId: string }) => {
     const { getSimplePrimaryThread } = await import('../../server/handlers/simplePrimaryThread');
-    return getSimplePrimaryThread();
+    return getSimplePrimaryThread(undefined, request);
   });
 
   registerHandle(
     IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_BIND,
-    async (_event, request: { threadId: string; expectedThreadId?: string | null }) => {
+    async (_event, request: { threadId: string; expectedThreadId?: string | null; projectId?: string; windowId?: string }) => {
       const { bindSimplePrimaryThread } = await import('../../server/handlers/simplePrimaryThread');
       return bindSimplePrimaryThread(request);
     },

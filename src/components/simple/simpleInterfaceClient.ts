@@ -1,8 +1,8 @@
-import { apiRequest, getApiUrl } from '@/ipc';
+import { apiRequest } from '@/ipc';
 import { isWorkstationReadOnly } from '../../remote/workstationConnection';
-import type { SimpleActionEvent, SimpleInterfaceSnapshot } from '../../../shared/simpleInterface';
 
 export type SimpleProjectSnapshot = { projectPath: string; revision: string; bundle: string; diagnostic: string | null };
+export type SimpleProject = { id: string; path: string; name: string };
 
 async function request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
   const response = await apiRequest({ method, path: `/api/simple-interface${path}`, body });
@@ -16,23 +16,15 @@ async function request<T>(method: 'GET' | 'POST', path: string, body?: unknown):
 }
 
 export const simpleInterfaceClient = {
-  projectRefresh: () => isWorkstationReadOnly()
-    ? request<SimpleProjectSnapshot>('GET', '/project')
-    : request<SimpleProjectSnapshot>('POST', '/project/promote'),
-  projectSelect: (projectPath: string) => request<{ projectPath: string }>('POST', '/project/select', { projectPath }),
-  projectAction: (action: { revision: string; message: string }) =>
+  projects: (windowId: string) => request<{ projects: SimpleProject[]; active: SimpleProject | null }>('GET', `/projects?windowId=${encodeURIComponent(windowId)}`),
+  createProject: (windowId: string, parentPath: string, name: string) => request<SimpleProject>('POST', '/projects/new', { windowId, parentPath, name }),
+  openProject: (windowId: string, projectPath: string) => request<SimpleProject>('POST', '/projects/open', { windowId, projectPath }),
+  closeProject: (windowId: string) => request<{ closed: true }>('POST', '/projects/close', { windowId }),
+  projectRefresh: (windowId: string, projectId: string) => isWorkstationReadOnly()
+    ? request<SimpleProjectSnapshot>('GET', `/project?windowId=${encodeURIComponent(windowId)}&projectId=${encodeURIComponent(projectId)}`)
+    : request<SimpleProjectSnapshot>('POST', '/project/promote', { windowId, projectId }),
+  projectAction: (action: { windowId: string; projectId: string; revision: string; message: string }) =>
     request<{ id: string; message: string }>('POST', '/project/action', action),
-  projectDelivery: (delivery: { id: string; status: 'dispatched' | 'failed' }) =>
+  projectDelivery: (delivery: { windowId: string; projectId: string; id: string; status: 'dispatched' | 'failed' }) =>
     request<{ success: true }>('POST', '/project/delivery', delivery),
-  read: () => request<SimpleInterfaceSnapshot>('GET', ''),
-  refresh: () => isWorkstationReadOnly()
-    ? request<SimpleInterfaceSnapshot>('GET', '')
-    : request<SimpleInterfaceSnapshot>('POST', '/promote'),
-  action: (requestData: { actionId: string; revision: string; value?: string }) =>
-    request<SimpleActionEvent>('POST', '/action', requestData),
-  input: (requestData: { id: string; revision: string; value: string }) =>
-    request<{ success: true }>('POST', '/input', requestData),
-  delivery: (requestData: { id: string; status: 'dispatched' | 'failed'; error?: string }) =>
-    request<{ success: true }>('POST', '/delivery', requestData),
-  assetUrl: (asset: string) => getApiUrl(`/api/simple-interface/assets/${encodeURIComponent(asset)}`),
 };

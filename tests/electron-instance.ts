@@ -336,7 +336,7 @@ class ElectronInstanceManager {
 
     const { args, signature } = this.getLaunchConfig();
     const envEntries = Object.entries(process.env).filter(
-      (entry): entry is [string, string] => entry[1] !== undefined,
+      (entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== 'ELECTRON_RUN_AS_NODE',
     );
     const launchEnv: Record<string, string> = {
       ...Object.fromEntries(envEntries),
