@@ -370,6 +370,8 @@ export async function waitForAppReady(
     try {
       await page.waitForFunction(({ emptyStateSelector, composerSelector, editorSurfaceSelector, explorerSidebarSelector, persistentLayerSelector }) => {
         const candidates = [
+          ...document.querySelectorAll<HTMLElement>('[data-simple-shell]'),
+          ...document.querySelectorAll<HTMLElement>('[aria-label="Interface projects"]'),
           ...document.querySelectorAll<HTMLElement>(emptyStateSelector),
           ...document.querySelectorAll<HTMLElement>(composerSelector),
           ...document.querySelectorAll<HTMLElement>(editorSurfaceSelector),

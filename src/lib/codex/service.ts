@@ -144,6 +144,7 @@ type RunTurnOptions = {
   attachments?: StreamImageAttachment[];
   skills?: StreamSkillReference[];
   sandboxPolicy?: v2.SandboxPolicy;
+  additionalWritableRoots?: string[];
   model: string;
   modelProvider?: string | null;
   providerConfig?: Profile["providerConfig"];
@@ -231,6 +232,7 @@ export type CodexClient = {
     config?: Record<string, JsonValue> | null,
     developerInstructions?: string | null,
     dynamicTools?: v2.DynamicToolSpec[] | null,
+    additionalWritableRoots?: string[],
   ): Promise<string>;
   startMcpToolThread(params: {
     model?: string | null;
@@ -245,6 +247,7 @@ export type CodexClient = {
     config?: Record<string, JsonValue> | null,
     baseInstructions?: string | null,
     developerInstructions?: string | null,
+    additionalWritableRoots?: string[],
   ): Promise<string>;
   forkThread(
     threadId: string,
@@ -260,6 +263,7 @@ export type CodexClient = {
     attachments?: StreamImageAttachment[];
     skills?: StreamSkillReference[];
     sandboxPolicy?: v2.SandboxPolicy;
+    additionalWritableRoots?: string[];
     cwd?: string;
     model?: string;
     effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -690,6 +694,7 @@ export class CodexService {
       options.developerInstructions,
       runConfig,
       options.dynamicTools,
+      options.additionalWritableRoots,
     );
     await this.reconcileTerminalTurn(threadId);
     this.assertNoActiveTurn(threadId);
@@ -883,6 +888,7 @@ export class CodexService {
         attachments: options.attachments,
         skills: options.skills,
         sandboxPolicy: options.sandboxPolicy,
+        additionalWritableRoots: options.additionalWritableRoots,
         cwd: options.cwd,
         model: options.model,
         effort: options.effort,
@@ -974,14 +980,15 @@ export class CodexService {
     message: string,
     cwd?: string,
     config?: Record<string, JsonValue>,
+    additionalWritableRoots?: string[],
   ): Promise<string> {
     await this.reconcileTerminalTurn(threadId);
     this.assertNoActiveTurn(threadId);
     this.activeTurns.set(threadId, null);
     try {
-      const resumedId = await this.client.resumeThread(threadId, null, null, cwd, config);
+      const resumedId = await this.client.resumeThread(threadId, null, null, cwd, config, null, null, additionalWritableRoots);
       if (resumedId !== threadId) throw new Error('Existing thread identity changed');
-      const turn = await this.client.startTurn({ threadId, message, cwd });
+      const turn = await this.client.startTurn({ threadId, message, cwd, additionalWritableRoots });
       this.activeTurns.set(threadId, turn.id);
       return turn.id;
     } catch (error) {
@@ -1119,6 +1126,7 @@ export class CodexService {
     developerInstructions?: string,
     config?: Record<string, JsonValue> | null,
     dynamicTools?: v2.DynamicToolSpec[] | null,
+    additionalWritableRoots?: string[],
   ) {
     const nextConfig = withElectronRunAsNodeConfig(config);
 
@@ -1131,6 +1139,7 @@ export class CodexService {
         nextConfig,
         developerInstructions,
         dynamicTools,
+        additionalWritableRoots,
       );
     }
 
@@ -1143,6 +1152,7 @@ export class CodexService {
         nextConfig,
         baseInstructions,
         developerInstructions,
+        additionalWritableRoots,
       );
     } catch (error) {
       // NOTE(victor): Upstream app-server reports stale thread resumes as
@@ -1162,6 +1172,7 @@ export class CodexService {
         nextConfig,
         developerInstructions,
         dynamicTools,
+        additionalWritableRoots,
       );
     }
   }

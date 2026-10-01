@@ -699,6 +699,11 @@ export const agentThreads: AgentThreadsIpc = isMarketingDemoMode()
   : isElectron
     ? window.electron.agentThreads
     : disabledAgentThreadsIpc;
+export const simplePrimaryThread: {
+  get: (request?: { projectId: string; windowId: string }) => Promise<{ threadId: string | null }>;
+  bind: (request: { threadId: string; expectedThreadId?: string | null; projectId?: string; windowId?: string }) => Promise<{ threadId: string }>;
+  onOverlaySubmit: (callback: (event: { text: string }) => void) => () => void;
+} = client.simplePrimaryThread;
 export const workspace = isRemoteWorkstationMode()
   ? remoteWorkstationWorkspaceIpc
   : isMarketingDemoMode() ? marketingDemoWorkspaceIpc : client.workspace;

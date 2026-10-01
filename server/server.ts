@@ -59,10 +59,12 @@ import telegramRouter from "./routes/telegram";
 import inboxRouter from "./routes/inbox";
 import pdfRouter from "./routes/pdf";
 import ipcRouter from "./routes/ipc";
+import simpleInterfaceRouter from './routes/simpleInterface';
 import mcpRouter from "./routes/mcp";
 import interpreterCliRouter from "./routes/interpreterCli";
 import publicThreadRouter from "./routes/publicThread";
 import publicWorkspaceRouter from "./routes/publicWorkspace";
+import simpleRemoteClientRouter from './routes/simpleRemoteClient';
 import { addClient, removeClient, broadcast } from "./utils/sse";
 import { IPC_CHANNELS } from '../electron/ipc/registry';
 import { broadcastEvent } from './handlers/broadcast';
@@ -275,6 +277,8 @@ app.use('/api/servers/telegram', telegramRouter);
 app.use('/api/inbox', inboxRouter);
 app.use('/api/pdf', pdfRouter); // Direct PDF API (no IPC events) for UI use
 app.use('/api/ipc', ipcRouter); // Browser mode IPC-equivalent endpoints
+app.use('/api/simple-interface', simpleInterfaceRouter); // Standalone executable React projects
+app.use('/api/simple-remote-client', simpleRemoteClientRouter); // Paired, project-scoped private display proxy
 app.use('/api/interpreter-cli', interpreterCliRouter);
 app.use('/api/public-thread', publicThreadRouter);
 app.use('/api/public-workspace', publicWorkspaceRouter);

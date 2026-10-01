@@ -118,11 +118,33 @@ const handlers: Record<string, Record<string, HandlerFn>> = {
     },
   },
 
+  // ========== Simple primary conversation ==========
+  simplePrimaryThread: {
+    get: async ([request]: [{ projectId?: string; windowId?: string }?] = []) => {
+      const { getSimplePrimaryThread } = await import('../handlers/simplePrimaryThread');
+      if (Boolean(request?.projectId) !== Boolean(request?.windowId)) throw new Error('Project identity is incomplete');
+      return getSimplePrimaryThread(undefined, request?.projectId && request?.windowId
+        ? { projectId: request.projectId, windowId: request.windowId } : undefined);
+    },
+    bind: async ([request]: [{ threadId: string; expectedThreadId?: string | null; projectId?: string; windowId?: string }]) => {
+      const { bindSimplePrimaryThread } = await import('../handlers/simplePrimaryThread');
+      return bindSimplePrimaryThread(request);
+    },
+  },
+
   // ========== Workspace ==========
   workspace: {
     get: async () => {
       const { getWorkspace } = await import('../handlers/workspace');
       return getWorkspace();
+    },
+    getSimple: async () => {
+      const { getSimpleWorkspacePath } = await import('../simpleWorkspace');
+      return { workspacePath: await getSimpleWorkspacePath() };
+    },
+    setSimple: async ([arg]: [{ workspacePath: string }]) => {
+      const { setSimpleWorkspacePath } = await import('../simpleWorkspace');
+      return { workspacePath: await setSimpleWorkspacePath(arg.workspacePath) };
     },
     createSample: async () => {
       const { createSampleWorkspace } = await import('../handlers/workspace');

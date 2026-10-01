@@ -373,6 +373,9 @@ importers:
       unbzip2-stream:
         specifier: 1.4.3
         version: 1.4.3
+      undici:
+        specifier: 7.29.1
+        version: 7.29.1
       unist-util-visit:
         specifier: 5.1.0
         version: 5.1.0

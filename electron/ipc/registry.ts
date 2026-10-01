@@ -99,6 +99,9 @@ export const IPC_CHANNELS = {
   AGENT_THREADS_RENAME: 'agentThreads:rename',
   AGENT_THREADS_ARCHIVE: 'agentThreads:archive',
   AGENT_THREADS_UNARCHIVE: 'agentThreads:unarchive',
+  SIMPLE_PRIMARY_THREAD_GET: 'simplePrimaryThread:get',
+  SIMPLE_PRIMARY_THREAD_BIND: 'simplePrimaryThread:bind',
+  SIMPLE_PRIMARY_OVERLAY_SUBMIT: 'simplePrimaryThread:overlay-submit',
 
   // Profiles (camelCase namespace for browser proxy: profiles.onDefaultChanged)
   PROFILES_LIST: 'profiles:list',
@@ -115,9 +118,12 @@ export const IPC_CHANNELS = {
 
   // Workspace
   WORKSPACE_CHANGED: 'workspace:changed',
+  WORKSPACE_SIMPLE_CHANGED: 'workspace:simple-changed',
   WORKSPACE_FILES_CHANGED: 'workspace:files-changed',
   WORKSPACE_CONFIRMATION_REQUESTED: 'workspace:confirmation-requested',
   WORKSPACE_GET: 'workspace:get',
+  WORKSPACE_GET_SIMPLE: 'workspace:get-simple',
+  WORKSPACE_SET_SIMPLE: 'workspace:set-simple',
   WORKSPACE_CREATE_SAMPLE: 'workspace:create-sample',
   WORKSPACE_SET: 'workspace:set',
   WORKSPACE_CONFIRMATION_RESPOND: 'workspace:confirmation-respond',
@@ -868,6 +874,8 @@ export interface CachedFileTree {
 export interface WindowCreateRequest {
   workspacePath?: string | null;
   background?: boolean;
+  /** Open a new standalone Simple project window without changing the global mode. */
+  simpleInterfacePicker?: boolean;
 }
 
 export interface WindowCreateResponse {

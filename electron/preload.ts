@@ -355,6 +355,12 @@ export interface ElectronAPI {
     unarchiveThread: (threadId: string) => Promise<AgentThreadsUnarchiveResponse>;
   };
 
+  simplePrimaryThread: {
+    get: (request?: { projectId: string; windowId: string }) => Promise<{ threadId: string | null }>;
+    bind: (request: { threadId: string; expectedThreadId?: string | null; projectId?: string; windowId?: string }) => Promise<{ threadId: string }>;
+    onOverlaySubmit: (callback: (event: { text: string }) => void) => () => void;
+  };
+
   // Profiles IPC methods
   profiles: {
     list: () => Promise<{ profiles: any[]; defaultProfileId: string | null; fastProfileId: string | null }>;
@@ -373,6 +379,8 @@ export interface ElectronAPI {
   // Workspace IPC methods
   workspace: {
     get: () => Promise<{ workspace: string | null }>;
+    getSimple: () => Promise<{ workspacePath: string }>;
+    setSimple: (request: { workspacePath: string }) => Promise<{ workspacePath: string }>;
     createSample: () => Promise<WorkspaceCreateSampleResponse>;
     set: (request: { workspacePath: string }) => Promise<{ success: boolean }>;
     respondToConfirmation: (request: WorkspaceConfirmationRespondRequest) => Promise<WorkspaceConfirmationRespondResponse>;
@@ -381,6 +389,7 @@ export interface ElectronAPI {
     removeWatch: (folderPath: string) => Promise<{ success: boolean }>;
     onConfirmationRequested: (callback: (event: WorkspaceConfirmationRequestedEvent) => void) => () => void;
     onChanged: (callback: (event: { workspacePath: string | null }) => void) => () => void;
+    onSimpleChanged: (callback: (event: { workspacePath: string }) => void) => () => void;
     onFilesChanged: (callback: (event: WorkspaceFilesChangedEvent) => void) => () => void;
   };
 
@@ -939,6 +948,17 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(IPC_CHANNELS.AGENT_THREADS_UNARCHIVE, { threadId }),
   },
 
+  simplePrimaryThread: {
+    get: (request?: { projectId: string; windowId: string }) => ipcRenderer.invoke(IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_GET, request),
+    bind: (request: { threadId: string; expectedThreadId?: string | null; projectId?: string; windowId?: string }) =>
+      ipcRenderer.invoke(IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_BIND, request),
+    onOverlaySubmit: (callback: (event: { text: string }) => void) => {
+      const listener = (_: unknown, event: { text: string }) => callback(event);
+      ipcRenderer.on(IPC_CHANNELS.SIMPLE_PRIMARY_OVERLAY_SUBMIT, listener);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.SIMPLE_PRIMARY_OVERLAY_SUBMIT, listener);
+    },
+  },
+
   // Profiles IPC
   profiles: {
     list: () => ipcRenderer.invoke(IPC_CHANNELS.PROFILES_LIST),
@@ -969,6 +989,9 @@ contextBridge.exposeInMainWorld('electron', {
   // Workspace IPC
   workspace: {
     get: () => ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_GET),
+    getSimple: () => ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_GET_SIMPLE),
+    setSimple: (request: { workspacePath: string }) =>
+      ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_SET_SIMPLE, request),
     createSample: () => ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_CREATE_SAMPLE),
     set: (request: { workspacePath: string }) =>
       ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_SET, request),
@@ -989,6 +1012,11 @@ contextBridge.exposeInMainWorld('electron', {
       const listener = (_: any, event: { workspacePath: string | null }) => callback(event);
       ipcRenderer.on(IPC_CHANNELS.WORKSPACE_CHANGED, listener);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.WORKSPACE_CHANGED, listener);
+    },
+    onSimpleChanged: (callback: (event: { workspacePath: string }) => void) => {
+      const listener = (_: any, event: { workspacePath: string }) => callback(event);
+      ipcRenderer.on(IPC_CHANNELS.WORKSPACE_SIMPLE_CHANGED, listener);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.WORKSPACE_SIMPLE_CHANGED, listener);
     },
     onFilesChanged: (callback: (event: WorkspaceFilesChangedEvent) => void) => {
       const listener = (_: any, event: WorkspaceFilesChangedEvent) => callback(event);

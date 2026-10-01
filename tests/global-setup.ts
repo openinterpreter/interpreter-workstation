@@ -16,6 +16,9 @@ async function globalSetup() {
 
   console.log(`📝 Session log: ${sessionLogPath}`);
 
+  // A shell harness may use Electron as Node; the app under test must instead
+  // launch in its normal browser process mode.
+  const { ELECTRON_RUN_AS_NODE: _nodeMode, ...appEnvironment } = process.env;
   const electronApp = await electron.launch({
     args: [
       getTestConfig().electronMainPath,
@@ -25,7 +28,7 @@ async function globalSetup() {
       '--disable-software-rasterizer',
     ],
     env: {
-      ...process.env,
+      ...appEnvironment,
       NODE_ENV: 'test',
       ELECTRON_ENABLE_LOGGING: '1',
       NODE_V8_COVERAGE: path.join(testRunDir, 'coverage-backend'),

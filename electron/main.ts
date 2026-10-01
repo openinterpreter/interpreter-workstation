@@ -1691,6 +1691,7 @@ interface CreateWindowOptions {
   bootstrapLayout?: LayoutState | null;
   primary?: boolean;
   background?: boolean;
+  simpleInterfacePicker?: boolean;
 }
 
 function createWindowSessionKey(): string {
@@ -1800,7 +1801,7 @@ function bindMainWindowLaunchTelemetry(
   });
 }
 
-async function loadMainWindowContent(window: BrowserWindow): Promise<MainWindowContentLoadResult> {
+async function loadMainWindowContent(window: BrowserWindow, simpleInterfacePicker = false): Promise<MainWindowContentLoadResult> {
   const windowId = window.id;
   const webContentsId = window.webContents.id;
 
@@ -1825,7 +1826,7 @@ async function loadMainWindowContent(window: BrowserWindow): Promise<MainWindowC
 
     while (retries > 0) {
       try {
-        await window.loadURL(devServerUrl);
+        await window.loadURL(simpleInterfacePicker ? `${devServerUrl}${devServerUrl.includes('?') ? '&' : '?'}simple-interface=new` : devServerUrl);
         return 'loaded';
       } catch (error) {
         if (isMainWindowLoadAbortError(error)) {
@@ -1888,7 +1889,7 @@ async function loadMainWindowContent(window: BrowserWindow): Promise<MainWindowC
           windowId,
         });
       }
-      await window.loadURL(`http://127.0.0.1:${serverPort}`);
+      await window.loadURL(`http://127.0.0.1:${serverPort}${simpleInterfacePicker ? '?simple-interface=new' : ''}`);
     } else {
       const distPath = path.join(__dirname, '../../dist/index.html');
       if (mainWindow === window) {
@@ -1904,7 +1905,7 @@ async function loadMainWindowContent(window: BrowserWindow): Promise<MainWindowC
           windowId,
         });
       }
-      await window.loadFile(distPath);
+      await window.loadFile(distPath, simpleInterfacePicker ? { query: { 'simple-interface': 'new' } } : undefined);
     }
     return 'loaded';
   } catch (error) {
@@ -2328,7 +2329,7 @@ async function createWindow(options?: CreateWindowOptions): Promise<CreateWindow
       await abortWindowInitialization();
     },
     getZoomFactor,
-    loadContent: loadMainWindowContent,
+    loadContent: (createdWindow) => loadMainWindowContent(createdWindow, options?.simpleInterfacePicker === true),
     maximize: isPlaywrightElectronSession,
     registerWindow: (createdWindow) => {
       workstationService.registerWindow(createdWindow, { primary: isPrimaryWindow });
@@ -2346,6 +2347,7 @@ async function createWorkstationWindow(options?: {
   workspacePath?: string | null;
   bootstrapLayout?: LayoutState | null;
   background?: boolean;
+  simpleInterfacePicker?: boolean;
 }): Promise<{ success: true; windowId: number; sessionKey: string } | { success: false; error: string }> {
   const sourceWindow = options?.sourceWindowId ? BrowserWindow.fromId(options.sourceWindowId) : BrowserWindow.getFocusedWindow();
   const inheritedWorkspacePath = options?.workspacePath
@@ -2358,6 +2360,7 @@ async function createWorkstationWindow(options?: {
     bootstrapLayout: options?.bootstrapLayout ?? null,
     primary: false,
     background: options?.background === true,
+    simpleInterfacePicker: options?.simpleInterfacePicker === true,
   });
 
   if (createWindowResult.status !== 'created') {
@@ -2625,9 +2628,10 @@ app.whenReady().then(async () => {
     const configLanguage = await getLanguage();
     await initI18nMain(configLanguage);
 
-    setCreateWindowHandler(async () => {
+    setCreateWindowHandler(async (intent) => {
       const result = await createWorkstationWindow({
         sourceWindowId: BrowserWindow.getFocusedWindow()?.id ?? null,
+        simpleInterfacePicker: intent === 'interface',
       });
       if (!result.success) {
         throw new Error(result.error);

@@ -10,6 +10,7 @@ import { AgentModelConfig } from '../../shared/types/model';
 import { messageQueueStore } from '../utils/messageQueueStore';
 import { cleanupACPProvider } from '../utils/acpProvider';
 import { getCurrentWorkspace, requireExistingWorkspacePath } from '../utils/workspace';
+import { allowedControlRootForProject } from '../simpleProjectRoots';
 import { setCurrentTurnMessageId } from '../utils/turnMessageIdRegistry';
 import { registerPendingToolCall } from '../utils/codexMcpBridge';
 import { parseToolName } from '../../shared/utils/mcpToolName';
@@ -1041,6 +1042,11 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
     const workspacePath = requireExistingWorkspacePath(
       resolveStreamWorkspacePathForAgentRequest(request),
     );
+    const simpleControlRoots = request.agentId === 'simple-primary-agent'
+      ? await allowedControlRootForProject(workspacePath) : [];
+    if (request.agentId === 'simple-primary-agent' && simpleControlRoots.length !== 1) {
+      throw new Error('Simple conversation requires an open, validated interface project.');
+    }
     const service = getCodexService();
     if (targetThreadId) {
       try {
@@ -1091,6 +1097,7 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
       requestedModel: resolvedRequest.requestedModel,
       usesChatGptAuth: resolvedRequest.isChatGptProfile,
       workspacePath,
+      additionalWritableRoots: simpleControlRoots,
       message: rawMessage,
       system: request.system,
       attachments,

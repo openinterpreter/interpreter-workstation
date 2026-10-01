@@ -427,6 +427,7 @@ interface HandlerDependencies {
     workspacePath?: string | null;
     bootstrapLayout?: LayoutState | null;
     background?: boolean;
+    simpleInterfacePicker?: boolean;
   }) => Promise<{ success: true; windowId: number; sessionKey: string } | { success: false; error: string }>;
 }
 
@@ -736,6 +737,7 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
         sourceWindowId: senderWindowId,
         workspacePath: request?.workspacePath ?? senderWorkspace,
         background: request?.background === true,
+        simpleInterfacePicker: request?.simpleInterfacePicker === true,
       });
 
       if (!result.success) {
@@ -807,6 +809,16 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
       return getWorkspace();
     }
   );
+
+  registerHandle(IPC_CHANNELS.WORKSPACE_GET_SIMPLE, async () => {
+    const { getSimpleWorkspacePath } = await import('../../server/simpleWorkspace');
+    return { workspacePath: await getSimpleWorkspacePath() };
+  });
+
+  registerHandle(IPC_CHANNELS.WORKSPACE_SET_SIMPLE, async (_event, request: { workspacePath: string }) => {
+    const { setSimpleWorkspacePath } = await import('../../server/simpleWorkspace');
+    return { workspacePath: await setSimpleWorkspacePath(request.workspacePath) };
+  });
 
   registerHandle(
     IPC_CHANNELS.WORKSPACE_CREATE_SAMPLE,
@@ -1617,6 +1629,19 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
         console.error('[IPC] Error unarchiving agent thread:', error);
         return { success: false, error: error?.message ?? 'Failed to unarchive thread.' };
       }
+    },
+  );
+
+  registerHandle(IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_GET, async (_event, request?: { projectId: string; windowId: string }) => {
+    const { getSimplePrimaryThread } = await import('../../server/handlers/simplePrimaryThread');
+    return getSimplePrimaryThread(undefined, request);
+  });
+
+  registerHandle(
+    IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_BIND,
+    async (_event, request: { threadId: string; expectedThreadId?: string | null; projectId?: string; windowId?: string }) => {
+      const { bindSimplePrimaryThread } = await import('../../server/handlers/simplePrimaryThread');
+      return bindSimplePrimaryThread(request);
     },
   );
 

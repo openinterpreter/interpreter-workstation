@@ -2156,9 +2156,14 @@ export class CodexAppServerClient {
     cwd?: string | null,
     config?: Record<string, JsonValue> | null,
     developerInstructions?: string | null,
+    _dynamicTools?: v2.DynamicToolSpec[] | null,
+    additionalWritableRoots: string[] = [],
   ) {
     const threadApprovalPolicy = await getConfigApprovalPolicy();
     const runtimeAccess = await this.getRuntimeAccessSnapshot();
+    if (additionalWritableRoots.length && runtimeAccess.sandboxMode !== 'workspace-write') {
+      throw new Error('Simple interface requires workspace-write sandbox mode');
+    }
     const workspacePermission = buildCodexWorkspacePermissionSelection({
       sandboxMode: runtimeAccess.sandboxMode,
       readAccessMode: runtimeAccess.readAccessMode,
@@ -2166,7 +2171,7 @@ export class CodexAppServerClient {
       allowTempAccess: process.platform === "darwin" ? runtimeAccess.macosTempAccess : true,
       cwd,
       additionalReadableRoots: getInterpreterCliSandboxReadableRoots(),
-      additionalWritableRoots: getInterpreterCliSandboxWritableRoots(),
+      additionalWritableRoots: [...getInterpreterCliSandboxWritableRoots(), ...additionalWritableRoots],
     });
     const nextConfig = withWorkspacePermissionConfig(config, workspacePermission);
 
@@ -2256,8 +2261,12 @@ export class CodexAppServerClient {
     config?: Record<string, JsonValue> | null,
     baseInstructions?: string | null,
     developerInstructions?: string | null,
+    additionalWritableRoots: string[] = [],
   ) {
     const runtimeAccess = await this.getRuntimeAccessSnapshot();
+    if (additionalWritableRoots.length && runtimeAccess.sandboxMode !== 'workspace-write') {
+      throw new Error('Simple interface requires workspace-write sandbox mode');
+    }
     const workspacePermission = buildCodexWorkspacePermissionSelection({
       sandboxMode: runtimeAccess.sandboxMode,
       readAccessMode: runtimeAccess.readAccessMode,
@@ -2265,7 +2274,7 @@ export class CodexAppServerClient {
       allowTempAccess: process.platform === "darwin" ? runtimeAccess.macosTempAccess : true,
       cwd,
       additionalReadableRoots: getInterpreterCliSandboxReadableRoots(),
-      additionalWritableRoots: getInterpreterCliSandboxWritableRoots(),
+      additionalWritableRoots: [...getInterpreterCliSandboxWritableRoots(), ...additionalWritableRoots],
     });
     const nextConfig = withWorkspacePermissionConfig(config, workspacePermission);
 
@@ -2465,6 +2474,7 @@ export class CodexAppServerClient {
     attachments?: StreamImageAttachment[];
     skills?: StreamSkillReference[];
     sandboxPolicy?: v2.SandboxPolicy;
+    additionalWritableRoots?: string[];
     cwd?: string;
     model?: string;
     effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -2474,6 +2484,9 @@ export class CodexAppServerClient {
 
     const turnApprovalPolicy = await getConfigApprovalPolicy();
     const runtimeAccess = await this.getRuntimeAccessSnapshot();
+    if (params.additionalWritableRoots?.length && runtimeAccess.sandboxMode !== 'workspace-write') {
+      throw new Error('Simple interface requires workspace-write sandbox mode');
+    }
     const workspacePermission = buildCodexWorkspacePermissionSelection({
       sandboxMode: runtimeAccess.sandboxMode,
       readAccessMode: runtimeAccess.readAccessMode,
@@ -2481,12 +2494,13 @@ export class CodexAppServerClient {
       allowTempAccess: process.platform === "darwin" ? runtimeAccess.macosTempAccess : true,
       cwd: params.cwd,
       additionalReadableRoots: getInterpreterCliSandboxReadableRoots(),
-      additionalWritableRoots: getInterpreterCliSandboxWritableRoots(),
+      additionalWritableRoots: [...getInterpreterCliSandboxWritableRoots(), ...(params.additionalWritableRoots ?? [])],
     });
     const sandboxPolicy = workspacePermission
       ? undefined
       : params.sandboxPolicy ?? buildCodexSandboxPolicy({
           sandboxMode: runtimeAccess.sandboxMode,
+          writableRoots: params.additionalWritableRoots,
           networkAccess: runtimeAccess.networkAccess,
           allowTempAccess: process.platform === "darwin" ? runtimeAccess.macosTempAccess : true,
         });

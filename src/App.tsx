@@ -62,6 +62,14 @@ import type {
 import { getMarketingDemoSurface, isMarketingDemoMode, isMarketingDemoWindowChromeEnabled } from "./demo/marketingDemo";
 import { isWorkstationReadOnly } from "./remote/workstationConnection";
 import { WorkstationConnectionGate } from './components/WorkstationConnectionGate';
+import { SimpleShell, sendSimpleMessage } from './components/simple/SimpleShell';
+import { SimpleInterface } from './components/simple/SimpleInterface';
+import { SimpleProjectPicker } from './components/simple/SimpleProjectPicker';
+import { simpleInterfaceClient, type SimpleProject } from './components/simple/simpleInterfaceClient';
+import { type RemoteConnection } from './components/simple/remoteSimpleClient';
+import { RemoteSimpleShell } from './components/simple/RemoteSimpleShell';
+import { uiSettings, workspace as workspaceIpc, quickActions } from '@/ipc';
+import * as workstationIpc from '@/ipc';
 
 const FIRST_STARTUP_NUDGE_EVENT = 'onboarding:first-startup-nudge';
 const TITLEBAR_LAYOUT_CHANGED_EVENT = 'titlebar:layout-changed';
@@ -71,6 +79,81 @@ function AppContent() {
   "use no memo";
 
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
+  const [advancedMode, setAdvancedMode] = useState<boolean | null>(null);
+  const [simpleWorkspacePath, setSimpleWorkspacePath] = useState<string | null>(null);
+  const [simpleThreadId, setSimpleThreadId] = useState<string | null>(null);
+  const [simpleThreadWorkspacePath, setSimpleThreadWorkspacePath] = useState<string | null>(null);
+  const [simpleThreadLoaded, setSimpleThreadLoaded] = useState(false);
+  const [simpleError, setSimpleError] = useState<string | null>(null);
+  const [simpleSettingsOpen, setSimpleSettingsOpen] = useState(false);
+  const [simpleProject, setSimpleProject] = useState<SimpleProject | null>(null);
+  const [remoteProject, setRemoteProject] = useState<RemoteConnection | null>(null);
+  const [simpleWindowId] = useState(() => {
+    const previous = sessionStorage.getItem('interpreter-simple-window-id');
+    if (previous && !window.opener) return previous;
+    const id = crypto.randomUUID();
+    sessionStorage.setItem('interpreter-simple-window-id', id);
+    return id;
+  });
+  const openSimpleProject = useCallback((project: SimpleProject) => setSimpleProject(project), []);
+  const openRemoteProject = useCallback((project: RemoteConnection) => setRemoteProject(project), []);
+
+  useEffect(() => {
+    let alive = true;
+    const newInterfaceWindow = new URLSearchParams(window.location.search).get('simple-interface') === 'new';
+    void uiSettings.getAdvancedMode()
+      .then(({ enabled }: { enabled: boolean }) => { if (alive) setAdvancedMode(newInterfaceWindow ? false : enabled); })
+      .catch(() => { if (alive) setSimpleError('Could not load your experience preference.'); });
+    const unsubscribe = uiSettings.onAdvancedModeChanged(({ enabled }: { enabled: boolean }) => setAdvancedMode(enabled));
+    return () => { alive = false; unsubscribe(); };
+  }, []);
+
+  useEffect(() => {
+    if (advancedMode !== false) return;
+    let alive = true;
+    const simpleWorkspace = workspaceIpc as typeof workspaceIpc & {
+      getSimple?: () => Promise<{ workspacePath: string }>;
+      onSimpleChanged?: (callback: (event: { workspacePath: string }) => void) => () => void;
+    };
+    if (!simpleWorkspace.getSimple) {
+      setSimpleError('Simple workspace is unavailable.');
+      return;
+    }
+    const load = () => {
+      void simpleWorkspace.getSimple!().then(({ workspacePath }: { workspacePath: string }) => {
+        if (alive) { setSimpleWorkspacePath(workspacePath); setSimpleError(null); }
+      }).catch((error: unknown) => {
+        if (alive) setSimpleError(error instanceof Error ? error.message : 'Could not open the Simple workspace.');
+      });
+    };
+    load();
+    const unsubscribe = simpleWorkspace.onSimpleChanged?.(({ workspacePath }: { workspacePath: string }) => {
+      if (alive) { setSimpleWorkspacePath(workspacePath); setSimpleError(null); }
+    });
+    window.addEventListener('simple-workspace:changed', load);
+    return () => { alive = false; unsubscribe?.(); window.removeEventListener('simple-workspace:changed', load); };
+  }, [advancedMode]);
+
+  useEffect(() => {
+    if (advancedMode !== false || !simpleWorkspacePath || !simpleProject) return;
+    let alive = true;
+    setSimpleThreadLoaded(false);
+    // The backend is authoritative; a renderer remount never silently creates a new thread.
+    const primaryThread = (workstationIpc as typeof workstationIpc & {
+      simplePrimaryThread?: { get: (request: { projectId: string; windowId: string }) => Promise<{ threadId: string | null }> };
+    }).simplePrimaryThread;
+    if (!primaryThread) { setSimpleError('Primary conversation is unavailable.'); return; }
+    void primaryThread.get({ projectId: simpleProject.id, windowId: simpleWindowId }).then(({ threadId }) => {
+      if (alive) { setSimpleThreadId(threadId); setSimpleThreadWorkspacePath(simpleProject.path); setSimpleThreadLoaded(true); }
+    }).catch((error) => {
+      if (alive) setSimpleError(error instanceof Error ? error.message : 'Could not restore the primary conversation.');
+    });
+    return () => { alive = false; };
+  }, [advancedMode, simpleWorkspacePath, simpleProject, simpleWindowId]);
+
+  useEffect(() => quickActions.onOpenSettings(() => {
+    if (advancedMode === false) setSimpleSettingsOpen(true);
+  }), [advancedMode]);
   const marketingDemoMode = isMarketingDemoMode();
   const readOnlyWorkstation = isWorkstationReadOnly();
   const marketingDemoWindowChrome = marketingDemoMode && isMarketingDemoWindowChromeEnabled();
@@ -853,7 +936,32 @@ function AppContent() {
         }`}
         style={{ transition: 'opacity 400ms ease' }}
       >
-        {/* Title bar - positioned on top */}
+        {shouldRenderMainSurfaces && advancedMode === false && remoteProject ? (
+          <RemoteSimpleShell key={remoteProject.id} connection={remoteProject} windowId={simpleWindowId} onClose={() => setRemoteProject(null)} />
+        ) : shouldRenderMainSurfaces && advancedMode === false && simpleWorkspacePath && !simpleProject && !simpleError ? (
+          <SimpleProjectPicker windowId={simpleWindowId} onOpen={openSimpleProject} onOpenRemote={openRemoteProject} />
+        ) : shouldRenderMainSurfaces && advancedMode === false && simpleWorkspacePath && simpleProject && simpleThreadLoaded && simpleThreadWorkspacePath === simpleProject.path && !simpleError ? (
+          <SimpleShell key={`${simpleWindowId}:${simpleProject.id}`} workspacePath={simpleProject.path} controlWorkspacePath={simpleWorkspacePath} projectId={simpleProject.id} windowId={simpleWindowId} projectName={simpleProject.name} initialThreadId={simpleThreadId}
+            onCloseProject={async () => { await simpleInterfaceClient.closeProject(simpleWindowId); setSimpleProject(null); setSimpleThreadLoaded(false); }}
+            onBindThread={async (threadId) => {
+              const primaryThread = (workstationIpc as typeof workstationIpc & {
+                simplePrimaryThread?: { bind: (request: { threadId: string; expectedThreadId?: string | null; projectId: string; windowId: string }) => Promise<{ threadId: string }> };
+              }).simplePrimaryThread;
+              if (!primaryThread) throw new Error('Primary conversation persistence is unavailable.');
+              await primaryThread.bind({ threadId, expectedThreadId: simpleThreadId, projectId: simpleProject.id, windowId: simpleWindowId });
+              setSimpleThreadId(threadId);
+            }}
+            settingsOpen={simpleSettingsOpen} onOpenSettings={() => setSimpleSettingsOpen(true)}
+            onCloseSettings={() => setSimpleSettingsOpen(false)}
+            canvas={<SimpleInterface projectId={simpleProject.id} windowId={simpleWindowId} onMessage={(text) => sendSimpleMessage(text, simpleProject.path, simpleProject.id, simpleWindowId)} />} />
+        ) : advancedMode === false || advancedMode === null ? (
+          <div role={simpleError ? 'alert' : 'status'} className="flex h-full flex-col items-center justify-center gap-3 px-8 text-ui-sm text-muted-foreground">
+            <span>{simpleError ?? 'Opening Interpreter…'}</span>
+            {simpleError && <button type="button" className="rounded-md px-3 py-1.5" style={{ border: 'var(--border-width) solid var(--border)' }}
+              onClick={() => window.location.reload()}>Retry</button>}
+          </div>
+        ) : <>
+        {/* Title bar - positioned on top in Advanced mode */}
         <CustomTitleBar />
 
         {/* Full-height layout with JS-animated sidebars */}
@@ -925,6 +1033,7 @@ function AppContent() {
             </div>
           </div> : null}
         </div>
+        </>}
       </div>
 
       {/* Onboarding overlay -- renders above everything at z-50 */}
