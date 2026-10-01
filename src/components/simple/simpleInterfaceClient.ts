@@ -2,6 +2,8 @@ import { apiRequest, getApiUrl } from '@/ipc';
 import { isWorkstationReadOnly } from '../../remote/workstationConnection';
 import type { SimpleActionEvent, SimpleInterfaceSnapshot } from '../../../shared/simpleInterface';
 
+export type SimpleProjectSnapshot = { projectPath: string; revision: string; bundle: string; diagnostic: string | null };
+
 async function request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
   const response = await apiRequest({ method, path: `/api/simple-interface${path}`, body });
   if (!response.ok) {
@@ -14,6 +16,14 @@ async function request<T>(method: 'GET' | 'POST', path: string, body?: unknown):
 }
 
 export const simpleInterfaceClient = {
+  projectRefresh: () => isWorkstationReadOnly()
+    ? request<SimpleProjectSnapshot>('GET', '/project')
+    : request<SimpleProjectSnapshot>('POST', '/project/promote'),
+  projectSelect: (projectPath: string) => request<{ projectPath: string }>('POST', '/project/select', { projectPath }),
+  projectAction: (action: { revision: string; message: string }) =>
+    request<{ id: string; message: string }>('POST', '/project/action', action),
+  projectDelivery: (delivery: { id: string; status: 'dispatched' | 'failed' }) =>
+    request<{ success: true }>('POST', '/project/delivery', delivery),
   read: () => request<SimpleInterfaceSnapshot>('GET', ''),
   refresh: () => isWorkstationReadOnly()
     ? request<SimpleInterfaceSnapshot>('GET', '')

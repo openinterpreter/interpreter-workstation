@@ -132,6 +132,7 @@ export interface AppConfig {
   /** The durable Simple conversation is scoped to its workspace, not an Advanced tab. */
   simplePrimaryThreads?: Record<string, string>;
   simpleWorkspacePath?: string; // Dedicated filesystem-backed Simple workspace root
+  simpleProjectPath?: string; // Selected standalone Simple interface project
   recentFolders?: RecentFolder[]; // Recent workspace folders
   detectedNoteWorkspaces?: DetectedNoteWorkspace[]; // Results from the last user-requested note workspace scan
 
@@ -2039,6 +2040,16 @@ export async function getSimpleWorkspaceSetting(): Promise<string | null> {
 export async function setSimpleWorkspaceSetting(workspacePath: string): Promise<void> {
   const config = await loadConfig();
   config.simpleWorkspacePath = workspacePath;
+  await saveConfig(config);
+}
+
+export async function getSimpleProjectSetting(): Promise<string | null> {
+  return (await loadConfig()).simpleProjectPath ?? null;
+}
+
+export async function setSimpleProjectSetting(projectPath: string): Promise<void> {
+  const config = await loadConfig();
+  config.simpleProjectPath = projectPath;
   await saveConfig(config);
 }
 

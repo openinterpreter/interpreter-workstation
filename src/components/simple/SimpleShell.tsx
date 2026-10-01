@@ -4,13 +4,11 @@ import { AgentThread } from '../../../agent/components/AgentThread';
 import { ComposerArea } from '../../../agent/components/ComposerArea';
 import { AgentMetadataProvider } from '../../../agent/contexts/AgentMetadataContext';
 import { AgentErrorProvider } from '../../../agent/contexts/AgentErrorContext';
-import { getProfiles } from '../../api';
 import { createAgentCallerToken } from '../../utils/layoutHelpers';
-import { getDefaultModelConfig, profileToModelConfig } from '../../../shared/types/profile';
-import type { AgentModelConfig } from '../../../shared/types/model';
 import { isWorkstationReadOnly } from '../../remote/workstationConnection';
 import { ExperienceSectionContent } from '../settings/ExperienceSection';
 import { simplePrimaryThread } from '@/ipc';
+import { useSimpleStoredProfile } from './useSimpleStoredProfile';
 
 /** A fixed identity names the one conversation even when the shell is remounted. */
 export const SIMPLE_PRIMARY_AGENT_ID = 'simple-primary-agent';
@@ -44,7 +42,8 @@ interface SimpleShellProps {
 export function SimpleShell({ workspacePath, initialThreadId, onBindThread, onOpenSettings, settingsOpen, onCloseSettings, canvas }: SimpleShellProps) {
   const [expanded, setExpanded] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(initialThreadId);
-  const [modelConfig, setModelConfig] = useState<AgentModelConfig>(getDefaultModelConfig);
+  const profile = useSimpleStoredProfile();
+  const modelConfig = profile.modelConfig;
   const [isStreaming, setIsStreaming] = useState(false);
   const [messageCount, setMessageCount] = useState(0);
   const [persistenceError, setPersistenceError] = useState(false);
@@ -67,19 +66,16 @@ export function SimpleShell({ workspacePath, initialThreadId, onBindThread, onOp
   }), [workspacePath]);
 
   useEffect(() => {
-    let cancelled = false;
-    getProfiles().then(({ profiles, defaultProfileId }) => {
-      const selected = profiles.find((profile) => profile.id === defaultProfileId);
-      if (!cancelled && selected) setModelConfig(profileToModelConfig(selected));
-    }).catch((error) => console.warn('[SimpleShell] Default profile unavailable', error));
-    return () => { cancelled = true; };
-  }, []);
+    const close = () => { setExpanded(false); if (settingsOpen) onCloseSettings(); };
+    window.addEventListener('simple-interface:interact', close);
+    return () => window.removeEventListener('simple-interface:interact', close);
+  }, [settingsOpen, onCloseSettings]);
 
   const agent = useMemo(() => ({
     id: SIMPLE_PRIMARY_AGENT_ID,
     createdAt: 0,
     agent: {
-      runtime: { modelConfig, workspacePath },
+      runtime: { modelConfig: modelConfig!, workspacePath },
       session: { callerToken, codexThreadId: threadId ?? undefined },
     },
   }), [callerToken, modelConfig, threadId, workspacePath]);
@@ -98,56 +94,56 @@ export function SimpleShell({ workspacePath, initialThreadId, onBindThread, onOp
   return (
     <div className="relative flex h-screen w-full flex-col bg-background text-foreground" data-simple-shell="true"
       data-primary-thread-error={persistenceError ? 'true' : undefined}>
-      <div className="absolute inset-x-0 top-0 z-20 flex h-12 items-center justify-end px-4"
-        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
-        <button type="button" aria-label="Open Settings" onClick={onOpenSettings}
-          className="rounded-full bg-background/90 p-2 text-muted-foreground shadow-sm hover:text-foreground"
-          style={{ WebkitAppRegion: 'no-drag', border: 'var(--border-width) solid var(--border)' } as React.CSSProperties}>
-          <Settings2 className="size-4" />
-        </button>
-      </div>
-
       <main aria-label="Interface" className="absolute inset-0 overflow-y-auto" onPointerDown={(event) => {
         if (event.target === event.currentTarget) setExpanded(false);
       }}>
-        {settingsOpen ? <div className="mx-auto max-w-[780px] px-6 pb-48 pt-20" aria-label="Settings">
-          <button type="button" className="mb-6 text-ui-sm text-muted-foreground hover:text-foreground" onClick={onCloseSettings}>← Back to interface</button>
-          <h1 className="mb-6 text-2xl font-semibold">Settings</h1>
-          <ExperienceSectionContent />
-        </div> : <div className="min-h-full" onPointerDown={() => setExpanded(false)}>{canvas}</div>}
+        <div className="min-h-full" onPointerDown={() => { setExpanded(false); if (settingsOpen) onCloseSettings(); }}>{canvas}</div>
       </main>
 
-      <AgentMetadataProvider agent={agent}>
+      {modelConfig ? <AgentMetadataProvider agent={agent}>
         <AgentErrorProvider>
-          <section aria-label="Primary conversation" data-simple-conversation="true"
-            className="absolute bottom-5 left-1/2 z-30 flex w-[calc(100%-1.5rem)] max-w-[680px] -translate-x-1/2 flex-col overflow-hidden rounded-[24px] bg-background/95 shadow-xl backdrop-blur-xl transition-[height,width] duration-200"
-            style={{ height: expanded ? 'min(75vh,720px)' : 'auto', border: 'var(--border-width) solid var(--border)' }}>
-            <div className="flex min-h-0 flex-1 flex-col" style={{ display: expanded ? 'flex' : 'none' }}>
-              <header className="flex h-10 shrink-0 items-center justify-between px-5 text-ui-sm text-muted-foreground">
-                <span>Conversation</span>
-                <button type="button" aria-label="Collapse conversation" onClick={() => setExpanded(false)}><ChevronDown className="size-4" /></button>
+          <div className="absolute bottom-5 left-1/2 z-30 flex w-[calc(100%-1.5rem)] max-w-[680px] -translate-x-1/2 flex-col gap-1.5">
+            {(expanded || settingsOpen) && <section aria-label={settingsOpen ? 'Simple Settings' : 'Conversation drawer'}
+              className="flex min-h-0 flex-col overflow-hidden rounded-[20px] bg-background/95 shadow-xl backdrop-blur-xl"
+              style={{ height: 'min(65vh,640px)', border: 'var(--border-width) solid var(--border)' }}>
+              <header className="flex h-10 shrink-0 items-center justify-between px-4 text-ui-sm text-muted-foreground">
+                <span>{settingsOpen ? 'Settings' : 'Conversation'}</span>
+                <button type="button" aria-label="Close drawer" onClick={() => { setExpanded(false); if (settingsOpen) onCloseSettings(); }}><ChevronDown className="size-4" /></button>
               </header>
-              <div className="min-h-0 flex-1 overflow-hidden">
+              {settingsOpen ? <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-5" aria-label="Settings">
+                <ExperienceSectionContent />
+                <div className="mt-6 space-y-2"><h2 className="font-medium">Model</h2>
+                  <select aria-label="Simple model" value={profile.profileId ?? ''} disabled={readOnly || profile.selecting}
+                    onChange={(event) => void profile.selectProfile(event.target.value)} className="w-full rounded-md bg-background p-2" style={{ border: 'var(--border-width) solid var(--border)' }}>
+                    {profile.availableProfiles.map(({ id, name }) => <option value={id} key={id}>{name}</option>)}
+                  </select>{profile.selectionError && <p role="alert">{profile.selectionError}</p>}
+                </div>
+              </div> : <div className="min-h-0 flex-1 overflow-hidden">
                 <AgentThread agentId={SIMPLE_PRIMARY_AGENT_ID} codexThreadId={threadId ?? undefined}
                   callerToken={callerToken} workspacePath={workspacePath} modelConfig={modelConfig}
                   isVisible={true} isEditorPane={false} readOnly={readOnly} allowConversationRestart={false}
-                  onModelConfigUpdate={(_id, next) => setModelConfig(next)}
+                  onModelConfigUpdate={() => { /* Simple model selection is persisted through Settings. */ }}
                   onCodexThreadIdAssigned={handleThreadAssigned}
                   onLabelUpdate={(_id, _label, running) => setIsStreaming(running)}
                   onMessageCountChange={(_id, count) => setMessageCount(count)} />
-              </div>
-            </div>
-            <div className="min-w-0 shrink-0 px-3 pb-2 pt-2">
+              </div>}
+            </section>}
+          <section aria-label="Primary conversation" data-simple-conversation="true"
+            className="min-w-0 shrink-0 overflow-hidden rounded-[22px] bg-background/95 shadow-xl backdrop-blur-xl"
+            style={{ border: 'var(--border-width) solid var(--border)' }}>
+            <div className="min-w-0 px-3 pb-2 pt-2">
               {persistenceError && <div role="alert" className="mb-2 rounded-md bg-destructive/10 px-3 py-2 text-ui-sm text-destructive">
                 The primary conversation could not be saved. Reload Interpreter to recover before sending again.
                 <button type="button" className="ml-2 underline" onClick={() => window.location.reload()}>Reload</button>
               </div>}
               {overlayError && <div role="alert" className="mb-2 rounded-md bg-destructive/10 px-3 py-2 text-ui-sm text-destructive">{overlayError}</div>}
-              {!expanded && <button type="button" aria-label="Expand conversation" aria-expanded="false"
-                onClick={() => setExpanded(true)} className="mb-1 flex w-full items-center justify-between px-3 py-1 text-ui-xs text-muted-foreground">
-                <span>{isStreaming ? 'Interpreter is working…' : messageCount > 0 ? 'Show conversation' : 'Ask Interpreter anything'}</span>
-                <ChevronUp className="size-4" />
-              </button>}
+              <div className="flex h-7 min-w-0 items-center justify-between gap-2 px-2 text-ui-xs text-muted-foreground">
+                <span className="truncate">{isStreaming ? 'Interpreter is working…' : messageCount > 0 ? 'Continue with Interpreter' : 'Ask Interpreter anything'}</span>
+                <div className="flex shrink-0 gap-2">
+                  <button type="button" aria-label="Open Settings" onClick={onOpenSettings}><Settings2 className="size-4" /></button>
+                  <button type="button" aria-label={expanded ? 'Collapse conversation' : 'Expand conversation'} aria-expanded={expanded} onClick={() => { if (settingsOpen) onCloseSettings(); setExpanded(!expanded); }}>{expanded ? <ChevronDown className="size-4" /> : <ChevronUp className="size-4" />}</button>
+                </div>
+              </div>
               {!readOnly && !persistenceError && <ComposerArea isTerminal={false} agentId={SIMPLE_PRIMARY_AGENT_ID}
                 modelConfig={modelConfig} workspacePath={workspacePath} isStreaming={isStreaming}
                 messageCount={messageCount} showSuggestionChips={false} showQueuedMessages={expanded}
@@ -157,9 +153,14 @@ export function SimpleShell({ workspacePath, initialThreadId, onBindThread, onOp
                   }));
                 }} />}
             </div>
-          </section>
+          </section></div>
         </AgentErrorProvider>
-      </AgentMetadataProvider>
+      </AgentMetadataProvider> : <section aria-label="Model setup" className="absolute bottom-5 left-1/2 z-30 w-[calc(100%-1.5rem)] max-w-[680px] -translate-x-1/2 rounded-2xl bg-background p-4 shadow-lg">
+        {settingsOpen ? <div aria-label="Settings"><button type="button" onClick={onCloseSettings}>Close Settings</button><ExperienceSectionContent />
+          <p>Configure a saved non-terminal model in Advanced Settings before using Simple.</p></div> : <>
+          <p role="status">{profile.status === 'loading' ? 'Loading your model…' : profile.status === 'error' ? 'Could not load saved models. Reopen Interpreter to retry.' : 'Choose a non-terminal model in Settings to begin.'}</p>
+          <button type="button" onClick={onOpenSettings}>Open Settings</button></>}
+      </section>}
     </div>
   );
 }

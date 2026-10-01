@@ -21,7 +21,7 @@ vi.mock('../../../agent/contexts/AgentMetadataContext', () => ({
 vi.mock('../../../agent/contexts/AgentErrorContext', () => ({
   AgentErrorProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
-vi.mock('../../api', () => ({ getProfiles: async () => ({ profiles: [], defaultProfileId: null }) }));
+vi.mock('./useSimpleStoredProfile', () => ({ useSimpleStoredProfile: () => ({ status: 'ready', profileId: 'saved-profile', modelConfig: { profileId: 'saved-profile', model: 'test-model', provider: 'openai' }, availableProfiles: [{ id: 'saved-profile', name: 'Saved model' }], selecting: false, selectionError: null, selectProfile: vi.fn() }) }));
 vi.mock('../../remote/workstationConnection', () => ({ isWorkstationReadOnly: () => false }));
 vi.mock('@/ipc', () => ({ simplePrimaryThread: { onOverlaySubmit: () => () => {} } }));
 vi.mock('../../utils/layoutHelpers', () => ({ createAgentCallerToken: () => 'token-for-test' }));
