@@ -1287,11 +1287,21 @@ describe("CodexService", () => {
   test("wake admission starts only the exact existing thread and keeps its active-turn guard", async () => {
     const fake = createFakeClient();
     const service = new CodexService(fake.client);
-    assert.equal(await service.startExistingThreadTurn("thr_existing", "wake input", "/workspace"), "turn_1");
+    const bridgePolicy = {
+      inherit: "core",
+      set: { INTERPRETER_CLI_SERVER_CONNECTION: "file:/tmp/bridge", INTERPRETER_CALLER_TOKEN: "agtok_test" },
+    };
+    assert.equal(await service.startExistingThreadTurn("thr_existing", "wake input", "/workspace", {
+      mcp_servers: {}, shell_environment_policy: bridgePolicy,
+    }), "turn_1");
     assert.equal(fake.calls.resumeThread, 1);
     assert.equal(fake.calls.startThread, 0);
     assert.equal(fake.calls.startTurn, 1);
     assert.equal(fake.calls.resumeThreadModel[0], null);
+    assert.equal(fake.calls.resumeThreadModelProvider[0], null);
+    assert.deepEqual(fake.calls.resumeThreadConfig[0], {
+      mcp_servers: {}, shell_environment_policy: bridgePolicy,
+    });
     await assert.rejects(service.startExistingThreadTurn("thr_existing", "duplicate"), /already responding/);
     assert.equal(fake.calls.startTurn, 1);
   });
