@@ -257,6 +257,7 @@ export type CodexClient = {
   startTurn(params: {
     threadId: string;
     message?: string;
+    clientUserMessageId?: string;
     attachments?: StreamImageAttachment[];
     skills?: StreamSkillReference[];
     sandboxPolicy?: v2.SandboxPolicy;
@@ -269,6 +270,7 @@ export type CodexClient = {
     threadId: string;
     turnId: string;
     message?: string;
+    clientUserMessageId?: string;
     attachments?: StreamImageAttachment[];
     skills?: StreamSkillReference[];
   }): Promise<v2.TurnSteerResponse>;
@@ -974,6 +976,7 @@ export class CodexService {
     message: string,
     cwd?: string,
     config?: Record<string, JsonValue>,
+    clientUserMessageId?: string,
   ): Promise<string> {
     await this.reconcileTerminalTurn(threadId);
     this.assertNoActiveTurn(threadId);
@@ -981,7 +984,7 @@ export class CodexService {
     try {
       const resumedId = await this.client.resumeThread(threadId, null, null, cwd, config);
       if (resumedId !== threadId) throw new Error('Existing thread identity changed');
-      const turn = await this.client.startTurn({ threadId, message, cwd });
+      const turn = await this.client.startTurn({ threadId, message, cwd, clientUserMessageId });
       this.activeTurns.set(threadId, turn.id);
       return turn.id;
     } catch (error) {
@@ -1046,6 +1049,7 @@ export class CodexService {
     params: {
       turnId?: string;
       message?: string;
+      clientUserMessageId?: string;
       attachments?: StreamImageAttachment[];
       skills?: StreamSkillReference[];
     },
@@ -1061,6 +1065,7 @@ export class CodexService {
           threadId,
           turnId: activeTurnId,
           message: params.message,
+          ...(params.clientUserMessageId ? { clientUserMessageId: params.clientUserMessageId } : {}),
           attachments: params.attachments,
           skills: params.skills,
         });

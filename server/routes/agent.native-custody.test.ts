@@ -4,6 +4,7 @@ import request from 'supertest';
 import agentRouter from './agent';
 
 const app = express();
+app.use(express.json());
 app.use('/api/agent', agentRouter);
 const id = '00000000-0000-4000-8000-000000000001';
 const previous = process.env.WORKSTATION_WAKE_TOKEN;
@@ -29,5 +30,15 @@ describe('native custody diagnostic authentication', () => {
       .get(`/api/agent/threads/${id}/native-custody`)
       .set('Authorization', 'Bearer test-private-token');
     expect(denied.status).toBe(401);
+  });
+
+  test('ambiguous offer disposition requires the private bearer and an exact no-replay confirmation', async () => {
+    process.env.WORKSTATION_WAKE_TOKEN = 'test-private-token';
+    const route = `/api/agent/threads/${id}/wake-events/source/event/hold`;
+    expect((await request(app).post(route).send({ turnId: 'turn-1', confirmedNoReplay: true })).status).toBe(401);
+    expect((await request(app).post(route).set('Authorization', 'Bearer test-private-token')
+      .send({ turnId: 'turn-1' })).status).toBe(400);
+    expect((await request(app).post(route).set('Authorization', 'Bearer test-private-token')
+      .send({ confirmedNoReplay: true })).status).toBe(400);
   });
 });

@@ -170,6 +170,25 @@ router.get('/threads/:threadId/native-custody', async (req: Request, res: Respon
   }
 });
 
+// Explicit local operator disposition of a terminal ambiguous offer. This is
+// not an admission receipt: retain the original event for manual review.
+router.post('/threads/:threadId/wake-events/:sourceId/:eventId/hold', async (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  if (req.body?.confirmedNoReplay !== true || typeof req.body?.turnId !== 'string') {
+    return res.status(400).json({ error: 'Exact turn and no-replay confirmation required.' });
+  }
+  try {
+    await readyWakeSources();
+    const event = await wakeSources.holdOffered(req.params.threadId, req.params.sourceId, req.params.eventId, req.body.turnId);
+    return res.json({ eventId: event.eventId, status: event.status, turnId: event.turnId });
+  } catch {
+    return res.status(409).json({ error: 'Native custody cannot establish a terminal ambiguous offer.' });
+  }
+});
+
 router.get('/threads/:threadId/wake-sources', async (req: Request, res: Response) => {
   try { await readyWakeSources(); res.json(wakeSources.list(req.params.threadId)); }
   catch { res.status(503).json({ error: 'Wake sources unavailable.' }); }

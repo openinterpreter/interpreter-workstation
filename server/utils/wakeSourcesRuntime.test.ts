@@ -38,6 +38,9 @@ describe('native wake browser-tool bridge', () => {
 
     expect(await startWakeThreadTurn(threadId, 'next wake', service)).toBe('native-turn');
     expect(agentTabManager.getBindingForThread(threadId)?.callerToken).toBe(binding?.callerToken);
+    expect(await startWakeThreadTurn(threadId, 'identified wake', service, 'wake_fixture'))
+      .toBe('native-turn');
+    expect(received[4]).toBe('wake_fixture');
   });
 
   test('does not mint a caller or start a turn for another thread identity', async () => {

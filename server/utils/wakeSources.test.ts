@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { WakeSources, wakeInput, wakeTokenValid, type WakeNative } from './wakeSources';
+import { WakeSources, wakeClientId, wakeInput, wakeTokenValid, type WakeNative } from './wakeSources';
 import { nextCivilDaily } from './civilSchedule';
 
 async function fixture() {
@@ -174,6 +174,91 @@ describe('durable thread wake sources', () => {
       await w.tick();
       expect(w.list('thread-1').events[0]?.status).toBe('admitted');
     } finally { await f.cleanup(); }
+  });
+
+  test('stable native client ID reconciles a steered receipt without replaying a missing text marker', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-client-id-'));
+    const receipts: string[] = [];
+    let submissions = 0;
+    const native: WakeNative = {
+      inspect: async () => ({ messages: [], clientIds: receipts }),
+      steer: async () => { throw new Error('unexpected steer'); },
+      start: async (_thread, _message, clientId) => {
+        submissions++;
+        expect(clientId).toMatch(/^wake_[0-9a-f]{64}$/);
+        return 'turn-1';
+      },
+    };
+    const first = new WakeSources(native, root);
+    try {
+      await first.initialize();
+      const event = await first.ingest('thread-1', 'source-1', 'event-1', 'approved input');
+      const second = await first.ingest('thread-1', 'source-1', 'event-2', 'later input');
+      expect(wakeClientId(event)).not.toBe(wakeClientId(second));
+      await first.tick();
+      expect(first.list('thread-1').events.map(e => e.status)).toEqual(['offered', 'pending']);
+      expect(submissions).toBe(1);
+      await first.stop();
+      const resumed = new WakeSources(native, root);
+      try {
+        await resumed.initialize();
+        await resumed.tick(Date.now() + 300_000);
+        expect(submissions).toBe(1);
+        receipts.push(wakeClientId(event));
+        await resumed.tick();
+        expect(resumed.list('thread-1').events[0]?.status).toBe('admitted');
+        expect(submissions).toBe(1);
+        await resumed.tick();
+        expect(submissions).toBe(2);
+      } finally { await resumed.stop(); }
+    } finally { await first.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  test('only an exact terminal queue-empty ambiguous offer may be held without a duplicate turn', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-hold-'));
+    let activeTurnId: string | undefined;
+    let turnStatus = 'inProgress';
+    let queueCount = 0;
+    let starts = 0;
+    const messages: string[] = [];
+    const native: WakeNative = {
+      inspect: async () => ({ activeTurnId, messages }),
+      custody: async () => ({ turnStatus, queuedSubmissionCount: queueCount }),
+      steer: async () => { throw new Error('unexpected steer'); },
+      start: async (_thread, message) => { starts++; if (starts > 1) messages.push(message); return 'turn-offered'; },
+    };
+    const wake = new WakeSources(native, root);
+    try {
+      await wake.initialize();
+      await wake.put({ id: 'old-schedule', threadId: 'thread-1', kind: 'schedule', message: 'old work',
+        at: new Date(Date.now() - 1000).toISOString() });
+      await wake.tick();
+      const first = wake.list('thread-1').events[0]!;
+      expect(first.status).toBe('offered');
+      await wake.ingest('thread-1', 'provider', 'later', 'operator input');
+      await expect(wake.holdOffered('thread-1', 'old-schedule', first.eventId, 'wrong-turn')).rejects.toThrow('mismatch');
+      await expect(wake.holdOffered('thread-1', 'old-schedule', first.eventId, 'turn-offered')).rejects.toThrow('terminal');
+      turnStatus = 'interrupted'; queueCount = 1;
+      await expect(wake.holdOffered('thread-1', 'old-schedule', first.eventId, 'turn-offered')).rejects.toThrow('terminal');
+      queueCount = 0; activeTurnId = 'still-active';
+      await expect(wake.holdOffered('thread-1', 'old-schedule', first.eventId, 'turn-offered')).rejects.toThrow('terminal');
+      activeTurnId = undefined;
+      messages.push(wakeInput(first));
+      await expect(wake.holdOffered('thread-1', 'old-schedule', first.eventId, 'turn-offered')).rejects.toThrow('receipt exists');
+      messages.splice(0);
+      const held = await wake.holdOffered('thread-1', 'old-schedule', first.eventId, 'turn-offered');
+      expect(held.status).toBe('held');
+      expect(held.message).toBe('old work');
+      expect(wake.list('thread-1').sources[0]?.status).toBe('error');
+      await wake.put({ id: 'old-schedule', threadId: 'thread-1', kind: 'schedule', message: 'reviewed future work',
+        at: new Date(Date.now() + 1_000_000).toISOString() });
+      expect((await wake.ingest('thread-1', 'old-schedule', first.eventId, 'duplicate')).status).toBe('held');
+      await wake.tick();
+      expect(starts).toBe(2);
+      expect(wake.list('thread-1').events.map(e => e.status)).toEqual(['held', 'offered']);
+      await wake.tick(Date.now() + 300_000);
+      expect(starts).toBe(2);
+    } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
   });
 
   test('later provider or scheduled input cannot overtake an ambiguous native receipt', async () => {
