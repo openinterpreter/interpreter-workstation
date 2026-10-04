@@ -187,6 +187,20 @@ const includeElectronWorkstationServers =
   Boolean(process.versions.electron)
   || process.env.INTERPRETER_ENABLE_HEADLESS_BROWSER_TOOLS === '1';
 
+// A headless sidecar owns the browser relay but not Electron windows, layout,
+// selection or desktop settings. Expose only relay-backed browser tools under
+// the existing server ID; never advertise Electron-only handlers in a sidecar.
+const HEADLESS_BROWSER_TOOL_NAMES = new Set([
+  'interpreter_whole_computer_state_get',
+  'interpreter_browser_tab_activate',
+  'interpreter_browser_page_inspect',
+  'interpreter_browser_page_trace',
+  'interpreter_browser_page_click',
+  'interpreter_browser_page_type',
+  'interpreter_browser_page_select',
+  'interpreter_browser_page_scroll',
+]);
+
 /**
  * All built-in servers (internal - includes hidden)
  */
@@ -206,9 +220,8 @@ const ALL_BUILTIN_SERVERS: BuiltinServerDefinition[] = [
   jsReplServerDefinition,
   ...(mediaAiServerDefinition ? [mediaAiServerDefinition] : []),
   ...(transcribeServerDefinition ? [transcribeServerDefinition] : []),
-  // Most workstation tools require Electron BrowserWindow state. The explicit
-  // headless opt-in is used by deterministic browser-extension CLI smoke tests
-  // for the browser page tools that do not depend on Electron windows.
+  // Browser relay tools work in headless sidecars. The full tool set is
+  // reserved for Electron (or the explicit deterministic smoke-test opt-in).
   ...(includeElectronWorkstationServers ? [interpreterServerDefinition] : []),
   ...(process.versions.electron ? [interpreterOverlayServerDefinition] : []),
   ...(process.versions.electron ? [selectionServerDefinition] : []),
@@ -219,8 +232,20 @@ const ALL_BUILTIN_SERVERS: BuiltinServerDefinition[] = [
   agentWindowsServerDefinition,
 ];
 
+function getAllBuiltinServers(): BuiltinServerDefinition[] {
+  if (includeElectronWorkstationServers) return ALL_BUILTIN_SERVERS;
+  // Resolve this binding only on discovery. The headless relay imports the
+  // agent manager, which can in turn import this registry during module init.
+  return [...ALL_BUILTIN_SERVERS, {
+    ...interpreterServerDefinition,
+    tools: interpreterServerDefinition.tools.filter((tool) =>
+      HEADLESS_BROWSER_TOOL_NAMES.has(tool.name)
+    ),
+  }];
+}
+
 export function getBuiltinServersIncludingHidden(): BuiltinServerDefinition[] {
-  return [...ALL_BUILTIN_SERVERS];
+  return [...getAllBuiltinServers()];
 }
 
 export function isHiddenBuiltinServerId(serverId: string): boolean {
@@ -228,7 +253,7 @@ export function isHiddenBuiltinServerId(serverId: string): boolean {
 }
 
 export function getAgentFacingHiddenBuiltinServers(): BuiltinServerDefinition[] {
-  return ALL_BUILTIN_SERVERS.filter((server) =>
+  return getAllBuiltinServers().filter((server) =>
     (AGENT_FACING_HIDDEN_SERVER_IDS as readonly string[]).includes(server.id)
   );
 }
@@ -253,7 +278,7 @@ export const BUILTIN_SERVERS: BuiltinServerDefinition[] = ALL_BUILTIN_SERVERS.fi
  */
 export function getBuiltinServers(): BuiltinServerDefinition[] {
   const hidden = getHiddenServerIds();
-  return ALL_BUILTIN_SERVERS.filter((s) => !hidden.includes(s.id));
+  return getAllBuiltinServers().filter((s) => !hidden.includes(s.id));
 }
 
 /**
@@ -264,7 +289,7 @@ export function getBuiltinServer(id: string): BuiltinServerDefinition | undefine
 }
 
 export function getBuiltinServerIncludingHidden(id: string): BuiltinServerDefinition | undefined {
-  return ALL_BUILTIN_SERVERS.find((server) => server.id === id);
+  return getAllBuiltinServers().find((server) => server.id === id);
 }
 
 /**

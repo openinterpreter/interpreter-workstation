@@ -1295,46 +1295,22 @@ describe('interpreterCli handlers', () => {
   });
 
   test('describes a visible tool for the bound caller token', async () => {
-    setToolManager({
-      async listAllToolServers() {
-        return [
-          {
-            id: 'builtin-interpreter',
-            name: 'Interpreter',
-            description: 'Query and control the Interpreter UI',
-            state: {
-              status: 'connected',
-              tools: [
-                { name: 'interpreter_settings_set', description: 'Set Interpreter settings', inputSchema: { type: 'object', required: ['path', 'value'] } },
-              ],
-            },
-          },
-        ];
-      },
-    } as any);
+    setToolManager(new ToolManager());
     agentTabManager.bindThread({
       agentId: 'agent-describe',
       threadId: 'thr_describe',
       callerToken: 'agtok_describe',
-      allowedToolNames: ['builtin-interpreter__interpreter_settings_set'],
+      allowedToolNames: ['builtin-interpreter__interpreter_browser_page_inspect'],
     });
 
-    await expect(describeInterpreterCliTool(
+    const described = await describeInterpreterCliTool(
       'agtok_describe',
       'builtin-interpreter',
-      'interpreter_settings_set',
-    )).resolves.toEqual({
-      server: {
-        id: 'builtin-interpreter',
-        name: 'Interpreter',
-        description: 'Query and control the Interpreter UI',
-      },
-      tool: {
-        name: 'interpreter_settings_set',
-        description: 'Set Interpreter settings',
-        inputSchema: { type: 'object', required: ['path', 'value'] },
-      },
-    });
+      'interpreter_browser_page_inspect',
+    );
+    expect(described.server.id).toBe('builtin-interpreter');
+    expect(described.tool.name).toBe('interpreter_browser_page_inspect');
+    expect((described.tool.inputSchema as { required?: string[] }).required).toEqual(['tab_ref']);
   });
 
   test('describes visible builtin tools with annotations from their source definition', async () => {

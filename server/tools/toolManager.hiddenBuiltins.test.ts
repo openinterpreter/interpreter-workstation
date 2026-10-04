@@ -17,6 +17,7 @@ mock.module('../utils/mcpServiceBridge', () => ({
 import { clearConfigCache, setConfigOverride } from '../configStore';
 import {
   AGENT_FACING_HIDDEN_SERVER_IDS,
+  getBuiltinServers,
   getBuiltinServersIncludingHidden,
   isHiddenBuiltinServerId,
 } from './builtinTools';
@@ -29,6 +30,23 @@ afterEach(() => {
 });
 
 describe('ToolManager hidden builtin discovery', () => {
+  test('exposes only relay-backed browser tools from builtin-interpreter in a headless sidecar', () => {
+    if (process.versions.electron || process.env.INTERPRETER_ENABLE_HEADLESS_BROWSER_TOOLS === '1') return;
+    const server = getBuiltinServers().find((entry) => entry.id === 'builtin-interpreter');
+    expect(server).toBeDefined();
+    expect(server!.tools.map((tool) => tool.name).sort()).toEqual([
+      'interpreter_whole_computer_state_get',
+      'interpreter_browser_tab_activate',
+      'interpreter_browser_page_inspect',
+      'interpreter_browser_page_trace',
+      'interpreter_browser_page_click',
+      'interpreter_browser_page_type',
+      'interpreter_browser_page_select',
+      'interpreter_browser_page_scroll',
+    ].sort());
+    expect(server!.tools.some((tool) => tool.name === 'interpreter_layout_set')).toBe(false);
+  });
+
   test('keeps every built-in server on the builtin-id convention', () => {
     for (const server of getBuiltinServersIncludingHidden()) {
       expect(server.id.startsWith('builtin-')).toBe(true);
