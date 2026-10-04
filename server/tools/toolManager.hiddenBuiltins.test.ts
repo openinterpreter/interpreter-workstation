@@ -30,12 +30,13 @@ afterEach(() => {
 });
 
 describe('ToolManager hidden builtin discovery', () => {
-  test('exposes only relay-backed browser tools from builtin-interpreter in a headless sidecar', () => {
+  test('exposes only relay-backed browser and thread-scoped schedule tools in a headless sidecar', () => {
     if (process.versions.electron || process.env.INTERPRETER_ENABLE_HEADLESS_BROWSER_TOOLS === '1') return;
     const server = getBuiltinServers().find((entry) => entry.id === 'builtin-interpreter');
     expect(server).toBeDefined();
     expect(server!.tools.map((tool) => tool.name).sort()).toEqual([
       'interpreter_whole_computer_state_get',
+      'interpreter_wake_schedule',
       'interpreter_browser_tab_activate',
       'interpreter_browser_page_inspect',
       'interpreter_browser_page_trace',

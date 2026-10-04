@@ -191,6 +191,8 @@ const includeElectronWorkstationServers =
 // selection or desktop settings. Expose only relay-backed browser tools under
 // the existing server ID; never advertise Electron-only handlers in a sidecar.
 const HEADLESS_BROWSER_TOOL_NAMES = new Set([
+  // Thread-scoped durable schedules are hosted by the sidecar, not Electron.
+  'interpreter_wake_schedule',
   'interpreter_whole_computer_state_get',
   'interpreter_browser_tab_activate',
   'interpreter_browser_page_inspect',
