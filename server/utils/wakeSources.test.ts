@@ -261,6 +261,51 @@ describe('durable thread wake sources', () => {
     } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
   });
 
+  test('held schedule occurrence stays held while an explicit same-ID rearm admits only the next sequence', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-held-rearm-'));
+    const messages: string[] = [];
+    let starts = 0;
+    const native: WakeNative = {
+      inspect: async () => ({ messages }),
+      custody: async () => ({ turnStatus: 'completed', queuedSubmissionCount: 0 }),
+      steer: async () => { throw new Error('unexpected steer'); },
+      start: async () => `turn-${++starts}`,
+    };
+    const wake = new WakeSources(native, root);
+    try {
+      await wake.initialize();
+      const id = 'existing-monitor';
+      const interval = 1_200_000;
+      await wake.put({ id, threadId: 'thread-1', kind: 'schedule', message: 'existing instruction',
+        at: new Date(Date.now() - 1000).toISOString(), everyMs: interval });
+      await wake.tick();
+      const first = wake.list('thread-1').events[0]!;
+      expect(first.eventId).toBe(`${id}-1`);
+      expect((await wake.holdOffered('thread-1', id, first.eventId, 'turn-1')).status).toBe('held');
+      const dueAt = Date.now() + 120_000;
+      const updated = await wake.put({ id, threadId: 'thread-1', kind: 'schedule', message: 'existing instruction',
+        at: new Date(dueAt).toISOString(), everyMs: interval });
+      expect(updated.sequence).toBe(1);
+      await wake.tick(dueAt - 1);
+      expect(starts).toBe(1);
+      await wake.tick(dueAt);
+      const [held, next] = wake.list('thread-1').events;
+      expect(held?.status).toBe('held');
+      expect(held?.message).toBe('existing instruction');
+      expect(next?.eventId).toBe(`${id}-2`);
+      expect(next?.status).toBe('offered');
+      expect(starts).toBe(2);
+      await wake.tick(dueAt + 1);
+      expect(starts).toBe(2);
+      messages.push(wakeInput(next!));
+      await wake.tick(dueAt + 2);
+      const state = wake.list('thread-1');
+      expect(state.events.map(event => event.status)).toEqual(['held', 'admitted']);
+      expect(state.sources[0]?.status).toBe('waiting');
+      expect(Date.parse(state.sources[0]!.nextAt!)).toBe(dueAt + 2 + interval);
+    } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
   test('later provider or scheduled input cannot overtake an ambiguous native receipt', async () => {
     const f = await fixture();
     try {

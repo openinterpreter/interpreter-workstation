@@ -342,7 +342,10 @@ export class WakeSources {
       if (this.stopping) break;
       if (!(source.status === 'waiting' || (source.kind === 'command' && source.status === 'error')) ||
           !source.nextAt || Date.parse(source.nextAt) > now ||
-          this.state.events.some(e => e.threadId === source.threadId && e.sourceId === source.id && e.status !== 'admitted')) continue;
+          // A held terminal offer is retained for audit, not an admission fence.
+          // Re-arm of that same source must still be explicit through put().
+          this.state.events.some(e => e.threadId === source.threadId && e.sourceId === source.id &&
+            (e.status === 'pending' || e.status === 'offered'))) continue;
       if (source.kind === 'schedule') {
         await this.exclusive(async () => {
           // Commit event custody and its sequence in the same atomic replace.
