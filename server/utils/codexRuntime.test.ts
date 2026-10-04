@@ -1305,6 +1305,13 @@ describe('runCodexAgentTurn overlay continuation', () => {
         service: fakeService,
         profile,
         threadId,
+        workspacePath: '/tmp/persistent-browser',
+        binding: { agentId: 'native-expanded', allowedToolNames: ['unapproved_tool'] },
+      })).rejects.toThrow('Persistent thread app-tool scope changed.');
+      await expect(runCodexAgentTurn({
+        service: fakeService,
+        profile,
+        threadId,
         workspacePath: '/tmp/another-workspace',
         binding: { agentId: 'native-third' },
       })).rejects.toThrow('Persistent thread app-tool scope changed.');
