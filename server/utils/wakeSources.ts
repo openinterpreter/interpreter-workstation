@@ -1,4 +1,4 @@
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, open, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
@@ -28,7 +28,7 @@ export type WakeEvent = {
   sourceId: string;
   eventId: string;
   message: string;
-  status: 'pending' | 'offered' | 'admitted';
+  status: 'pending' | 'offered' | 'admitted' | 'held';
   createdAt: string;
   offeredAt?: string;
   turnId?: string;
@@ -46,6 +46,10 @@ const MAX_SCHEDULE_ID = 143;
 const COMMAND_REARM_MS = 30_000;
 const marker = (source: string, id: string) => `[Wake event ${source}/${id}]`;
 export const wakeInput = (event: WakeEvent) => `${marker(event.sourceId, event.eventId)}\n${event.message}`;
+// Native user-message IDs give a second, machine-readable receipt when a
+// steered input is persisted independently of the turn that accepted the RPC.
+export const wakeClientId = (event: Pick<WakeEvent, 'threadId' | 'sourceId' | 'eventId'>) =>
+  `wake_${createHash('sha256').update(JSON.stringify([event.threadId, event.sourceId, event.eventId])).digest('hex')}`;
 function safeError(error: unknown): string {
   const message = error instanceof Error ? error.message.toLowerCase() : '';
   if (/usage|quota|credit|billing|limit/.test(message)) return 'Usage limit reached; operator action required';
@@ -62,9 +66,10 @@ export function wakeTokenValid(actual: string | undefined, supplied: string | un
 }
 
 export interface WakeNative {
-  inspect(threadId: string): Promise<{ activeTurnId?: string; messages: string[] }>;
-  steer(threadId: string, turnId: string, message: string): Promise<string>;
-  start(threadId: string, message: string): Promise<string>;
+  inspect(threadId: string): Promise<{ activeTurnId?: string; messages: string[]; clientIds?: string[] }>;
+  custody?(threadId: string, turnId: string): Promise<{ turnStatus?: string; queuedSubmissionCount: number }>;
+  steer(threadId: string, turnId: string, message: string, clientId?: string): Promise<string>;
+  start(threadId: string, message: string, clientId?: string): Promise<string>;
 }
 
 /** One owner per application process; all transitions use an atomic, mode-0600 replace. */
@@ -238,7 +243,8 @@ export class WakeSources {
     return this.exclusive(async () => {
       const old = this.state.sources.find(s => s.id === source.id && s.threadId === source.threadId);
       if (old?.status === 'running') throw new Error('Wait for the running command before changing it');
-      if (old && this.state.events.some(e => e.sourceId === old.id && e.threadId === old.threadId && e.status !== 'admitted')) {
+      if (old && this.state.events.some(e => e.sourceId === old.id && e.threadId === old.threadId &&
+        (e.status === 'pending' || e.status === 'offered'))) {
         throw new Error('Cannot change a source while its input awaits native admission');
       }
       if (old) this.state.sources.splice(this.state.sources.indexOf(old), 1);
@@ -279,7 +285,8 @@ export class WakeSources {
       // Keep stable IDs as compact admission receipts indefinitely. Bound only
       // inputs still awaiting admission, so a long-running thread cannot hit
       // a permanent lifetime event ceiling.
-      if (this.state.events.filter(e => e.threadId === threadId && e.status !== 'admitted').length >= 10_000) {
+      if (this.state.events.filter(e => e.threadId === threadId &&
+        (e.status === 'pending' || e.status === 'offered')).length >= 10_000) {
         throw new Error('Thread pending wake event limit reached; operator action required');
       }
       const event: WakeEvent = { threadId, sourceId, eventId, message, status: 'pending', createdAt: new Date().toISOString() };
@@ -287,6 +294,43 @@ export class WakeSources {
       await this.save();
       return structuredClone(event);
     });
+  }
+
+  /** Operator-only resolution of an ambiguous, terminal offer: retain its body and
+   * audit ID, but never replay or mislabel it as admitted. Later inputs may proceed.
+   * The caller must explicitly accept that this held event needs separate review.
+   */
+  async holdOffered(threadId: string, sourceId: string, eventId: string, turnId: string): Promise<WakeEvent> {
+    if (this.stopping) throw new Error('Wake admission is draining for restart');
+    if (![threadId, sourceId, eventId, turnId].every(x => ID.test(x))) throw new Error('Invalid wake custody ID');
+    const key = `${threadId}:${eventId}`;
+    if (this.ticking || this.inFlight.has(key)) throw new Error('Wake inspection in progress');
+    this.inFlight.add(key);
+    try { return await this.exclusive(async () => {
+      const event = this.state.events.find(e => e.threadId === threadId && e.sourceId === sourceId && e.eventId === eventId);
+      if (!event || event.status !== 'offered' || event.turnId !== turnId) throw new Error('Offered event/turn mismatch');
+      if (!this.native.custody) throw new Error('Native custody inspection unavailable');
+      const [state, custody] = await Promise.all([this.native.inspect(threadId), this.native.custody(threadId, turnId)]);
+      if (state.activeTurnId || !['completed', 'interrupted', 'failed'].includes(custody.turnStatus ?? '') ||
+          custody.queuedSubmissionCount !== 0) {
+        throw new Error('Native offer is not terminal and queue-empty');
+      }
+      if (state.clientIds?.includes(wakeClientId(event)) ||
+        state.messages.some(message => message === wakeInput(event) || message.startsWith(`${wakeInput(event)}\n`))) {
+        throw new Error('Native receipt exists; reconcile admission instead');
+      }
+      event.status = 'held';
+      event.error = 'Operator-held ambiguous native offer; not admitted or replayed';
+      delete event.nextAttemptAt;
+      const source = this.state.sources.find(s => s.threadId === threadId && s.id === sourceId);
+      if (source && source.status !== 'cancelled') {
+        source.status = 'error';
+        source.nextAt = undefined;
+        source.error = 'Operator-held ambiguous native offer; review source before rearming';
+      }
+      await this.save();
+      return structuredClone(event);
+    }); } finally { this.inFlight.delete(key); }
   }
 
   async tick(now = Date.now()): Promise<void> {
@@ -313,7 +357,8 @@ export class WakeSources {
           const existing = this.state.events.find(e => e.threadId === source.threadId &&
             e.sourceId === source.id && e.eventId === eventId);
           if (!existing) {
-            if (this.state.events.filter(e => e.threadId === source.threadId && e.status !== 'admitted').length >= 10_000) {
+            if (this.state.events.filter(e => e.threadId === source.threadId &&
+              (e.status === 'pending' || e.status === 'offered')).length >= 10_000) {
               source.status = 'error'; source.error = 'Thread pending wake event limit reached';
               await this.save(); return;
             }
@@ -337,7 +382,7 @@ export class WakeSources {
     // An ambiguous RPC result is never automatically resubmitted while its
     // original turn is still running. The marker in native history is the receipt.
     const seenThreads = new Set<string>();
-    for (const event of this.state.events.filter(e => e.status !== 'admitted')) {
+    for (const event of this.state.events.filter(e => e.status === 'pending' || e.status === 'offered')) {
       if (this.stopping) break;
       // Preserve durable per-thread input order. An ambiguous offered event or
       // a backoff must fence later inputs on that thread, not let them overtake
@@ -363,7 +408,8 @@ export class WakeSources {
       const source = this.state.sources.find(s => s.id === event.sourceId && s.threadId === event.threadId);
       if (source?.status === 'cancelled' && event.status === 'pending') return;
       const state = await this.native.inspect(event.threadId);
-      if (state.messages.some(message => message === wakeInput(event) || message.startsWith(`${wakeInput(event)}\n`))) {
+      if (state.clientIds?.includes(wakeClientId(event)) ||
+        state.messages.some(message => message === wakeInput(event) || message.startsWith(`${wakeInput(event)}\n`))) {
         await this.exclusive(async () => {
           event.status = 'admitted';
           event.message = '';
@@ -398,8 +444,8 @@ export class WakeSources {
       // reconciled against native history, rather than immediately retried.
       await this.exclusive(async () => { event.status = 'offered'; event.offeredAt = new Date(now).toISOString(); await this.save(); });
       const turnId = state.activeTurnId
-        ? await this.native.steer(event.threadId, state.activeTurnId, wakeInput(event))
-        : await this.native.start(event.threadId, wakeInput(event));
+        ? await this.native.steer(event.threadId, state.activeTurnId, wakeInput(event), wakeClientId(event))
+        : await this.native.start(event.threadId, wakeInput(event), wakeClientId(event));
       await this.exclusive(async () => { event.turnId = turnId; await this.save(); });
     } catch (error) {
       const explanation = safeError(error);

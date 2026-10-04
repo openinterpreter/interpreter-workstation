@@ -2462,6 +2462,7 @@ export class CodexAppServerClient {
   async startTurn(params: {
     threadId: string;
     message?: string;
+    clientUserMessageId?: string;
     attachments?: StreamImageAttachment[];
     skills?: StreamSkillReference[];
     sandboxPolicy?: v2.SandboxPolicy;
@@ -2513,6 +2514,7 @@ export class CodexAppServerClient {
       ...(params.model ? { model: params.model } : {}),
       ...(params.effort ? { effort: params.effort } : {}),
       ...(params.summary ? { summary: params.summary } : {}),
+      ...(params.clientUserMessageId ? { clientUserMessageId: params.clientUserMessageId } : {}),
     };
     const result = await this.rpcRequest(CLIENT_METHOD.turnStart, request);
 
@@ -2527,6 +2529,7 @@ export class CodexAppServerClient {
     threadId: string;
     turnId: string;
     message?: string;
+    clientUserMessageId?: string;
     attachments?: StreamImageAttachment[];
     skills?: StreamSkillReference[];
   }) {
@@ -2535,6 +2538,7 @@ export class CodexAppServerClient {
       threadId: params.threadId,
       input,
       expectedTurnId: params.turnId,
+      ...(params.clientUserMessageId ? { clientUserMessageId: params.clientUserMessageId } : {}),
     });
   }
 

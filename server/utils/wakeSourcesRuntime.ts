@@ -13,6 +13,7 @@ export async function startWakeThreadTurn(
   threadId: string,
   message: string,
   service = getCodexService(),
+  clientUserMessageId?: string,
 ): Promise<string> {
   const thread = await service.readThread(threadId);
   if (thread.id !== threadId) throw new Error('Wake destination changed');
@@ -38,7 +39,7 @@ export async function startWakeThreadTurn(
     shell_environment_policy: buildInterpreterCliShellEnvironmentPolicy(
       callerToken, process.env, process.platform, thread.cwd ?? undefined, connection,
     ),
-  });
+  }, clientUserMessageId);
 }
 
 export const wakeSources = new WakeSources({
@@ -50,13 +51,23 @@ export const wakeSources = new WakeSources({
       messages: thread.turns.flatMap(turn => turn.items.flatMap(item => item.type === 'userMessage'
         ? item.content.filter(input => input.type === 'text').map(input => input.text)
         : [])),
+      clientIds: thread.turns.flatMap(turn => turn.items.flatMap(item => item.type === 'userMessage' && item.clientId
+        ? [item.clientId] : [])),
     };
   },
-  steer(threadId, turnId, message) {
-    return getCodexService().steer(threadId, { turnId, message });
+  async custody(threadId, turnId) {
+    const service = getCodexService();
+    const [thread, custody] = await Promise.all([service.readThread(threadId), service.readNativeCustody(threadId)]);
+    return {
+      turnStatus: thread.turns.find(turn => turn.id === turnId)?.status,
+      queuedSubmissionCount: custody.queuedSubmissionCount,
+    };
   },
-  async start(threadId, message) {
-    return startWakeThreadTurn(threadId, message);
+  steer(threadId, turnId, message, clientUserMessageId) {
+    return getCodexService().steer(threadId, { turnId, message, clientUserMessageId });
+  },
+  async start(threadId, message, clientUserMessageId) {
+    return startWakeThreadTurn(threadId, message, getCodexService(), clientUserMessageId);
   },
 });
 let initialization: Promise<void> | undefined;
