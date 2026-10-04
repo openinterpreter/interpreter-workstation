@@ -1223,6 +1223,20 @@ function formatTurnErrorEnglish(
     return CYBER_POLICY_MESSAGE;
   }
 
+  // App-server can introduce scalar error kinds before the generated client
+  // protocol is refreshed. Preserve a useful message for those forward-
+  // compatible values without weakening the exhaustive match below.
+  const forwardCompatibleErrorInfo = error.codexErrorInfo as
+    | v2.CodexErrorInfo
+    | "rateLimitExceeded"
+    | "misalignmentPolicyViolation";
+  if (forwardCompatibleErrorInfo === "rateLimitExceeded") {
+    return "Rate limit exceeded. Try again later.";
+  }
+  if (forwardCompatibleErrorInfo === "misalignmentPolicyViolation") {
+    return unwrapJsonErrorMessage(error.message);
+  }
+
   const formattedError = match(error.codexErrorInfo as ExhaustivelyFormattedCodexErrorInfo)
     .with("unauthorized", () => {
       if (isRefreshTokenAuthError(error.message)) {
@@ -1233,8 +1247,6 @@ function formatTurnErrorEnglish(
     .with("usageLimitExceeded", () =>
       formatUsageLimitExceeded(error.message, error.additionalDetails, context),
     )
-    .with("rateLimitExceeded", () => "Rate limit exceeded. Try again later.")
-    .with("misalignmentPolicyViolation", () => unwrapJsonErrorMessage(error.message))
     .with(
       "contextWindowExceeded",
       () => "Context window exceeded. Start a new conversation.",

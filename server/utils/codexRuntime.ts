@@ -372,6 +372,7 @@ export interface RunCodexAgentTurnOptions {
   threadId?: string;
   binding: AgentRuntimeBindingOptions;
   sandboxPolicy?: v2.SandboxPolicy;
+  additionalWritableRoots?: string[];
   reasoningEffort?: ReasoningEffort | null;
   reasoningSummary?: CodexReasoningSummary | null;
   system?: string;
@@ -2138,6 +2139,7 @@ export async function runCodexAgentTurn(
           baseInstructions: getMainAgentBaseInstructions(),
           developerInstructions,
           config: threadConfig,
+          additionalWritableRoots: options.additionalWritableRoots,
           effort: options.reasoningEffort ?? null,
           summary: options.reasoningSummary ?? null,
           idleTimeoutMs: options.idleTimeoutMs,

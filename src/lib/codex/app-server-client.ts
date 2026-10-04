@@ -2156,6 +2156,8 @@ export class CodexAppServerClient {
     cwd?: string | null,
     config?: Record<string, JsonValue> | null,
     developerInstructions?: string | null,
+    dynamicTools?: v2.DynamicToolSpec[] | null,
+    additionalWritableRoots?: string[],
   ) {
     const threadApprovalPolicy = await getConfigApprovalPolicy();
     const runtimeAccess = await this.getRuntimeAccessSnapshot();
@@ -2166,7 +2168,7 @@ export class CodexAppServerClient {
       allowTempAccess: process.platform === "darwin" ? runtimeAccess.macosTempAccess : true,
       cwd,
       additionalReadableRoots: getInterpreterCliSandboxReadableRoots(),
-      additionalWritableRoots: getInterpreterCliSandboxWritableRoots(),
+      additionalWritableRoots: [...getInterpreterCliSandboxWritableRoots(), ...(additionalWritableRoots ?? [])],
     });
     const nextConfig = withWorkspacePermissionConfig(config, workspacePermission);
 
@@ -2180,6 +2182,7 @@ export class CodexAppServerClient {
       ...(cwd ? { cwd } : {}),
       ...(baseInstructions ? { baseInstructions } : {}),
       ...(developerInstructions ? { developerInstructions } : {}),
+      ...(dynamicTools?.length ? { dynamicTools } : {}),
       config: nextConfig,
       approvalPolicy: threadApprovalPolicy as v2.ThreadStartParams["approvalPolicy"],
       ...(workspacePermission
@@ -2256,6 +2259,7 @@ export class CodexAppServerClient {
     config?: Record<string, JsonValue> | null,
     baseInstructions?: string | null,
     developerInstructions?: string | null,
+    additionalWritableRoots?: string[],
   ) {
     const runtimeAccess = await this.getRuntimeAccessSnapshot();
     const workspacePermission = buildCodexWorkspacePermissionSelection({
@@ -2265,7 +2269,7 @@ export class CodexAppServerClient {
       allowTempAccess: process.platform === "darwin" ? runtimeAccess.macosTempAccess : true,
       cwd,
       additionalReadableRoots: getInterpreterCliSandboxReadableRoots(),
-      additionalWritableRoots: getInterpreterCliSandboxWritableRoots(),
+      additionalWritableRoots: [...getInterpreterCliSandboxWritableRoots(), ...(additionalWritableRoots ?? [])],
     });
     const nextConfig = withWorkspacePermissionConfig(config, workspacePermission);
 
@@ -2469,6 +2473,7 @@ export class CodexAppServerClient {
     model?: string;
     effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
     summary?: "auto" | "concise" | "detailed" | "none" | null;
+    additionalWritableRoots?: string[];
   }) {
     const input = buildUserInput(params);
 
@@ -2481,7 +2486,7 @@ export class CodexAppServerClient {
       allowTempAccess: process.platform === "darwin" ? runtimeAccess.macosTempAccess : true,
       cwd: params.cwd,
       additionalReadableRoots: getInterpreterCliSandboxReadableRoots(),
-      additionalWritableRoots: getInterpreterCliSandboxWritableRoots(),
+      additionalWritableRoots: [...getInterpreterCliSandboxWritableRoots(), ...(params.additionalWritableRoots ?? [])],
     });
     const sandboxPolicy = workspacePermission
       ? undefined

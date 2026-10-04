@@ -13,6 +13,7 @@ import {
   sendWhatsAppMessageWithRetry,
   broadcastEvent,
   notifyAgent,
+  getBooleanUISettingSync,
 } from './whatsappBridgeDependencies';
 import {
   extractDownloadableMedia,
@@ -20,6 +21,7 @@ import {
 } from '../tools/builtin-tools/whatsapp/extract';
 import { jidToPhone } from '../tools/builtin-tools/whatsapp/normalize';
 import type { CachedMessage } from '../tools/builtin-tools/whatsapp/types';
+const SIMPLE_PRIMARY_AGENT_ID = 'simple-primary-agent';
 
 interface PendingBridgeSession {
   requestId: string;
@@ -36,6 +38,7 @@ interface ActiveBridgeSession {
   pendingMessages: string[];
   createdAt: number;
   lastActivityAt: number;
+  replyPending: boolean;
 }
 
 type BridgeSession = PendingBridgeSession | ActiveBridgeSession;
@@ -172,6 +175,7 @@ function enqueueIncomingMessage(text: string): void {
   if (!activeSession) return;
   activeSession.pendingMessages.push(trimmed);
   if (hasActiveAgentSession(activeSession)) {
+    activeSession.replyPending = true;
     flushPendingMessages();
   }
 }
@@ -191,6 +195,21 @@ function createSessionFromInbound(chatId: string, initialMessage: string): void 
   if (!firstMessage) return;
   const requestId = `whatsapp-bridge-${nanoid()}`;
   const canonicalChatId = canonicalizeChatId(chatId);
+
+  if (!getBooleanUISettingSync('advancedMode')) {
+    activeSession = {
+      requestId,
+      chatId: canonicalChatId,
+      agentId: SIMPLE_PRIMARY_AGENT_ID,
+      conversationId: null,
+      pendingMessages: [firstMessage],
+      createdAt: Date.now(),
+      lastActivityAt: Date.now(),
+      replyPending: true,
+    };
+    flushPendingMessages();
+    return;
+  }
 
   activeSession = {
     requestId,
@@ -606,6 +625,7 @@ export function onWhatsAppBridgeTabCreated(requestId: string, agentId: string): 
     agentId,
     conversationId: null,
     lastActivityAt: Date.now(),
+    replyPending: true,
   };
 
   flushPendingMessages();
@@ -627,6 +647,7 @@ export async function forwardWhatsAppAssistantMessage(
   const session = activeSession;
   if (!hasActiveAgentSession(session)) return false;
   if (session.conversationId !== conversationId) return false;
+  if (!session.replyPending) return false;
 
   const text = assistantResponseText.trim();
   if (!text) return false;
@@ -661,6 +682,7 @@ export async function forwardWhatsAppAssistantMessage(
       return false;
     }
     session.lastActivityAt = Date.now();
+    session.replyPending = false;
     return true;
   } catch (error) {
     console.error('[WhatsAppBridge] Failed to send assistant reply:', error);

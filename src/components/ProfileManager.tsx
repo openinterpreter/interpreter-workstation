@@ -1464,9 +1464,16 @@ export function ProfileManager({ selectedProfileId: _selectedProfileId, onProfil
   const handleSaveProfile = async (updatedProfile: Profile): Promise<Profile | null> => {
     setIsSaving(true);
     try {
+      // TOML has no null value. Form controls use null for a few explicit
+      // "automatic/native" selections, so remove those before the profile is
+      // sent to OIX instead of making every new API profile fail to save.
+      const withoutNulls = JSON.parse(JSON.stringify(
+        updatedProfile,
+        (_key, value) => value === null ? undefined : value,
+      )) as Profile;
       const normalizedProfile: Profile = {
-        ...updatedProfile,
-        apiKey: updatedProfile.apiKey?.trim() || undefined,
+        ...withoutNulls,
+        apiKey: withoutNulls.apiKey?.trim() || undefined,
       };
       let savedProfile: Profile | null = null;
       if (normalizedProfile.id.startsWith('new:')) {

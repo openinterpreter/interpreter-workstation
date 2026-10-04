@@ -23,7 +23,9 @@ function explicitAccess(params: URLSearchParams): WorkstationAccess | null {
 
 function explicitAuthentication(params: URLSearchParams): WorkstationAuthentication | null {
   const authentication = params.get('auth');
-  return authentication === 'none' || authentication === 'password' ? authentication : null;
+  return authentication === 'none' || authentication === 'password' || authentication === 'pairing'
+    ? authentication
+    : null;
 }
 
 /**
@@ -93,7 +95,11 @@ export function getBrowserWorkstationStorageKey(): string | null {
   const connection = getBrowserWorkstationConnection();
   if (connection.host !== 'remote' || connection.publication) return null;
   const target = connection.endpoint || (typeof window !== 'undefined' ? window.location.origin : 'remote');
-  const identity = `${target}|${connection.access}`;
+  return getWorkstationStorageKey(target, connection.access);
+}
+
+function getWorkstationStorageKey(endpoint: string, access: WorkstationAccess): string {
+  const identity = `${endpoint}|${access}`;
   let hash = 2166136261;
   for (let index = 0; index < identity.length; index += 1) {
     hash ^= identity.charCodeAt(index);
@@ -102,9 +108,64 @@ export function getBrowserWorkstationStorageKey(): string | null {
   return `workstation-remote-${(hash >>> 0).toString(36)}`;
 }
 
-export function workstationFetch(input: string, init: RequestInit = {}): Promise<Response> {
-  return fetch(resolveWorkstationApiUrl(input), {
+function accessTokenStorageKey(): string | null {
+  const storageKey = getBrowserWorkstationStorageKey();
+  return storageKey ? `${storageKey}:access-token` : null;
+}
+
+export function saveBrowserWorkstationAccessToken(token: string): void {
+  const key = accessTokenStorageKey();
+  if (!key || typeof window === 'undefined') return;
+  window.localStorage.setItem(key, token);
+}
+
+export function saveWorkstationAccessToken(
+  endpoint: string,
+  access: WorkstationAccess,
+  token: string,
+): void {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(`${getWorkstationStorageKey(endpoint, access)}:access-token`, token);
+}
+
+export function clearBrowserWorkstationAccessToken(): void {
+  const key = accessTokenStorageKey();
+  if (!key || typeof window === 'undefined') return;
+  window.localStorage.removeItem(key);
+}
+
+async function resolveWorkstationFetchUrl(path: string): Promise<string> {
+  const resolved = resolveWorkstationApiUrl(path);
+  const connection = getBrowserWorkstationConnection();
+  if (
+    connection.host === 'remote'
+    || typeof window === 'undefined'
+    || !window.electron
+    || window.location.protocol !== 'file:'
+  ) {
+    return resolved;
+  }
+
+  const port = await window.electron.getServerPort();
+  const url = new URL(path.startsWith('/') ? path : `/${path}`, `http://127.0.0.1:${port}`);
+  const sessionKey = window.electron.getWindowSessionKey?.();
+  if (sessionKey) url.searchParams.set('windowSessionKey', sessionKey);
+  return url.toString();
+}
+
+function browserWorkstationAccessToken(): string | null {
+  const key = accessTokenStorageKey();
+  if (!key || typeof window === 'undefined') return null;
+  return window.localStorage.getItem(key);
+}
+
+export async function workstationFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const token = browserWorkstationAccessToken();
+  const headers = new Headers(init.headers);
+  if (token && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`);
+  return fetch(await resolveWorkstationFetchUrl(input), {
     ...init,
+    headers,
     credentials: init.credentials ?? 'include',
   });
 }

@@ -157,6 +157,7 @@ type RunTurnOptions = {
   onEvent: (event: StreamEvent) => void;
   signal?: AbortSignal;
   dynamicTools?: v2.DynamicToolSpec[] | null;
+  additionalWritableRoots?: string[];
 };
 
 type ResumeThreadOptions = {
@@ -231,6 +232,7 @@ export type CodexClient = {
     config?: Record<string, JsonValue> | null,
     developerInstructions?: string | null,
     dynamicTools?: v2.DynamicToolSpec[] | null,
+    additionalWritableRoots?: string[],
   ): Promise<string>;
   startMcpToolThread(params: {
     model?: string | null;
@@ -245,6 +247,7 @@ export type CodexClient = {
     config?: Record<string, JsonValue> | null,
     baseInstructions?: string | null,
     developerInstructions?: string | null,
+    additionalWritableRoots?: string[],
   ): Promise<string>;
   forkThread(
     threadId: string,
@@ -264,6 +267,7 @@ export type CodexClient = {
     model?: string;
     effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
     summary?: "auto" | "concise" | "detailed" | "none" | null;
+    additionalWritableRoots?: string[];
   }): Promise<v2.Turn>;
   steerTurn(params: {
     threadId: string;
@@ -690,6 +694,7 @@ export class CodexService {
       options.developerInstructions,
       runConfig,
       options.dynamicTools,
+      options.additionalWritableRoots,
     );
     await this.reconcileTerminalTurn(threadId);
     this.assertNoActiveTurn(threadId);
@@ -887,6 +892,7 @@ export class CodexService {
         model: options.model,
         effort: options.effort,
         summary: options.summary,
+        additionalWritableRoots: options.additionalWritableRoots,
       });
 
       turnId = turn.id;
@@ -969,17 +975,12 @@ export class CodexService {
   }
 
   /** Admit an input only to an existing idle thread, retaining its native model/config. */
-  async startExistingThreadTurn(
-    threadId: string,
-    message: string,
-    cwd?: string,
-    config?: Record<string, JsonValue>,
-  ): Promise<string> {
+  async startExistingThreadTurn(threadId: string, message: string, cwd?: string): Promise<string> {
     await this.reconcileTerminalTurn(threadId);
     this.assertNoActiveTurn(threadId);
     this.activeTurns.set(threadId, null);
     try {
-      const resumedId = await this.client.resumeThread(threadId, null, null, cwd, config);
+      const resumedId = await this.client.resumeThread(threadId, null, null, cwd);
       if (resumedId !== threadId) throw new Error('Existing thread identity changed');
       const turn = await this.client.startTurn({ threadId, message, cwd });
       this.activeTurns.set(threadId, turn.id);
@@ -1119,6 +1120,7 @@ export class CodexService {
     developerInstructions?: string,
     config?: Record<string, JsonValue> | null,
     dynamicTools?: v2.DynamicToolSpec[] | null,
+    additionalWritableRoots?: string[],
   ) {
     const nextConfig = withElectronRunAsNodeConfig(config);
 
@@ -1131,6 +1133,7 @@ export class CodexService {
         nextConfig,
         developerInstructions,
         dynamicTools,
+        additionalWritableRoots,
       );
     }
 
@@ -1143,6 +1146,7 @@ export class CodexService {
         nextConfig,
         baseInstructions,
         developerInstructions,
+        additionalWritableRoots,
       );
     } catch (error) {
       // NOTE(victor): Upstream app-server reports stale thread resumes as
@@ -1162,6 +1166,7 @@ export class CodexService {
         nextConfig,
         developerInstructions,
         dynamicTools,
+        additionalWritableRoots,
       );
     }
   }

@@ -42,6 +42,8 @@ import { ModelSetupScreen, type ModelPackReviewState } from './screens/ModelSetu
 import { StayConnectedScreen } from './screens/StayConnectedScreen';
 import { FeedbackScreen } from './screens/FeedbackScreen';
 import { WorkspaceChoiceScreen } from './screens/WorkspaceChoiceScreen';
+import { SimpleWorkspaceChoiceScreen } from './screens/SimpleWorkspaceChoiceScreen';
+import { SimpleConnectionsScreen } from './screens/SimpleConnectionsScreen';
 import { AiSetupScreen } from './screens/AiSetupScreen';
 import { OverlayFirstUseScreen } from './screens/OverlayFirstUseScreen';
 import { OverlayPermissionsScreen } from './screens/OverlayPermissionsScreen';
@@ -94,6 +96,15 @@ const STEP_FEEDBACK = ONBOARDING_STEP_INDEX.feedback;
 
 const ENABLED_STEPS = ENABLED_ONBOARDING_STEP_INDICES;
 const STEPS_WITHOUT_BUCKET = ONBOARDING_STEPS_WITHOUT_BUCKET_INDICES;
+const SIMPLE_ENABLED_STEPS = [
+  STEP_NAME,
+  STEP_PRIVACY,
+  STEP_MODEL_SETUP,
+  STEP_MODEL_REVIEW,
+  STEP_MODEL_CREDITS,
+  STEP_STAY_CONNECTED,
+  STEP_WORKSPACE_CHOICE,
+];
 const ONBOARDING_PROFILE_LOAD_TIMEOUT_MS = 1500;
 const ONBOARDING_PROFILE_LOAD_MAX_ATTEMPTS = 3;
 
@@ -284,11 +295,12 @@ const SCREEN_VARIANTS = {
 
 interface OnboardingOverlayContentProps {
   onComplete: () => void;
+  simpleMode: boolean;
 }
 
 type ThemeOption = 'light' | 'dark' | 'system';
 
-function OnboardingOverlayContent({ onComplete }: OnboardingOverlayContentProps) {
+function OnboardingOverlayContent({ onComplete, simpleMode }: OnboardingOverlayContentProps) {
   "use no memo";
 
   const { t } = useTranslation();
@@ -332,11 +344,13 @@ function OnboardingOverlayContent({ onComplete }: OnboardingOverlayContentProps)
   );
 
   const activeStepIndices = useMemo(() => {
-    const steps = isDetectionComplete && detectionResults?.isConfident
-      ? STEPS_WITHOUT_BUCKET
-      : ENABLED_STEPS;
+    const steps = simpleMode
+      ? SIMPLE_ENABLED_STEPS
+      : isDetectionComplete && detectionResults?.isConfident
+        ? STEPS_WITHOUT_BUCKET
+        : ENABLED_STEPS;
     return withInterpreterCreditsStep(steps, showInterpreterCreditsStep);
-  }, [detectionResults?.isConfident, isDetectionComplete, showInterpreterCreditsStep]);
+  }, [detectionResults?.isConfident, isDetectionComplete, showInterpreterCreditsStep, simpleMode]);
 
   useEffect(() => {
     setActiveSteps(activeStepIndices);
@@ -546,9 +560,13 @@ function OnboardingOverlayContent({ onComplete }: OnboardingOverlayContentProps)
     return true;
   }, [activeStepIndices, completeOnboarding, goToStep, onComplete]);
 
-  const handleWorkspaceChoiceFinish = useCallback(() => {
+  const handleWorkspaceChoiceFinish = useCallback(async () => {
+    if (simpleMode) {
+      await handleOnboardingComplete();
+      return;
+    }
     goToStep(STEP_FEEDBACK);
-  }, [goToStep]);
+  }, [goToStep, handleOnboardingComplete, simpleMode]);
 
   const handleAiSetupComplete = useCallback(async (answers: OnboardingInterviewAnswers) => {
     const { interviewDraft, interviewResult } = buildOnboardingInterviewResult(
@@ -754,6 +772,7 @@ function OnboardingOverlayContent({ onComplete }: OnboardingOverlayContentProps)
           />
         );
       case STEP_STAY_CONNECTED:
+        if (simpleMode) return <SimpleConnectionsScreen onNext={goForward} />;
         return (
           <StayConnectedScreen
             authenticatedEmail={user?.email ?? undefined}
@@ -763,7 +782,9 @@ function OnboardingOverlayContent({ onComplete }: OnboardingOverlayContentProps)
           />
         );
       case STEP_WORKSPACE_CHOICE:
-        return <WorkspaceChoiceScreen onFinish={handleWorkspaceChoiceFinish} />;
+        return simpleMode
+          ? <SimpleWorkspaceChoiceScreen onFinish={handleWorkspaceChoiceFinish} />
+          : <WorkspaceChoiceScreen onFinish={handleWorkspaceChoiceFinish} />;
       case STEP_AI_SETUP:
         return <AiSetupScreen onComplete={handleAiSetupComplete} />;
       case STEP_FEEDBACK:
@@ -835,12 +856,13 @@ function OnboardingOverlayContent({ onComplete }: OnboardingOverlayContentProps)
 interface OnboardingOverlayProps {
   /** Called when onboarding is complete and the overlay should begin its exit */
   onComplete: () => void;
+  simpleMode?: boolean;
 }
 
-export function OnboardingOverlay({ onComplete }: OnboardingOverlayProps) {
+export function OnboardingOverlay({ onComplete, simpleMode = false }: OnboardingOverlayProps) {
   return (
     <OnboardingProvider totalSteps={TOTAL_STEPS}>
-      <OnboardingOverlayContent onComplete={onComplete} />
+      <OnboardingOverlayContent onComplete={onComplete} simpleMode={simpleMode} />
     </OnboardingProvider>
   );
 }

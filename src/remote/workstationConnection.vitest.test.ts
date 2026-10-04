@@ -7,12 +7,14 @@ import {
   isWorkstationReadOnly,
   resolveWorkstationApiUrl,
   workstationFetch,
+  saveBrowserWorkstationAccessToken,
 } from './workstationConnection';
 
 const originalUrl = window.location.href;
 
 afterEach(() => {
   window.history.replaceState({}, '', originalUrl);
+  window.localStorage.clear();
   vi.restoreAllMocks();
 });
 
@@ -88,5 +90,18 @@ describe('browser Workstation connection', () => {
       'https://computer.example/api/ipc/workspace/get',
       expect.objectContaining({ method: 'POST', credentials: 'include' }),
     );
+  });
+
+  test('adds the saved pairing bearer token to remote bridge requests', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/?surface=workstation&endpoint=https%3A%2F%2Fcomputer.example&access=read-write&auth=pairing',
+    );
+    saveBrowserWorkstationAccessToken('paired-session');
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}'));
+    await workstationFetch('/api/workspace');
+    const headers = fetchMock.mock.calls[0]?.[1]?.headers as Headers;
+    expect(headers.get('Authorization')).toBe('Bearer paired-session');
   });
 });

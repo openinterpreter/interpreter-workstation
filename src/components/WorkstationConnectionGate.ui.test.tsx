@@ -7,16 +7,21 @@ const originalUrl = window.location.href;
 
 afterEach(() => {
   window.history.replaceState({}, '', originalUrl);
+  window.localStorage.clear();
   vi.restoreAllMocks();
 });
 
-function descriptor(authenticated: boolean, access: 'read-only' | 'read-write' = 'read-write') {
+function descriptor(
+  authenticated: boolean,
+  access: 'read-only' | 'read-write' = 'read-write',
+  method: 'password' | 'pairing' = 'password',
+) {
   return {
     schemaVersion: 1,
     host: 'remote',
     access,
     authentication: {
-      method: 'password',
+      method,
       required: true,
       authenticated,
     },
@@ -92,5 +97,37 @@ describe('WorkstationConnectionGate', () => {
     expect(screen.getByText('Public shell')).toBeInTheDocument();
     await waitFor(() => expect(fetchMock).not.toHaveBeenCalled());
     expect(document.documentElement.dataset.workstationAccess).toBe('read-only');
+  });
+
+  test('opens a paired remote Workstation with its saved bearer session', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      '/?surface=workstation&endpoint=https%3A%2F%2Fcomputer.example&access=read-write&auth=pairing',
+    );
+    // Derive the real key through the public save path instead of coupling the
+    // test to its hash implementation.
+    const { saveBrowserWorkstationAccessToken } = await import('../remote/workstationConnection');
+    saveBrowserWorkstationAccessToken('paired-session');
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify(descriptor(true, 'read-write', 'pairing')), { status: 200 }),
+    );
+
+    render(
+      <WorkstationConnectionGate>
+        <div>Paired shell</div>
+      </WorkstationConnectionGate>,
+    );
+
+    expect(await screen.findByText('Paired shell')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://computer.example/api/workstation-connection',
+      expect.objectContaining({
+        credentials: 'include',
+        headers: expect.any(Headers),
+      }),
+    );
+    const headers = fetchMock.mock.calls[0]?.[1]?.headers as Headers;
+    expect(headers.get('Authorization')).toBe('Bearer paired-session');
   });
 });

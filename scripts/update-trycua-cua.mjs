@@ -2,6 +2,7 @@
 
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 const ROOT = process.cwd();
@@ -29,10 +30,74 @@ function git(args, options = {}) {
   return run('git', args, options).trim();
 }
 
+function gitBuffer(args, options = {}) {
+  return execFileSync('git', args, {
+    cwd: options.cwd ?? ROOT,
+    stdio: options.stdio ?? 'pipe',
+    env: process.env,
+  });
+}
+
 function requireCleanSubmodule() {
   const status = git(['status', '--porcelain'], { cwd: SUBMODULE_PATH });
   if (status) {
     throw new Error(`submodules/interpreter-cua has local changes. Commit/stash them before updating:\n${status}`);
+  }
+}
+
+function updateDriverSubtree(before, upstreamRef) {
+  try {
+    run('git', ['merge-base', '--is-ancestor', upstreamRef, before], { cwd: SUBMODULE_PATH });
+    return before;
+  } catch {
+    // The fork has new upstream work to reconcile.
+  }
+
+  const mergeBase = git(['merge-base', before, upstreamRef], { cwd: SUBMODULE_PATH });
+  if (!mergeBase) {
+    throw new Error(`No merge base between pinned CUA commit ${before} and ${upstreamRef}`);
+  }
+
+  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'workstation-cua-update-'));
+  const forkPatchPath = path.join(temporaryDirectory, 'driver-fork.patch');
+
+  try {
+    const forkPatch = gitBuffer(
+      ['diff', '--binary', mergeBase, before, '--', 'libs/cua-driver'],
+      { cwd: SUBMODULE_PATH },
+    );
+    fs.writeFileSync(forkPatchPath, forkPatch);
+
+    // Record upstream ancestry without importing unrelated Cua monorepo products.
+    // Workstation consumes only libs/cua-driver; its fork-owned CI and policy files
+    // stay on the Interpreter side of this boundary.
+    runInherited('git', ['merge', '--strategy=ours', '--no-commit', upstreamRef], {
+      cwd: SUBMODULE_PATH,
+    });
+    runInherited('git', ['rm', '-r', '--quiet', '--ignore-unmatch', 'libs/cua-driver'], {
+      cwd: SUBMODULE_PATH,
+    });
+    runInherited('git', ['checkout', upstreamRef, '--', 'libs/cua-driver'], {
+      cwd: SUBMODULE_PATH,
+    });
+
+    try {
+      runInherited('git', ['apply', '--3way', '--index', forkPatchPath], {
+        cwd: SUBMODULE_PATH,
+      });
+    } catch {
+      throw new Error(
+        'Upstream CUA Driver conflicts with the Interpreter fork delta. Resolve the staged conflicts, verify the fork guards, and commit the merge manually.',
+      );
+    }
+
+    const upstreamShort = git(['rev-parse', '--short=12', upstreamRef], { cwd: SUBMODULE_PATH });
+    runInherited('git', ['commit', '-m', `Merge upstream CUA Driver ${upstreamShort}`], {
+      cwd: SUBMODULE_PATH,
+    });
+    return git(['rev-parse', 'HEAD'], { cwd: SUBMODULE_PATH });
+  } finally {
+    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
   }
 }
 
@@ -59,9 +124,7 @@ function main() {
     throw new Error(`submodules/interpreter-cua upstream must be https://github.com/trycua/cua.git, got ${upstreamUrl}`);
   }
   runInherited('git', ['fetch', 'upstream', 'main', '--tags', '--prune'], { cwd: SUBMODULE_PATH });
-  runInherited('git', ['checkout', 'main'], { cwd: SUBMODULE_PATH });
-  runInherited('git', ['merge', '--no-edit', 'upstream/main'], { cwd: SUBMODULE_PATH });
-  const after = git(['rev-parse', 'HEAD'], { cwd: SUBMODULE_PATH });
+  const after = updateDriverSubtree(before, 'upstream/main');
   const subject = git(['log', '-1', '--format=%s'], { cwd: SUBMODULE_PATH });
 
   const binaryPath = buildCuaDriver(path.join(SUBMODULE_PATH, 'libs', 'cua-driver', 'rust'));

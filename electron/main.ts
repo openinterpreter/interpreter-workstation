@@ -874,6 +874,9 @@ import {
   getZoomFactor,
   setZoomFactor,
   incrementAppLaunchCount,
+  getSimpleProjectSetting,
+  getSimpleOpenProjectPaths,
+  setSimpleOpenProjectPaths,
 } from '../server/configStore';
 import { broadcastEvent } from '../server/handlers/broadcast';
 import { globalFileAccessResolver } from '../server/globalFileAccessResolver';
@@ -911,6 +914,7 @@ import {
   registerWindowSession,
   runWithWindowSessionOverride,
   unregisterWindowSession,
+  getWindowSessionSimpleProject,
 } from '../server/utils/windowSessions';
 import {
   bindWindowSessionWorkspace,
@@ -1689,8 +1693,14 @@ interface CreateWindowOptions {
   sessionKey?: string;
   workspacePath?: string | null;
   bootstrapLayout?: LayoutState | null;
+  simpleProjectPath?: string | null;
   primary?: boolean;
   background?: boolean;
+  remoteConnection?: {
+    endpoint: string;
+    access: 'read-only' | 'read-write';
+    authentication: 'none' | 'password' | 'pairing';
+  } | null;
 }
 
 function createWindowSessionKey(): string {
@@ -1800,13 +1810,23 @@ function bindMainWindowLaunchTelemetry(
   });
 }
 
-async function loadMainWindowContent(window: BrowserWindow): Promise<MainWindowContentLoadResult> {
+async function loadMainWindowContent(
+  window: BrowserWindow,
+  remoteConnection?: CreateWindowOptions['remoteConnection'],
+): Promise<MainWindowContentLoadResult> {
   const windowId = window.id;
   const webContentsId = window.webContents.id;
 
   // In development, load from Vite dev server
   if (isDev) {
-    const devServerUrl = await resolveRendererDevUrl();
+    const devServerUrl = new URL(await resolveRendererDevUrl());
+    if (remoteConnection) {
+      devServerUrl.searchParams.set('surface', 'workstation');
+      devServerUrl.searchParams.set('endpoint', remoteConnection.endpoint);
+      devServerUrl.searchParams.set('access', remoteConnection.access);
+      devServerUrl.searchParams.set('auth', remoteConnection.authentication);
+    }
+    const devServerTarget = devServerUrl.toString();
     if (mainWindow === window) {
     updateMainWindowLaunchState('load-target-selected', {
       currentUrl: getWindowCurrentUrl(window),
@@ -1814,7 +1834,7 @@ async function loadMainWindowContent(window: BrowserWindow): Promise<MainWindowC
       errorDescription: null,
       isMainFrame: null,
       loadTarget: 'vite-dev-server',
-      targetUrl: devServerUrl,
+      targetUrl: devServerTarget,
       validatedUrl: null,
       webContentsId,
       windowId,
@@ -1825,17 +1845,17 @@ async function loadMainWindowContent(window: BrowserWindow): Promise<MainWindowC
 
     while (retries > 0) {
       try {
-        await window.loadURL(devServerUrl);
+        await window.loadURL(devServerTarget);
         return 'loaded';
       } catch (error) {
         if (isMainWindowLoadAbortError(error)) {
           const recoveryResult = await waitForMainWindowLoadRecovery({
             window,
-            expectedUrl: devServerUrl,
+            expectedUrl: devServerTarget,
           });
           if (recoveryResult === 'recovered') {
             console.warn('[Main] Recovered from renderer load abort:', {
-              url: devServerUrl,
+              url: devServerTarget,
             });
             return 'loaded';
           }
@@ -1850,7 +1870,7 @@ async function loadMainWindowContent(window: BrowserWindow): Promise<MainWindowC
             currentUrl: getWindowCurrentUrl(window),
             errorDescription: error instanceof Error ? error.message : String(error),
             loadTarget: 'vite-dev-server',
-            targetUrl: devServerUrl,
+            targetUrl: devServerTarget,
             webContentsId,
             windowId,
           }, 'warning');
@@ -1864,13 +1884,13 @@ async function loadMainWindowContent(window: BrowserWindow): Promise<MainWindowC
         lastError = error;
         retries -= 1;
         if (retries > 0) {
-          console.log(`Failed to load Vite dev server at ${devServerUrl}, retrying... (${retries} attempts left)`);
+          console.log(`Failed to load Vite dev server at ${devServerTarget}, retrying... (${retries} attempts left)`);
           await new Promise(resolve => setTimeout(resolve, 500));
         }
       }
     }
 
-    throw new Error(`Failed to load Vite dev server at ${devServerUrl} after 10 attempts: ${String(lastError)}`);
+    throw new Error(`Failed to load Vite dev server at ${devServerTarget} after 10 attempts: ${String(lastError)}`);
   }
 
   try {
@@ -1888,7 +1908,14 @@ async function loadMainWindowContent(window: BrowserWindow): Promise<MainWindowC
           windowId,
         });
       }
-      await window.loadURL(`http://127.0.0.1:${serverPort}`);
+      const targetUrl = new URL(`http://127.0.0.1:${serverPort}`);
+      if (remoteConnection) {
+        targetUrl.searchParams.set('surface', 'workstation');
+        targetUrl.searchParams.set('endpoint', remoteConnection.endpoint);
+        targetUrl.searchParams.set('access', remoteConnection.access);
+        targetUrl.searchParams.set('auth', remoteConnection.authentication);
+      }
+      await window.loadURL(targetUrl.toString());
     } else {
       const distPath = path.join(__dirname, '../../dist/index.html');
       if (mainWindow === window) {
@@ -1904,7 +1931,14 @@ async function loadMainWindowContent(window: BrowserWindow): Promise<MainWindowC
           windowId,
         });
       }
-      await window.loadFile(distPath);
+      await window.loadFile(distPath, remoteConnection ? {
+        query: {
+          surface: 'workstation',
+          endpoint: remoteConnection.endpoint,
+          access: remoteConnection.access,
+          auth: remoteConnection.authentication,
+        },
+      } : undefined);
     }
     return 'loaded';
   } catch (error) {
@@ -2121,11 +2155,20 @@ function bindWindowEvents(window: BrowserWindow, options: { primary: boolean; se
       mainWindowCloseRequested = false;
       mainWindowLaunchState = null;
     }
+    const closedSimpleProjectPath = getWindowSessionSimpleProject(options.sessionKey);
     workstationService.unregisterWindow(options.windowId);
     void unbindWindowSessionWorkspace(options.sessionKey).catch((error) => {
       console.error('[Main] Failed to unbind workspace watch for window session:', error);
     });
     unregisterWindowSession(options.windowId);
+    const projectStillOpen = closedSimpleProjectPath
+      ? listWindowSessions().some((session) => session.simpleProjectPath === closedSimpleProjectPath)
+      : false;
+    if (!isQuitting && closedSimpleProjectPath && !projectStillOpen) {
+      void getSimpleOpenProjectPaths()
+        .then((paths) => setSimpleOpenProjectPaths(paths.filter((candidate) => candidate !== closedSimpleProjectPath)))
+        .catch((error) => console.error('[Main] Failed to persist closed Simple interface window:', error));
+    }
 
     if (mainWindow === window) {
       mainWindow = workstationService.getMainWindow();
@@ -2273,6 +2316,27 @@ async function createWindow(options?: CreateWindowOptions): Promise<CreateWindow
   });
   const windowId = window.id;
   const webContentsId = window.webContents.id;
+  const publishComposerOwner = (owner: BrowserWindow) => {
+    for (const candidate of getLiveWorkstationWindows()) {
+      if (!candidate.webContents.isDestroyed()) {
+        candidate.webContents.send(IPC_CHANNELS.WINDOW_FOCUS_CHANGED, {
+          focused: candidate.id === owner.id,
+        });
+      }
+    }
+  };
+  // The composer belongs to the active Workstation window, not to every
+  // renderer. Losing focus to another application does not destroy ownership;
+  // the desktop overlay takes over independently when its hotkey is invoked.
+  window.on('focus', () => publishComposerOwner(window));
+  window.webContents.on('did-finish-load', () => {
+    const focused = BrowserWindow.getFocusedWindow();
+    publishComposerOwner(
+      focused && getWindowSessionByWindowId(focused.id)
+        ? focused
+        : (mainWindow && !mainWindow.isDestroyed() ? mainWindow : window),
+    );
+  });
   if (shouldKeepMainWindowHiddenForHeadlessRuns()) {
     hideWorkstationWindowForHeadlessRuns(window);
     window.on('show', () => {
@@ -2298,6 +2362,7 @@ async function createWindow(options?: CreateWindowOptions): Promise<CreateWindow
     sessionKey,
     windowId,
     workspacePath: initialWorkspacePath ?? null,
+    simpleProjectPath: options?.simpleProjectPath ?? null,
   });
   await bindWindowSessionWorkspace(sessionKey, initialWorkspacePath ?? null);
   if (isBrowserWindowUnavailable(window)) {
@@ -2328,7 +2393,7 @@ async function createWindow(options?: CreateWindowOptions): Promise<CreateWindow
       await abortWindowInitialization();
     },
     getZoomFactor,
-    loadContent: loadMainWindowContent,
+    loadContent: (createdWindow) => loadMainWindowContent(createdWindow, options?.remoteConnection),
     maximize: isPlaywrightElectronSession,
     registerWindow: (createdWindow) => {
       workstationService.registerWindow(createdWindow, { primary: isPrimaryWindow });
@@ -2345,8 +2410,20 @@ async function createWorkstationWindow(options?: {
   sourceWindowId?: number | null;
   workspacePath?: string | null;
   bootstrapLayout?: LayoutState | null;
+  simpleProjectPath?: string | null;
   background?: boolean;
+  remoteConnection?: CreateWindowOptions['remoteConnection'];
 }): Promise<{ success: true; windowId: number; sessionKey: string } | { success: false; error: string }> {
+  if (options?.remoteConnection) {
+    try {
+      const endpoint = new URL(options.remoteConnection.endpoint);
+      if (endpoint.protocol !== 'https:' || endpoint.username || endpoint.password) {
+        return { success: false, error: 'Remote Workstation endpoints must use private HTTPS.' };
+      }
+    } catch {
+      return { success: false, error: 'The remote Workstation endpoint is invalid.' };
+    }
+  }
   const sourceWindow = options?.sourceWindowId ? BrowserWindow.fromId(options.sourceWindowId) : BrowserWindow.getFocusedWindow();
   const inheritedWorkspacePath = options?.workspacePath
     ?? getWindowSessionByWindowId(sourceWindow?.id ?? null)?.workspacePath
@@ -2356,8 +2433,10 @@ async function createWorkstationWindow(options?: {
     sessionKey,
     workspacePath: inheritedWorkspacePath,
     bootstrapLayout: options?.bootstrapLayout ?? null,
+    simpleProjectPath: options?.simpleProjectPath ?? null,
     primary: false,
     background: options?.background === true,
+    remoteConnection: options?.remoteConnection ?? null,
   });
 
   if (createWindowResult.status !== 'created') {
@@ -2385,6 +2464,11 @@ async function createWorkstationWindow(options?: {
 
   if (options?.background !== true) {
     focusWorkstationWindow(createWindowResult.window);
+  }
+
+  if (options?.simpleProjectPath) {
+    const openPaths = await getSimpleOpenProjectPaths();
+    await setSimpleOpenProjectPaths([...openPaths, options.simpleProjectPath]);
   }
 
   return {
@@ -2661,10 +2745,31 @@ app.whenReady().then(async () => {
       console.error('[Main] Failed to increment app launch count:', error);
     }
 
-    // Create the window
-    const createWindowResult = await createWindow();
+    // Simple restores one independent window per interface project. Advanced
+    // continues to restore its layout inside the ordinary primary window.
+    const simpleMode = !(await getBooleanUISetting('advancedMode'));
+    const savedSimpleProjects = simpleMode
+      ? (await getSimpleOpenProjectPaths()).filter((candidate) => fs.existsSync(candidate))
+      : [];
+    const launchDefaultProject = simpleMode
+      ? (savedSimpleProjects[0] ?? (await getSimpleProjectSetting()).activePath)
+      : null;
+    const createWindowResult = await createWindow({ simpleProjectPath: launchDefaultProject });
     if (createWindowResult.status === 'aborted-during-teardown') {
       return;
+    }
+    if (simpleMode && launchDefaultProject && savedSimpleProjects.length === 0) {
+      await setSimpleOpenProjectPaths([launchDefaultProject]);
+    }
+    for (const projectPath of savedSimpleProjects.slice(1)) {
+      const restored = await createWorkstationWindow({
+        sourceWindowId: createWindowResult.window.id,
+        simpleProjectPath: projectPath,
+        background: false,
+      });
+      if (!restored.success) {
+        console.warn('[Main] Could not restore Simple interface window:', projectPath, restored.error);
+      }
     }
 
     await handlePendingNativeCrashReports({

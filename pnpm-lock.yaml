@@ -10,9 +10,9 @@ overrides:
   node-abi: 4.31.0
   '@xmldom/xmldom@<0.8.15': 0.8.15
   adm-zip@<0.6.1: 0.6.1
-  brace-expansion@<2: 1.1.20
-  brace-expansion@>=2 <3: 2.1.6
-  brace-expansion@>=5 <6: 5.0.11
+  brace-expansion@<2: 1.1.18
+  brace-expansion@>=2 <3: 2.1.4
+  brace-expansion@>=5 <6: 5.0.9
   browserslist: 4.28.7
   exceljs>uuid: 11.1.1
   fast-uri@<3.1.7: 3.1.7
@@ -38,9 +38,9 @@ patchedDependencies:
   '@oxidezap/baileyrs@0.0.32':
     hash: ckgxziy6uxvzjkxxap5rdgovlm
     path: patches/@oxidezap__baileyrs@0.0.32.patch
-  whatsapp-rust-bridge@0.6.0-alpha.42:
+  whatsapp-rust-bridge@0.6.0-alpha.44:
     hash: yh4pqya7t45lhhrwczokoiso5u
-    path: patches/whatsapp-rust-bridge@0.6.0-alpha.42.patch
+    path: patches/whatsapp-rust-bridge@0.6.0-alpha.44.patch
 
 importers:
 
@@ -211,6 +211,9 @@ importers:
       electron-updater:
         specifier: 6.8.9
         version: 6.8.9
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       eventemitter3:
         specifier: 5.0.4
         version: 5.0.4
@@ -383,8 +386,8 @@ importers:
         specifier: 1.7.0
         version: 1.7.0(react@19.3.0)
       whatsapp-rust-bridge:
-        specifier: 0.6.0-alpha.42
-        version: 0.6.0-alpha.42(patch_hash=yh4pqya7t45lhhrwczokoiso5u)
+        specifier: 0.6.0-alpha.44
+        version: 0.6.0-alpha.44(patch_hash=yh4pqya7t45lhhrwczokoiso5u)
       ws:
         specifier: 8.21.3
         version: 8.21.3
@@ -503,9 +506,6 @@ importers:
       electron-builder-squirrel-windows:
         specifier: 26.15.3
         version: 26.15.3(dmg-builder@26.15.3)
-      esbuild:
-        specifier: 0.28.2
-        version: 0.28.2
       eslint:
         specifier: 10.10.0
         version: 10.10.0(jiti@2.7.0)
@@ -4661,14 +4661,14 @@ packages:
     resolution: {integrity: sha512-d0II/GO9uf9lfUHH2BQsjxzRJZBdsjgsBiW4BvhWk/3qoKwQFjIDVN19PfX8F2D/r9PCMTtLWjYVCFrpeYUzsw==}
     deprecated: Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.
 
-  brace-expansion@1.1.20:
-    resolution: {integrity: sha512-5/qk29RyvatwgzNMrvGjkIhKYzpJ0OUnPK+9TU+zS/CMJqzmb+UD0irWu42JfpUvO636fxd8IstgiydZRM/76A==}
+  brace-expansion@1.1.18:
+    resolution: {integrity: sha512-Edep/X9fGqVNmzKBVsDYIOtD+z1tuezV70LBjdCst9Tqu76lsnvRiZ6oTic1n+/BIwX6QDGAO94PN4N2SADvtw==}
 
-  brace-expansion@2.1.6:
-    resolution: {integrity: sha512-pi/WFpBvCBmB/NsURt7hW5sDvuOqvJaDMDai7CrlT9xoehzWRzo/dhQRKqOhpPvlnicVaTzHCbzGnnTgpvMTFw==}
+  brace-expansion@2.1.4:
+    resolution: {integrity: sha512-hGfVzPxthbf3+2yjg/RBs60cB0FhqBS/zvdV/4wn4/BmN0bNMMHPc4V/BbFieqf1TKAGGAHnY4eSjajCl0f2Xg==}
 
-  brace-expansion@5.0.11:
-    resolution: {integrity: sha512-awigjhi6cLTh90bdw6+QJ9CtmJmyYhEIi70iCbc8Rozn04Fw9FeQIBjv/E22FFGuCGx1bLJyUfB64x/szUSXUg==}
+  brace-expansion@5.0.9:
+    resolution: {integrity: sha512-ScQ4IuvIEF1TMlP7Zt+vjJ//9zlPb2SDcxWxM3bk8s6t6GGdJ7KO1dCcTidOPJKePW30LE/2cT7wCyPho9/Wxg==}
     engines: {node: 20 || >=22}
 
   braces@3.0.3:
@@ -8832,6 +8832,9 @@ packages:
   whatsapp-rust-bridge@0.6.0-alpha.42:
     resolution: {integrity: sha512-PfEWoKwRA8f186rroyq+ILX196OBGM2jPsgCLxmTxsa4eMmg/9ZAw/B6K3Hd+jpmlMWGiKXvd1RcjHNejBbX3g==}
 
+  whatsapp-rust-bridge@0.6.0-alpha.44:
+    resolution: {integrity: sha512-zq6yh7sIqxTnQk4D53M/QnllDZa8BNeBVnYx/T1Iew+SZuW9pcrMVkvHvi94gL6Ipczg6gVoCPoM1Q4ZzIoelQ==}
+
   whatwg-fetch@3.6.20:
     resolution: {integrity: sha512-EqhiFU6daOA8kpjOWTL0olhVOF3i7OrFzSYiGsEMB8GcXS+RrzauAERX65xMeNWVqxA6HXH2m69Z9LaKKdisfg==}
 
@@ -10641,7 +10644,7 @@ snapshots:
       long: 5.3.2
       pino: 10.3.1
       protobufjs: 7.6.5
-      whatsapp-rust-bridge: 0.6.0-alpha.42(patch_hash=yh4pqya7t45lhhrwczokoiso5u)
+      whatsapp-rust-bridge: 0.6.0-alpha.42
     optionalDependencies:
       sharp: 0.35.4(@types/node@24.9.1)
 
@@ -13413,16 +13416,16 @@ snapshots:
 
   boolean@3.2.0: {}
 
-  brace-expansion@1.1.20:
+  brace-expansion@1.1.18:
     dependencies:
       balanced-match: 1.0.2
       concat-map: 0.0.1
 
-  brace-expansion@2.1.6:
+  brace-expansion@2.1.4:
     dependencies:
       balanced-match: 1.0.2
 
-  brace-expansion@5.0.11:
+  brace-expansion@5.0.9:
     dependencies:
       balanced-match: 4.0.4
 
@@ -16005,19 +16008,19 @@ snapshots:
 
   minimatch@10.2.6:
     dependencies:
-      brace-expansion: 5.0.11
+      brace-expansion: 5.0.9
 
   minimatch@3.1.5:
     dependencies:
-      brace-expansion: 1.1.20
+      brace-expansion: 1.1.18
 
   minimatch@5.1.9:
     dependencies:
-      brace-expansion: 2.1.6
+      brace-expansion: 2.1.4
 
   minimatch@9.0.9:
     dependencies:
-      brace-expansion: 2.1.6
+      brace-expansion: 2.1.4
 
   minimist@1.2.6: {}
 
@@ -18098,7 +18101,9 @@ snapshots:
       - postcss
       - uglify-js
 
-  whatsapp-rust-bridge@0.6.0-alpha.42(patch_hash=yh4pqya7t45lhhrwczokoiso5u): {}
+  whatsapp-rust-bridge@0.6.0-alpha.42: {}
+
+  whatsapp-rust-bridge@0.6.0-alpha.44(patch_hash=yh4pqya7t45lhhrwczokoiso5u): {}
 
   whatwg-fetch@3.6.20: {}
 

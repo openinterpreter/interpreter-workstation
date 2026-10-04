@@ -198,7 +198,6 @@
     "electron": "42.10.0",
     "electron-builder": "26.15.3",
     "electron-builder-squirrel-windows": "26.15.3",
-    "esbuild": "0.28.2",
     "eslint": "10.10.0",
     "eslint-plugin-react-compiler": "19.1.0-rc.2",
     "eslint-plugin-react-hooks": "7.1.1",
@@ -274,6 +273,7 @@
     "dotenv": "17.4.2",
     "electron-context-menu": "4.1.2",
     "electron-updater": "6.8.9",
+    "esbuild": "0.28.2",
     "eventemitter3": "5.0.4",
     "eventsource-parser": "3.0.6",
     "exceljs": "4.4.0",
@@ -331,7 +331,7 @@
     "unist-util-visit": "5.1.0",
     "use-stick-to-bottom": "1.1.6",
     "use-sync-external-store": "1.7.0",
-    "whatsapp-rust-bridge": "0.6.0-alpha.42",
+    "whatsapp-rust-bridge": "0.6.0-alpha.44",
     "ws": "8.21.3",
     "xml-formatter": "3.7.0",
     "zod": "4.6.5"
@@ -343,9 +343,9 @@
       "node-abi": "4.31.0",
       "@xmldom/xmldom@<0.8.15": "0.8.15",
       "adm-zip@<0.6.1": "0.6.1",
-      "brace-expansion@<2": "1.1.20",
-      "brace-expansion@>=2 <3": "2.1.6",
-      "brace-expansion@>=5 <6": "5.0.11",
+      "brace-expansion@<2": "1.1.18",
+      "brace-expansion@>=2 <3": "2.1.4",
+      "brace-expansion@>=5 <6": "5.0.9",
       "browserslist": "4.28.7",
       "exceljs>uuid": "11.1.1",
       "fast-uri@<3.1.7": "3.1.7",
@@ -383,7 +383,7 @@
       "onnxruntime-node"
     ],
     "patchedDependencies": {
-      "whatsapp-rust-bridge@0.6.0-alpha.42": "patches/whatsapp-rust-bridge@0.6.0-alpha.42.patch",
+      "whatsapp-rust-bridge@0.6.0-alpha.44": "patches/whatsapp-rust-bridge@0.6.0-alpha.44.patch",
       "@oxidezap/baileyrs@0.0.32": "patches/@oxidezap__baileyrs@0.0.32.patch",
       "@jimp/core@0.22.12": "patches/@jimp__core@0.22.12.patch"
     }

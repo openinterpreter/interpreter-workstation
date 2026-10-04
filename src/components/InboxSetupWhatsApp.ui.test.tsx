@@ -80,6 +80,11 @@ describe('InboxSetupWhatsApp', () => {
       expect(MockEventSource.instances).toHaveLength(1);
     });
 
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    act(() => {
+      MockEventSource.instances[0].dispatch('open');
+    });
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
     expect(globalThis.fetch).toHaveBeenCalledWith(
       'http://127.0.0.1:5177/api/servers/whatsapp/setup',
       { method: 'POST', credentials: 'include' },
@@ -103,6 +108,10 @@ describe('InboxSetupWhatsApp', () => {
     });
 
     act(() => {
+      MockEventSource.instances[0].dispatch('open');
+    });
+
+    act(() => {
       MockEventSource.instances[0].dispatch('disconnected', {
         configured: false,
         status: 408,
@@ -118,5 +127,19 @@ describe('InboxSetupWhatsApp', () => {
       error: 'WhatsApp connection failed: Opening handshake has timed out',
       stage: 'disconnected',
     });
+  });
+
+  test('starts only once when the stream open event is repeated', async () => {
+    render(<InboxSetupWhatsApp onConnected={vi.fn()} onCancel={vi.fn()} compact />);
+
+    await waitFor(() => expect(MockEventSource.instances).toHaveLength(1));
+    act(() => {
+      MockEventSource.instances[0].dispatch('open');
+      MockEventSource.instances[0].dispatch('open');
+    });
+
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('heading', { name: 'Connect WhatsApp' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close setup' })).toBeVisible();
   });
 });

@@ -33,6 +33,7 @@ import { usePendingApprovalsByAgent } from '../../hooks/usePendingApprovalsByAge
 import { isMarketingDemoMode } from '../../demo/marketingDemo';
 import {
   canUseHostNativeFileManager,
+  clearBrowserWorkstationAccessToken,
   getBrowserWorkstationConnection,
   isPublicWorkstationPublication,
   isWorkstationReadOnly,
@@ -60,7 +61,8 @@ export function CustomTitleBar() {
   const browserConnection = getBrowserWorkstationConnection();
   const canSignOut = browserConnection.host === 'remote'
     && !isPublicWorkstationPublication()
-    && browserConnection.authentication === 'password';
+    && (browserConnection.authentication === 'password'
+      || browserConnection.authentication === 'pairing');
   const isMac = runtimePlatform === 'darwin';
   const isWindows = runtimePlatform === 'win32';
 
@@ -365,6 +367,7 @@ export function CustomTitleBar() {
       console.error(`[Workstation] Sign out failed (${response.status})`);
       return;
     }
+    clearBrowserWorkstationAccessToken();
     window.location.reload();
   };
 

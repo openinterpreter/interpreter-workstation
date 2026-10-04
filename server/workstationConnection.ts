@@ -1,13 +1,95 @@
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { chmodSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { Router, type NextFunction, type Request, type Response } from 'express';
+import QRCode from 'qrcode';
 import type {
   WorkstationAccess,
   WorkstationAuthentication,
   WorkstationConnectionDescriptor,
+  WorkstationPairingPayload,
+  WorkstationPairingSession,
 } from '../shared/types/workstationConnection';
+import { resolveInterpreterDataDir } from '../shared/interpreterConfigPaths';
+import { getActiveSimpleProject } from './simpleProjects';
+import { getServerPort } from './utils/serverPort';
+import {
+  disableTailscaleServe,
+  enableTailscaleServe,
+  inspectTailscaleRemote,
+} from './tailscaleRemote';
 
 const SESSION_COOKIE = 'interpreter_workstation_session';
 const DEFAULT_SESSION_SECONDS = 60 * 60 * 24 * 14;
+const DEFAULT_PAIRING_SECONDS = 5 * 60;
+
+type RuntimePairingPolicy = {
+  endpoint: string;
+  allowedOrigins: string[];
+  sessionSecret: string;
+  persisted: boolean;
+};
+
+type PendingPairing = {
+  digest: string;
+  expiresAt: number;
+  endpoint: string;
+  hostName: string;
+  projectId: string;
+  projectName: string;
+  projectPathHint: string;
+};
+
+let runtimePairingPolicy: RuntimePairingPolicy | null = null;
+const pendingPairings = new Map<string, PendingPairing>();
+
+function pairingPolicyPath(): string {
+  return path.join(resolveInterpreterDataDir(), 'private-workstation.json');
+}
+
+function persistRuntimePairingPolicy(policy: RuntimePairingPolicy | null): void {
+  const filePath = pairingPolicyPath();
+  if (!policy) {
+    try { unlinkSync(filePath); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    return;
+  }
+  mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  const temporaryPath = `${filePath}.${process.pid}.tmp`;
+  const persistedPolicy = {
+    endpoint: policy.endpoint,
+    allowedOrigins: policy.allowedOrigins,
+    sessionSecret: policy.sessionSecret,
+  };
+  writeFileSync(temporaryPath, `${JSON.stringify(persistedPolicy)}\n`, { encoding: 'utf8', mode: 0o600 });
+  chmodSync(temporaryPath, 0o600);
+  renameSync(temporaryPath, filePath);
+}
+
+function restoreRuntimePairingPolicy(): RuntimePairingPolicy | null {
+  if (process.env.NODE_ENV === 'test') return null;
+  try {
+    const value = JSON.parse(readFileSync(pairingPolicyPath(), 'utf8')) as Partial<RuntimePairingPolicy>;
+    if (typeof value.endpoint !== 'string'
+      || !Array.isArray(value.allowedOrigins)
+      || !value.allowedOrigins.every((origin) => typeof origin === 'string')
+      || typeof value.sessionSecret !== 'string'
+      || value.sessionSecret.length < 32) return null;
+    const endpoint = new URL(value.endpoint);
+    if (endpoint.protocol !== 'https:') return null;
+    return {
+      endpoint: endpoint.toString().replace(/\/$/, ''),
+      allowedOrigins: value.allowedOrigins,
+      sessionSecret: value.sessionSecret,
+      persisted: true,
+    };
+  } catch {
+    return null;
+  }
+}
+
+runtimePairingPolicy = restoreRuntimePairingPolicy();
 
 export type WorkstationHostPolicy = {
   remote: boolean;
@@ -30,13 +112,27 @@ function normalizedOrigins(value: string | undefined): string[] {
 export function getWorkstationHostPolicy(
   environment: NodeJS.ProcessEnv = process.env,
 ): WorkstationHostPolicy {
+  if (runtimePairingPolicy) {
+    return {
+      remote: true,
+      access: 'read-write',
+      authentication: 'pairing',
+      password: null,
+      sessionSecret: runtimePairingPolicy.sessionSecret,
+      sessionSeconds: DEFAULT_SESSION_SECONDS,
+      allowedOrigins: runtimePairingPolicy.allowedOrigins,
+      secureCookie: true,
+    };
+  }
   const configuredAccess = environment.INTERPRETER_WORKSTATION_ACCESS?.trim();
   const remote = configuredAccess === 'read-only' || configuredAccess === 'read-write';
   const access: WorkstationAccess = configuredAccess === 'read-only' ? 'read-only' : 'read-write';
   const configuredAuthentication = environment.INTERPRETER_WORKSTATION_AUTH?.trim();
   const authentication: WorkstationAuthentication = configuredAuthentication === 'password'
     ? 'password'
-    : 'none';
+    : configuredAuthentication === 'pairing'
+      ? 'pairing'
+      : 'none';
   const password = environment.INTERPRETER_WORKSTATION_PASSWORD?.trim() || null;
   const sessionSecret = environment.INTERPRETER_WORKSTATION_SESSION_SECRET?.trim()
     || password;
@@ -54,6 +150,37 @@ export function getWorkstationHostPolicy(
     allowedOrigins: normalizedOrigins(environment.INTERPRETER_WORKSTATION_ALLOWED_ORIGINS),
     secureCookie: environment.INTERPRETER_WORKSTATION_SECURE_COOKIE === '1',
   };
+}
+
+export function enableRuntimeWorkstationPairing(input: {
+  endpoint: string;
+  allowedOrigins?: string[];
+  persist?: boolean;
+}): void {
+  const endpoint = new URL(input.endpoint);
+  if (endpoint.protocol !== 'https:') throw new Error('Remote Workstation requires a private HTTPS endpoint.');
+  endpoint.pathname = '';
+  endpoint.search = '';
+  endpoint.hash = '';
+  const normalizedEndpoint = endpoint.toString().replace(/\/$/, '');
+  runtimePairingPolicy = {
+    endpoint: normalizedEndpoint,
+    allowedOrigins: input.allowedOrigins?.length ? input.allowedOrigins : [normalizedEndpoint],
+    sessionSecret: randomBytes(32).toString('base64url'),
+    persisted: input.persist === true,
+  };
+  if (input.persist) persistRuntimePairingPolicy(runtimePairingPolicy);
+  pendingPairings.clear();
+}
+
+export function disableRuntimeWorkstationPairing(persist = false): void {
+  runtimePairingPolicy = null;
+  if (persist) persistRuntimePairingPolicy(null);
+  pendingPairings.clear();
+}
+
+export function getRuntimeWorkstationPairingEndpoint(): string | null {
+  return runtimePairingPolicy?.endpoint ?? null;
 }
 
 export function validateWorkstationHostPolicy(policy: WorkstationHostPolicy): void {
@@ -82,6 +209,33 @@ function createSessionValue(policy: WorkstationHostPolicy, now = Date.now()): st
   return `${payload}.${signature(payload, policy.sessionSecret)}`;
 }
 
+function sessionCookie(value: string, policy: WorkstationHostPolicy, secure: boolean): string {
+  return [
+    `${SESSION_COOKIE}=${encodeURIComponent(value)}`,
+    'Path=/',
+    'HttpOnly',
+    secure ? 'Secure' : '',
+    secure ? 'SameSite=None' : 'SameSite=Lax',
+    `Max-Age=${policy.sessionSeconds}`,
+  ].filter(Boolean).join('; ');
+}
+
+function bearerValue(request: Request): string | null {
+  const header = request.header('authorization');
+  const match = /^Bearer\s+(.+)$/i.exec(header ?? '');
+  return match?.[1]?.trim() || null;
+}
+
+function validSessionValue(session: string | null, policy: WorkstationHostPolicy, now = Date.now()): boolean {
+  if (!session || !policy.sessionSecret) return false;
+  const match = /^v1\.(\d+)\.([A-Za-z0-9_-]+)$/.exec(session);
+  if (!match) return false;
+  const expiresAt = Number(match[1]);
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= Math.floor(now / 1000)) return false;
+  const payload = `v1.${expiresAt}`;
+  return safeEqual(match[2], signature(payload, policy.sessionSecret));
+}
+
 function cookieValue(request: Request, name: string): string | null {
   const cookieHeader = request.header('cookie');
   if (!cookieHeader) return null;
@@ -100,20 +254,101 @@ export function isWorkstationSessionAuthenticated(
   now = Date.now(),
 ): boolean {
   if (!policy.remote || policy.authentication === 'none') return true;
-  if (!policy.sessionSecret) return false;
-  const session = cookieValue(request, SESSION_COOKIE);
-  if (!session) return false;
-  const match = /^v1\.(\d+)\.([A-Za-z0-9_-]+)$/.exec(session);
-  if (!match) return false;
-  const expiresAt = Number(match[1]);
-  if (!Number.isSafeInteger(expiresAt) || expiresAt <= Math.floor(now / 1000)) return false;
-  const payload = `v1.${expiresAt}`;
-  return safeEqual(match[2], signature(payload, policy.sessionSecret));
+  return validSessionValue(bearerValue(request), policy, now)
+    || validSessionValue(cookieValue(request, SESSION_COOKIE), policy, now);
+}
+
+function isLoopbackRequest(request: Request): boolean {
+  const address = request.socket.remoteAddress ?? '';
+  return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+}
+
+function isDirectLoopbackRequest(request: Request): boolean {
+  if (!isLoopbackRequest(request)) return false;
+  const host = request.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}
+
+function purgeExpiredPairings(now = Date.now()): void {
+  for (const [key, pairing] of pendingPairings) {
+    if (pairing.expiresAt <= now) pendingPairings.delete(key);
+  }
+}
+
+function issuePairing(input: Omit<PendingPairing, 'digest' | 'expiresAt' | 'endpoint'>): WorkstationPairingPayload {
+  if (!runtimePairingPolicy) throw new Error('Private remote access is not enabled.');
+  purgeExpiredPairings();
+  const pairingToken = randomBytes(24).toString('base64url');
+  const digest = createHash('sha256').update(pairingToken).digest('hex');
+  const expiresAt = Date.now() + DEFAULT_PAIRING_SECONDS * 1000;
+  pendingPairings.set(digest, {
+    ...input,
+    digest,
+    expiresAt,
+    endpoint: runtimePairingPolicy.endpoint,
+  });
+  return {
+    schemaVersion: 1,
+    endpoint: runtimePairingPolicy.endpoint,
+    pairingToken,
+    expiresAt: new Date(expiresAt).toISOString(),
+    hostName: input.hostName,
+    projectId: input.projectId,
+    projectName: input.projectName,
+    projectPathHint: input.projectPathHint,
+  };
+}
+
+function redeemPairing(token: string): WorkstationPairingSession | null {
+  if (!runtimePairingPolicy) return null;
+  purgeExpiredPairings();
+  const digest = createHash('sha256').update(token).digest('hex');
+  const pairing = pendingPairings.get(digest);
+  if (!pairing || pairing.expiresAt <= Date.now()) return null;
+  pendingPairings.delete(digest);
+  const policy = getWorkstationHostPolicy();
+  const accessToken = createSessionValue(policy);
+  const expiresAtSeconds = Number(/^v1\.(\d+)\./.exec(accessToken)?.[1] ?? 0);
+  return {
+    schemaVersion: 1,
+    endpoint: pairing.endpoint,
+    accessToken,
+    expiresAt: new Date(expiresAtSeconds * 1000).toISOString(),
+    access: policy.access,
+  };
 }
 
 function requestOrigin(request: Request): string | null {
   const origin = request.header('origin')?.replace(/\/+$/, '');
   return origin || null;
+}
+
+function authorizePairingOrigin(origin: string | null): void {
+  if (!runtimePairingPolicy || !origin) return;
+  // Packaged Electron renderers have an opaque `file://` origin, serialized by
+  // browsers as the literal `null`. It is safe only after possession of the
+  // single-use pairing secret, and the resulting bearer remains mandatory.
+  if (origin === 'null') {
+    if (!runtimePairingPolicy.allowedOrigins.includes(origin)) {
+      runtimePairingPolicy = {
+        ...runtimePairingPolicy,
+        allowedOrigins: [...runtimePairingPolicy.allowedOrigins, origin],
+      };
+      if (runtimePairingPolicy.persisted) persistRuntimePairingPolicy(runtimePairingPolicy);
+    }
+    return;
+  }
+  const parsed = new URL(origin);
+  if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || parsed.username || parsed.password) {
+    throw new Error('The connecting app origin is invalid.');
+  }
+  const normalized = parsed.origin;
+  if (runtimePairingPolicy.allowedOrigins.includes(normalized)) return;
+  runtimePairingPolicy = {
+    ...runtimePairingPolicy,
+    allowedOrigins: [...runtimePairingPolicy.allowedOrigins, normalized],
+  };
+  if (runtimePairingPolicy.persisted) persistRuntimePairingPolicy(runtimePairingPolicy);
 }
 
 function ownOrigin(request: Request): string {
@@ -195,9 +430,17 @@ export function workstationCorsMiddleware(
 ): void {
   const policy = getWorkstationHostPolicy();
   const origin = requestOrigin(request);
+  const isPairingRedemption = request.path === '/api/workstation-connection/pairings/redeem';
 
   if (!policy.remote) {
     response.header('Access-Control-Allow-Origin', '*');
+  } else if (isPairingRedemption && origin) {
+    response.header('Access-Control-Allow-Origin', origin);
+    response.header('Vary', 'Origin');
+  } else if (isDirectLoopbackRequest(request) && origin) {
+    response.header('Access-Control-Allow-Origin', origin);
+    response.header('Access-Control-Allow-Credentials', 'true');
+    response.header('Vary', 'Origin');
   } else if (origin && isAllowedOrigin(request, policy)) {
     response.header('Access-Control-Allow-Origin', origin);
     response.header('Access-Control-Allow-Credentials', 'true');
@@ -207,7 +450,11 @@ export function workstationCorsMiddleware(
   response.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (request.method === 'OPTIONS') {
-    if (policy.remote && origin && !isAllowedOrigin(request, policy)) {
+    if (policy.remote
+      && origin
+      && !isPairingRedemption
+      && !isDirectLoopbackRequest(request)
+      && !isAllowedOrigin(request, policy)) {
       response.status(403).json({ error: 'Origin is not allowed.' });
       return;
     }
@@ -229,6 +476,15 @@ export function workstationAccessMiddleware(
     || request.path === '/mcp'
     || request.path.startsWith('/mcp/');
   if (!policy.remote || !isApplicationApi || isPublicPublicationPath(request.path)) {
+    next();
+    return;
+  }
+
+
+  // Tailscale Serve reaches this process over loopback too, so the socket
+  // address alone is not authority. Only an explicitly loopback Host is the
+  // local desktop/browser bridge; tailnet hostnames still require a session.
+  if (isDirectLoopbackRequest(request)) {
     next();
     return;
   }
@@ -271,6 +527,92 @@ export function createWorkstationConnectionRouter(): Router {
     response.json(descriptor);
   });
 
+  router.get('/tailscale', async (request, response) => {
+    if (!isDirectLoopbackRequest(request)) {
+      response.status(403).json({ error: 'Tailscale host status is only available on this computer.' });
+      return;
+    }
+    response.setHeader('Cache-Control', 'no-store');
+    response.json({
+      ...(await inspectTailscaleRemote()),
+      enabled: getRuntimeWorkstationPairingEndpoint() !== null,
+    });
+  });
+
+  router.post('/tailscale/enable', async (request, response) => {
+    if (!isDirectLoopbackRequest(request)) {
+      response.status(403).json({ error: 'Private access can only be enabled on this computer.' });
+      return;
+    }
+    try {
+      const status = await enableTailscaleServe(getServerPort());
+      if (!status.endpoint) throw new Error('Tailscale did not provide a private HTTPS name.');
+      const localOrigin = requestOrigin(request);
+      enableRuntimeWorkstationPairing({
+        endpoint: status.endpoint,
+        allowedOrigins: [status.endpoint, ...(localOrigin ? [localOrigin] : [])],
+        persist: true,
+      });
+      const hostPolicy = getWorkstationHostPolicy();
+      response.setHeader('Set-Cookie', sessionCookie(
+        createSessionValue(hostPolicy),
+        hostPolicy,
+        request.secure || request.header('x-forwarded-proto') === 'https',
+      ));
+      const project = await getActiveSimpleProject();
+      const pairing = issuePairing({
+        hostName: status.hostName || 'Workstation',
+        projectId: project.metadata.id,
+        projectName: project.metadata.name,
+        projectPathHint: project.metadata.name,
+      });
+      const qrDataUrl = await QRCode.toDataURL(JSON.stringify(pairing), { width: 320, margin: 1 });
+      response.setHeader('Cache-Control', 'no-store');
+      response.json({ status: { ...status, enabled: true }, pairing, qrDataUrl });
+    } catch (error) {
+      response.status(409).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.post('/tailscale/pairing', async (request, response) => {
+    if (!isDirectLoopbackRequest(request)) {
+      response.status(403).json({ error: 'Pairing codes can only be created on this computer.' });
+      return;
+    }
+    try {
+      const status = await inspectTailscaleRemote();
+      if (!status.endpoint || getRuntimeWorkstationPairingEndpoint() !== status.endpoint) {
+        throw new Error('Enable private access before creating another pairing code.');
+      }
+      const project = await getActiveSimpleProject();
+      const pairing = issuePairing({
+        hostName: status.hostName || 'Workstation',
+        projectId: project.metadata.id,
+        projectName: project.metadata.name,
+        projectPathHint: project.metadata.name,
+      });
+      const qrDataUrl = await QRCode.toDataURL(JSON.stringify(pairing), { width: 320, margin: 1 });
+      response.setHeader('Cache-Control', 'no-store');
+      response.json({ pairing, qrDataUrl });
+    } catch (error) {
+      response.status(409).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.delete('/tailscale', async (request, response) => {
+    if (!isDirectLoopbackRequest(request)) {
+      response.status(403).json({ error: 'Private access can only be disabled on this computer.' });
+      return;
+    }
+    try {
+      await disableTailscaleServe();
+      disableRuntimeWorkstationPairing(true);
+      response.json({ success: true });
+    } catch (error) {
+      response.status(409).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
   router.post('/session', (request, response) => {
     const policy = getWorkstationHostPolicy();
     if (!policy.remote || policy.authentication !== 'password' || !policy.password) {
@@ -290,16 +632,47 @@ export function createWorkstationConnectionRouter(): Router {
     }
 
     const secure = policy.secureCookie || request.secure || request.header('x-forwarded-proto') === 'https';
-    const attributes = [
-      `${SESSION_COOKIE}=${encodeURIComponent(createSessionValue(policy))}`,
-      'Path=/',
-      'HttpOnly',
-      secure ? 'Secure' : '',
-      'SameSite=Lax',
-      `Max-Age=${policy.sessionSeconds}`,
-    ].filter(Boolean);
-    response.setHeader('Set-Cookie', attributes.join('; '));
+    response.setHeader('Set-Cookie', sessionCookie(createSessionValue(policy), policy, secure));
     response.json({ success: true });
+  });
+
+  router.post('/pairings', (request, response) => {
+    if (!isDirectLoopbackRequest(request)) {
+      response.status(403).json({ error: 'Pairing codes can only be created on the host computer.' });
+      return;
+    }
+    try {
+      const value = issuePairing({
+        hostName: typeof request.body?.hostName === 'string' ? request.body.hostName : 'Workstation',
+        projectId: typeof request.body?.projectId === 'string' ? request.body.projectId : '',
+        projectName: typeof request.body?.projectName === 'string' ? request.body.projectName : 'Interface',
+        projectPathHint: typeof request.body?.projectPathHint === 'string' ? request.body.projectPathHint : '',
+      });
+      response.setHeader('Cache-Control', 'no-store');
+      response.json(value);
+    } catch (error) {
+      response.status(409).json({ error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  router.post('/pairings/redeem', (request, response) => {
+    const token = typeof request.body?.pairingToken === 'string' ? request.body.pairingToken : '';
+    const session = token ? redeemPairing(token) : null;
+    if (!session) {
+      response.status(401).json({ error: 'This pairing code is invalid, expired, or already used.' });
+      return;
+    }
+    try {
+      authorizePairingOrigin(requestOrigin(request));
+    } catch (error) {
+      response.status(400).json({ error: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+    const policy = getWorkstationHostPolicy();
+    const secure = policy.secureCookie || request.secure || request.header('x-forwarded-proto') === 'https';
+    response.setHeader('Set-Cookie', sessionCookie(session.accessToken, policy, secure));
+    response.setHeader('Cache-Control', 'no-store');
+    response.json(session);
   });
 
   router.delete('/session', (request, response) => {
@@ -308,9 +681,10 @@ export function createWorkstationConnectionRouter(): Router {
       response.status(403).json({ error: 'Request origin is not allowed.' });
       return;
     }
+    const secure = policy.secureCookie || request.secure || request.header('x-forwarded-proto') === 'https';
     response.setHeader(
       'Set-Cookie',
-      `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
+      `${SESSION_COOKIE}=; Path=/; HttpOnly; ${secure ? 'Secure; SameSite=None' : 'SameSite=Lax'}; Max-Age=0`,
     );
     response.json({ success: true });
   });

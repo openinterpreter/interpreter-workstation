@@ -3,11 +3,21 @@ import { describe, expect, test } from 'bun:test';
 import { applyChatEvent, createInitialChatState } from '../../src/hooks/use-chat-reducer';
 import {
   createAgentStreamErrorPayload,
+  getAgentServiceTierConfig,
   getProgrammaticTaskHttpError,
   parseProgrammaticTaskBody,
   resolveTestModelRuntime,
   toProgrammaticTaskProgressSseEvents,
 } from './agent';
+
+describe('Simple mode service tier', () => {
+  test('uses the actual OpenAI fast tier only for the Simple primary agent', () => {
+    expect(getAgentServiceTierConfig('simple-primary-agent')).toEqual({
+      service_tier: 'fast',
+    });
+    expect(getAgentServiceTierConfig('advanced-agent')).toBeUndefined();
+  });
+});
 
 describe('programmatic task HTTP transport', () => {
   test('keeps whole-task and turn-idle timeouts separate', () => {

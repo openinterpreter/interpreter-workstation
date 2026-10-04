@@ -47,6 +47,11 @@ let cuaAccessPolicyProvider: () => Promise<CuaAccessPolicy> = getCuaAccessPolicy
 let browserAccessPolicyProvider: () => Promise<BrowserAccessPolicy> = getBrowserAccessPolicy;
 let windowsCuaDriverToolProvider: WindowsCuaDriverToolProvider = callWindowsCuaDriverTool;
 const macCuaDriverSocketPath = path.join(os.tmpdir(), `interpreter-desktop-driver-${process.pid}.sock`);
+// Keep every one-shot CLI call in the same daemon-owned lifecycle. CUA Driver
+// 0.31 retires anonymous CLI sessions (and their element snapshots) as soon as
+// each process exits; an explicit per-Workstation label preserves the snapshot
+// from observation through the following action without crossing app runs.
+const macCuaDriverSession = `interpreter-workstation-${process.pid}`;
 const MAC_CUA_DRIVER_DAEMON_STARTUP_TIMEOUT_MS = 20_000;
 const MAC_CUA_DRIVER_TOOL_TIMEOUT_MS = 60_000;
 const MAC_CUA_DRIVER_ACTIVITY_TIMEOUT_MS = 5_000;
@@ -65,6 +70,7 @@ type ComputerUseTarget = {
   pid: number;
   windowId: number | string;
   focusedElementIndex: number | null;
+  elementTokens?: Map<number, string>;
   onCurrentSpace?: boolean;
   isOnScreen?: boolean;
   bounds?: {
@@ -759,6 +765,43 @@ function optionalElementIndex(args: Record<string, unknown>): number | null {
   return value;
 }
 
+function elementTokenFor(target: ComputerUseTarget, elementIndex: number): string {
+  const token = target.elementTokens?.get(elementIndex);
+  if (!token) {
+    throw new Error(`No snapshot token exists for element_index ${elementIndex}. Call get_app_state or get_ui_elements again.`);
+  }
+  return token;
+}
+
+async function freshElementTokenFor(
+  app: string,
+  target: ComputerUseTarget,
+  elementIndex: number,
+  context: BuiltinToolContext | undefined,
+  appApprovalArgs: Record<string, unknown>,
+): Promise<string> {
+  // CUA Driver 0.31 intentionally scopes element tokens to the driver's most
+  // recent accessibility snapshot. Refresh immediately before acting so a
+  // renderer/tool round trip cannot leave Workstation holding a stale token.
+  // If the visible numeric reference no longer exists, fail closed rather
+  // than guessing at another control.
+  const response = await callCuaDriverCli('get_window_state', {
+    pid: target.pid,
+    window_id: target.windowId,
+  }, context, undefined, appApprovalArgs);
+  if (response.isError) {
+    throw new Error(`Could not refresh the current UI snapshot before acting on element_index ${elementIndex}: ${toolText(response)}`);
+  }
+  const parsed = parseJsonText(toolText(response)) as MacCuaWindowState;
+  const refreshedTarget: ComputerUseTarget = {
+    ...target,
+    focusedElementIndex: focusedElementIndexFromTreeMarkdown(parsed.tree_markdown),
+    elementTokens: elementTokensFromState(parsed),
+  };
+  cacheComputerUseTarget(app, refreshedTarget, context);
+  return elementTokenFor(refreshedTarget, elementIndex);
+}
+
 function isContentWindowRecord(window: MacCuaWindowRecord): boolean {
   const width = typeof window.bounds?.width === 'number' ? window.bounds.width : 0;
   const height = typeof window.bounds?.height === 'number' ? window.bounds.height : 0;
@@ -1297,11 +1340,20 @@ function formatMacComputerUseApps(response: ToolCallResponse): ToolCallResponse 
 
 export type MacCuaWindowStateElement = {
   element_index?: number;
+  element_token?: string;
   parent_index?: number;
   role?: string;
   label?: string;
   value?: string;
 };
+
+function elementTokensFromState(state: MacCuaWindowState): Map<number, string> {
+  return new Map((state.elements ?? []).flatMap((element) => (
+    typeof element.element_index === 'number' && typeof element.element_token === 'string'
+      ? [[element.element_index, element.element_token] as const]
+      : []
+  )));
+}
 
 type MacCuaWindowState = {
   bundle_id?: string;
@@ -1704,6 +1756,7 @@ async function callMacComputerUseTool(
         const observedTarget = {
           ...target,
           focusedElementIndex: focusedElementIndexFromTreeMarkdown(parsed.tree_markdown),
+          elementTokens: elementTokensFromState(parsed),
         };
         cacheComputerUseTarget(app, observedTarget, context);
         const resolvedScreenshotPath = parsed.screenshot_file_path ?? screenshotPath;
@@ -1716,6 +1769,7 @@ async function callMacComputerUseTool(
       const observedTarget = {
         ...lastTarget,
         focusedElementIndex: focusedElementIndexFromTreeMarkdown(lastParsed.tree_markdown),
+        elementTokens: elementTokensFromState(lastParsed),
       };
       cacheComputerUseTarget(app, observedTarget, context);
       const resolvedScreenshotPath = lastParsed.screenshot_file_path ?? screenshotPath;
@@ -1753,6 +1807,7 @@ async function callMacComputerUseTool(
         const observedTarget = {
           ...target,
           focusedElementIndex: focusedElementIndexFromTreeMarkdown(parsed.tree_markdown),
+          elementTokens: elementTokensFromState(parsed),
         };
         cacheComputerUseTarget(app, observedTarget, context);
         return formatComputerUseUiElements(observedTarget, parsed, region);
@@ -1764,6 +1819,7 @@ async function callMacComputerUseTool(
       const observedTarget = {
         ...lastTarget,
         focusedElementIndex: focusedElementIndexFromTreeMarkdown(lastParsed.tree_markdown),
+        elementTokens: elementTokensFromState(lastParsed),
       };
       cacheComputerUseTarget(app, observedTarget, context);
       return formatComputerUseUiElements(observedTarget, lastParsed, region);
@@ -1782,13 +1838,13 @@ async function callMacComputerUseTool(
         return callCuaDriverCli('right_click', {
           pid: target.pid,
           window_id: target.windowId,
-          element_index: Number(elementIndex),
+          element_token: await freshElementTokenFor(app, target, Number(elementIndex), context, appApprovalArgs),
         }, context, undefined, appApprovalArgs);
       }
       return callCuaDriverCli(count > 1 ? 'double_click' : 'click', {
         pid: target.pid,
         window_id: target.windowId,
-        element_index: Number(elementIndex),
+        element_token: await freshElementTokenFor(app, target, Number(elementIndex), context, appApprovalArgs),
         ...(args.skip_change_detection === true ? { skip_change_detection: true } : {}),
         ...(typeof args.action === 'string' ? { action: args.action } : {}),
       }, context, undefined, appApprovalArgs);
@@ -1832,7 +1888,7 @@ async function callMacComputerUseTool(
     };
     if (target.focusedElementIndex !== null) {
       pressArgs.window_id = target.windowId;
-      pressArgs.element_index = target.focusedElementIndex;
+      pressArgs.element_token = await freshElementTokenFor(app, target, target.focusedElementIndex, context, appApprovalArgs);
     }
     return callCuaDriverCli('press_key', pressArgs, context, undefined, appApprovalArgs);
   }
@@ -1847,10 +1903,10 @@ async function callMacComputerUseTool(
     };
     if (elementIndex !== null) {
       typeArgs.window_id = target.windowId;
-      typeArgs.element_index = elementIndex;
+      typeArgs.element_token = await freshElementTokenFor(app, target, elementIndex, context, appApprovalArgs);
     } else if (target.focusedElementIndex !== null) {
       typeArgs.window_id = target.windowId;
-      typeArgs.element_index = target.focusedElementIndex;
+      typeArgs.element_token = await freshElementTokenFor(app, target, target.focusedElementIndex, context, appApprovalArgs);
     }
     return callCuaDriverCli('type_text', typeArgs, context, undefined, appApprovalArgs);
   }
@@ -1861,7 +1917,7 @@ async function callMacComputerUseTool(
     return callCuaDriverCli('set_value', {
       pid: target.pid,
       window_id: target.windowId,
-      element_index: Number(args.element_index),
+      element_token: await freshElementTokenFor(app, target, Number(args.element_index), context, appApprovalArgs),
       value: args.value,
       ...(args.skip_change_detection === true ? { skip_change_detection: true } : {}),
     }, context, undefined, appApprovalArgs);
@@ -1878,7 +1934,7 @@ async function callMacComputerUseTool(
     const direct = await callCuaDriverCli('set_value', {
       pid: target.pid,
       window_id: target.windowId,
-      element_index: elementIndex,
+      element_token: await freshElementTokenFor(app, target, elementIndex, context, appApprovalArgs),
       value,
       ...skipChangeDetection,
     }, context, undefined, appApprovalArgs);
@@ -1889,7 +1945,7 @@ async function callMacComputerUseTool(
     const click = await callCuaDriverCli('click', {
       pid: target.pid,
       window_id: target.windowId,
-      element_index: elementIndex,
+      element_token: await freshElementTokenFor(app, target, elementIndex, context, appApprovalArgs),
       ...skipChangeDetection,
     }, context, undefined, appApprovalArgs);
     if (click.isError) {
@@ -1945,7 +2001,7 @@ async function callMacComputerUseTool(
     const resolved = await callCuaDriverCli('set_value', {
       pid: target.pid,
       window_id: target.windowId,
-      element_index: elementIndex,
+      element_token: await freshElementTokenFor(app, target, elementIndex, context, appApprovalArgs),
       value: menu.optionText,
       ...skipChangeDetection,
     }, context, undefined, appApprovalArgs);
@@ -1971,7 +2027,9 @@ async function callMacComputerUseTool(
     return callCuaDriverCli('scroll', {
       pid: target.pid,
       window_id: target.windowId,
-      element_index: args.element_index === undefined ? undefined : Number(args.element_index),
+      element_token: args.element_index === undefined
+        ? undefined
+        : await freshElementTokenFor(app, target, Number(args.element_index), context, appApprovalArgs),
       direction: args.direction,
       amount: typeof args.pages === 'number' ? Math.min(COMPUTER_USE_SCROLL_MAX_PAGES, Math.max(1, Math.round(args.pages))) : 1,
       ...(args.skip_change_detection === true ? { skip_change_detection: true } : {}),
@@ -1985,7 +2043,7 @@ async function callMacComputerUseTool(
     return callCuaDriverCli('click', {
       pid: target.pid,
       window_id: target.windowId,
-      element_index: Number(args.element_index),
+      element_token: await freshElementTokenFor(app, target, Number(args.element_index), context, appApprovalArgs),
       action: mapped,
     }, context, undefined, appApprovalArgs);
   }
@@ -3075,11 +3133,13 @@ async function getMacComputerUsePermissionStatus(): Promise<MacComputerUsePermis
 
   if (!isElectronMainProcess()) {
     const binary = resolveCuaDriverBinary();
+    await ensureCuaDriverDaemon(binary);
     const { stdout } = await execFileAsync(binary, [
       'call',
       'check_permissions',
       JSON.stringify({ prompt: false }),
-      '--no-daemon',
+      '--socket',
+      macCuaDriverSocketPath,
     ], {
       maxBuffer: 1024 * 1024,
     });
@@ -3387,7 +3447,7 @@ async function callMacCuaDriverCli(
   const binary = resolveCuaDriverBinary();
   await ensureCuaDriverDaemon(binary);
   await requestMacForegroundApprovalIfNeeded(toolName, args, context);
-  const jsonArgs = JSON.stringify(args ?? {});
+  const jsonArgs = JSON.stringify({ ...(args ?? {}), session: macCuaDriverSession });
   let saveToDiskPath = imageOutputPath;
   let userRequestedSaveToDisk = false;
   if (context?.saveToDiskPath) {

@@ -235,6 +235,7 @@ describe('InputPanel mounted Enter submit', () => {
       const root = createRoot(container);
       await act(async () => {
         root.render(React.createElement(InputPanel, {
+          simpleMode: true,
           visible: true,
           shown: true,
           screenshot: null,
@@ -256,6 +257,19 @@ describe('InputPanel mounted Enter submit', () => {
 
       const textarea = container.querySelector('textarea')!;
       expect(textarea).toBeTruthy();
+      expect(container.textContent).toContain('Ask Interpreter');
+      const composer = container.querySelector<HTMLElement>('[data-simple-overlay-composer="true"]');
+      expect(composer).toBeTruthy();
+      expect(composer?.style.bottom).toBe('24px');
+      expect(composer?.style.left).toBe('50%');
+      expect(composer?.style.transform).toBe('translate(-50%, 0)');
+      expect(composer?.style.borderRadius).toBe('999px');
+      expect(composer?.style.backdropFilter).toContain('blur(28px)');
+      const dim = container.querySelector<HTMLElement>('[data-simple-overlay-dim="true"]');
+      expect(dim).toBeTruthy();
+      expect(dim?.style.inset).toBe('0px');
+      expect(dim?.style.backgroundColor).toBe('rgba(0, 0, 0, 0.46)');
+      expect(dim?.style.pointerEvents).toBe('none');
       const setTextareaValue = async (value: string) => {
         await act(async () => {
           const valueSetter = Object.getOwnPropertyDescriptor(

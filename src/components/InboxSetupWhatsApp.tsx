@@ -18,9 +18,10 @@ import {
 interface InboxSetupWhatsAppProps {
   onConnected: () => void;
   onCancel: () => void;
+  compact?: boolean;
 }
 
-export function InboxSetupWhatsApp({ onConnected, onCancel }: InboxSetupWhatsAppProps) {
+export function InboxSetupWhatsApp({ onConnected, onCancel, compact = false }: InboxSetupWhatsAppProps) {
   "use no memo";
 
   const [qrCode, setQrCode] = useState<string | null>(null);
@@ -29,6 +30,7 @@ export function InboxSetupWhatsApp({ onConnected, onCancel }: InboxSetupWhatsApp
   const eventSourceRef = useRef<EventSource | null>(null);
   const qrTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const completedRef = useRef(false);
+  const setupAttemptRef = useRef(0);
 
   const clearQrTimeout = useCallback(() => {
     if (qrTimeoutRef.current) {
@@ -46,6 +48,8 @@ export function InboxSetupWhatsApp({ onConnected, onCancel }: InboxSetupWhatsApp
   }, [clearQrTimeout]);
 
   const startSetup = useCallback(async () => {
+    const attempt = setupAttemptRef.current + 1;
+    setupAttemptRef.current = attempt;
     try {
       closeEventSource();
       setError(null);
@@ -55,43 +59,63 @@ export function InboxSetupWhatsApp({ onConnected, onCancel }: InboxSetupWhatsApp
       const baseUrl = isBrowserDevMode()
         ? ''
         : await getAppServerOrigin();
+      if (setupAttemptRef.current !== attempt) return;
 
-      // Start the socket initialization
-      const response = await fetch(`${baseUrl}/api/servers/whatsapp/setup`, { method: 'POST', credentials: 'include' });
-      if (!response.ok) {
-        let message = 'Failed to initialize WhatsApp setup.';
-        try {
-          const payload = await response.json();
-          if (typeof payload?.error === 'string' && payload.error.trim().length > 0) {
-            message = payload.error;
-          }
-        } catch {
-          // Ignore malformed JSON error response.
-        }
-        throw new Error(message);
-      }
-
-      // Open SSE stream for QR codes
+      // Subscribe before starting the socket. The server flushes EventSource
+      // headers only after its QR listeners are installed, so `open` is the
+      // handshake that prevents the first QR from being emitted into a gap.
       const evtSource = new EventSource(`${baseUrl}/api/servers/whatsapp/setup/qr-stream`, {
         withCredentials: true,
       });
       eventSourceRef.current = evtSource;
-      qrTimeoutRef.current = setTimeout(() => {
-        setConnecting(false);
-        const message = 'Unable to get a WhatsApp QR code. Check internet/proxy/firewall and try again.';
-        setError(message);
-        trackInboxSetupFailed({
-          channel: 'whatsapp',
-          error: message,
-          stage: 'qr_timeout',
-        });
-      }, 30000);
+      let setupStarted = false;
+
+      evtSource.addEventListener('open', () => {
+        if (setupStarted || setupAttemptRef.current !== attempt) return;
+        setupStarted = true;
+        qrTimeoutRef.current = setTimeout(() => {
+          if (setupAttemptRef.current !== attempt) return;
+          setConnecting(false);
+          const message = 'Unable to get a WhatsApp QR code. Check internet/proxy/firewall and try again.';
+          setError(message);
+          trackInboxSetupFailed({
+            channel: 'whatsapp',
+            error: message,
+            stage: 'qr_timeout',
+          });
+        }, 30000);
+
+        void fetch(`${baseUrl}/api/servers/whatsapp/setup`, { method: 'POST', credentials: 'include' })
+          .then(async (response) => {
+            if (response.ok || setupAttemptRef.current !== attempt) return;
+            let message = 'Failed to initialize WhatsApp setup.';
+            try {
+              const payload = await response.json();
+              if (typeof payload?.error === 'string' && payload.error.trim().length > 0) {
+                message = payload.error;
+              }
+            } catch {
+              // Ignore malformed JSON error response.
+            }
+            throw new Error(message);
+          })
+          .catch((cause: unknown) => {
+            if (setupAttemptRef.current !== attempt) return;
+            clearQrTimeout();
+            setConnecting(false);
+            const message = cause instanceof Error ? cause.message : String(cause);
+            setError(message);
+            trackInboxSetupFailed({ channel: 'whatsapp', error: message, stage: 'setup_start' });
+          });
+      });
 
       evtSource.addEventListener('connecting', () => {
+        if (setupAttemptRef.current !== attempt) return;
         setConnecting(true);
       });
 
       evtSource.addEventListener('qr', (event) => {
+        if (setupAttemptRef.current !== attempt) return;
         try {
           const data = JSON.parse(event.data);
           clearQrTimeout();
@@ -104,6 +128,7 @@ export function InboxSetupWhatsApp({ onConnected, onCancel }: InboxSetupWhatsApp
       });
 
       evtSource.addEventListener('disconnected', (event) => {
+        if (setupAttemptRef.current !== attempt) return;
         clearQrTimeout();
         setQrCode(null);
         setConnecting(false);
@@ -129,6 +154,7 @@ export function InboxSetupWhatsApp({ onConnected, onCancel }: InboxSetupWhatsApp
       });
 
       evtSource.addEventListener('connected', () => {
+        if (setupAttemptRef.current !== attempt) return;
         completedRef.current = true;
         closeEventSource();
         trackInboxSetupCompleted({ channel: 'whatsapp' });
@@ -136,6 +162,7 @@ export function InboxSetupWhatsApp({ onConnected, onCancel }: InboxSetupWhatsApp
       });
 
       evtSource.addEventListener('logged_out', () => {
+        if (setupAttemptRef.current !== attempt) return;
         closeEventSource();
         const message = 'Session was logged out. Please try again.';
         setError(message);
@@ -151,7 +178,7 @@ export function InboxSetupWhatsApp({ onConnected, onCancel }: InboxSetupWhatsApp
       evtSource.onerror = () => {
         // SSE reconnects automatically, but if it persists we show an error
         setTimeout(() => {
-          if (evtSource.readyState === EventSource.CLOSED) {
+          if (setupAttemptRef.current === attempt && evtSource.readyState === EventSource.CLOSED) {
             const message = 'Connection lost. Please try again.';
             setError(message);
             setConnecting(false);
@@ -183,6 +210,7 @@ export function InboxSetupWhatsApp({ onConnected, onCancel }: InboxSetupWhatsApp
   useEffect(() => {
     void startSetup();
     return () => {
+      setupAttemptRef.current += 1;
       closeEventSource();
     };
   }, [startSetup, closeEventSource]);
@@ -199,42 +227,48 @@ export function InboxSetupWhatsApp({ onConnected, onCancel }: InboxSetupWhatsApp
   };
 
   return (
-    <div className="flex h-full flex-col overflow-auto px-3 py-3 text-[var(--oa-text)]">
-      <div
-        className="flex items-start justify-between gap-4 px-1 pb-4"
-        style={{ borderBottom: 'var(--border-width) solid', ...dividerStyle }}
-      >
-        <div className="min-w-0">
-          <div className="flex items-center gap-3">
-            <div className="flex size-8 items-center justify-center rounded-[10px] bg-black/[0.04] dark:bg-white/[0.06]">
-              <Phone className="size-4 text-[var(--oa-text-muted)]" />
-            </div>
-            <div className="min-w-0">
-              <h2 className="text-ui-base font-medium">Connect WhatsApp</h2>
-              <p className="mt-1 text-ui-sm text-[var(--oa-text-muted)]">
-                Scan a QR code from your phone to bring your chats into Inbox.
-              </p>
+    <div
+      className={`flex h-full flex-col overflow-auto text-[var(--oa-text)] ${compact ? 'p-2' : 'px-3 py-3'}`}
+    >
+      {!compact ? (
+        <div
+          className="flex items-start justify-between gap-4 px-1 pb-4"
+          style={{ borderBottom: 'var(--border-width) solid', ...dividerStyle }}
+        >
+          <div className="min-w-0">
+            <div className="flex items-center gap-3">
+              <div className="flex size-8 items-center justify-center rounded-[10px] bg-black/[0.04] dark:bg-white/[0.06]">
+                <Phone className="size-4 text-[var(--oa-text-muted)]" />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-ui-base font-medium">Connect WhatsApp</h2>
+                <p className="mt-1 text-pretty text-ui-sm text-[var(--oa-text-muted)]">
+                  Scan a QR code from your phone to bring your chats into Inbox.
+                </p>
+              </div>
             </div>
           </div>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Close WhatsApp setup"
+            onClick={() => {
+              if (!completedRef.current) {
+                trackInboxSetupCancelled({ channel: 'whatsapp' });
+              }
+              onCancel();
+            }}
+            className="text-[var(--oa-text-muted)]"
+          >
+            <X className="size-4" />
+          </Button>
         </div>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => {
-            if (!completedRef.current) {
-              trackInboxSetupCancelled({ channel: 'whatsapp' });
-            }
-            onCancel();
-          }}
-          className="text-[var(--oa-text-muted)]"
-        >
-          <X className="size-4" />
-        </Button>
-      </div>
+      ) : null}
 
       <div className="flex flex-1 flex-col gap-4 px-1 py-4">
         {error && (
           <div
+            role="alert"
             className="rounded-[14px] px-3 py-2.5 text-ui-sm text-destructive"
             style={{
               background: 'color-mix(in srgb, var(--destructive) 5%, transparent)',
@@ -250,7 +284,7 @@ export function InboxSetupWhatsApp({ onConnected, onCancel }: InboxSetupWhatsApp
           className="flex flex-col items-center gap-4 rounded-[18px] px-4 py-5 text-center"
           style={panelStyle}
         >
-        {connecting && !qrCode && (
+          {connecting && !qrCode && (
             <>
               <Loader2 className="mb-1 size-7 animate-spin text-[var(--oa-text-muted)]" />
               <div className="space-y-1">
@@ -262,9 +296,9 @@ export function InboxSetupWhatsApp({ onConnected, onCancel }: InboxSetupWhatsApp
                 </p>
               </div>
             </>
-        )}
+          )}
 
-        {qrCode && (
+          {qrCode && (
             <>
               <div
                 className="rounded-[16px] bg-white p-3"
@@ -276,37 +310,39 @@ export function InboxSetupWhatsApp({ onConnected, onCancel }: InboxSetupWhatsApp
                 <img
                   src={qrCode}
                   alt="WhatsApp QR Code"
-                  className="h-[192px] w-[192px] rounded-[12px]"
+                  className="size-[192px] rounded-[12px]"
                 />
               </div>
               <div className="space-y-1.5">
                 <h3 className="text-ui-base font-medium text-[var(--oa-text)]">
                   Scan with WhatsApp
                 </h3>
-                <p className="mx-auto max-w-[260px] text-ui-sm text-[var(--oa-text-muted)]">
+                <p className="mx-auto max-w-[260px] text-pretty text-ui-sm text-[var(--oa-text-muted)]">
                   Open WhatsApp on your phone, go to Settings {'>'} Linked Devices {'>'} Link a Device, and scan this QR code.
                 </p>
               </div>
             </>
-        )}
+          )}
         </div>
 
-        <div
-          className="space-y-2 pt-4"
-          style={{ borderTop: 'var(--border-width) solid', ...dividerStyle }}
-        >
-          <p className="text-ui-sm font-medium text-[var(--oa-text)]">After it connects</p>
-          <ol className="space-y-1 pl-4 text-ui-sm text-[var(--oa-text-muted)]">
-            <li>The setup view will close automatically.</li>
-            <li>Send yourself a message to create your WhatsApp thread in Inbox.</li>
-            <li>If the QR code expires, refresh and scan the newest one.</li>
-          </ol>
-        </div>
+        {!compact ? (
+          <div
+            className="space-y-2 pt-4"
+            style={{ borderTop: 'var(--border-width) solid', ...dividerStyle }}
+          >
+            <p className="text-ui-sm font-medium text-[var(--oa-text)]">After it connects</p>
+            <ol className="space-y-1 pl-4 text-pretty text-ui-sm text-[var(--oa-text-muted)]">
+              <li>The setup view will close automatically.</li>
+              <li>Send yourself a message to create your WhatsApp thread in Inbox.</li>
+              <li>If the QR code expires, refresh and scan the newest one.</li>
+            </ol>
+          </div>
+        ) : null}
       </div>
 
       <div
         className="mt-auto flex items-center justify-between gap-3 px-1 pt-3"
-        style={{ borderTop: 'var(--border-width) solid', ...dividerStyle }}
+        style={compact ? undefined : { borderTop: 'var(--border-width) solid', ...dividerStyle }}
       >
         <Button
           variant="ghost"
@@ -319,7 +355,7 @@ export function InboxSetupWhatsApp({ onConnected, onCancel }: InboxSetupWhatsApp
           }}
           className="text-[var(--oa-text-muted)]"
         >
-          Cancel
+          {compact ? 'Close setup' : 'Cancel'}
         </Button>
         {error ? (
           <Button variant="secondary" size="sm" onClick={() => void startSetup()}>

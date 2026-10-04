@@ -6,6 +6,7 @@ import {
   isPublicWorkstationPublication,
   isRemoteWorkstationHost,
   resolveWorkstationApiUrl,
+  workstationFetch,
 } from '../remote/workstationConnection';
 
 function isDescriptor(value: unknown): value is WorkstationConnectionDescriptor {
@@ -16,7 +17,9 @@ function isDescriptor(value: unknown): value is WorkstationConnectionDescriptor 
     && (descriptor.access === 'read-only' || descriptor.access === 'read-write')
     && typeof descriptor.authentication === 'object'
     && descriptor.authentication !== null
-    && (descriptor.authentication.method === 'none' || descriptor.authentication.method === 'password')
+    && (descriptor.authentication.method === 'none'
+      || descriptor.authentication.method === 'password'
+      || descriptor.authentication.method === 'pairing')
     && typeof descriptor.authentication.required === 'boolean'
     && typeof descriptor.authentication.authenticated === 'boolean';
 }
@@ -42,7 +45,7 @@ export function WorkstationConnectionGate({ children }: { children: React.ReactN
       return;
     }
     try {
-      const response = await fetch(resolveWorkstationApiUrl('/api/workstation-connection'), {
+      const response = await workstationFetch('/api/workstation-connection', {
         credentials: 'include',
         headers: { Accept: 'application/json' },
         cache: 'no-store',

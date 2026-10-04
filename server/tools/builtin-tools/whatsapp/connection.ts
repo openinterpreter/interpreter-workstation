@@ -25,7 +25,8 @@ import {
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   makeWASocket,
-  useLegacyMultiFileAuthState as useMultiFileAuthState,
+  useLegacyMultiFileAuthState,
+  useMultiFileAuthState,
   isJidGroup,
   type WASocket,
   type WAMessage,
@@ -34,6 +35,7 @@ import {
 import pino from 'pino';
 import {
   AUTH_DIR,
+  hasAuthState,
   saveCredentials,
   deleteCredentials,
   enqueueSaveCreds,
@@ -363,14 +365,27 @@ export async function initializeSocket(): Promise<void> {
   maybeRestoreCredsFromBackup();
 
   const logger = pino({ level: 'silent' });
-  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+  // Keep existing Baileys JSON sessions usable, but start fresh connections
+  // with baileyrs' native persistent store. The legacy adapter deliberately
+  // rejects an empty directory because it is migration-only.
+  const hasExistingAuth = hasAuthState();
+  const authState = hasExistingAuth
+    ? await useLegacyMultiFileAuthState(AUTH_DIR)
+    : await useMultiFileAuthState(AUTH_DIR);
+  const { state, saveCreds } = authState;
   const { version } = await fetchLatestBaileysVersion();
 
   const sock = makeWASocket({
-    auth: {
-      creds: state.creds,
-      keys: makeCacheableSignalKeyStore(state.keys, logger),
-    },
+    // A fresh baileyrs state includes its native persistent `store`; passing
+    // only the upstream-compatible creds/keys mirror silently discards that
+    // store and stalls before the pairing QR. Legacy JSON sessions still use
+    // the cacheable Baileys key adapter during migration.
+    auth: hasExistingAuth
+      ? {
+          creds: state.creds,
+          keys: makeCacheableSignalKeyStore(state.keys, logger),
+        }
+      : state,
     version,
     logger,
     printQRInTerminal: false,
@@ -390,7 +405,6 @@ export async function initializeSocket(): Promise<void> {
   sock.ev.on('connection.update', (update: Partial<ConnectionState>) => {
     try {
       const { connection, lastDisconnect, qr } = update;
-
       if (qr) {
         connectionEvents.emit('qr', qr);
       }

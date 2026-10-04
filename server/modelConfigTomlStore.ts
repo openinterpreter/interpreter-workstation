@@ -920,11 +920,27 @@ function parseModelConfigState(section: unknown, issues?: string[]): ModelConfig
   return state;
 }
 
+function omitNullishTomlValues(value: unknown): JsonValue {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => item !== null && item !== undefined)
+      .map((item) => omitNullishTomlValues(item));
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, item]) => item !== null && item !== undefined)
+        .map(([key, item]) => [key, omitNullishTomlValues(item)]),
+    ) as JsonValue;
+  }
+  return value as JsonValue;
+}
+
 function toTomlSection(state: ModelConfigState): Record<string, JsonValue> {
   const section: Record<string, JsonValue> = {
     storage_version: MODEL_CONFIG_STORAGE_VERSION,
-    profiles: state.profiles as unknown as JsonValue,
-    providers: state.providers as unknown as JsonValue,
+    profiles: omitNullishTomlValues(state.profiles),
+    providers: omitNullishTomlValues(state.providers),
   };
 
   if (state.defaultProfileId) {

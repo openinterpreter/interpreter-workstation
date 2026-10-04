@@ -5,10 +5,11 @@ import { DisconnectReason } from '@whiskeysockets/baileys';
 const fakeConnectionEvents = new EventEmitter();
 let fakeConnectionState = 'disconnected';
 let fakePhoneNumber: string | undefined;
+const initializeSocketMock = mock(() => Promise.resolve());
 
 mock.module('./whatsappSetupDependencies', () => ({
   connectionEvents: fakeConnectionEvents,
-  initializeSocket: mock(() => Promise.resolve()),
+  initializeSocket: initializeSocketMock,
   disconnectSocket: mock(() => Promise.resolve()),
   getConnectionState: () => fakeConnectionState,
   getPhoneNumber: () => fakePhoneNumber,
@@ -77,6 +78,8 @@ describe('WhatsApp QR stream SSE (#534, #518)', () => {
     fakeConnectionEvents.removeAllListeners();
     fakeConnectionState = 'disconnected';
     fakePhoneNumber = undefined;
+    initializeSocketMock.mockReset();
+    initializeSocketMock.mockImplementation(() => Promise.resolve());
   });
 
   test('should forward connecting event over SSE', async () => {
@@ -95,6 +98,29 @@ describe('WhatsApp QR stream SSE (#534, #518)', () => {
       const text = await firstChunk;
       expect(text).toContain('event: connecting');
       expect(text).toContain('data: {}');
+
+      response.destroy();
+    } finally {
+      await closeTestServer(server);
+    }
+  });
+
+  test('signals readiness before setup can emit the first QR', async () => {
+    initializeSocketMock.mockImplementation(async () => {
+      fakeConnectionEvents.emit('qr', 'first-fast-qr');
+    });
+    const app = createTestApp();
+    const server: Server = await new Promise(resolve => {
+      const s = app.listen(0, () => resolve(s));
+    });
+    const addr = server.address();
+    const port = typeof addr === 'object' && addr ? addr.port : 0;
+
+    try {
+      const { response, firstChunk } = await openSse(`http://127.0.0.1:${port}/api/servers/whatsapp/setup/qr-stream`);
+      const setupResponse = await fetch(`http://127.0.0.1:${port}/api/servers/whatsapp/setup`, { method: 'POST' });
+      expect(setupResponse.ok).toBe(true);
+      expect(await firstChunk).toContain('event: qr');
 
       response.destroy();
     } finally {

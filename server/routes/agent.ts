@@ -72,6 +72,7 @@ import {
   withAuthToken,
 } from '../../src/lib/codex/profiles';
 import { inferProfileIdFromEndpoint } from '../../src/lib/codex/profile-options';
+import type { JsonValue } from '../handlers/codex-generated-types/serde_json/JsonValue';
 import { resolveLocalRuntimeModelId } from '../../shared/types/provider';
 import {
   validateBackgroundTerminalStopRequestBody,
@@ -85,6 +86,7 @@ import {
 } from './agentStreamRequest';
 import { resolveLocalModelToolUseSupport } from '../handlers/providers';
 import { renameThread } from '../handlers/agentThreads';
+import { getActiveSimpleProject } from '../simpleProjects';
 
 import { appendCustomInstructionsToPrompt } from '../utils/customInstructions';
 import { isReasoningEffort } from '../../shared/types/reasoning';
@@ -695,6 +697,14 @@ function routeGroqThroughProxy(profile: CodexProfile): CodexProfile {
   };
 }
 
+export function getAgentServiceTierConfig(
+  agentId?: string,
+): Record<string, JsonValue> | undefined {
+  return agentId === 'simple-primary-agent'
+    ? { service_tier: 'fast' }
+    : undefined;
+}
+
 router.get('/threads', async (req: Request, res: Response) => {
   try {
     const archived = req.query.archived === '1' || req.query.archived === 'true';
@@ -1042,6 +1052,13 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
       resolveStreamWorkspacePathForAgentRequest(request),
     );
     const service = getCodexService();
+    const simpleProject = request.agentId === 'simple-primary-agent'
+      ? await getActiveSimpleProject()
+      : null;
+    const agentWorkspacePath = simpleProject?.path ?? workspacePath;
+    const simpleProjectInstruction = simpleProject
+      ? `Simple mode's active project is ${simpleProject.path}; it is the working directory and the interface to edit. The control workspace is ${workspacePath} and is a second writable root. Read the active project's AGENTS.md and then read .interpreter/skills/interface-design/SKILL.md completely before changing visible React UI. Use the maintained @interpreter/interface and @interpreter/motion capabilities described there. Update the existing interface in place, compile it, inspect diagnostics, preserve user state, and preserve the last good build. Never create an interface inside the control workspace. Preserve the ingress channel: desktop requests may use the visible interface; WhatsApp requests must reply through WhatsApp because the sender cannot see it; GPT Live requests must reply in voice.`
+      : null;
     if (targetThreadId) {
       try {
         const existingThread = await service.readThread(targetThreadId);
@@ -1090,9 +1107,9 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
       profile: resolvedRequest.profile,
       requestedModel: resolvedRequest.requestedModel,
       usesChatGptAuth: resolvedRequest.isChatGptProfile,
-      workspacePath,
+      workspacePath: agentWorkspacePath,
       message: rawMessage,
-      system: request.system,
+      system: [request.system, simpleProjectInstruction].filter(Boolean).join('\n\n') || undefined,
       attachments,
       skills: explicitSkills,
       threadId: targetThreadId,
@@ -1100,17 +1117,22 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
         ? {
           agentId: request.agentId,
           callerToken: request.callerToken,
-          workspacePath,
+          workspacePath: agentWorkspacePath,
           modelConfig: bindingModelConfig,
           toolProfileId: request.selection === 'stored-profile' ? request.profileId : undefined,
         }
         : {
           agentId: request.agentId ?? `stream-${Date.now()}`,
           callerToken: request.callerToken,
-          workspacePath,
+          workspacePath: agentWorkspacePath,
           modelConfig: bindingModelConfig,
         },
+      additionalWritableRoots: simpleProject && simpleProject.path !== workspacePath ? [workspacePath] : undefined,
       reasoningEffort: request.reasoningEffort,
+      // Simple mode is the quick, conversational surface. Codex/OpenAI accepts
+      // this as the request-level fast/priority processing tier. Keep Advanced
+      // mode on its existing account default unless it opts in separately.
+      config: getAgentServiceTierConfig(request.agentId),
       signal: abortController.signal,
       inspectExistingThread: Boolean(targetThreadId),
       turnErrorContext,

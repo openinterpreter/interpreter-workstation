@@ -11,6 +11,7 @@ import EventEmitter from 'node:events';
 // getPhoneNumber() returns sock.user.id split at '@' and ':', set on connection.update 'open'.
 const fakeConnectionEvents = new EventEmitter();
 let fakePhoneNumber = '+15551234567';
+let fakeAdvancedMode = true;
 
 // NOTE(victor): normalize and extract are NOT mocked -- real implementations are used.
 // The bridge calls jidToPhone() (normalize.ts) inside isSelfChat() to compare
@@ -48,6 +49,7 @@ mock.module('./whatsappBridgeDependencies', () => ({
   sendWhatsAppMessageWithRetry: sendMessageMock,
   broadcastEvent: broadcastSpy,
   notifyAgent: notifySpy,
+  getBooleanUISettingSync: () => fakeAdvancedMode,
 }));
 
 const {
@@ -98,6 +100,7 @@ describe('whatsappBridge', () => {
     notifySpy.mockClear();
     sendMessageMock.mockClear();
     fakePhoneNumber = '+15551234567';
+    fakeAdvancedMode = true;
     resetBridgeSession();
   });
 
@@ -199,6 +202,20 @@ describe('whatsappBridge', () => {
   // Broadcast payload shape
   // ===========================================================================
   describe('broadcast payload', () => {
+    test('routes Simple mode through its durable agent instead of creating an Advanced tab', async () => {
+      fakeAdvancedMode = false;
+      fakeConnectionEvents.emit('message', makeSelfChatMessage({ body: 'simple request' }));
+      await waitForBatchFlush();
+
+      expect(broadcastSpy).not.toHaveBeenCalledWith('agent-tab:create-requested', expect.anything());
+      expect(notifySpy).toHaveBeenCalledWith('simple-primary-agent', 'simple request', 'whatsapp');
+
+      bindWhatsAppBridgeConversation('simple-primary-agent', 'simple-thread-123');
+      const sent = await forwardWhatsAppAssistantMessage('simple-thread-123', 'simple reply');
+      expect(sent).toBe(true);
+      expect(sendMessageMock.mock.calls.at(-1)?.[0]?.text).toBe('simple reply');
+    });
+
     test('should contain all required fields in agent-tab:create-requested', async () => {
       fakeConnectionEvents.emit('message', makeSelfChatMessage({ body: 'payload test' }));
       await waitForBatchFlush();

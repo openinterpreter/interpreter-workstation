@@ -96,7 +96,6 @@ router.get('/setup/qr-stream', (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
 
   const onQr = async (qr: string) => {
     try {
@@ -145,6 +144,10 @@ router.get('/setup/qr-stream', (req, res) => {
   connectionEvents.on('disconnected', onDisconnected);
   connectionEvents.on('connected', onConnected);
   connectionEvents.on('logged_out', onLoggedOut);
+  // Do not establish the browser's EventSource connection until every QR
+  // listener is installed. The renderer starts the socket from its `open`
+  // event, closing the race where a fast first QR could otherwise be lost.
+  res.flushHeaders();
 
   function cleanup() {
     clearInterval(keepalive);

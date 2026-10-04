@@ -25,6 +25,7 @@ import { useAttachmentPreviewTrigger } from '../../../agent/components/composer/
 import '../../../agent/components/composer/attachment/attachment.css';
 
 interface InputPanelProps {
+  simpleMode?: boolean;
   visible: boolean;
   shown: boolean;
   screenshot: string | null;
@@ -305,6 +306,7 @@ function InputPanelContextChip({
 }
 
 export function InputPanel({
+  simpleMode = false,
   visible,
   shown,
   transcript,
@@ -353,14 +355,18 @@ export function InputPanel({
     (item): item is OverlayRegionContextItem => item.kind === 'region' && item.role === 'target',
   );
   const hasActiveAppTarget = targetRegion?.label.startsWith('Active app:') === true;
-  const placeholderText = targetRegion
+  const placeholderText = simpleMode
+    ? 'Ask Interpreter'
+    : targetRegion
     ? hasActiveAppTarget
       ? (isRecording ? 'Say what to do...' : 'Ask Interpreter anything...')
       : (isRecording ? 'Say what to do with this region...' : 'Describe what to do with this region...')
     : (isRecording ? 'Say what to do...' : 'Ask Interpreter anything...');
   const hasDraftText = hasComposerContent;
   const buttonMode = isRecording ? 'dismiss' : (hasDraftText ? 'send' : 'voice');
-  const { fontSize, lineHeight } = TEXT_SCALE_STYLES[textScale];
+  const scaledText = TEXT_SCALE_STYLES[textScale];
+  const fontSize = simpleMode ? 17 : scaledText.fontSize;
+  const lineHeight = simpleMode ? 24 : scaledText.lineHeight;
   useLayoutEffect(() => {
     visibleRef.current = visible;
   }, [visible]);
@@ -720,7 +726,7 @@ export function InputPanel({
           min-width: 0;
           pointer-events: none;
           color: rgba(255, 255, 255, 0.56);
-          font-size: 32px;
+          font-size: ${simpleMode ? 17 : 32}px;
           font-weight: 470;
           letter-spacing: -0.02em;
           font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -894,7 +900,7 @@ export function InputPanel({
           height: stripHeight,
           pointerEvents: 'none',
           zIndex: 1,
-          opacity: shown ? panelOpacity : 0,
+          opacity: simpleMode ? 0 : (shown ? panelOpacity : 0),
           transition: 'opacity 100ms ease-out',
           background: 'linear-gradient(to top, rgba(0,0,0,0.78) 0%, rgba(0,0,0,0.64) 18%, rgba(0,0,0,0.44) 40%, rgba(0,0,0,0.20) 68%, rgba(0,0,0,0) 100%)',
         }}
@@ -903,10 +909,13 @@ export function InputPanel({
       </div>
 
       <div
+        data-simple-overlay-dim={simpleMode ? 'true' : undefined}
         style={{
           position: 'absolute',
           inset: 0,
-          backgroundColor: INTERPRETER_OVERLAY_FULLSCREEN_DIM_COLOR,
+          backgroundColor: simpleMode
+            ? 'rgba(0, 0, 0, 0.46)'
+            : INTERPRETER_OVERLAY_FULLSCREEN_DIM_COLOR,
           pointerEvents: 'none',
           zIndex: 2,
           opacity: shown ? 1 : 0,
@@ -934,19 +943,31 @@ export function InputPanel({
 
       <div
         data-interactive
+        data-simple-overlay-composer={simpleMode ? 'true' : undefined}
         data-overlay-selection-tooltip-suppress="true"
         style={{
           position: 'absolute',
-          left: '40px',
-          bottom: '50px',
-          right: '40px',
+          left: simpleMode ? '50%' : '40px',
+          bottom: simpleMode ? '24px' : '50px',
+          right: simpleMode ? 'auto' : '40px',
+          width: simpleMode ? 'min(780px, calc(100vw - 32px))' : undefined,
+          minHeight: simpleMode ? '52px' : undefined,
+          padding: simpleMode ? '5px 7px 5px 18px' : undefined,
+          borderRadius: simpleMode ? '999px' : undefined,
+          border: simpleMode ? '1px solid rgba(255, 255, 255, 0.14)' : undefined,
+          background: simpleMode ? 'rgba(29, 29, 31, 0.78)' : undefined,
+          boxShadow: simpleMode ? '0 20px 64px rgba(0, 0, 0, 0.42), inset 0 1px 0 rgba(255,255,255,0.08)' : undefined,
+          backdropFilter: simpleMode ? 'blur(28px) saturate(1.2)' : undefined,
+          WebkitBackdropFilter: simpleMode ? 'blur(28px) saturate(1.2)' : undefined,
           pointerEvents: selectionInteractionActive ? 'none' : 'auto',
           zIndex: 3,
           display: 'flex',
           alignItems: 'flex-end',
           gap: '16px',
           opacity: shown ? panelOpacity : 0,
-          transform: shown ? 'translateY(0)' : 'translateY(10px)',
+          transform: simpleMode
+            ? (shown ? 'translate(-50%, 0)' : 'translate(-50%, 10px)')
+            : (shown ? 'translateY(0)' : 'translateY(10px)'),
           transition: 'opacity 100ms ease-out, transform 100ms ease-out',
         }}
         onClick={(event) => event.stopPropagation()}
@@ -959,9 +980,9 @@ export function InputPanel({
             display: 'flex',
             flex: 1,
             minWidth: 0,
-            alignItems: 'flex-end',
             gap: '12px',
-            minHeight: `${fieldHeight}px`,
+            minHeight: simpleMode ? '42px' : `${fieldHeight}px`,
+            alignItems: simpleMode ? 'center' : 'flex-end',
           }}
         >
           <div
@@ -970,8 +991,8 @@ export function InputPanel({
               flex: 1,
               minWidth: 0,
               position: 'relative',
-              alignItems: 'flex-end',
-              minHeight: `${fieldHeight}px`,
+              alignItems: simpleMode ? 'center' : 'flex-end',
+              minHeight: simpleMode ? '42px' : `${fieldHeight}px`,
             }}
           >
             {!inputValue && (
@@ -985,8 +1006,8 @@ export function InputPanel({
               data-overlay-selection-tooltip-suppress="true"
               style={{
                 flex: 1,
-                minHeight: `${lineHeight}px`,
-                height: `${fieldHeight}px`,
+                minHeight: simpleMode ? '24px' : `${lineHeight}px`,
+                height: simpleMode ? `${Math.min(Math.max(fieldHeight, 24), 120)}px` : `${fieldHeight}px`,
                 color: 'white',
                 fontWeight: 500,
                 paddingRight: '12px',
@@ -1031,8 +1052,8 @@ export function InputPanel({
                 }}
                 style={{
                   width: '100%',
-                  height: `${fieldHeight}px`,
-                  maxHeight: `${MAX_INPUT_HEIGHT}px`,
+                  height: simpleMode ? `${Math.min(Math.max(fieldHeight, 24), 120)}px` : `${fieldHeight}px`,
+                  maxHeight: simpleMode ? '120px' : `${MAX_INPUT_HEIGHT}px`,
                   resize: 'none',
                   overflowY: fieldHeight >= MAX_INPUT_HEIGHT ? 'auto' : 'hidden',
                   border: 0,
@@ -1096,6 +1117,9 @@ export function InputPanel({
                 : 'Send request'
           }
           style={{
+            width: simpleMode ? 40 : OVERLAY_CONTROL_SIZE_PX,
+            height: simpleMode ? 40 : OVERLAY_CONTROL_SIZE_PX,
+            flexBasis: simpleMode ? 40 : OVERLAY_CONTROL_SIZE_PX,
             background: 'rgba(255, 255, 255, 0.92)',
             border: '1px solid rgba(255, 255, 255, 0.96)',
             color: 'rgba(17, 20, 24, 0.94)',

@@ -37,6 +37,23 @@ describe('AI setup onboarding flow', () => {
     expect(overlaySource).toContain('<AiSetupScreen onComplete={handleAiSetupComplete} />');
   });
 
+  test('keeps the legacy voice interview out of Simple onboarding', async () => {
+    const overlaySource = await readFile(
+      join(process.cwd(), 'src/components/onboarding/OnboardingOverlay.tsx'),
+      'utf-8',
+    );
+    const simpleSteps = overlaySource.match(/const SIMPLE_ENABLED_STEPS = \[([\s\S]*?)\];/)?.[1] ?? '';
+
+    expect(simpleSteps).not.toContain('STEP_AI_SETUP');
+    expect(simpleSteps).not.toContain('STEP_OVERLAY_FIRST_USE');
+    expect(simpleSteps).not.toContain('STEP_OVERLAY_PERMISSIONS');
+    expect(simpleSteps).toContain('STEP_MODEL_SETUP');
+    expect(simpleSteps).toContain('STEP_STAY_CONNECTED');
+    expect(simpleSteps).toContain('STEP_WORKSPACE_CHOICE');
+    expect(simpleSteps).not.toContain('STEP_FEEDBACK');
+    expect(overlaySource).toContain('if (simpleMode) {\n      await handleOnboardingComplete();');
+  });
+
   test('persists a redacted imported tool summary from onboarding detection', async () => {
     const overlaySource = await readFile(
       join(process.cwd(), 'src/components/onboarding/OnboardingOverlay.tsx'),

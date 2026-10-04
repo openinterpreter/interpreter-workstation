@@ -14,3 +14,4 @@ export {
 export {
   notifyAgent,
 } from '../handlers/agentNotifications';
+export { getBooleanUISettingSync } from '../configStore';

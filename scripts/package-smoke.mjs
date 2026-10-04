@@ -12,6 +12,8 @@ const DIST_DIR = path.join(ROOT, 'dist');
 const PRODUCT_NAME = 'Interpreter';
 const PACKAGE_SMOKE_SENTINEL = '[package-smoke] js_repl runtime ok';
 const PACKAGE_SMOKE_SENTRY_SENTINEL = '[package-smoke] sentry runtime ok';
+const PACKAGE_SMOKE_SIMPLE_COMPILER_SENTINEL = '[package-smoke] simple interface compiler ok';
+const PACKAGE_SMOKE_SIMPLE_RUNTIME_SENTINEL = '[package-smoke] simple interface runtime graph ok';
 const REQUIRED_LICENSE_RESOURCES = [
   'NOTICE',
   'THIRD_PARTY_NOTICES.md',
@@ -187,6 +189,8 @@ function runSentryRuntimeSmoke() {
   const resourcesRoot = findBundledResourcesRoot();
   const appBinary = resolvePackagedAppBinary(resourcesRoot);
   const appNodeModulesDir = path.join(resourcesRoot, 'app.asar', 'node_modules');
+  const simpleRuntimeRoot = path.join(resourcesRoot, 'simple-interface-runtime');
+  const simpleRuntimeNodeModules = path.join(simpleRuntimeRoot, 'node_modules');
   const smokeScriptPath = path.join(resourcesRoot, '__package-smoke-sentry.mjs');
 
   writeFileSync(smokeScriptPath, `
@@ -197,7 +201,6 @@ const Sentry = require('@sentry/node');
 if (typeof Sentry.init !== 'function') {
   throw new Error('@sentry/node did not expose init');
 }
-
 process.stdout.write(${JSON.stringify(`${PACKAGE_SMOKE_SENTRY_SENTINEL}\n`)});
 `, 'utf8');
 
@@ -222,6 +225,90 @@ process.stdout.write(${JSON.stringify(`${PACKAGE_SMOKE_SENTRY_SENTINEL}\n`)});
   }
 }
 
+function runSimpleInterfaceCompilerSmoke() {
+  const resourcesRoot = findBundledResourcesRoot();
+  const appBinary = resolvePackagedAppBinary(resourcesRoot);
+  const appNodeModulesDir = path.join(resourcesRoot, 'app.asar', 'node_modules');
+  const simpleRuntimeRoot = path.join(resourcesRoot, 'simple-interface-runtime');
+  const simpleRuntimeNodeModules = path.join(simpleRuntimeRoot, 'node_modules');
+  const esbuildBinaryPath = path.join(
+    resourcesRoot,
+    'app.asar.unpacked',
+    'node_modules',
+    'esbuild',
+    'bin',
+    process.platform === 'win32' ? 'esbuild.exe' : 'esbuild',
+  );
+  const smokeScriptPath = path.join(resourcesRoot, '__package-smoke-simple-compiler.cjs');
+
+  if (!existsSync(esbuildBinaryPath)) {
+    throw new Error(`[package-smoke] Packaged Simple compiler binary is missing: ${esbuildBinaryPath}`);
+  }
+  if (!existsSync(path.join(simpleRuntimeRoot, 'package.json'))) {
+    throw new Error(`[package-smoke] Packaged Simple runtime is missing: ${simpleRuntimeRoot}`);
+  }
+
+  writeFileSync(smokeScriptPath, `
+const esbuild = require('esbuild');
+(async () => {
+const result = esbuild.transformSync('export default function App(){ return <main>Ready</main> }', {
+  loader: 'jsx',
+  format: 'esm',
+  jsx: 'automatic',
+});
+if (!result.code.includes('function App')) throw new Error('esbuild did not compile the Simple interface smoke source');
+const runtime = await esbuild.build({
+  stdin: {
+    contents: ${JSON.stringify(`
+      import React from 'react';
+      import { createRoot } from 'react-dom/client';
+      import Markdown from 'react-markdown';
+      import remarkGfm from 'remark-gfm';
+      import { motion } from 'motion/react';
+      createRoot(document.createElement('div')).render(
+        React.createElement(motion.main, null, React.createElement(Markdown, { remarkPlugins: [remarkGfm] }, '# Ready')),
+      );
+    `)},
+    loader: 'jsx',
+    resolveDir: ${JSON.stringify(simpleRuntimeNodeModules)},
+  },
+  bundle: true,
+  write: false,
+  platform: 'browser',
+  format: 'iife',
+});
+if (!runtime.outputFiles?.[0]?.contents?.length) throw new Error('Simple runtime graph did not bundle');
+process.stdout.write(${JSON.stringify(`${PACKAGE_SMOKE_SIMPLE_COMPILER_SENTINEL}\n`)});
+process.stdout.write(${JSON.stringify(`${PACKAGE_SMOKE_SIMPLE_RUNTIME_SENTINEL}\n`)});
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
+`, 'utf8');
+
+  try {
+    const output = execFileSync(appBinary, [smokeScriptPath], {
+      cwd: resourcesRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        ESBUILD_BINARY_PATH: esbuildBinaryPath,
+        NODE_PATH: appNodeModulesDir,
+      },
+    });
+    if (!output.includes(PACKAGE_SMOKE_SIMPLE_COMPILER_SENTINEL)) {
+      throw new Error(`[package-smoke] Simple compiler smoke did not report success. Output: ${output.trim()}`);
+    }
+    if (!output.includes(PACKAGE_SMOKE_SIMPLE_RUNTIME_SENTINEL)) {
+      throw new Error(`[package-smoke] Simple runtime graph smoke did not report success. Output: ${output.trim()}`);
+    }
+    console.log(output.trim());
+  } finally {
+    rmSync(smokeScriptPath, { force: true });
+  }
+}
+
 function main() {
   const args = [
     'exec',
@@ -234,20 +321,25 @@ function main() {
     'never',
   ];
 
-  console.log(`[package-smoke] Running: ${PNPM_BIN} ${args.join(' ')}`);
-  execFileSync(PNPM_BIN, args, {
-    cwd: ROOT,
-    stdio: 'inherit',
-    shell: process.platform === 'win32',
-    env: {
-      ...process.env,
-      CSC_IDENTITY_AUTO_DISCOVERY: 'false',
-    },
-  });
+  if (!process.argv.includes('--reuse-package')) {
+    console.log(`[package-smoke] Running: ${PNPM_BIN} ${args.join(' ')}`);
+    execFileSync(PNPM_BIN, args, {
+      cwd: ROOT,
+      stdio: 'inherit',
+      shell: process.platform === 'win32',
+      env: {
+        ...process.env,
+        CSC_IDENTITY_AUTO_DISCOVERY: 'false',
+      },
+    });
+  } else {
+    console.log('[package-smoke] Reusing the existing packaged directory.');
+  }
 
   assertPackagedLicenseResources();
   runJsReplRuntimeSmoke();
   runSentryRuntimeSmoke();
+  runSimpleInterfaceCompilerSmoke();
 }
 
 main();

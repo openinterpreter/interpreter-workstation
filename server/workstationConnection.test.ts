@@ -3,6 +3,8 @@ import express from 'express';
 import request from 'supertest';
 import {
   createWorkstationConnectionRouter,
+  disableRuntimeWorkstationPairing,
+  enableRuntimeWorkstationPairing,
   getWorkstationHostPolicy,
   isReadOnlyWorkstationRequest,
   validateWorkstationHostPolicy,
@@ -21,6 +23,7 @@ const ENV_KEYS = [
 const originalEnvironment = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 
 afterEach(() => {
+  disableRuntimeWorkstationPairing();
   for (const key of ENV_KEYS) {
     const original = originalEnvironment[key];
     if (original === undefined) delete process.env[key];
@@ -80,7 +83,7 @@ describe('remote Workstation host policy', () => {
       access: 'read-write',
       authentication: { method: 'password', required: true, authenticated: false },
     });
-    expect((await request(app).get('/api/read')).status).toBe(401);
+    expect((await request(app).get('/api/read').set('Host', 'workstation.test')).status).toBe(401);
 
     const login = await request(app)
       .post('/api/workstation-connection/session')
@@ -90,7 +93,7 @@ describe('remote Workstation host policy', () => {
     expect(login.status).toBe(200);
     const cookie = login.headers['set-cookie'][0].split(';')[0];
 
-    expect((await request(app).get('/api/read').set('Cookie', cookie)).status).toBe(200);
+    expect((await request(app).get('/api/read').set('Host', 'workstation.test').set('Cookie', cookie)).status).toBe(200);
     expect((await request(app)
       .post('/api/write')
       .set('Host', 'workstation.test')
@@ -112,7 +115,9 @@ describe('remote Workstation host policy', () => {
     const response = await request(createTestApp()).get('/api/public-thread/snapshot');
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ public: true });
-    expect((await request(createTestApp()).get('/api/public-thread-pretender')).status).toBe(401);
+    expect((await request(createTestApp())
+      .get('/api/public-thread-pretender')
+      .set('Host', 'workstation.test')).status).toBe(401);
   });
 
   test('serves the browser shell before login while keeping APIs private', async () => {
@@ -125,6 +130,61 @@ describe('remote Workstation host policy', () => {
 
     expect((await request(app).get('/index.html')).status).toBe(200);
     expect((await request(app).get('/assets/app.js')).status).toBe(200);
-    expect((await request(app).get('/api/read')).status).toBe(401);
+    expect((await request(app).get('/api/read').set('Host', 'workstation.test')).status).toBe(401);
+  });
+
+  test('redeems a short-lived pairing once and accepts its bearer session', async () => {
+    enableRuntimeWorkstationPairing({
+      endpoint: 'https://workstation.example.ts.net',
+      allowedOrigins: ['https://workstation.example.ts.net'],
+    });
+    const app = createTestApp();
+
+    const issued = await request(app)
+      .post('/api/workstation-connection/pairings')
+      .send({ hostName: 'Studio Mac', projectId: 'project-one', projectName: 'Canvas' });
+    expect(issued.status).toBe(200);
+    expect(issued.body).toMatchObject({
+      schemaVersion: 1,
+      endpoint: 'https://workstation.example.ts.net',
+      hostName: 'Studio Mac',
+      projectId: 'project-one',
+      projectName: 'Canvas',
+    });
+
+    const redeemed = await request(app)
+      .post('/api/workstation-connection/pairings/redeem')
+      .set('Origin', 'null')
+      .send({ pairingToken: issued.body.pairingToken });
+    expect(redeemed.status).toBe(200);
+    expect(redeemed.body.accessToken).toMatch(/^v1\./);
+    expect((await request(app)
+      .get('/api/read')
+      .set('Authorization', `Bearer ${redeemed.body.accessToken}`)).status).toBe(200);
+    expect((await request(app)
+      .post('/api/write')
+      .set('Origin', 'null')
+      .set('Authorization', `Bearer ${redeemed.body.accessToken}`)).status).toBe(200);
+
+    const reused = await request(app)
+      .post('/api/workstation-connection/pairings/redeem')
+      .send({ pairingToken: issued.body.pairingToken });
+    expect(reused.status).toBe(401);
+  });
+
+  test('keeps direct localhost usable but does not trust a proxied tailnet Host', async () => {
+    enableRuntimeWorkstationPairing({
+      endpoint: 'https://workstation.example.ts.net',
+      allowedOrigins: ['https://workstation.example.ts.net'],
+    });
+    const app = createTestApp();
+
+    expect((await request(app).get('/api/read').set('Host', 'localhost:5177')).status).toBe(200);
+    expect((await request(app).get('/api/read').set('Host', '127.0.0.1:5177')).status).toBe(200);
+    expect((await request(app).get('/api/read').set('Host', 'workstation.example.ts.net')).status).toBe(401);
+    expect((await request(app)
+      .post('/api/workstation-connection/pairings')
+      .set('Host', 'workstation.example.ts.net')
+      .send({ projectName: 'Should not issue' })).status).toBe(403);
   });
 });
