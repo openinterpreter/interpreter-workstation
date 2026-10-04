@@ -1271,6 +1271,49 @@ describe('resolveCodexProfileForStreamRequest', () => {
 });
 
 describe('runCodexAgentTurn overlay continuation', () => {
+  test('retains a saved thread caller across distinct native control turns', async () => {
+    const threadId = 'thread-persistent-browser-caller';
+    const seenTokens: string[] = [];
+    const fakeService = {
+      async ensureProvider() {},
+      async runTurn(options: any) {
+        seenTokens.push(options.config.shell_environment_policy.set.INTERPRETER_CALLER_TOKEN);
+        options.onEvent?.({ kind: 'thread', threadId });
+        return { threadId, turnId: `turn-${seenTokens.length}`, status: 'completed' };
+      },
+    } as any;
+    const profile = { modelProvider: 'openai', model: 'gpt-5.4' } as any;
+    let retainedToken: string | undefined;
+    try {
+      for (const [index, agentId] of ['native-first', 'native-second'].entries()) {
+        await runCodexAgentTurn({
+          service: fakeService,
+          profile,
+          ...(index ? { threadId } : {}),
+          workspacePath: '/tmp/persistent-browser',
+          message: 'Inspect an existing tab.',
+          binding: { agentId, allowedToolNames: ['interpreter_whole_computer_state_get'] },
+        });
+        retainedToken = agentTabManager.getBindingForThread(threadId)?.callerToken;
+        expect(retainedToken).toBeDefined();
+        expect(agentTabManager.getBindingForCallerToken(retainedToken!)).toBeDefined();
+      }
+      expect(seenTokens).toEqual([retainedToken, retainedToken]);
+      expect(agentTabManager.getBindingForThread(threadId)?.allowedToolNames)
+        .toEqual(['interpreter_whole_computer_state_get']);
+      await expect(runCodexAgentTurn({
+        service: fakeService,
+        profile,
+        threadId,
+        workspacePath: '/tmp/another-workspace',
+        binding: { agentId: 'native-third' },
+      })).rejects.toThrow('Persistent thread app-tool scope changed.');
+      expect(seenTokens).toHaveLength(2);
+    } finally {
+      if (retainedToken) agentTabManager.disposeBinding(retainedToken);
+    }
+  });
+
   function installOverlayDriver() {
     overlaySessionManager.setDriver({
       async captureContext(session) {

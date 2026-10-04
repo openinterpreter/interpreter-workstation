@@ -2011,10 +2011,26 @@ export async function runCodexAgentTurn(
   }
 
   const normalizedBinding = normalizeBinding(options.binding);
-  const ownsCallerToken = !normalizedBinding.callerToken;
-  const callerToken = normalizedBinding.callerToken ?? createRuntimeCallerToken();
+  // OIX can continue a saved thread after the HTTP turn has completed. Reuse
+  // its thread-scoped app-tool caller instead of installing a new shell token
+  // for every native continuation and then disposing that token at turn end.
+  const priorBinding = options.threadId && !normalizedBinding.callerToken
+    ? agentTabManager.getBindingForThread(options.threadId)
+    : undefined;
+  if (priorBinding && (
+    (priorBinding.workspacePath && priorBinding.workspacePath !== options.workspacePath) ||
+    (normalizedBinding.allowedToolNames &&
+      JSON.stringify([...normalizedBinding.allowedToolNames].sort()) !==
+      JSON.stringify([...(priorBinding.allowedToolNames ?? [])].sort()))
+  )) {
+    throw new Error('Persistent thread app-tool scope changed.');
+  }
+  const ownsCallerToken = !normalizedBinding.callerToken && !priorBinding;
+  const callerToken = normalizedBinding.callerToken ?? priorBinding?.callerToken ?? createRuntimeCallerToken();
   const runtimeBinding = {
     ...normalizedBinding,
+    ...(priorBinding ? { agentId: priorBinding.agentId } : {}),
+    workspacePath: normalizedBinding.workspacePath ?? options.workspacePath,
     callerToken,
   };
   const interpreterCliServerConnection = buildInterpreterCliServerConnection(getServerPort(), {
@@ -2235,7 +2251,9 @@ export async function runCodexAgentTurn(
       nextSkills = undefined;
     }
   } finally {
-    if (ownsCallerToken) {
+    // A newly created native thread also needs this caller after its first
+    // turn. Only short-lived turns that never acquired a thread are disposed.
+    if (ownsCallerToken && !agentTabManager.getBindingForCallerToken(callerToken)?.threadId) {
       const activeOverlaySession = overlaySessionManager.getDebugSnapshotForAgent(
         runtimeBinding.agentId,
       );
