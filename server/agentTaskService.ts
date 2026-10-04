@@ -275,6 +275,7 @@ async function startHeadlessAgentTask(
     allowedToolNames: options.allowedToolNames,
     parentOwner: options.parentOwner,
     threadId: options.threadId,
+    retainThreadCaller: true,
     onEvent: (event) => {
       if (event.kind === 'thread') {
         options.onProgress?.({

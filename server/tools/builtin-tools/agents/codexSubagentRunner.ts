@@ -32,6 +32,9 @@ export interface RunCodexSubagentOptions {
   reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   reasoningSummary?: 'auto' | 'concise' | 'detailed' | 'none';
   session?: CodexSubagentSession;
+  /** Only the top-level saved headless task retains its caller between HTTP turns. */
+  retainThreadCaller?: boolean;
+  createSession?: typeof createCodexSubagentSession;
   onEvent?: (event: StreamEvent) => void;
 }
 
@@ -138,11 +141,26 @@ export async function runCodexSubagent(options: RunCodexSubagentOptions): Promis
   }
 
   const ownsSession = !options.session;
-  const session = options.session ?? await createCodexSubagentSession({
+  const retained = options.retainThreadCaller && options.threadId
+    ? agentTabManager.getBindingForThread(options.threadId)
+    : undefined;
+  if (retained && (retained.workspacePath !== workspace ||
+    (retained.modelConfig && (retained.modelConfig.provider !== options.modelConfig.provider ||
+      retained.modelConfig.modelId !== options.modelConfig.modelId)) ||
+    (options.allowedToolNames && JSON.stringify([...options.allowedToolNames].sort()) !==
+      JSON.stringify([...(retained.allowedToolNames ?? [])].sort())))) {
+    throw new Error('Persistent thread app-tool scope changed.');
+  }
+  const session = options.session ?? await (options.createSession ?? createCodexSubagentSession)({
     modelConfig: options.modelConfig,
     allowedToolNames: options.allowedToolNames ?? [],
     parentOwner: options.parentOwner,
   });
+  if (retained && ownsSession) {
+    session.agentId = retained.agentId;
+    session.callerToken = retained.callerToken;
+    session.allowedToolNames = retained.allowedToolNames;
+  }
 
   console.log(`${timingTag} start workspace=${workspace} timeoutMs=${options.timeoutMs ?? 0}`);
   console.log(`${timingTag} session=${ownsSession ? 'new' : 'reused'} callerToken=${session.callerToken}`);
@@ -273,7 +291,7 @@ export async function runCodexSubagent(options: RunCodexSubagentOptions): Promis
     if (timeoutId) {
       clearTimeout(timeoutId);
     }
-    if (ownsSession) {
+    if (ownsSession && (!options.retainThreadCaller || !session.threadId)) {
       closeCodexSubagentSession(session);
     }
   }

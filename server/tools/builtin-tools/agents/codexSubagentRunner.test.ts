@@ -47,6 +47,49 @@ afterEach(() => {
 });
 
 describe('runCodexSubagent', () => {
+  test('top-level headless thread keeps one caller across independently owned sessions', async () => {
+    const threadId = 'thr_retained_headless';
+    const workspace = '/tmp/retained-headless';
+    const tokens: string[] = [];
+    let disposals = 0;
+    const service = {
+      async ensureProvider() {},
+      async getAccount() { return { account: { type: 'chatgpt' } }; },
+      async runTurn(options: any) {
+        tokens.push(options.config.shell_environment_policy.set.INTERPRETER_CALLER_TOKEN);
+        options.onEvent({ kind: 'thread', threadId });
+        options.onEvent({ kind: 'turn', threadId, turnId: `turn-${tokens.length}`, status: 'inProgress' });
+        return { threadId, turnId: `turn-${tokens.length}`, status: 'completed' };
+      },
+      async readThread() { return { turns: [{ id: `turn-${tokens.length}`, items: [{ type: 'agentMessage', text: 'Done.' }] }] }; },
+    } as any;
+    const modelConfig: AgentModelConfig = { provider: 'openai-oauth', modelId: 'gpt-6-sol' };
+    let created = 0;
+    const createSession = async (): Promise<CodexSubagentSession> => ({
+      service,
+      profile: getCodexProfile('default'),
+      agentId: `headless-${++created}`,
+      callerToken: `agtok_fresh_${created}`,
+      modelConfig,
+      dispose() { disposals++; agentTabManager.disposeBinding(this.callerToken); },
+    });
+    const first = await runCodexSubagent({ message: 'First', modelConfig, workspace,
+      retainThreadCaller: true, createSession });
+    expect(first.completed).toBe(true);
+    expect(agentTabManager.getBindingForThread(threadId)?.callerToken).toBe(tokens[0]);
+    expect(disposals).toBe(0);
+    const next = await runCodexSubagent({ message: 'Second', modelConfig, workspace,
+      threadId, retainThreadCaller: true, createSession });
+    expect(next.completed).toBe(true);
+    expect(tokens).toEqual(['agtok_fresh_1', 'agtok_fresh_1']);
+    expect(disposals).toBe(0);
+    expect(agentTabManager.getBindingForThread(threadId)?.agentId).toBe('headless-1');
+    await expect(runCodexSubagent({ message: 'Wrong workspace', modelConfig,
+      workspace: '/tmp/other-headless', threadId, retainThreadCaller: true, createSession }))
+      .rejects.toThrow('Persistent thread app-tool scope changed.');
+    expect(tokens).toHaveLength(2);
+  });
+
   test('uses the shared runtime shell CLI contract instead of attaching interpreter MCP config', async () => {
     const tempHome = await mkdtemp(path.join(tmpdir(), 'codex-subagent-cli-runtime-'));
     process.env.INTERPRETER_HOME = tempHome;
