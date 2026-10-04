@@ -19,13 +19,6 @@
       "notice": "licenses/THIRD_PARTY_NOTICES.md"
     },
     {
-      "package": "node-forge",
-      "version": "1.4.0",
-      "inventoryLicense": "(BSD-3-Clause OR GPL-2.0)",
-      "selectedLicense": "BSD-3-Clause",
-      "notice": "licenses/THIRD_PARTY_NOTICES.md"
-    },
-    {
       "package": "buffers",
       "version": "0.1.1",
       "inventoryLicense": "Unknown",

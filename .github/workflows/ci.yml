@@ -50,6 +50,8 @@ jobs:
         run: |
           pnpm --dir shadcn-preset/preset-app install --frozen-lockfile
           pnpm --dir shadcn-preset/preset-app audit --audit-level=high
+          pnpm --dir shadcn-preset/preset-app test:glob-compat
+          pnpm --dir shadcn-preset/preset-app lint
           pnpm --dir shadcn-preset/preset-app build
       - name: Generate production dependency license inventory
         run: pnpm run --silent release:licenses > production-license-inventory.json
