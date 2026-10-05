@@ -316,7 +316,7 @@ describe('durable thread wake sources', () => {
         lastTurnId = 'failed-turn'; nativeTurnStatus = 'completed';
         await expect(resumed.holdOffered('thread-1', 'same-schedule', first.eventId, 'failed-turn'))
           .rejects.toThrow('settled');
-        nativeTurnStatus = 'failed';
+        nativeTurnStatus = 'failed'; threadStatus = 'notLoaded'; // supervised host restart
         messages.push(wakeInput(first));
         await expect(resumed.holdOffered('thread-1', 'same-schedule', first.eventId, 'failed-turn'))
           .rejects.toThrow('receipt exists');

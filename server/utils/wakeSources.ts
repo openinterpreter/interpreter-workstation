@@ -319,11 +319,14 @@ export class WakeSources {
       // startTurn may fail before returning a turn ID, leaving a durable offer
       // with no turn association. Never infer admission or retry that offer.
       // An operator may hold it only against the exact latest failed native
-      // turn on a terminal error thread, after the offer has settled. This is
-      // deliberately stricter than the bound-turn disposition above.
+      // turn after the offer has settled. A supervised host restart may leave
+      // the same persisted failed turn unloaded or idle; never infer a receipt
+      // from that lifecycle transition. This is deliberately stricter than
+      // the bound-turn disposition above.
       if (!event.turnId && (!event.offeredAt || !Number.isFinite(Date.parse(event.offeredAt)) ||
           Date.now() - Date.parse(event.offeredAt) < 60_000 ||
-          custody.threadStatus !== 'systemError' || custody.lastTurnId !== turnId ||
+          !['systemError', 'notLoaded', 'idle'].includes(custody.threadStatus ?? '') ||
+          custody.lastTurnId !== turnId ||
           custody.turnStatus !== 'failed')) {
         throw new Error('Unbound offer lacks a settled failed native turn');
       }
