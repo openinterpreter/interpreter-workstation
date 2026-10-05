@@ -207,7 +207,10 @@ export function FeedbackPopover({ className }: FeedbackPopoverProps) {
           messageLength: trimmedMessage.length,
         });
         dismissToast(sendingToastId);
-        showToast(t('feedback.success'), 'success', 4000);
+        const reportId = typeof result.id === 'string' && /^[a-f0-9]{32}$/i.test(result.id)
+          ? result.id
+          : null;
+        showToast(reportId ? `${t('feedback.success')} Report ID: ${reportId}` : t('feedback.success'), 'success', 15000);
       } else {
         let errorMessage = result.error;
         if (!errorMessage) {
