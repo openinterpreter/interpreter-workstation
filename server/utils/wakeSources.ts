@@ -67,7 +67,10 @@ export function wakeTokenValid(actual: string | undefined, supplied: string | un
 
 export interface WakeNative {
   inspect(threadId: string): Promise<{ activeTurnId?: string; messages: string[]; clientIds?: string[] }>;
-  custody?(threadId: string, turnId: string): Promise<{ turnStatus?: string; queuedSubmissionCount: number }>;
+  custody?(threadId: string, turnId: string): Promise<{
+    turnStatus?: string; queuedSubmissionCount: number;
+    lastTurnId?: string | null; threadStatus?: string;
+  }>;
   steer(threadId: string, turnId: string, message: string, clientId?: string): Promise<string>;
   start(threadId: string, message: string, clientId?: string): Promise<string>;
 }
@@ -308,9 +311,25 @@ export class WakeSources {
     this.inFlight.add(key);
     try { return await this.exclusive(async () => {
       const event = this.state.events.find(e => e.threadId === threadId && e.sourceId === sourceId && e.eventId === eventId);
-      if (!event || event.status !== 'offered' || event.turnId !== turnId) throw new Error('Offered event/turn mismatch');
+      if (!event || event.status !== 'offered' || (event.turnId && event.turnId !== turnId)) {
+        throw new Error('Offered event/turn mismatch');
+      }
       if (!this.native.custody) throw new Error('Native custody inspection unavailable');
       const [state, custody] = await Promise.all([this.native.inspect(threadId), this.native.custody(threadId, turnId)]);
+      // startTurn may fail before returning a turn ID, leaving a durable offer
+      // with no turn association. Never infer admission or retry that offer.
+      // An operator may hold it only against the exact latest failed native
+      // turn after the offer has settled. A supervised host restart may leave
+      // the same persisted failed turn unloaded or idle; never infer a receipt
+      // from that lifecycle transition. This is deliberately stricter than
+      // the bound-turn disposition above.
+      if (!event.turnId && (!event.offeredAt || !Number.isFinite(Date.parse(event.offeredAt)) ||
+          Date.now() - Date.parse(event.offeredAt) < 60_000 ||
+          !['systemError', 'notLoaded', 'idle'].includes(custody.threadStatus ?? '') ||
+          custody.lastTurnId !== turnId ||
+          custody.turnStatus !== 'failed')) {
+        throw new Error('Unbound offer lacks a settled failed native turn');
+      }
       if (state.activeTurnId || !['completed', 'interrupted', 'failed'].includes(custody.turnStatus ?? '') ||
           custody.queuedSubmissionCount !== 0) {
         throw new Error('Native offer is not terminal and queue-empty');

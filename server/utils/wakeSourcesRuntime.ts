@@ -61,6 +61,8 @@ export const wakeSources = new WakeSources({
     return {
       turnStatus: thread.turns.find(turn => turn.id === turnId)?.status,
       queuedSubmissionCount: custody.queuedSubmissionCount,
+      lastTurnId: custody.lastTurnId,
+      threadStatus: custody.status,
     };
   },
   steer(threadId, turnId, message, clientUserMessageId) {

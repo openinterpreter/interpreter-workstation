@@ -261,6 +261,88 @@ describe('durable thread wake sources', () => {
     } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
   });
 
+  test('operator holds an unbound failed offer without replay and later input admits once', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-unbound-hold-'));
+    let starts = 0;
+    let queue = 0;
+    let threadStatus = 'systemError';
+    let lastTurnId = 'failed-turn';
+    let nativeTurnStatus = 'failed';
+    const messages: string[] = [];
+    const native: WakeNative = {
+      inspect: async () => ({ messages }),
+      custody: async () => ({ turnStatus: nativeTurnStatus, queuedSubmissionCount: queue,
+        lastTurnId, threadStatus }),
+      steer: async () => { throw new Error('unexpected steer'); },
+      start: async (_thread, message) => { starts++; if (starts === 1) throw new Error('server overloaded');
+        messages.push(message); return 'next-turn'; },
+    };
+    const wake = new WakeSources(native, root);
+    try {
+      await wake.initialize();
+      await wake.put({ id: 'same-schedule', threadId: 'thread-1', kind: 'schedule',
+        message: 'Original instruction', at: new Date(Date.now() - 1_000).toISOString(), everyMs: 1_200_000 });
+      await wake.tick();
+      const first = wake.list('thread-1').events[0]!;
+      expect(first.status).toBe('offered');
+      expect(first.turnId).toBeUndefined();
+      await wake.ingest('thread-1', 'provider', 'later-message', 'later input');
+      await wake.tick(Date.now() + 61_000);
+      expect(starts).toBe(1);
+      await expect(wake.holdOffered('thread-1', 'same-schedule', first.eventId, 'failed-turn'))
+        .rejects.toThrow('settled');
+      // The saved timestamp is deliberately aged, not the offered event retried.
+      first.offeredAt = new Date(Date.now() - 61_000).toISOString();
+      // list() returns a clone; age the durable fixture through a safe stop/load.
+      await wake.stop();
+      const file = path.join(root, 'wake-sources.json');
+      const saved = JSON.parse(await readFile(file, 'utf8'));
+      saved.events[0].offeredAt = first.offeredAt;
+      await writeFile(file, JSON.stringify(saved));
+      const resumed = new WakeSources(native, root);
+      await resumed.initialize();
+      try {
+        await expect(resumed.holdOffered('thread-1', 'same-schedule', first.eventId, 'wrong-turn'))
+          .rejects.toThrow('settled');
+        queue = 1;
+        await expect(resumed.holdOffered('thread-1', 'same-schedule', first.eventId, 'failed-turn'))
+          .rejects.toThrow('terminal');
+        queue = 0; threadStatus = 'active';
+        await expect(resumed.holdOffered('thread-1', 'same-schedule', first.eventId, 'failed-turn'))
+          .rejects.toThrow('settled');
+        threadStatus = 'systemError'; lastTurnId = 'another-turn';
+        await expect(resumed.holdOffered('thread-1', 'same-schedule', first.eventId, 'failed-turn'))
+          .rejects.toThrow('settled');
+        lastTurnId = 'failed-turn'; nativeTurnStatus = 'completed';
+        await expect(resumed.holdOffered('thread-1', 'same-schedule', first.eventId, 'failed-turn'))
+          .rejects.toThrow('settled');
+        nativeTurnStatus = 'failed'; threadStatus = 'notLoaded'; // supervised host restart
+        messages.push(wakeInput(first));
+        await expect(resumed.holdOffered('thread-1', 'same-schedule', first.eventId, 'failed-turn'))
+          .rejects.toThrow('receipt exists');
+        messages.length = 0;
+        expect((await resumed.holdOffered('thread-1', 'same-schedule', first.eventId, 'failed-turn')).status)
+          .toBe('held');
+        expect((await resumed.ingest('thread-1', 'same-schedule', first.eventId, 'duplicate')).status)
+          .toBe('held');
+        await resumed.put({ id: 'same-schedule', threadId: 'thread-1', kind: 'schedule',
+          message: 'Future instruction', at: new Date(Date.now() + 600_000).toISOString(),
+          everyMs: 1_200_000 });
+        await resumed.tick();
+        expect(starts).toBe(2);
+        await resumed.tick();
+        expect(resumed.list('thread-1').events.map(e => e.status)).toEqual(['held', 'admitted']);
+        expect(starts).toBe(2); // the held offer is never started a second time
+        await resumed.tick(Date.now() + 601_000);
+        expect(resumed.list('thread-1').events.map(e => [e.eventId, e.status]))
+          .toEqual([[first.eventId, 'held'], ['later-message', 'admitted'], ['same-schedule-2', 'offered']]);
+        await resumed.tick();
+        expect(resumed.list('thread-1').events[2]?.status).toBe('admitted');
+        expect(starts).toBe(3);
+      } finally { await resumed.stop(); }
+    } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
   test('held schedule occurrence stays held while an explicit same-ID rearm admits only the next sequence', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'wake-held-rearm-'));
     const messages: string[] = [];
