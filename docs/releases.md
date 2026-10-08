@@ -11,14 +11,22 @@ An official Interpreter Workstation release must satisfy every condition below:
 - source is the exact protected `main` commit named by the GitHub release;
 - the checked-in `distribution/product.official.json` profile is used;
 - every submodule and the bundled OIX release are pinned and recorded;
-- macOS applications are Developer ID signed, notarized, and stapled;
+- any published macOS applications are Developer ID signed, notarized, and stapled;
 - Windows applications and installers carry a valid Authenticode signature;
 - Linux packages come from the same workflow run and source commit;
 - `SHA256SUMS`, `RELEASE-MANIFEST.json`, and `SBOM.spdx.json` are published;
 - GitHub records both build-provenance and SBOM attestations for the artifacts;
-- binaries reach the public release bucket and the GitHub release becomes
-  public before auto-update manifests are published, so clients never discover
-  a partial or hidden release.
+- each platform's verified binaries reach the public release bucket and the
+  GitHub release becomes public before that platform's auto-update manifests
+  are published, so clients never discover an unverified or hidden package.
+
+When both macOS package jobs fail after Windows signing and Linux package
+verification have succeeded, the same official workflow can publish **Windows
+and Linux only** from that exact run. It does not upload a macOS package, update
+the macOS download aliases, or advance `latest-mac.yml`; existing macOS clients
+remain on their previous release. The release notes and manifest identify the
+platforms actually published. A later full retry must satisfy the macOS
+signature, notarization, and stapling gates before advancing macOS.
 
 A local package, a pull-request artifact, or an internal candidate is useful
 for review but is not an official build.
@@ -48,14 +56,17 @@ are public. Those manifests are the final commit point for installed clients.
 3. Dispatch `Official release` from `main` with the confirmation value
    `release`.
 4. Review and approve the pending `production-release` deployment.
-5. Let every platform build and signature check finish.
+5. Let every platform build and signature check finish. If macOS packaging
+   fails, confirm the Windows/Linux-only gate accepted both successful build
+   jobs from the current run and left macOS unpublished.
 6. Review and approve final publication if GitHub requests a second deployment
    approval.
 7. Verify the public GitHub release, Supabase update manifests, and one clean
-   installation/update on each supported operating-system family.
+   installation/update on each **published** operating-system family.
 
-The workflow refuses an existing version tag. Advance `publicVersion` rather
-than replacing a published binary or mutating a release in place.
+The workflow reuses an existing version tag only for a retry at its **exact
+original commit**. A different commit must advance `publicVersion`; it cannot
+replace an already published binary under the old tag.
 
 ## Verifying a download
 

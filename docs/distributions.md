@@ -44,7 +44,8 @@ pnpm run package:official
 The official binary is not defined merely by running that command locally. An
 official release is a build of protected `main` produced by the checked-in
 `Official release` workflow, approved through the `production-release`
-environment, signed and notarized with project credentials, accompanied by
+environment, signed where applicable and notarized for any published macOS
+package, accompanied by
 checksums and an SPDX SBOM, and covered by GitHub artifact attestations. See
 [Official releases](releases.md).
 

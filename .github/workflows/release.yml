@@ -79,6 +79,7 @@ jobs:
         run: bun scripts/ci/set-version.ts --version "${{ needs.authorize.outputs.version }}"
       - run: pnpm typecheck
       - run: node --test scripts/ci/release-workflow.test.mjs
+      - run: node --test scripts/ci/release-platform-mode.test.mjs
       - run: pnpm run test:unit
       - run: node --test scripts/electron-builder/sign-windows.test.cjs
       - run: pnpm run release:licenses:check
@@ -241,11 +242,16 @@ jobs:
 
   publish:
     name: Attest and publish
-    needs: [authorize, build]
+    needs: [authorize, verify, build]
+    if: >-
+      always() && needs.authorize.result == 'success' &&
+      needs.verify.result == 'success' &&
+      (needs.build.result == 'success' || needs.build.result == 'failure')
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     environment: production-release
     permissions:
+      actions: read
       contents: write
       id-token: write
       attestations: write
@@ -259,23 +265,60 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
+      - id: platforms
+        name: Verify current-run platform build conclusions
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/ci/release-platform-mode.mjs
       - uses: actions/download-artifact@v8
         with:
-          pattern: official-*
-          path: release-parts
+          name: official-windows-x64
+          path: release-parts/official-windows-x64
+      - uses: actions/download-artifact@v8
+        with:
+          name: official-linux-x64
+          path: release-parts/official-linux-x64
+      - uses: actions/download-artifact@v8
+        if: steps.platforms.outputs.mode == 'all'
+        with:
+          name: official-macos-arm64
+          path: release-parts/official-macos-arm64
+      - uses: actions/download-artifact@v8
+        if: steps.platforms.outputs.mode == 'all'
+        with:
+          name: official-macos-x64
+          path: release-parts/official-macos-x64
       - uses: astral-sh/setup-uv@v7
       - name: Assemble the cross-platform release
+        env:
+          RELEASE_PLATFORM_MODE: ${{ steps.platforms.outputs.mode }}
         run: |
           mkdir release
-          find release-parts -type f ! -name 'latest-mac.yml' -exec cp {} release/ \;
-          uv run scripts/ci/merge-mac-yml.py \
-            release-parts/official-macos-arm64/latest-mac.yml \
-            release-parts/official-macos-x64/latest-mac.yml \
-            release/latest-mac.yml
+          test -s "release-parts/official-windows-x64/Interpreter-win-x64-${RELEASE_VERSION}.exe"
+          test -s "release-parts/official-linux-x64/Interpreter-linux-x86_64-${RELEASE_VERSION}.AppImage"
+          test -s "release-parts/official-linux-x64/Interpreter-linux-amd64-${RELEASE_VERSION}.deb"
+          test -s release-parts/official-windows-x64/latest.yml
+          test -s release-parts/official-linux-x64/latest-linux.yml
+          find release-parts -type f ! -name 'latest-mac.yml' -exec cp -n {} release/ \;
+          if [[ "$RELEASE_PLATFORM_MODE" == all ]]; then
+            test -s "release/Interpreter-arm64-${RELEASE_VERSION}.dmg"
+            test -s "release/Interpreter-x64-${RELEASE_VERSION}.dmg"
+            uv run scripts/ci/merge-mac-yml.py \
+              release-parts/official-macos-arm64/latest-mac.yml \
+              release-parts/official-macos-x64/latest-mac.yml \
+              release/latest-mac.yml
+          else
+            test "$RELEASE_PLATFORM_MODE" = windows-linux
+            test ! -e release/latest-mac.yml
+            ! find release -maxdepth 1 -type f \( -name '*.dmg' -o -name '*mac*.zip' \) | grep -q .
+          fi
           {
             printf '# Interpreter Workstation v%s\n\n' "$RELEASE_VERSION"
             printf 'Official Interpreter build from [%s@%s](%s/%s/commit/%s).\n\n' \
               "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_SHA"
+            if [[ "$RELEASE_PLATFORM_MODE" == windows-linux ]]; then
+              printf '**Windows and Linux only.** macOS v%s is not published or available for update; the previous macOS release remains in place pending Apple notarization.\n\n' "$RELEASE_VERSION"
+            fi
             cat RELEASE_NOTES.md
             cat <<'EOF'
           Verify file hashes with `SHA256SUMS` and GitHub build provenance with:
@@ -331,20 +374,25 @@ jobs:
       - name: Publish the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+        run: gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --notes-file release/RELEASE_NOTES.md --draft=false --latest
       - name: Publish stable website download aliases
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          RELEASE_PLATFORM_MODE: ${{ steps.platforms.outputs.mode }}
         run: |
           mkdir release-aliases
           aliases=(
-            "Interpreter-arm64-${RELEASE_VERSION}.dmg:Interpreter-arm64.dmg"
-            "Interpreter-x64-${RELEASE_VERSION}.dmg:Interpreter-x64.dmg"
             "Interpreter-win-x64-${RELEASE_VERSION}.exe:Interpreter-x64.exe"
             "Interpreter-linux-x86_64-${RELEASE_VERSION}.AppImage:Interpreter-latest.AppImage"
             "Interpreter-linux-amd64-${RELEASE_VERSION}.deb:Interpreter-linux-amd64.deb"
           )
+          if [[ "$RELEASE_PLATFORM_MODE" == all ]]; then
+            aliases+=(
+              "Interpreter-arm64-${RELEASE_VERSION}.dmg:Interpreter-arm64.dmg"
+              "Interpreter-x64-${RELEASE_VERSION}.dmg:Interpreter-x64.dmg"
+            )
+          fi
           for mapping in "${aliases[@]}"; do
             source="release/${mapping%%:*}"
             target="release-aliases/${mapping#*:}"
@@ -374,4 +422,5 @@ jobs:
       - name: Verify the published release end to end
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_PLATFORM_MODE: ${{ steps.platforms.outputs.mode }}
         run: node scripts/ci/verify-published-release.mjs "$RELEASE_VERSION" "https://auth.openinterpreter.com/storage/v1/object/public/workstationupdater/releases" "$GITHUB_REPOSITORY"
