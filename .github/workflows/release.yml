@@ -327,13 +327,34 @@ jobs:
           ```
           EOF
           } > release/RELEASE_NOTES.md
+      - name: Prepare bounded source dependency inventory
+        run: |
+          mkdir release-sbom-source
+          cp package.json pnpm-lock.yaml release-sbom-source/
       - name: Generate SPDX software bill of materials
         uses: anchore/sbom-action@v0.24.2
         with:
-          path: .
+          # Scan the immutable package manifest and lockfile, not the downloaded
+          # installers or recursive checkout. Those duplicate source trees and
+          # can exceed the attestation service's 16 MiB SBOM limit.
+          path: ./release-sbom-source
           format: spdx-json
           output-file: release/SBOM.spdx.json
           upload-artifact: false
+      - name: Validate source dependency SBOM for attestation
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const file = "release/SBOM.spdx.json";
+            const sbom = JSON.parse(fs.readFileSync(file, "utf8"));
+            const compact = JSON.stringify(sbom);
+            const size = Buffer.byteLength(compact);
+            if (size >= 16 * 1024 * 1024 || !Array.isArray(sbom.packages) || sbom.packages.length < 100) {
+              throw new Error("Source dependency SBOM is incomplete or exceeds the attestation limit");
+            }
+            fs.writeFileSync(file, compact);
+            console.log(`Validated ${sbom.packages.length} dependency packages in ${size} bytes`);
+          '
       - name: Write checksums and reproducibility manifest
         run: node scripts/ci/write-release-metadata.mjs release
       - name: Attest build provenance
