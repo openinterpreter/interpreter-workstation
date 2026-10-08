@@ -167,9 +167,9 @@ export function resolveCuaDriverBinary(): string {
   if (binary) return binary;
 
   throw new Error(
-    'macOS Computer Use driver binary not found. '
+    'Computer Use driver binary not found. '
     + `Checked: ${candidates.join(', ')}. `
-    + 'Run `pnpm run build:electron` on macOS or set CUA_DRIVER_PATH.',
+    + 'Build the pinned driver or set CUA_DRIVER_PATH.',
   );
 }
 
@@ -1282,13 +1282,13 @@ function extractAppRecords(parsed: unknown): MacCuaAppRecord[] {
 function formatMacComputerUseApps(response: ToolCallResponse): ToolCallResponse {
   const apps = extractAppRecords(parseJsonText(toolText(response)));
   const lines = apps
-    .filter((app) => typeof app.name === 'string' && typeof app.bundle_id === 'string')
+    .filter((app) => typeof app.name === 'string' && (process.platform === 'linux' || typeof app.bundle_id === 'string'))
     .map((app) => {
       const flags = [
         app.running ? 'running' : null,
         app.active ? 'active' : null,
       ].filter(Boolean).join(', ');
-      return `${app.name} — ${app.bundle_id}${flags ? ` [${flags}]` : ''}`;
+      return `${app.name}${app.bundle_id ? ` — ${app.bundle_id}` : ''}${flags ? ` [${flags}]` : ''}`;
     });
   return {
     content: [{ type: 'text', text: lines.join('\n') }],
@@ -1568,7 +1568,7 @@ function requireScreenshotCoordinate(
   return point;
 }
 
-function macLaunchAppArgs(args: Record<string, unknown>): Record<string, unknown> {
+export function nativeLaunchAppArgsForTest(args: Record<string, unknown>): Record<string, unknown> {
   const nextArgs = { ...args };
   if (typeof nextArgs.app === 'string' && typeof nextArgs.name !== 'string' && typeof nextArgs.bundle_id !== 'string') {
     nextArgs.name = nextArgs.app;
@@ -1604,13 +1604,13 @@ async function callMacComputerUseTool(
   }
 
   if (toolName === 'launch_app') {
-    return callCuaDriverCli('launch_app', macLaunchAppArgs(args), context);
+    return callCuaDriverCli('launch_app', nativeLaunchAppArgsForTest(args), context);
   }
 
   if (toolName === 'set_window_bounds') {
     const { pid, windowId } = requireWindowTargetIdentityForBounds(args);
     if (typeof windowId !== 'number') {
-      throw new Error('target_identity.window.native_window_id must be an integer for macOS window positioning.');
+      throw new Error('target_identity.window.native_window_id must be an integer for window positioning.');
     }
     const x = typeof args.x === 'number' ? args.x : null;
     const y = typeof args.y === 'number' ? args.y : null;
@@ -1658,7 +1658,7 @@ async function callMacComputerUseTool(
   if (toolName === 'minimize_window' || toolName === 'restore_window' || toolName === 'maximize_window') {
     const { pid, windowId } = requireWindowTargetIdentity(args, toolName.replace('_window', ''));
     if (typeof windowId !== 'number') {
-      throw new Error(`target_identity.window.native_window_id must be an integer for macOS ${toolName}.`);
+      throw new Error(`target_identity.window.native_window_id must be an integer for ${toolName}.`);
     }
     assertNotProtectedDesktopPid(pid);
     return callCuaDriverCli(toolName, {
@@ -2237,7 +2237,7 @@ async function callComputerUseTool(
   args: Record<string, unknown>,
   context?: BuiltinToolContext,
 ): Promise<ToolCallResponse> {
-  if (process.platform === 'darwin') {
+  if (process.platform === 'darwin' || process.platform === 'linux') {
     return callMacComputerUseTool(toolName, args, context);
   }
   if (process.platform === 'win32') {
@@ -2589,7 +2589,7 @@ export function macAgentActivityForTool(
 }
 
 function disableMacAgentActivityOverlay(): void {
-  if (process.platform !== 'darwin') return;
+  if (process.platform !== 'darwin' && process.platform !== 'linux') return;
   const state = readMacAgentActivityState();
   if (isProcessAlive(state.overlay_pid)) {
     try {
@@ -3143,16 +3143,16 @@ async function ensureMacComputerUsePermissionsBeforeDaemon(): Promise<void> {
 }
 
 async function ensureCuaDriverDaemon(binary: string): Promise<void> {
-  if (process.platform !== 'darwin') return;
+  if (process.platform !== 'darwin' && process.platform !== 'linux') return;
   if (daemonProcess && !daemonProcess.killed) {
     await waitForCuaDriverDaemon(binary);
-    await configureCuaDriverDaemon(binary);
+    if (process.platform === 'darwin') await configureCuaDriverDaemon(binary);
     return;
   }
   if (daemonStartPromise) {
     await daemonStartPromise;
     await waitForCuaDriverDaemon(binary);
-    await configureCuaDriverDaemon(binary);
+    if (process.platform === 'darwin') await configureCuaDriverDaemon(binary);
     return;
   }
 
@@ -3208,7 +3208,7 @@ async function ensureCuaDriverDaemon(binary: string): Promise<void> {
 
   await daemonStartPromise;
   await waitForCuaDriverDaemon(binary);
-  await configureCuaDriverDaemon(binary);
+  if (process.platform === 'darwin') await configureCuaDriverDaemon(binary);
 }
 
 async function waitForCuaDriverDaemon(binary: string): Promise<void> {
@@ -3352,7 +3352,7 @@ async function callCuaDriverCli(
   approvalArgs?: Record<string, unknown>,
 ): Promise<ToolCallResponse> {
   assertNotProtectedDesktopAutomationTarget(toolName, args);
-  if (process.platform === 'darwin') {
+  if (process.platform === 'darwin' || process.platform === 'linux') {
     return withMacCuaDriverProcessLock(() => (
       withMacCuaDriverSerialized(() => callMacCuaDriverCli(toolName, args, context, imageOutputPath, approvalArgs))
     ));

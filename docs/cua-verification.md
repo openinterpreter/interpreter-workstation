@@ -6,7 +6,7 @@ CUA is one product contract with platform-specific backends. Verify it as one th
 
 Agent E2E is the acceptance layer. These tests ask an actual agent to do a user task, then grade app state. Passing primitive tool calls is not enough.
 
-Primitive CLI smoke is the diagnostics layer. These tests call `interpreter-app tools builtin-cua-driver ...` directly through the real CLI transport. They prove the tool server, approval routing, permissions, and native backend are working.
+Primitive CLI smoke is the diagnostics layer. These tests call `interpreter-app tools builtin-cua-driver ...` directly through the real CLI transport. They prove the tool server, approval routing, permissions, and native backend are working. On Linux the pinned Rust driver uses the existing X11/AT-SPI desktop session; the headless host must inherit its `DISPLAY` and session D-Bus address and set `CUA_DRIVER_PATH` to the installed pinned binary. A registered tool without a usable desktop session is not acceptance.
 
 Do not replace agent E2E with direct handler calls, mocked calls, or direct backend imports.
 
