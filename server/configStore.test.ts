@@ -797,6 +797,15 @@ describe('language-dependent STT cleanup', () => {
 });
 
 describe('boolean UI settings', () => {
+  test('Simple is the first-run default; Advanced is opt-in and persisted', async () => {
+    expect(await getBooleanUISetting('advancedMode')).toBe(false);
+    expect(getBooleanUISettingSync('advancedMode')).toBe(false);
+    await setBooleanUISetting('advancedMode', true);
+    expect(await getBooleanUISetting('advancedMode')).toBe(true);
+    expect(getBooleanUISettingSync('advancedMode')).toBe(true);
+    await setBooleanUISetting('advancedMode', false);
+    expect(await getBooleanUISetting('advancedMode')).toBe(false);
+  });
   test('launchAtLogin defaults to false and persists', async () => {
     expect(await getBooleanUISetting('launchAtLogin')).toBe(false);
     expect(getBooleanUISettingSync('launchAtLogin')).toBe(false);

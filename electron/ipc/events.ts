@@ -373,6 +373,19 @@ export function emitOpenSettings(window: BrowserWindow | null): void {
   broadcast('settings:open', {});
 }
 
+export type SimpleProjectMenuAction = {
+  action: 'new' | 'open' | 'recent';
+  path?: string;
+};
+
+export function emitSimpleProjectAction(
+  window: BrowserWindow | null,
+  action: SimpleProjectMenuAction,
+): void {
+  emitToRenderer(window, IPC_CHANNELS.SIMPLE_PROJECT_ACTION, action);
+  broadcast('simpleProject:action', action);
+}
+
 // ============================================================================
 // Tool Server Events
 // ============================================================================

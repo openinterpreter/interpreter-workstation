@@ -31,6 +31,23 @@ signature, notarization, and stapling gates before advancing macOS.
 A local package, a pull-request artifact, or an internal candidate is useful
 for review but is not an official build.
 
+## Signed macOS test builds
+
+The manual `Signed macOS test build` workflow builds both Apple Silicon and
+Intel packages from protected `main` after the dedicated automation identity
+dispatches it with confirmation `test`. It uses the protected signing
+environment, verifies Developer ID signing, notarization and stapling, and
+uploads only the installable DMG/ZIP files, per-architecture SHA-256 checksums,
+and exact source commit. It does **not** publish an update manifest, upload to
+the production download bucket, create a release, or change the latest release.
+
+For a prerelease, a maintainer must verify the successful workflow run, exact
+source commit, signatures, notarization, and artifact checksums after download;
+then attach the verified packages and a combined `SHA256SUMS` to a clearly
+labeled GitHub prerelease using the repository's authorized publishing identity.
+Do not attach an unsigned candidate or include `latest*.yml` update manifests.
+The test build and prerelease are not a production release or auto-update.
+
 ## Release authority
 
 The `Official release` workflow is manual, accepts only the protected `main`
