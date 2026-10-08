@@ -363,6 +363,29 @@ function parseJsonText(text: string): unknown {
   return JSON.parse(trimmed);
 }
 
+function parseNativeWindowStateResponse(response: ToolCallResponse):
+  | { state: MacCuaWindowState; error?: never }
+  | { state?: never; error: ToolCallResponse } {
+  const output = toolText(response).trim();
+  try {
+    const value = parseJsonText(output);
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return { state: value as MacCuaWindowState };
+    }
+  } catch {
+    // The driver may exit successfully while returning a plain-text ToolResult
+    // error (not structuredContent), notably Linux window-capture failures.
+  }
+  const message = output.startsWith('Capture error:')
+    ? 'Computer Use could not capture this window; no screenshot was acquired.'
+    : 'Computer Use returned an invalid window-state response; no screenshot was acquired.';
+  return { error: { content: [{ type: 'text', text: message }], isError: true } };
+}
+
+export function parseNativeWindowStateResponseForTest(response: ToolCallResponse) {
+  return parseNativeWindowStateResponse(response);
+}
+
 type MacCuaWindowRecord = {
   owner?: string;
   app?: string;
@@ -1696,7 +1719,9 @@ async function callMacComputerUseTool(
         lastTarget = target;
         continue;
       }
-      const parsed = parseJsonText(toolText(response)) as MacCuaWindowState;
+      const decoded = parseNativeWindowStateResponse(response);
+      if (decoded.error) return decoded.error;
+      const parsed = decoded.state;
       lastResponse = response;
       lastTarget = target;
       lastParsed = parsed;
@@ -1745,7 +1770,9 @@ async function callMacComputerUseTool(
         lastTarget = target;
         continue;
       }
-      const parsed = parseJsonText(toolText(response)) as MacCuaWindowState;
+      const decoded = parseNativeWindowStateResponse(response);
+      if (decoded.error) return decoded.error;
+      const parsed = decoded.state;
       lastResponse = response;
       lastTarget = target;
       lastParsed = parsed;
