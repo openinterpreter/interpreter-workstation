@@ -19,6 +19,7 @@ import {
   macToolMayRequireForegroundFocusForTest,
   nativeLaunchAppArgsForTest,
   parseComputerUseUiElementsForTest,
+  parseNativeWindowStateResponseForTest,
   resolveMacSelectOptionFromElementsForTest,
   requireWindowTargetIdentityForBoundsForTest,
   requestApprovalForTest,
@@ -42,6 +43,37 @@ function windowsToolResponse(data: unknown): { content: [{ type: 'text'; text: s
     }],
   };
 }
+
+describe('native CUA window-state response', () => {
+  test('returns a fixed capture failure rather than parsing plain driver error as JSON', () => {
+    const result = parseNativeWindowStateResponseForTest({
+      content: [{ type: 'text', text: 'Capture error: window screenshot failed for window 17: backend unavailable' }],
+    });
+    expect(result).toEqual({
+      error: {
+        content: [{ type: 'text', text: 'Computer Use could not capture this window; no screenshot was acquired.' }],
+        isError: true,
+      },
+    });
+  });
+
+  test('preserves structured native window state', () => {
+    const result = parseNativeWindowStateResponseForTest({
+      content: [{ type: 'text', text: JSON.stringify({ pid: 9, tree_markdown: 'Window' }) }],
+    });
+    expect(result).toEqual({ state: { pid: 9, tree_markdown: 'Window' } });
+  });
+
+  test('does not echo arbitrary invalid driver output', () => {
+    const result = parseNativeWindowStateResponseForTest({
+      content: [{ type: 'text', text: 'untrusted screen text' }],
+    });
+    expect(result.error?.isError).toBe(true);
+    expect(result.error?.content[0]).toEqual({
+      type: 'text', text: 'Computer Use returned an invalid window-state response; no screenshot was acquired.',
+    });
+  });
+});
 
 async function withPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T> {
   const originalPlatform = process.platform;
