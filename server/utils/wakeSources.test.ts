@@ -49,6 +49,22 @@ describe('durable thread wake sources', () => {
     finally { await f.cleanup(); }
   });
 
+  test('exposes the sole private config path and rejects invalid civil edits without changing it', async () => {
+    const f = await fixture();
+    try {
+      const w = await f.make();
+      expect(w.configFilePath()).toBe(path.join(f.root, 'wake-sources.json'));
+      const source = { id: 'daily', threadId: 'thread-1', kind: 'schedule' as const,
+        message: 'Daily review', dailyAt: '22:00', timeZone: 'America/Los_Angeles' };
+      await w.put(source);
+      const before = await readFile(w.configFilePath(), 'utf8');
+      await expect(w.put({ ...source, dailyAt: '25:00' })).rejects.toThrow();
+      await expect(w.put({ ...source, timeZone: 'Invalid/Zone' })).rejects.toThrow();
+      expect(await readFile(w.configFilePath(), 'utf8')).toBe(before);
+      expect(w.list('thread-1').sources[0]?.dailyAt).toBe('22:00');
+    } finally { await f.cleanup(); }
+  });
+
   test('persists before dispatch, reconciles history after restart, deduplicates source IDs', async () => {
     const f = await fixture();
     try {

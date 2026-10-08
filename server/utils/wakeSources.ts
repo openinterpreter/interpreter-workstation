@@ -199,6 +199,9 @@ export class WakeSources {
     });
   }
 
+  /** The one private, atomically replaced state file backing all thread schedules. */
+  configFilePath(): string { return this.file; }
+
   private async save(): Promise<void> {
     await mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 });
     const temp = `${this.file}.${randomUUID()}.tmp`;
