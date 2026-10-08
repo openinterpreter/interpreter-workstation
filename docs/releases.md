@@ -80,10 +80,10 @@ gh attestation verify ./Interpreter-<platform>-<arch>-<version>.<ext> \
 ```
 
 `RELEASE-MANIFEST.json` ties the files to the source commit, OIX release,
-submodule commits, and workflow run. `SBOM.spdx.json` provides the release
-software bill of materials. Platform-native signature inspection remains an
-independent verification boundary and should also be used for managed
-deployment.
+submodule commits, and workflow run. `SBOM.spdx.json` inventories the locked
+application source dependencies; it does not replace package inspection.
+Platform-native signature inspection remains an independent verification
+boundary and should also be used for managed deployment.
 
 ## Reproducibility boundary
 

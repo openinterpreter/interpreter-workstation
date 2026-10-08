@@ -133,6 +133,21 @@ test('a failed publication can reuse only its exact commit', () => {
   assert.match(publish, /gh release upload "\$RELEASE_TAG" release\/\* --repo "\$GITHUB_REPOSITORY" --clobber/);
 });
 
+test('SBOM attestation scans bounded locked source dependencies, not recursive binaries', () => {
+  const publish = section('  publish:');
+  const prepare = publish.indexOf('Prepare bounded source dependency inventory');
+  const generate = publish.indexOf('Generate SPDX software bill of materials');
+  const validate = publish.indexOf('Validate source dependency SBOM for attestation');
+  const attest = publish.indexOf('Attest the release SBOM');
+  assert.ok(prepare >= 0 && generate > prepare && validate > generate && attest > validate);
+  assert.match(publish, /cp package\.json pnpm-lock\.yaml release-sbom-source\//);
+  assert.match(publish, /path: \.\/release-sbom-source/);
+  assert.doesNotMatch(publish.slice(generate, validate), /^\s*path: \.$/m);
+  assert.match(publish, /sbom\.packages\.length < 100/);
+  assert.match(publish, /size >= 16 \* 1024 \* 1024/);
+  assert.match(publish, /fs\.writeFileSync\(file, compact\)/);
+});
+
 test('release packaging does not rebuild N-API native dependencies', () => {
   assert.match(electronBuilderConfig, /^npmRebuild: false$/m);
 });
