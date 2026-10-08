@@ -94,7 +94,7 @@ describe('ONBOARDING_MODEL_PACKS', () => {
       lmstudio: 'qwen/qwen3.5-4b',
     });
     expect(API_PROVIDER_MODEL_DEFAULTS).toMatchObject({
-      openai: 'gpt-5.4-nano',
+      openai: 'gpt-5.6-luna',
       groq: 'llama-3.3-70b-versatile',
       openrouter: 'anthropic/claude-opus-4.6',
       deepseek: 'deepseek-v4-flash',
@@ -102,6 +102,15 @@ describe('ONBOARDING_MODEL_PACKS', () => {
   });
 
   test('selects a provider preferred model when available and first model otherwise', () => {
+    expect(getDefaultApiProviderModelId('openai', [
+      { id: 'gpt-5.4-nano' },
+      { id: 'gpt-5.6-luna' },
+    ])).toBe('gpt-5.6-luna');
+
+    expect(getDefaultApiProviderModelId('openai', [
+      { id: 'gpt-5.6-terra' },
+    ])).toBe('gpt-5.6-terra');
+
     expect(getDefaultApiProviderModelId('groq', [
       { id: 'mixtral-8x7b' },
       { id: 'llama-3.3-70b-versatile' },

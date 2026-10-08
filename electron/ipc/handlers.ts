@@ -421,11 +421,14 @@ interface HandlerDependencies {
   cachedFileTree: CachedFileTree | null;
   getInterpreterOverlayService: () => {
     startWindowVoiceMode: (request?: InterpreterOverlayStartWindowVoiceRequest) => Promise<InterpreterOverlayStartWindowVoiceResponse>;
+    getSimpleComposerState: (windowSessionKey: string) => { draft: string };
+    setSimpleComposerState: (windowSessionKey: string, state: { draft: string }) => void;
   } | null;
   createWorkstationWindow: (options?: {
     sourceWindowId?: number | null;
     workspacePath?: string | null;
     bootstrapLayout?: LayoutState | null;
+    simpleProjectPath?: string | null;
     background?: boolean;
   }) => Promise<{ success: true; windowId: number; sessionKey: string } | { success: false; error: string }>;
 }
@@ -735,6 +738,7 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
       const result = await createWorkstationWindow({
         sourceWindowId: senderWindowId,
         workspacePath: request?.workspacePath ?? senderWorkspace,
+        simpleProjectPath: request?.simpleProjectPath ?? null,
         background: request?.background === true,
       });
 
@@ -807,6 +811,16 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
       return getWorkspace();
     }
   );
+
+  registerHandle(IPC_CHANNELS.WORKSPACE_GET_SIMPLE, async () => {
+    const { getSimpleWorkspacePath } = await import('../../server/simpleWorkspace');
+    return { workspacePath: await getSimpleWorkspacePath() };
+  });
+
+  registerHandle(IPC_CHANNELS.WORKSPACE_SET_SIMPLE, async (_event, request: { workspacePath: string }) => {
+    const { setSimpleWorkspacePath } = await import('../../server/simpleWorkspace');
+    return { workspacePath: await setSimpleWorkspacePath(request.workspacePath) };
+  });
 
   registerHandle(
     IPC_CHANNELS.WORKSPACE_CREATE_SAMPLE,
@@ -1617,6 +1631,74 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
         console.error('[IPC] Error unarchiving agent thread:', error);
         return { success: false, error: error?.message ?? 'Failed to unarchive thread.' };
       }
+    },
+  );
+
+  registerHandle(IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_GET, async () => {
+    const { getSimplePrimaryThread } = await import('../../server/handlers/simplePrimaryThread');
+    return getSimplePrimaryThread();
+  });
+
+  registerHandle(
+    IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_BIND,
+    async (_event, request: { threadId: string; expectedThreadId?: string | null }) => {
+      const { bindSimplePrimaryThread } = await import('../../server/handlers/simplePrimaryThread');
+      return bindSimplePrimaryThread(request);
+    },
+  );
+
+  registerHandle(
+    IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_CLEAR,
+    async (_event, request: { expectedThreadId: string }) => {
+      const { clearSimplePrimaryThread } = await import('../../server/handlers/simplePrimaryThread');
+      return clearSimplePrimaryThread(request);
+    },
+  );
+
+  registerHandle(IPC_CHANNELS.SIMPLE_COMPOSER_STATE_GET, (event) => {
+    const sessionKey = getWindowSessionKeyForWindowId(getEventWindowId(event));
+    if (!sessionKey) return { draft: '' };
+    return getInterpreterOverlayService()?.getSimpleComposerState(sessionKey) ?? { draft: '' };
+  });
+
+  registerHandle(
+    IPC_CHANNELS.SIMPLE_COMPOSER_STATE_SET,
+    (event, state: { draft: string }) => {
+      const sessionKey = getWindowSessionKeyForWindowId(getEventWindowId(event));
+      if (!sessionKey) return { success: false };
+      getInterpreterOverlayService()?.setSimpleComposerState(sessionKey, state);
+      return { success: true };
+    },
+  );
+
+  registerHandle(IPC_CHANNELS.SIMPLE_LIVE_STATUS, async () => {
+    const { getSimpleLiveStatus } = await import('../../server/handlers/simpleLive');
+    const { readSimpleLiveApiKey } = await import('../services/simpleLiveCredential');
+    return getSimpleLiveStatus({ secureApiKey: await readSimpleLiveApiKey() });
+  });
+
+  registerHandle(
+    IPC_CHANNELS.SIMPLE_LIVE_CONFIGURE,
+    async (_event, request: { apiKey: string }) => {
+      const { saveSimpleLiveApiKey } = await import('../services/simpleLiveCredential');
+      await saveSimpleLiveApiKey(request?.apiKey ?? '');
+      return { configured: true as const, source: 'secure' as const };
+    },
+  );
+
+  registerHandle(IPC_CHANNELS.SIMPLE_LIVE_CLEAR_CREDENTIAL, async () => {
+    const { clearSimpleLiveApiKey } = await import('../services/simpleLiveCredential');
+    await clearSimpleLiveApiKey();
+    const { getSimpleLiveStatus } = await import('../../server/handlers/simpleLive');
+    return getSimpleLiveStatus();
+  });
+
+  registerHandle(
+    IPC_CHANNELS.SIMPLE_LIVE_CREATE_SESSION,
+    async (_event, request: { offerSdp: string }) => {
+      const { createSimpleLiveSession } = await import('../../server/handlers/simpleLive');
+      const { readSimpleLiveApiKey } = await import('../services/simpleLiveCredential');
+      return createSimpleLiveSession(request, { secureApiKey: await readSimpleLiveApiKey() });
     },
   );
 
@@ -3697,6 +3779,54 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
         return { success: false, error: error.message };
       }
     }
+  );
+
+  registerHandle(
+    IPC_CHANNELS.SIMPLE_INTERFACE_AGENT_START,
+    async (
+      event,
+      request: import('./registry').SimpleInterfaceAgentStartRequest,
+    ): Promise<import('./registry').SimpleInterfaceAgentStartResponse> => {
+      try {
+        if (!request || typeof request.runId !== 'string' || !request.runId.trim()) {
+          throw new Error('A run id is required.');
+        }
+        const message = typeof request.message === 'string' ? request.message.trim() : '';
+        if (!message || message.length > 24_000) throw new Error('A focused agent message is required.');
+        const [{ startAgentTask }, { getActiveSimpleProject }] = await Promise.all([
+          import('../../server/agentTaskService'),
+          import('../../server/simpleProjects'),
+        ]);
+        const project = await getActiveSimpleProject();
+        const result = await startAgentTask({
+          mode: 'headless',
+          message,
+          system: typeof request.system === 'string' ? request.system.slice(0, 24_000) : undefined,
+          timeoutMs: Math.min(Math.max(request.timeoutMs ?? 300_000, 10_000), 1_800_000),
+          workspace: project.path,
+          notifyStarted: false,
+          onProgress: (progress) => {
+            if (!event.sender.isDestroyed()) {
+              event.sender.send(IPC_CHANNELS.SIMPLE_INTERFACE_AGENT_EVENT, {
+                runId: request.runId,
+                event: progress,
+              });
+            }
+          },
+        });
+        return {
+          success: true,
+          result: {
+            completed: result.completed,
+            threadId: result.threadId,
+            messages: result.messages,
+            error: result.error,
+          },
+        };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
   );
 
   registerHandle(

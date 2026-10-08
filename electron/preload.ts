@@ -195,6 +195,7 @@ import type {
   PrimaryColorSetResponse,
   PrimaryColorChangedEvent,
   WindowFullscreenChangedEvent,
+  WindowFocusChangedEvent,
   WorkstationOpenFileEvent,
   WorkstationOpenUrlEvent,
   WorkstationCloseTabEvent,
@@ -206,6 +207,9 @@ import type {
   AppToastEvent,
   ProgrammaticTaskStartHeadedRequest,
   ProgrammaticTaskStartHeadedResponse,
+  SimpleInterfaceAgentStartRequest,
+  SimpleInterfaceAgentStartResponse,
+  SimpleInterfaceAgentEvent,
   ProgrammaticTaskStartedEvent,
   GenericContextMenuRequest,
   GenericContextMenuResponse,
@@ -355,6 +359,25 @@ export interface ElectronAPI {
     unarchiveThread: (threadId: string) => Promise<AgentThreadsUnarchiveResponse>;
   };
 
+  simplePrimaryThread: {
+    get: () => Promise<{ threadId: string | null }>;
+    bind: (request: { threadId: string; expectedThreadId?: string | null }) => Promise<{ threadId: string }>;
+    clear: (request: { expectedThreadId: string }) => Promise<{ threadId: null }>;
+    onOverlaySubmit: (callback: (event: { text: string; interfacePath?: string }) => void) => () => void;
+  };
+  simpleComposerState: {
+    get: () => Promise<{ draft: string }>;
+    set: (state: { draft: string }) => Promise<{ success: boolean }>;
+    onChanged: (callback: (state: { draft: string }) => void) => () => void;
+  };
+
+  simpleLive: {
+    status: () => Promise<{ configured: boolean; source: 'profile' | 'environment' | 'secure' | 'none' }>;
+    configure: (request: { apiKey: string }) => Promise<{ configured: true; source: 'secure' }>;
+    clearCredential: () => Promise<{ configured: boolean; source: 'profile' | 'environment' | 'secure' | 'none' }>;
+    createSession: (request: { offerSdp: string }) => Promise<{ answerSdp: string; sessionId: string }>;
+  };
+
   // Profiles IPC methods
   profiles: {
     list: () => Promise<{ profiles: any[]; defaultProfileId: string | null; fastProfileId: string | null }>;
@@ -373,6 +396,8 @@ export interface ElectronAPI {
   // Workspace IPC methods
   workspace: {
     get: () => Promise<{ workspace: string | null }>;
+    getSimple: () => Promise<{ workspacePath: string }>;
+    setSimple: (request: { workspacePath: string }) => Promise<{ workspacePath: string }>;
     createSample: () => Promise<WorkspaceCreateSampleResponse>;
     set: (request: { workspacePath: string }) => Promise<{ success: boolean }>;
     respondToConfirmation: (request: WorkspaceConfirmationRespondRequest) => Promise<WorkspaceConfirmationRespondResponse>;
@@ -381,6 +406,7 @@ export interface ElectronAPI {
     removeWatch: (folderPath: string) => Promise<{ success: boolean }>;
     onConfirmationRequested: (callback: (event: WorkspaceConfirmationRequestedEvent) => void) => () => void;
     onChanged: (callback: (event: { workspacePath: string | null }) => void) => () => void;
+    onSimpleChanged: (callback: (event: { workspacePath: string }) => void) => () => void;
     onFilesChanged: (callback: (event: WorkspaceFilesChangedEvent) => void) => () => void;
   };
 
@@ -639,6 +665,7 @@ export interface ElectronAPI {
     detachTab: (request: WindowDetachTabRequest) => Promise<WindowDetachTabResponse>;
     transferTabOut: (request: WindowTransferTabOutRequest) => Promise<WindowTransferTabOutResponse>;
     onFullscreenChanged: (callback: (event: WindowFullscreenChangedEvent) => void) => () => void;
+    onFocusChanged: (callback: (event: WindowFocusChangedEvent) => void) => () => void;
   };
 
   // Tab navigation IPC methods (menu shortcuts)
@@ -659,6 +686,9 @@ export interface ElectronAPI {
     onNewSidebarAgent: (callback: () => void) => () => void;
     onOpenInbox: (callback: () => void) => () => void;
     onOpenSettings: (callback: () => void) => () => void;
+    onSimpleProjectAction: (
+      callback: (event: import('./ipc/events').SimpleProjectMenuAction) => void,
+    ) => () => void;
   };
 
   // Workstation IPC methods (main -> renderer control events)
@@ -702,6 +732,10 @@ export interface ElectronAPI {
   programmaticTasks: {
     startHeaded: (request: ProgrammaticTaskStartHeadedRequest) => Promise<ProgrammaticTaskStartHeadedResponse>;
     onStarted: (callback: (event: ProgrammaticTaskStartedEvent) => void) => () => void;
+  };
+  simpleInterfaceAgents: {
+    start: (request: SimpleInterfaceAgentStartRequest) => Promise<SimpleInterfaceAgentStartResponse>;
+    onEvent: (callback: (event: SimpleInterfaceAgentEvent) => void) => () => void;
   };
 
   // Feedback IPC methods
@@ -939,6 +973,38 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.invoke(IPC_CHANNELS.AGENT_THREADS_UNARCHIVE, { threadId }),
   },
 
+  simplePrimaryThread: {
+    get: () => ipcRenderer.invoke(IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_GET),
+    bind: (request: { threadId: string; expectedThreadId?: string | null }) =>
+      ipcRenderer.invoke(IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_BIND, request),
+    clear: (request: { expectedThreadId: string }) =>
+      ipcRenderer.invoke(IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_CLEAR, request),
+    onOverlaySubmit: (callback: (event: { text: string; interfacePath?: string }) => void) => {
+      const listener = (_: unknown, event: { text: string }) => callback(event);
+      ipcRenderer.on(IPC_CHANNELS.SIMPLE_PRIMARY_OVERLAY_SUBMIT, listener);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.SIMPLE_PRIMARY_OVERLAY_SUBMIT, listener);
+    },
+  },
+
+  simpleComposerState: {
+    get: () => ipcRenderer.invoke(IPC_CHANNELS.SIMPLE_COMPOSER_STATE_GET),
+    set: (state: { draft: string }) => ipcRenderer.invoke(IPC_CHANNELS.SIMPLE_COMPOSER_STATE_SET, state),
+    onChanged: (callback: (state: { draft: string }) => void) => {
+      const listener = (_event: any, state: { draft: string }) => callback(state);
+      ipcRenderer.on(IPC_CHANNELS.SIMPLE_COMPOSER_STATE_CHANGED, listener);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.SIMPLE_COMPOSER_STATE_CHANGED, listener);
+    },
+  },
+
+  simpleLive: {
+    status: () => ipcRenderer.invoke(IPC_CHANNELS.SIMPLE_LIVE_STATUS),
+    configure: (request: { apiKey: string }) =>
+      ipcRenderer.invoke(IPC_CHANNELS.SIMPLE_LIVE_CONFIGURE, request),
+    clearCredential: () => ipcRenderer.invoke(IPC_CHANNELS.SIMPLE_LIVE_CLEAR_CREDENTIAL),
+    createSession: (request: { offerSdp: string }) =>
+      ipcRenderer.invoke(IPC_CHANNELS.SIMPLE_LIVE_CREATE_SESSION, request),
+  },
+
   // Profiles IPC
   profiles: {
     list: () => ipcRenderer.invoke(IPC_CHANNELS.PROFILES_LIST),
@@ -969,6 +1035,9 @@ contextBridge.exposeInMainWorld('electron', {
   // Workspace IPC
   workspace: {
     get: () => ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_GET),
+    getSimple: () => ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_GET_SIMPLE),
+    setSimple: (request: { workspacePath: string }) =>
+      ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_SET_SIMPLE, request),
     createSample: () => ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_CREATE_SAMPLE),
     set: (request: { workspacePath: string }) =>
       ipcRenderer.invoke(IPC_CHANNELS.WORKSPACE_SET, request),
@@ -989,6 +1058,11 @@ contextBridge.exposeInMainWorld('electron', {
       const listener = (_: any, event: { workspacePath: string | null }) => callback(event);
       ipcRenderer.on(IPC_CHANNELS.WORKSPACE_CHANGED, listener);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.WORKSPACE_CHANGED, listener);
+    },
+    onSimpleChanged: (callback: (event: { workspacePath: string }) => void) => {
+      const listener = (_: any, event: { workspacePath: string }) => callback(event);
+      ipcRenderer.on(IPC_CHANNELS.WORKSPACE_SIMPLE_CHANGED, listener);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.WORKSPACE_SIMPLE_CHANGED, listener);
     },
     onFilesChanged: (callback: (event: WorkspaceFilesChangedEvent) => void) => {
       const listener = (_: any, event: WorkspaceFilesChangedEvent) => callback(event);
@@ -1552,6 +1626,11 @@ contextBridge.exposeInMainWorld('electron', {
       ipcRenderer.on(IPC_CHANNELS.WINDOW_FULLSCREEN_CHANGED, listener);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.WINDOW_FULLSCREEN_CHANGED, listener);
     },
+    onFocusChanged: (callback: (event: WindowFocusChangedEvent) => void) => {
+      const listener = (_: any, event: WindowFocusChangedEvent) => callback(event);
+      ipcRenderer.on(IPC_CHANNELS.WINDOW_FOCUS_CHANGED, listener);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.WINDOW_FOCUS_CHANGED, listener);
+    },
   },
 
   // Tab navigation IPC (menu shortcuts)
@@ -1619,6 +1698,17 @@ contextBridge.exposeInMainWorld('electron', {
       const listener = () => callback();
       ipcRenderer.on(IPC_CHANNELS.OPEN_SETTINGS, listener);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.OPEN_SETTINGS, listener);
+    },
+    onSimpleProjectAction: (
+      callback: (event: import('./ipc/events').SimpleProjectMenuAction) => void,
+    ) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        action: import('./ipc/events').SimpleProjectMenuAction,
+      ) => callback(action);
+      ipcRenderer.on(IPC_CHANNELS.SIMPLE_PROJECT_ACTION, listener);
+      return () =>
+        ipcRenderer.removeListener(IPC_CHANNELS.SIMPLE_PROJECT_ACTION, listener);
     },
   },
 
@@ -1725,6 +1815,16 @@ contextBridge.exposeInMainWorld('electron', {
       const handler = (_: any, event: ProgrammaticTaskStartedEvent) => callback(event);
       ipcRenderer.on(IPC_CHANNELS.PROGRAMMATIC_TASK_STARTED, handler);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.PROGRAMMATIC_TASK_STARTED, handler);
+    },
+  },
+
+  simpleInterfaceAgents: {
+    start: (request: SimpleInterfaceAgentStartRequest) =>
+      ipcRenderer.invoke(IPC_CHANNELS.SIMPLE_INTERFACE_AGENT_START, request),
+    onEvent: (callback: (event: SimpleInterfaceAgentEvent) => void) => {
+      const handler = (_: unknown, event: SimpleInterfaceAgentEvent) => callback(event);
+      ipcRenderer.on(IPC_CHANNELS.SIMPLE_INTERFACE_AGENT_EVENT, handler);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.SIMPLE_INTERFACE_AGENT_EVENT, handler);
     },
   },
 

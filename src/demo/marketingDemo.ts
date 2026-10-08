@@ -2669,6 +2669,8 @@ if (marketingDemoUseCaseOverride) {
 
 export const marketingDemoWorkspaceIpc = {
   get: async () => getMarketingDemoWorkspace(),
+  getSimple: async () => { throw new Error('Simple workspace is unavailable in the marketing demo.'); },
+  setSimple: async () => { throw new Error('Simple workspace is unavailable in the marketing demo.'); },
   createSample: async () => ({ success: true, workspacePath: DEMO_WORKSPACE_ROOT }),
   set: async () => ({ success: false }),
   addWatch: async () => ({ success: true }),
@@ -2677,6 +2679,7 @@ export const marketingDemoWorkspaceIpc = {
     queueMicrotask(() => callback({ workspacePath: DEMO_WORKSPACE_ROOT }));
     return subscribeMarketingDemoListener(marketingDemoWorkspaceChangedListeners, callback);
   },
+  onSimpleChanged: () => () => {},
   onFilesChanged: (callback: (event: unknown) => void) =>
     subscribeMarketingDemoListener(
       marketingDemoWorkspaceFilesChangedListeners,
@@ -2819,6 +2822,9 @@ export const marketingDemoPrimaryColorIpc = {
 };
 
 export const marketingDemoUiSettingsIpc = {
+  getAdvancedMode: async () => ({ enabled: true }),
+  setAdvancedMode: async (enabled: boolean) => ({ success: true, enabled }),
+  onAdvancedModeChanged: (_callback: (event: unknown) => void) => NOOP_UNSUBSCRIBE,
   getReviewMarkdownEdits: async () => ({ enabled: true }),
   setReviewMarkdownEdits: async (enabled: boolean) => ({ success: true, enabled }),
   onReviewMarkdownEditsChanged: (_callback: (event: unknown) => void) => NOOP_UNSUBSCRIBE,

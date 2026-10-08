@@ -129,6 +129,12 @@ export interface AppConfig {
   theme?: 'light' | 'dark' | 'system'; // Theme preference
   primaryColor?: string; // Primary accent color (e.g., "blue", "purple")
   lastWorkspace?: string | null; // Last opened workspace path
+  /** The durable Simple conversation is scoped to its workspace, not an Advanced tab. */
+  simplePrimaryThreads?: Record<string, string>;
+  simpleWorkspacePath?: string; // Durable control workspace for the Simple agent
+  simpleProjectPath?: string; // Active standalone interface project
+  simpleRecentProjectPaths?: string[];
+  simpleOpenProjectPaths?: string[]; // Interface windows restored on the next launch
   recentFolders?: RecentFolder[]; // Recent workspace folders
   detectedNoteWorkspaces?: DetectedNoteWorkspace[]; // Results from the last user-requested note workspace scan
 
@@ -173,6 +179,7 @@ export interface AppConfig {
   showHelpPanelPreview?: boolean; // Show file preview in help panel (default: false)
   reviewMarkdownEdits?: boolean; // Show accept/reject UI when agents edit markdown files (default: true)
   launchAtLogin?: boolean; // Launch the app when user logs into the OS (default: false)
+  advancedMode?: boolean; // Explicit opt-in to the existing multi-pane Advanced experience
   whatsNewDismissed?: boolean; // Whether the "What's new" video has been dismissed
   dismissedTopNoticeVersions?: Record<string, string>; // Per-notice dismissed versions for top-of-page notices
   lastDismissedReleaseNotesVersion?: number | string; // RELEASE_NOTES_VERSION string the user last dismissed (legacy: number)
@@ -2026,6 +2033,44 @@ export async function setSttSettings(settings: SttSettings): Promise<void> {
 }
 
 // Last Workspace Functions
+
+export async function getSimpleWorkspaceSetting(): Promise<string | null> {
+  const config = await loadConfig();
+  return config.simpleWorkspacePath ?? null;
+}
+
+export async function setSimpleWorkspaceSetting(workspacePath: string): Promise<void> {
+  const config = await loadConfig();
+  config.simpleWorkspacePath = workspacePath;
+  await saveConfig(config);
+}
+
+export async function getSimpleProjectSetting(): Promise<{ activePath: string | null; recentPaths: string[] }> {
+  const config = await loadConfig();
+  return {
+    activePath: config.simpleProjectPath ?? null,
+    recentPaths: config.simpleRecentProjectPaths ?? [],
+  };
+}
+
+export async function setSimpleProjectSetting(projectPath: string, options?: { activate?: boolean }): Promise<void> {
+  const config = await loadConfig();
+  const recent = [projectPath, ...(config.simpleRecentProjectPaths ?? []).filter((path) => path !== projectPath)].slice(0, 20);
+  if (options?.activate !== false) config.simpleProjectPath = projectPath;
+  config.simpleRecentProjectPaths = recent;
+  await saveConfig(config);
+}
+
+export async function getSimpleOpenProjectPaths(): Promise<string[]> {
+  const config = await loadConfig();
+  return Array.from(new Set(config.simpleOpenProjectPaths ?? []));
+}
+
+export async function setSimpleOpenProjectPaths(projectPaths: string[]): Promise<void> {
+  const config = await loadConfig();
+  config.simpleOpenProjectPaths = Array.from(new Set(projectPaths));
+  await saveConfig(config);
+}
 
 /**
  * Get the last opened workspace path
