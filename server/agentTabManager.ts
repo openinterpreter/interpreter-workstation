@@ -8,6 +8,7 @@ import type { MessageSendSource } from '../shared/types/messageSendSource';
 import type { AgentActivityState } from '../shared/utils/agentAttention';
 import type { StreamImageAttachment } from '../src/lib/codex/api-types';
 import { getCurrentWindowSessionKey } from './utils/windowSessions';
+import { persistNativeCallerBinding, recoverNativeCallerBinding, revokeNativeCallerBinding } from './utils/persistedCallerBinding';
 import type { AgentPermissionOwnerReference } from '../shared/types/approval';
 
 export interface PendingAgentTabRequest {
@@ -448,6 +449,10 @@ class AgentTabManager {
 
   bindThread(options: BindAgentRuntimeOptions & { threadId: string }): AgentThreadBinding {
     const binding = this.setBinding(options);
+    // A loaded native thread can outlive this JS process. The on-disk record
+    // stores only a hash of its caller token and its existing authorization
+    // scope; window/delegated callers are never persisted.
+    persistNativeCallerBinding(binding);
     console.log('[AgentTabManager] Bound thread to agent:', {
       agentId: options.agentId,
       threadId: options.threadId,
@@ -497,7 +502,7 @@ class AgentTabManager {
   }
 
   getBindingForCallerToken(callerToken: string): AgentThreadBinding | undefined {
-    return this.callerTokenBindings.get(callerToken);
+    return this.callerTokenBindings.get(callerToken) ?? recoverNativeCallerBinding(callerToken);
   }
 
   getBindingForAgentId(agentId: string): AgentThreadBinding | undefined {
@@ -635,6 +640,7 @@ class AgentTabManager {
     }
 
     this.callerTokenBindings.delete(callerToken);
+    revokeNativeCallerBinding(callerToken);
     const currentAgentBinding = this.agentIdBindings.get(binding.agentId);
     if (currentAgentBinding?.callerToken === callerToken) {
       this.agentIdBindings.delete(binding.agentId);

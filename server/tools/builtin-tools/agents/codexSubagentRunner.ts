@@ -163,7 +163,7 @@ export async function runCodexSubagent(options: RunCodexSubagentOptions): Promis
   }
 
   console.log(`${timingTag} start workspace=${workspace} timeoutMs=${options.timeoutMs ?? 0}`);
-  console.log(`${timingTag} session=${ownsSession ? 'new' : 'reused'} callerToken=${session.callerToken}`);
+  console.log(`${timingTag} session=${ownsSession ? 'new' : 'reused'} hasCallerToken=true`);
 
   const runAbortController = new AbortController();
   if (options.abortSignal) {

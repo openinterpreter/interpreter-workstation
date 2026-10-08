@@ -2262,7 +2262,7 @@ export async function runCodexAgentTurn(
           '[Agent Runtime] Preserving agent binding because the live Interpreter Overlay session is still attached and must be cleared explicitly.',
           {
             agentId: runtimeBinding.agentId,
-            callerToken,
+            hasCallerToken: true,
             overlaySessionId: activeOverlaySession.id,
             completionStatus,
           },
