@@ -7,6 +7,7 @@ import test from 'node:test';
 
 const workflow = await readFile('.github/workflows/release.yml', 'utf8');
 const electronBuilderConfig = await readFile('electron-builder.yml', 'utf8');
+const publishedVerifier = await readFile('scripts/ci/verify-published-release.mjs', 'utf8');
 
 test('Apple keychain patch matches the locked builder source and edits only a test copy', async () => {
   const manifest = JSON.parse(await readFile('package.json', 'utf8'));
@@ -62,6 +63,7 @@ test('publishing authority is not exposed at job scope', () => {
   assert.equal((publish.match(/AWS_ACCESS_KEY_ID:/g) ?? []).length, 3);
   assert.equal((publish.match(/AWS_SECRET_ACCESS_KEY:/g) ?? []).length, 3);
   assert.equal((publish.match(/GH_TOKEN:/g) ?? []).length, 3);
+  assert.equal((publish.match(/GITHUB_TOKEN:/g) ?? []).length, 1);
 });
 
 test('passwordless Apple certificate is protected before electron-builder imports it', () => {
@@ -101,6 +103,25 @@ test('installed clients discover a release only after GitHub publication', () =>
   ]) {
     assert.match(publish, new RegExp(filename.replaceAll('.', '\\.')));
   }
+});
+
+test('partial publication requires verified current-run Windows and Linux jobs, not macOS assets', () => {
+  const publish = section('  publish:');
+  assert.match(publish, /needs: \[authorize, verify, build\]/);
+  assert.match(publish, /always\(\) && needs\.authorize\.result == 'success'/);
+  assert.match(publish, /needs\.verify\.result == 'success'/);
+  assert.match(publish, /actions: read/);
+  assert.match(publish, /node scripts\/ci\/release-platform-mode\.mjs/);
+  for (const platform of ['windows-x64', 'linux-x64', 'macos-arm64', 'macos-x64']) {
+    assert.match(publish, new RegExp(`name: official-${platform}`));
+  }
+  assert.equal((publish.match(/if: steps\.platforms\.outputs\.mode == 'all'/g) ?? []).length, 2);
+  assert.match(publish, /test ! -e release\/latest-mac\.yml/);
+  assert.match(publish, /previous macOS release remains in place pending Apple notarization/);
+  assert.match(publish, /--notes-file release\/RELEASE_NOTES\.md --draft=false --latest/);
+  assert.match(publishedVerifier, /mode === 'all' \|\| mode === 'windows-linux'/);
+  assert.match(publishedVerifier, /if \(mode === 'all'\) expectedManifestFiles\['latest-mac\.yml'\]/);
+  assert.match(publishedVerifier, /Partial release unexpectedly includes macOS package/);
 });
 
 test('a failed publication can reuse only its exact commit', () => {
