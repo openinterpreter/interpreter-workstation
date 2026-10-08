@@ -57,7 +57,7 @@ describe('ToolManager hidden builtin discovery', () => {
   test('registers Cua Driver only on supported native desktop platforms', () => {
     expect(isCuaDriverSupportedPlatform('darwin')).toBe(true);
     expect(isCuaDriverSupportedPlatform('win32')).toBe(true);
-    expect(isCuaDriverSupportedPlatform('linux')).toBe(false);
+    expect(isCuaDriverSupportedPlatform('linux')).toBe(true);
 
     const serverIds = getBuiltinServersIncludingHidden().map((server) => server.id);
     if (isCuaDriverSupportedPlatform(process.platform)) {

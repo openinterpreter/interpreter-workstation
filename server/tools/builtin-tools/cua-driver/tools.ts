@@ -3871,5 +3871,5 @@ function buildComputerUseTools(): BuiltinToolDefinition[] {
 // Keep the static tool catalog available on every platform. Runtime
 // registration remains guarded by isCuaDriverSupportedPlatform() in
 // builtinTools.ts, while platform-neutral consumers (for example the shared
-// overlay prompt catalog) still need the authoritative schemas on Linux.
+// overlay prompt catalog) still need the authoritative schemas on all hosts.
 export const cuaDriverTools: BuiltinToolDefinition[] = buildComputerUseTools();
