@@ -17,6 +17,7 @@ import {
   macComputerUseScreenshotPathForTest,
   macComputerUseTreeHasWindowContentForTest,
   macToolMayRequireForegroundFocusForTest,
+  nativeLaunchAppArgsForTest,
   parseComputerUseUiElementsForTest,
   resolveMacSelectOptionFromElementsForTest,
   requireWindowTargetIdentityForBoundsForTest,
@@ -31,6 +32,7 @@ import {
 import type { BrowserControlStatus } from '../../../../shared/types/browserControl';
 import type { BrowserAccessPolicy, BrowserAccessPolicyMode, BrowserAccessProfilePolicy } from '../../../../shared/browserAccessPolicy';
 import { approvalManager } from '../../../approvalManager';
+import { isCuaDriverSupportedPlatform } from './index';
 
 function windowsToolResponse(data: unknown): { content: [{ type: 'text'; text: string }] } {
   return {
@@ -135,6 +137,14 @@ function chromeBrowserControlStatus(
 }
 
 describe('Computer Use tool contract', () => {
+  test('registers the existing driver on Linux without changing other platform gates', () => {
+    expect(isCuaDriverSupportedPlatform('linux')).toBe(true);
+    expect(isCuaDriverSupportedPlatform('darwin')).toBe(true);
+    expect(isCuaDriverSupportedPlatform('win32')).toBe(true);
+    expect(isCuaDriverSupportedPlatform('freebsd')).toBe(false);
+    expect(nativeLaunchAppArgsForTest({ app: 'Browser' })).toEqual({ name: 'Browser' });
+    expect(nativeLaunchAppArgsForTest({ app: 'Browser', name: 'Other' })).toEqual({ name: 'Other' });
+  });
   test('exposes the MCP-shaped app-scoped tool surface', () => {
     const contract = computerUseToolContractForTest();
     expect(contract.map((tool) => tool.name)).toEqual([

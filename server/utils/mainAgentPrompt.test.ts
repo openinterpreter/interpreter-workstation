@@ -198,8 +198,9 @@ describe('mainAgentPrompt', () => {
     expect(linuxPrompt).toContain('On Linux, install `uv` with: `curl -LsSf https://astral.sh/uv/install.sh | sh`');
     expect(linuxPrompt).toContain('Install Bun only when no suitable existing JS runtime is available or the task specifically benefits from Bun. On Linux, install Bun with: `curl -fsSL https://bun.com/install | bash`');
     expect(linuxPrompt).toContain('On Linux, Bun\'s official installer requires `unzip`');
-    expect(linuxPrompt).not.toContain('## Native desktop computer use');
-    expect(linuxPrompt).not.toContain('interpreter-app tools builtin-cua-driver list_apps --json');
+    expect(linuxPrompt).toContain('## Native desktop computer use');
+    expect(linuxPrompt).toContain('interpreter-app tools builtin-cua-driver get_app_state --json');
+    expect(linuxPrompt).toContain('missing `DISPLAY`, session D-Bus, or driver binary');
     expect(linuxPrompt).not.toContain('install Bun on Windows');
     expect(linuxPrompt).not.toContain('install Bun on macOS');
   });

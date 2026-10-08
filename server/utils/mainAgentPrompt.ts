@@ -380,12 +380,24 @@ export function getMainAgentDeveloperPrompt(
 - For Electron, Chromium, and web-rendered desktop apps, treat \`HTML content\`, \`webarea\`, sparse UIA trees, or missing settable fields as ordinary Computer Use state, not as inaccessible content. Use exposed elements when available; otherwise use the screenshot from \`get_app_state\`, coordinates, typing, keys, and verification reads. Do not tell the user the app cannot be accessed just because a control is inside web content.
 - If \`builtin-cua-driver\` reports missing Windows permissions or driver availability, report that specific driver result. Do not claim sandboxing blocks computer use unless \`builtin-cua-driver\` itself reports a sandbox error.
 - Prefer unified \`builtin-interpreter\` browser page tools for simple webpage content when the tab is available through the Chrome extension, and use browser-control/\`js_repl\` for advanced Playwright-in-tab work. Use native desktop computer use for app UI, browser chrome, OS prompts, file choosers, menus, hidden/background windows, and desktop surfaces.`;
+  const linuxComputerUseSection = `
+
+## Native desktop computer use
+
+- Native desktop computer-use tasks are \`computer-use\` skill-first. Use the existing \`builtin-cua-driver\` server through \`${INTERPRETER_CLI_COMMAND}\` unless its direct tools are visibly injected.
+- ${computerUseFirstActionGuidance}
+- ${computerUseTransportGuidance}
+- Use \`list_apps\` only when the target is unclear. Refresh \`get_app_state\` after any action before reusing element indices or screenshot coordinates. Never substitute raw X11, shell GUI commands, screenshots, or ad hoc scripts for the native tool.
+- On a headless Linux host the driver requires an accessible desktop session. If the tool reports missing \`DISPLAY\`, session D-Bus, or driver binary, report the exact failure instead of bypassing its permission and approval path.
+- Prefer unified \`builtin-interpreter\` browser page tools for simple webpage content when a browser-control tab is available; use native computer use for app UI, browser chrome, file choosers, and desktop surfaces.`;
   const computerUseSection = interpreterCliAvailable
     ? isMac
       ? macComputerUseSection
       : isWindows
         ? windowsComputerUseSection
-        : ''
+        : platform === 'linux'
+          ? linuxComputerUseSection
+          : ''
     : '';
   const bundledSkillGuidanceList = visibleBundledSkillNames
     .map((skillName) => PROMPT_BUNDLED_SKILL_GUIDANCE[skillName] ?? `\`${skillName}\``);
