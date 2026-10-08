@@ -5,11 +5,11 @@ import { readyWakeSources, wakeSources } from '../../../utils/wakeSourcesRuntime
 /** This tool only edits the caller's own ordinary thread. */
 export const wakeScheduleTool: BuiltinToolDefinition = {
   name: 'interpreter_wake_schedule',
-  description: 'List, add, change, or cancel a time-based user input for this conversation. One-time, interval, and IANA-zone daily schedules wake the same thread; missed occurrences coalesce.',
+  description: 'List, inspect configuration, add, change, or cancel a time-based user input for this conversation. One-time, interval, and IANA-zone daily schedules wake the same thread; missed occurrences coalesce.',
   inputSchema: {
     type: 'object',
     properties: {
-      action: { type: 'string', enum: ['list', 'upsert', 'cancel'] },
+      action: { type: 'string', enum: ['list', 'config', 'upsert', 'cancel'] },
       id: { type: 'string', description: 'Existing schedule ID for edit/cancel; omit for new schedule.' },
       message: { type: 'string', description: 'User input to send when due.' },
       at: { type: 'string', description: 'ISO-8601 date and time of first occurrence.' },
@@ -28,6 +28,14 @@ export const wakeScheduleTool: BuiltinToolDefinition = {
       await readyWakeSources();
       if (args.action === 'list') {
         return { content: [{ type: 'text', text: JSON.stringify(wakeSources.list(threadId).sources.filter(s => s.kind === 'schedule')) }] };
+      }
+      if (args.action === 'config') {
+        return { content: [{ type: 'text', text: JSON.stringify({
+          file: wakeSources.configFilePath(),
+          threadId,
+          schedules: wakeSources.list(threadId).sources.filter(s => s.kind === 'schedule'),
+          edit: 'Use upsert or cancel on this tool; the shared custody file is not a hand-edit interface.',
+        }) }] };
       }
       if (args.action === 'cancel') {
         if (typeof args.id !== 'string') throw new Error('Schedule ID required');
