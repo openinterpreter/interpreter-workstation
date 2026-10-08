@@ -31,6 +31,13 @@ function directory(root: string): string {
 function secureDirectory(root: string, create: boolean): string {
   const dir = directory(root);
   if (create) {
+    mkdirSync(root, { recursive: true, mode: 0o700 });
+    const parent = lstatSync(root);
+    // The application data root can legitimately be traversable; the new
+    // child directory is the mode-0700 confidentiality boundary.
+    if (!parent.isDirectory() || parent.isSymbolicLink() || parent.uid !== process.getuid?.()) {
+      throw new Error('Native caller binding parent is not owned by this runtime');
+    }
     try { mkdirSync(dir, { mode: 0o700 }); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
   }

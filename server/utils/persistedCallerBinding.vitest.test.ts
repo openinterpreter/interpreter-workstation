@@ -19,6 +19,7 @@ describe.skipIf(process.platform !== 'linux')('native caller scope continuity', 
 
   it('recovers only the exact bearer and scoped thread after an in-memory loss without storing token or credential', () => {
     const dir = root();
+    chmodSync(dir, 0o755); // Application data roots may be traversable.
     persistNativeCallerBinding(binding, dir);
     const stored = readFileSync(path.join(dir, 'native-caller-bindings', readdirSync(path.join(dir, 'native-caller-bindings'))[0]), 'utf8');
     expect(stored).not.toContain(token);
