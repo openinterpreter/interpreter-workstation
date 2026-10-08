@@ -4,12 +4,12 @@ import path from 'node:path';
 const pnpmStore = path.resolve('node_modules/.pnpm');
 const entries = await readdir(pnpmStore);
 const packageDirectory = entries.find((entry) => (
-  entry.startsWith('app-builder-lib@26.15.0_')
+  entry.startsWith('app-builder-lib@26.15.3_')
   && !entry.includes('patch_hash=')
 ));
 
 if (!packageDirectory) {
-  throw new Error('Could not locate the pinned app-builder-lib 26.15.0 package');
+  throw new Error('Could not locate the pinned app-builder-lib 26.15.3 package');
 }
 
 const sourcePath = path.join(

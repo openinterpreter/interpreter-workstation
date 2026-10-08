@@ -1,9 +1,39 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, mkdir, readFile, readdir, rm } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
 const workflow = await readFile('.github/workflows/release.yml', 'utf8');
 const electronBuilderConfig = await readFile('electron-builder.yml', 'utf8');
+
+test('Apple keychain patch matches the locked builder source and edits only a test copy', async () => {
+  const manifest = JSON.parse(await readFile('package.json', 'utf8'));
+  const version = manifest.devDependencies['electron-builder'];
+  const patchPath = path.resolve('scripts/ci/patch-electron-builder-keychain.mjs');
+  const patchSource = await readFile(patchPath, 'utf8');
+  assert.ok(patchSource.includes(`app-builder-lib@${version}_`));
+
+  const pnpmStore = path.resolve('node_modules/.pnpm');
+  const directory = (await readdir(pnpmStore)).find((entry) =>
+    entry.startsWith(`app-builder-lib@${version}_`) && !entry.includes('patch_hash='));
+  assert.ok(directory, `Missing locked app-builder-lib ${version}`);
+  const relative = path.join('node_modules/.pnpm', directory,
+    'node_modules/app-builder-lib/out/codeSign/macCodeSign.js');
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'workstation-keychain-patch-'));
+  try {
+    const copied = path.join(temporary, relative);
+    await mkdir(path.dirname(copied), { recursive: true });
+    await copyFile(path.resolve(relative), copied);
+    execFileSync(process.execPath, [patchPath], { cwd: temporary, encoding: 'utf8' });
+    const patched = await readFile(copied, 'utf8');
+    assert.match(patched, /importCerts\(keychainFile, certPaths, cscPasswords, keychainPassword\)/);
+    assert.match(patched, /"set-key-partition-list"[^\n]+"-k", keychainPassword, keychainFile/);
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
 
 function section(start, end) {
   const startIndex = workflow.indexOf(start);
