@@ -81,7 +81,7 @@ async function linuxProcessIdentity(pid: number): Promise<LinuxProcessIdentity |
   // Only legacy locks need a wall-clock comparison. Minimal Linux desktops
   // without getconf still use exact boot/start identity for all new locks.
   let ticksPerSecond: number | undefined;
-  try { ticksPerSecond = Number(execFileSync('getconf', ['CLK_TCK'], { encoding: 'utf8', timeout: 1000 }).trim()); }
+  try { ticksPerSecond = Number(execFileSync('/usr/bin/getconf', ['CLK_TCK'], { encoding: 'utf8', timeout: 1000 }).trim()); }
   catch { /* Legacy live locks remain conservatively owned. */ }
   const uptimeSeconds = Number(uptime.split(' ')[0]);
   return { bootId: bootId.trim(), startTicks,

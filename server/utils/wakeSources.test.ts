@@ -65,7 +65,7 @@ describe('durable thread wake sources', () => {
       await recovered.stop();
     } finally { await f.cleanup(); }
   });
-  test.skipIf(process.platform !== 'linux')('new locks retain exact identity when getconf is unavailable', async () => {
+  test.skipIf(process.platform !== 'linux')('new locks use exact identity without executing a PATH-provided getconf', async () => {
     const f = await fixture();
     const previousPath = process.env.PATH;
     try {
