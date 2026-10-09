@@ -13,15 +13,16 @@ import {
 
 describe('onboarding step registry', () => {
   test('keeps one ordered source of truth for step indices', () => {
-    expect(TOTAL_ONBOARDING_STEPS).toBe(22);
+    expect(TOTAL_ONBOARDING_STEPS).toBe(23);
     expect(ONBOARDING_STEP_INDEX.name).toBe(0);
     expect(ONBOARDING_STEP_INDEX.bucket).toBe(2);
     expect(ONBOARDING_STEP_INDEX['overlay-first-use']).toBe(11);
     expect(ONBOARDING_STEP_INDEX['overlay-permissions']).toBe(12);
     expect(ONBOARDING_STEP_INDEX['tool-addons']).toBe(13);
-    expect(ONBOARDING_STEP_INDEX['ai-setup']).toBe(15);
-    expect(ONBOARDING_STEP_INDEX['model-setup']).toBe(16);
-    expect(ONBOARDING_STEP_INDEX.feedback).toBe(21);
+    expect(ONBOARDING_STEP_INDEX['simple-mcp']).toBe(14);
+    expect(ONBOARDING_STEP_INDEX['ai-setup']).toBe(16);
+    expect(ONBOARDING_STEP_INDEX['model-setup']).toBe(17);
+    expect(ONBOARDING_STEP_INDEX.feedback).toBe(22);
   });
 
   test('derives the active flow from enabled step definitions', () => {

@@ -6,8 +6,55 @@ import path from 'node:path';
 import test from 'node:test';
 
 const workflow = await readFile('.github/workflows/release.yml', 'utf8');
+const signedTestWorkflow = await readFile('.github/workflows/signed-macos-test-build.yml', 'utf8');
 const electronBuilderConfig = await readFile('electron-builder.yml', 'utf8');
 const publishedVerifier = await readFile('scripts/ci/verify-published-release.mjs', 'utf8');
+const licensePolicy = JSON.parse(await readFile('licenses/release-policy.json', 'utf8'));
+
+test('each packaging verifier requires every reviewed license notice', async () => {
+  for (const scriptPath of [
+    'scripts/package-smoke.mjs',
+    'scripts/verify-official-release-candidate.mjs',
+    'scripts/verify-internal-release.mjs',
+  ]) {
+    const source = await readFile(scriptPath, 'utf8');
+    for (const notice of licensePolicy.noticeFiles) {
+      const required = scriptPath.endsWith('package-smoke.mjs')
+        ? notice.split('/').at(-1)
+        : `licenses/${notice.split('/').at(-1)}`;
+      assert.ok(source.includes(`'${required}'`), `${scriptPath} omits ${required}`);
+    }
+  }
+});
+
+test('signed macOS test builds reuse the protected signing boundary without publishing updates', () => {
+  assert.match(signedTestWorkflow, /github\.actor == 'interpreterwork-automation\[bot\]'/);
+  assert.match(signedTestWorkflow, /github\.ref == 'refs\/heads\/main'/);
+  assert.match(signedTestWorkflow, /inputs\.confirm == 'test'/);
+  assert.match(signedTestWorkflow, /environment: production-release/);
+  assert.match(signedTestWorkflow, /runner: macos-26\s+arch: arm64/);
+  assert.match(signedTestWorkflow, /runner: macos-15-intel\s+arch: x64/);
+  assert.match(signedTestWorkflow, /pnpm run package:official -- --mac dmg zip --\$\{\{ matrix\.arch \}\} --publish never/);
+  assert.match(signedTestWorkflow, /codesign --verify --deep --strict/);
+  assert.match(signedTestWorkflow, /spctl --assess --type execute/);
+  assert.match(signedTestWorkflow, /xcrun stapler validate/);
+  assert.match(signedTestWorkflow, /pnpm run release:verify:official-candidate -- --arch=\$\{\{ matrix\.arch \}\}/);
+  assert.match(signedTestWorkflow, /SOURCE_COMMIT/);
+  assert.match(signedTestWorkflow, /SHA256SUMS/);
+  assert.match(signedTestWorkflow, /actions\/upload-artifact@/);
+  assert.doesNotMatch(signedTestWorkflow, /gh release|upload_and_verify|latest\*\.yml|AWS_ACCESS_KEY_ID|contents: write|secrets\.SENTRY_AUTH_TOKEN/);
+
+  const certificateStep = /      - name: Prepare the passwordless macOS signing certificate\n([\s\S]*?)(?=      - name: Build signed and notarized macOS package)/;
+  assert.equal(signedTestWorkflow.match(certificateStep)?.[1],
+    workflow.match(certificateStep)?.[1].replace(/^        if: matrix\.os == 'macos'\n/, ''));
+});
+
+test('macOS candidate verifier selects the matching architecture without changing the production default', async () => {
+  const source = await readFile('scripts/verify-official-release-candidate.mjs', 'utf8');
+  assert.match(source, /archArg\?\.slice\('--arch='\.length\) \?\? 'arm64'/);
+  assert.match(source, /arch !== 'arm64' && arch !== 'x64'/);
+  assert.match(source, /path\.join\(distRoot, `mac-\$\{arch\}`, 'Interpreter\.app'\)/);
+});
 
 test('Apple keychain patch matches the locked builder source and edits only a test copy', async () => {
   const manifest = JSON.parse(await readFile('package.json', 'utf8'));

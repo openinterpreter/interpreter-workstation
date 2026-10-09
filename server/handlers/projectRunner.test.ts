@@ -108,6 +108,7 @@ function killPid(pid: number): void {
 async function waitForCondition(
   predicate: () => Promise<boolean>,
   timeoutMs = 5000,
+  description = 'condition',
 ): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -117,7 +118,7 @@ async function waitForCondition(
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 
-  throw new Error(`Condition not met within ${timeoutMs}ms`);
+  throw new Error(`${description} not met within ${timeoutMs}ms`);
 }
 
 async function isServerReachable(url: string): Promise<boolean> {
@@ -151,6 +152,8 @@ describe('projectRunner', () => {
     expect(message).toBe('Could not start the project because pnpm could not be launched.');
   });
 
+  // Startup and shutdown each have their own 5 s readiness check; Bun's
+  // default 5 s test deadline cannot encompass both even when each succeeds.
   test('kills the detached process group from the exit cleanup hook', async () => {
     if (process.platform === 'win32') {
       return;
@@ -167,14 +170,14 @@ describe('projectRunner', () => {
 
     await waitForCondition(async () => {
       return await isServerReachable(start.state.url!);
-    });
+    }, 5000, 'launcher server readiness');
 
     (cleanupHandler as (code?: number) => void)(0);
 
     await waitForCondition(async () => {
       return !(await isServerReachable(start.state.url!));
-    });
-  });
+    }, 5000, 'launcher server shutdown');
+  }, 15_000);
 
   test('broadcasts project runner updates to every window for the current workspace', async () => {
     const projectDir = await createRunnableProject();

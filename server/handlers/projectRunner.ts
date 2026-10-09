@@ -1,4 +1,4 @@
-import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -133,9 +133,31 @@ function getBroadcastScope(): BroadcastScope | undefined {
   return { workspacePath };
 }
 
+function runtimeSessionProcessIds(leaderPid: number): number[] {
+  try {
+    // pnpm may start `run` scripts in a *new process group* within the
+    // detached runner's session. Killing only -leaderPid leaves that group
+    // (and the web server) alive. Enumerate the exact session while its
+    // leader still exists; do not sweep by command name or project path.
+    const rows = execFileSync('ps', ['-eo', 'pid=,sess='], {
+      encoding: 'utf8', timeout: 2_000, maxBuffer: 8 * 1024 * 1024,
+    });
+    const ids = rows.split('\n').flatMap((row) => {
+      const match = /^\s*(\d+)\s+(\d+)\s*$/.exec(row);
+      return match && Number(match[2]) === leaderPid ? [Number(match[1])] : [];
+    });
+    return ids.includes(leaderPid) ? ids : [];
+  } catch {
+    return [];
+  }
+}
+
 function killRuntimeChild(runtime: ProjectRuntime, signal: NodeJS.Signals): void {
   const pid = runtime.child.pid;
   if (pid && process.platform !== 'win32') {
+    for (const member of runtimeSessionProcessIds(pid).filter((id) => id !== pid)) {
+      try { process.kill(member, signal); } catch { /* Already exited. */ }
+    }
     try {
       process.kill(-pid, signal);
       return;

@@ -222,6 +222,7 @@ interface AgentThreadProps {
   isVisible: boolean;
   onLabelUpdate?: (agentId: string, label: string, isRunning: boolean) => void;
   onMessageCountChange?: (agentId: string, count: number) => void;
+  onLatestAssistantMessage?: (text: string, messageId: string) => void;
   onCodexThreadIdAssigned?: (agentId: string, threadId: string) => void;
   modelConfig: AgentModelConfig;
   didSwitchRuntimeDuringConversation?: boolean;
@@ -236,6 +237,7 @@ interface AgentThreadProps {
   suggestionOverlayHeight?: number;
   onSuggestionOverlayOpacityChange?: (opacity: number) => void;
   readOnly?: boolean;
+  allowConversationRestart?: boolean;
 }
 
 export function AgentThread({
@@ -246,6 +248,7 @@ export function AgentThread({
   isVisible,
   onLabelUpdate,
   onMessageCountChange,
+  onLatestAssistantMessage,
   onCodexThreadIdAssigned,
   workspacePath,
   modelConfig,
@@ -260,6 +263,7 @@ export function AgentThread({
   suggestionOverlayHeight,
   onSuggestionOverlayOpacityChange,
   readOnly = false,
+  allowConversationRestart = true,
 }: AgentThreadProps) {
   const runtimeKey = useMemo(
     () => getAgentThreadRuntimeKey({ agentId, conversationId: providedConversationId }),
@@ -274,6 +278,7 @@ export function AgentThread({
       callerToken={callerToken}
       onLabelUpdate={onLabelUpdate}
       onMessageCountChange={onMessageCountChange}
+      onLatestAssistantMessage={onLatestAssistantMessage}
       modelConfig={modelConfig}
       didSwitchRuntimeDuringConversation={didSwitchRuntimeDuringConversation}
       codexThreadId={codexThreadId}
@@ -289,6 +294,7 @@ export function AgentThread({
       suggestionOverlayHeight={suggestionOverlayHeight}
       onSuggestionOverlayOpacityChange={onSuggestionOverlayOpacityChange}
       readOnly={readOnly}
+      allowConversationRestart={allowConversationRestart}
     />
   );
 }
@@ -299,6 +305,7 @@ function AgentThreadWithRuntime({
   callerToken,
   onLabelUpdate,
   onMessageCountChange,
+  onLatestAssistantMessage,
   modelConfig,
   didSwitchRuntimeDuringConversation,
   codexThreadId,
@@ -314,12 +321,14 @@ function AgentThreadWithRuntime({
   suggestionOverlayHeight,
   onSuggestionOverlayOpacityChange,
   readOnly,
+  allowConversationRestart,
 }: {
   agentId: string;
   isVisible: boolean;
   callerToken: string;
   onLabelUpdate?: (agentId: string, label: string, isRunning: boolean) => void;
   onMessageCountChange?: (agentId: string, count: number) => void;
+  onLatestAssistantMessage?: (text: string, messageId: string) => void;
   modelConfig: AgentModelConfig;
   didSwitchRuntimeDuringConversation?: boolean;
   codexThreadId?: string;
@@ -335,6 +344,7 @@ function AgentThreadWithRuntime({
   suggestionOverlayHeight?: number;
   onSuggestionOverlayOpacityChange?: (opacity: number) => void;
   readOnly: boolean;
+  allowConversationRestart: boolean;
 }) {
   const { showToast } = useToast();
   const handleCommittedUserMessage = useCallback(({ text }: { text: string }) => {
@@ -383,6 +393,7 @@ function AgentThreadWithRuntime({
     onCommittedUserMessage: handleCommittedUserMessage,
   });
   const previousErrorForToastRef = useRef<string | null>(null);
+  const reportedAssistantMessageRef = useRef<string | null>(null);
   const pendingInputs = useSyncExternalStore(
     subscribeAgentPendingInputs,
     () => getAgentPendingInputs(agentId),
@@ -1143,6 +1154,16 @@ function AgentThreadWithRuntime({
   }, [messages.length, agentId, onMessageCountChange]);
 
   useEffect(() => {
+    if (isStreaming || !onLatestAssistantMessage) return;
+    const latest = [...messages].reverse().find((message) => message.role === 'assistant');
+    if (!latest || latest.id === reportedAssistantMessageRef.current) return;
+    const text = textContent(latest).trim();
+    if (!text) return;
+    reportedAssistantMessageRef.current = latest.id;
+    onLatestAssistantMessage(text, latest.id);
+  }, [isStreaming, messages, onLatestAssistantMessage]);
+
+  useEffect(() => {
     if (!historyLoaded) return;
 
     const unreadCount = computeUnreadCount({
@@ -1276,7 +1297,7 @@ function AgentThreadWithRuntime({
         onStopBackgroundProcess={readOnly ? undefined : stopBackgroundProcess}
         isEditorPane={isEditorPane}
         openSettings={readOnly ? undefined : openSettings}
-        onStartNewChatWithHistory={readOnly ? undefined : startNewChatWithHistory}
+        onStartNewChatWithHistory={readOnly || !allowConversationRestart ? undefined : startNewChatWithHistory}
         onRetry={readOnly ? undefined : retryWithContinue}
         showProfileSwitchWarning={didSwitchRuntimeDuringConversation === true}
         suggestionOverlayHeight={suggestionOverlayHeight}

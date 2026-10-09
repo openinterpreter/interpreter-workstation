@@ -3290,6 +3290,14 @@ export function buildInterpreterCliShellEnvironmentPolicy(
   if (resolvedServerConnection) {
     set[INTERPRETER_CLI_SERVER_CONNECTION_ENV] = resolvedServerConnection;
   }
+  // Media providers configured for the local app must also be available to
+  // the agent's intentionally rebuilt shell environment. Codex clears the
+  // parent environment before launching shell tools, so relying on ordinary
+  // process inheritance silently drops this credential.
+  const falKey = env.FAL_KEY?.trim();
+  if (falKey) {
+    set.FAL_KEY = falKey;
+  }
 
   if (platform !== 'win32') {
     ensureInterpreterCliShellInit(platform, shellSafeHomeDir);

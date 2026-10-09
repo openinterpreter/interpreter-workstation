@@ -42,6 +42,7 @@ const TOOL_DISPLAY_INTERNAL = {
   read_multiple_files: { category: 'explore', verb: { active: 'Reading', past: 'Read' } },
   Read: { category: 'explore', verb: { active: 'Reading', past: 'Read' } },
   read_image: { category: 'explore', verb: { active: 'Reading', past: 'Read' } },
+  display_in_simple_mode: { category: 'workstation', verb: { active: 'Displaying', past: 'Displayed' } },
   read_word: { category: 'explore', verb: { active: 'Reading', past: 'Read' } },
   write_file: { category: 'edit', verb: { active: 'Writing', past: 'Wrote' } },
   write_file_content: { category: 'edit', verb: { active: 'Writing', past: 'Wrote' } },
