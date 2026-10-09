@@ -559,7 +559,7 @@ describe("parseError / string patterns", () => {
     assert.equal(r.type, "responses_contract_incompatible");
     assert.equal(
       r.message,
-      "This OpenAI model does not support Interpreter's custom/freeform agent tools. Use gpt-5.4-nano, or another model that supports Responses custom tools.",
+      "This OpenAI model does not support Interpreter's custom/freeform agent tools. Use gpt-5.6-luna, or another model that supports Responses custom tools.",
     );
   });
 

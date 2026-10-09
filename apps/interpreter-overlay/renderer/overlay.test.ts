@@ -106,6 +106,14 @@ describe('overlay interaction pill anchoring', () => {
   });
 });
 
+describe('Simple overlay presentation', () => {
+  test('uses the compact composer instead of the legacy chrome pill', () => {
+    const source = readOverlayRenderer();
+    expect(source).toContain("INTERPRETER_OVERLAY_INPUT_DESIGN === 'pill' && !state.simpleMode");
+    expect(source).toContain('simpleMode={state.simpleMode}');
+  });
+});
+
 describe('overlay executing pill progress', () => {
   test('derives current/total from the reviewed plan and remaining ghosts', () => {
     const { getExecutionPillProgress } = __test__;

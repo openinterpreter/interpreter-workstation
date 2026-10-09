@@ -31,6 +31,7 @@ import { browserPageTypeTool } from './browserPageTypeTool';
 import { browserPageSelectTool } from './browserPageSelectTool';
 import { browserPageScrollTool } from './browserPageScrollTool';
 import { readImageTool } from './readImageTool';
+import { displayInSimpleModeTool } from './displayInSimpleModeTool';
 
 export const interpreterServerDefinition: BuiltinServerDefinition = {
   id: 'builtin-interpreter',
@@ -53,6 +54,7 @@ export const interpreterServerDefinition: BuiltinServerDefinition = {
     customInstructionsSetTool,
     wholeComputerStateGetTool,
     readImageTool,
+    displayInSimpleModeTool,
     browserTabActivateTool,
     browserPageInspectTool,
     browserPageTraceTool,

@@ -99,6 +99,17 @@ export const IPC_CHANNELS = {
   AGENT_THREADS_RENAME: 'agentThreads:rename',
   AGENT_THREADS_ARCHIVE: 'agentThreads:archive',
   AGENT_THREADS_UNARCHIVE: 'agentThreads:unarchive',
+  SIMPLE_PRIMARY_THREAD_GET: 'simplePrimaryThread:get',
+  SIMPLE_PRIMARY_THREAD_BIND: 'simplePrimaryThread:bind',
+  SIMPLE_PRIMARY_THREAD_CLEAR: 'simplePrimaryThread:clear',
+  SIMPLE_PRIMARY_OVERLAY_SUBMIT: 'simplePrimaryThread:overlay-submit',
+  SIMPLE_COMPOSER_STATE_GET: 'simpleComposerState:get',
+  SIMPLE_COMPOSER_STATE_SET: 'simpleComposerState:set',
+  SIMPLE_COMPOSER_STATE_CHANGED: 'simpleComposerState:changed',
+  SIMPLE_LIVE_STATUS: 'simpleLive:status',
+  SIMPLE_LIVE_CONFIGURE: 'simpleLive:configure',
+  SIMPLE_LIVE_CLEAR_CREDENTIAL: 'simpleLive:clear-credential',
+  SIMPLE_LIVE_CREATE_SESSION: 'simpleLive:create-session',
 
   // Profiles (camelCase namespace for browser proxy: profiles.onDefaultChanged)
   PROFILES_LIST: 'profiles:list',
@@ -115,9 +126,12 @@ export const IPC_CHANNELS = {
 
   // Workspace
   WORKSPACE_CHANGED: 'workspace:changed',
+  WORKSPACE_SIMPLE_CHANGED: 'workspace:simple-changed',
   WORKSPACE_FILES_CHANGED: 'workspace:files-changed',
   WORKSPACE_CONFIRMATION_REQUESTED: 'workspace:confirmation-requested',
   WORKSPACE_GET: 'workspace:get',
+  WORKSPACE_GET_SIMPLE: 'workspace:get-simple',
+  WORKSPACE_SET_SIMPLE: 'workspace:set-simple',
   WORKSPACE_CREATE_SAMPLE: 'workspace:create-sample',
   WORKSPACE_SET: 'workspace:set',
   WORKSPACE_CONFIRMATION_RESPOND: 'workspace:confirmation-respond',
@@ -147,6 +161,7 @@ export const IPC_CHANNELS = {
   // Window/Title Bar
   MAC_TITLEBAR_CLICKED: 'mac-titlebar-clicked',
   WINDOW_FULLSCREEN_CHANGED: 'window:fullscreen-changed',
+  WINDOW_FOCUS_CHANGED: 'window:focus-changed',
   WINDOW_CREATE: 'window:create',
   WINDOW_DETACH_TAB: 'window:detach-tab',
   WINDOW_TRANSFER_TAB_OUT: 'window:transfer-tab-out',
@@ -165,6 +180,7 @@ export const IPC_CHANNELS = {
   NEW_SIDEBAR_AGENT: 'new-sidebar-agent',
   OPEN_INBOX: 'open-inbox',
   OPEN_SETTINGS: 'open-settings',
+  SIMPLE_PROJECT_ACTION: 'simple-project-action',
 
   // PDF
   PDF_UPDATE_FORM_DATA: 'pdf:update-form-data',
@@ -361,6 +377,8 @@ export const IPC_CHANNELS = {
   // Programmatic Agent Tasks (camelCase namespace for browser proxy: programmaticTasks.startHeaded / onStarted)
   PROGRAMMATIC_TASK_START_HEADED: 'programmaticTasks:start-headed',
   PROGRAMMATIC_TASK_STARTED: 'programmaticTasks:started',
+  SIMPLE_INTERFACE_AGENT_START: 'simpleInterfaceAgents:start',
+  SIMPLE_INTERFACE_AGENT_EVENT: 'simpleInterfaceAgents:event',
 
   // Feedback
   FEEDBACK_SUBMIT: 'feedback:submit',
@@ -867,6 +885,7 @@ export interface CachedFileTree {
 
 export interface WindowCreateRequest {
   workspacePath?: string | null;
+  simpleProjectPath?: string | null;
   background?: boolean;
 }
 
@@ -1939,6 +1958,10 @@ export interface WindowFullscreenChangedEvent {
   isFullScreen: boolean;
 }
 
+export interface WindowFocusChangedEvent {
+  focused: boolean;
+}
+
 // Subagent Tool Events
 
 export interface SubagentToolCallEvent {
@@ -2009,6 +2032,29 @@ export interface ProgrammaticTaskStartHeadedResult {
 export interface ProgrammaticTaskStartHeadedResponse {
   success: boolean;
   result?: ProgrammaticTaskStartHeadedResult;
+  error?: string;
+}
+
+export interface SimpleInterfaceAgentStartRequest {
+  runId: string;
+  message: string;
+  system?: string;
+  timeoutMs?: number;
+}
+
+export interface SimpleInterfaceAgentEvent {
+  runId: string;
+  event: unknown;
+}
+
+export interface SimpleInterfaceAgentStartResponse {
+  success: boolean;
+  result?: {
+    completed: boolean;
+    threadId?: string;
+    messages: unknown[];
+    error?: string;
+  };
   error?: string;
 }
 

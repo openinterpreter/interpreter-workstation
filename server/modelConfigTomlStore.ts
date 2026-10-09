@@ -4,6 +4,7 @@ import type { Profile } from '../shared/types/profile';
 import type { ModelConfig, TerminalConfig } from '../shared/types/model';
 import { MODEL_OPTIONS } from '../shared/types/model';
 import {
+  API_PROVIDER_MODEL_DEFAULTS,
   getDefaultApiProviderModelId,
   getHostedOnboardingFastProfileId,
   getOnboardingModelPack,
@@ -42,7 +43,9 @@ export interface LoadedModelConfigState {
   authCredentialsMissing: boolean;
 }
 
-const DEFAULT_OPENAI_API_MODEL = getDefaultApiProviderModelId('openai', MODEL_OPTIONS.openai);
+// Recovery has no live provider model list; do not let a stale bundled catalog
+// silently replace the shared OpenAI preset with its first legacy entry.
+const DEFAULT_OPENAI_API_MODEL = API_PROVIDER_MODEL_DEFAULTS.openai;
 const DEFAULT_GROQ_API_MODEL = getDefaultApiProviderModelId('groq', MODEL_OPTIONS.groq);
 const DEFAULT_OPENROUTER_API_MODEL = getDefaultApiProviderModelId('openrouter', MODEL_OPTIONS.openrouter);
 
@@ -920,11 +923,27 @@ function parseModelConfigState(section: unknown, issues?: string[]): ModelConfig
   return state;
 }
 
+function omitNullishTomlValues(value: unknown): JsonValue {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => item !== null && item !== undefined)
+      .map((item) => omitNullishTomlValues(item));
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, item]) => item !== null && item !== undefined)
+        .map(([key, item]) => [key, omitNullishTomlValues(item)]),
+    ) as JsonValue;
+  }
+  return value as JsonValue;
+}
+
 function toTomlSection(state: ModelConfigState): Record<string, JsonValue> {
   const section: Record<string, JsonValue> = {
     storage_version: MODEL_CONFIG_STORAGE_VERSION,
-    profiles: state.profiles as unknown as JsonValue,
-    providers: state.providers as unknown as JsonValue,
+    profiles: omitNullishTomlValues(state.profiles),
+    providers: omitNullishTomlValues(state.providers),
   };
 
   if (state.defaultProfileId) {

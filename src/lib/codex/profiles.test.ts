@@ -121,7 +121,7 @@ describe("codex profiles", () => {
   test("uses OpenAI's recommended speed and cost default for the OpenAI API preset", () => {
     const preset = getCustomPreset("openai-api");
     assert.ok(preset, "openai-api preset should exist");
-    assert.equal(preset.defaultModel, "gpt-5.4-nano");
+    assert.equal(preset.defaultModel, "gpt-5.6-luna");
   });
 
   test("preserves legacy NVIDIA runtime inference without advertising verified Responses support", () => {

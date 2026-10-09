@@ -42,6 +42,11 @@ import { ModelSetupScreen, type ModelPackReviewState } from './screens/ModelSetu
 import { StayConnectedScreen } from './screens/StayConnectedScreen';
 import { FeedbackScreen } from './screens/FeedbackScreen';
 import { WorkspaceChoiceScreen } from './screens/WorkspaceChoiceScreen';
+import { SimpleWorkspaceChoiceScreen } from './screens/SimpleWorkspaceChoiceScreen';
+import { SimpleConnectionsScreen } from './screens/SimpleConnectionsScreen';
+import { SimpleBrowserSetupScreen } from './screens/SimpleBrowserSetupScreen';
+import { SimpleMcpSetupScreen } from './screens/SimpleMcpSetupScreen';
+import { discoverSimpleMcps, shouldShowSimpleMcpStep, type SimpleMcpSummary } from './simpleSetupDiscovery';
 import { AiSetupScreen } from './screens/AiSetupScreen';
 import { OverlayFirstUseScreen } from './screens/OverlayFirstUseScreen';
 import { OverlayPermissionsScreen } from './screens/OverlayPermissionsScreen';
@@ -82,6 +87,7 @@ const STEP_FEATURE_2 = ONBOARDING_STEP_INDEX['feature-2'];
 const STEP_FEATURE_3 = ONBOARDING_STEP_INDEX['feature-3'];
 const STEP_FEATURE_4 = ONBOARDING_STEP_INDEX['feature-4'];
 const STEP_TOOL_ADDONS = ONBOARDING_STEP_INDEX['tool-addons'];
+const STEP_SIMPLE_MCP = ONBOARDING_STEP_INDEX['simple-mcp'];
 const STEP_OVERLAY_FIRST_USE = ONBOARDING_STEP_INDEX['overlay-first-use'];
 const STEP_OVERLAY_PERMISSIONS = ONBOARDING_STEP_INDEX['overlay-permissions'];
 const STEP_MODEL_SETUP = ONBOARDING_STEP_INDEX['model-setup'];
@@ -94,6 +100,16 @@ const STEP_FEEDBACK = ONBOARDING_STEP_INDEX.feedback;
 
 const ENABLED_STEPS = ENABLED_ONBOARDING_STEP_INDICES;
 const STEPS_WITHOUT_BUCKET = ONBOARDING_STEPS_WITHOUT_BUCKET_INDICES;
+const SIMPLE_ENABLED_STEPS = [
+  STEP_NAME,
+  STEP_PRIVACY,
+  STEP_TOOL_ADDONS,
+  STEP_MODEL_SETUP,
+  STEP_MODEL_REVIEW,
+  STEP_MODEL_CREDITS,
+  STEP_STAY_CONNECTED,
+  STEP_WORKSPACE_CHOICE,
+];
 const ONBOARDING_PROFILE_LOAD_TIMEOUT_MS = 1500;
 const ONBOARDING_PROFILE_LOAD_MAX_ATTEMPTS = 3;
 
@@ -284,11 +300,12 @@ const SCREEN_VARIANTS = {
 
 interface OnboardingOverlayContentProps {
   onComplete: () => void;
+  simpleMode: boolean;
 }
 
 type ThemeOption = 'light' | 'dark' | 'system';
 
-function OnboardingOverlayContent({ onComplete }: OnboardingOverlayContentProps) {
+function OnboardingOverlayContent({ onComplete, simpleMode }: OnboardingOverlayContentProps) {
   "use no memo";
 
   const { t } = useTranslation();
@@ -307,7 +324,19 @@ function OnboardingOverlayContent({ onComplete }: OnboardingOverlayContentProps)
   const { user, session } = useAuth();
   const { totalCredits } = useInterpreterTokenUsage();
   const [showInterpreterCreditsStep, setShowInterpreterCreditsStep] = useState(false);
+  const [simpleMcpSummary, setSimpleMcpSummary] = useState<SimpleMcpSummary | null>(null);
+  const [simpleDiscoveryReady, setSimpleDiscoveryReady] = useState(!simpleMode);
   const restoredStepFromProgressRef = useRef(false);
+
+  useEffect(() => {
+    if (!simpleMode) return;
+    let active = true;
+    void discoverSimpleMcps()
+      .then((summary) => { if (active) setSimpleMcpSummary(summary); })
+      .catch(() => { /* Optional discovery must not show an empty MCP step. */ })
+      .finally(() => { if (active) setSimpleDiscoveryReady(true); });
+    return () => { active = false; };
+  }, [simpleMode]);
 
   // Track every onboarding step transition
   useEffect(() => {
@@ -332,18 +361,22 @@ function OnboardingOverlayContent({ onComplete }: OnboardingOverlayContentProps)
   );
 
   const activeStepIndices = useMemo(() => {
-    const steps = isDetectionComplete && detectionResults?.isConfident
-      ? STEPS_WITHOUT_BUCKET
-      : ENABLED_STEPS;
+    const steps = simpleMode
+      ? shouldShowSimpleMcpStep(simpleMcpSummary)
+        ? [...SIMPLE_ENABLED_STEPS.slice(0, 3), STEP_SIMPLE_MCP, ...SIMPLE_ENABLED_STEPS.slice(3)]
+        : SIMPLE_ENABLED_STEPS
+      : isDetectionComplete && detectionResults?.isConfident
+        ? STEPS_WITHOUT_BUCKET
+        : ENABLED_STEPS;
     return withInterpreterCreditsStep(steps, showInterpreterCreditsStep);
-  }, [detectionResults?.isConfident, isDetectionComplete, showInterpreterCreditsStep]);
+  }, [detectionResults?.isConfident, isDetectionComplete, showInterpreterCreditsStep, simpleMode, simpleMcpSummary]);
 
   useEffect(() => {
     setActiveSteps(activeStepIndices);
   }, [activeStepIndices, setActiveSteps]);
 
   useEffect(() => {
-    if (restoredStepFromProgressRef.current || !isDetectionComplete) return;
+    if (restoredStepFromProgressRef.current || !isDetectionComplete || !simpleDiscoveryReady) return;
     restoredStepFromProgressRef.current = true;
     getOnboardingState()
       .then(({ state }) => {
@@ -359,7 +392,7 @@ function OnboardingOverlayContent({ onComplete }: OnboardingOverlayContentProps)
       .catch((error) => {
         console.error('[Onboarding] Failed to restore onboarding progress:', error);
       });
-  }, [activeStepIndices, currentStep, goToStep, isDetectionComplete]);
+  }, [activeStepIndices, currentStep, goToStep, isDetectionComplete, simpleDiscoveryReady]);
 
   useEffect(() => {
     if (!isDetectionComplete || !detectionResults) return;
@@ -546,9 +579,13 @@ function OnboardingOverlayContent({ onComplete }: OnboardingOverlayContentProps)
     return true;
   }, [activeStepIndices, completeOnboarding, goToStep, onComplete]);
 
-  const handleWorkspaceChoiceFinish = useCallback(() => {
+  const handleWorkspaceChoiceFinish = useCallback(async () => {
+    if (simpleMode) {
+      await handleOnboardingComplete();
+      return;
+    }
     goToStep(STEP_FEEDBACK);
-  }, [goToStep]);
+  }, [goToStep, handleOnboardingComplete, simpleMode]);
 
   const handleAiSetupComplete = useCallback(async (answers: OnboardingInterviewAnswers) => {
     const { interviewDraft, interviewResult } = buildOnboardingInterviewResult(
@@ -728,12 +765,17 @@ function OnboardingOverlayContent({ onComplete }: OnboardingOverlayContentProps)
           />
         );
       case STEP_TOOL_ADDONS:
+        if (simpleMode) return <SimpleBrowserSetupScreen onNext={goForward} discoveryReady={simpleDiscoveryReady} />;
         return (
           <ToolAddonsScreen
             onNext={goForward}
             bucket={bucket}
           />
         );
+      case STEP_SIMPLE_MCP:
+        return simpleMode && shouldShowSimpleMcpStep(simpleMcpSummary) && simpleMcpSummary
+          ? <SimpleMcpSetupScreen summary={simpleMcpSummary} onNext={goForward} />
+          : null;
       case STEP_OVERLAY_FIRST_USE:
         return <OverlayFirstUseScreen onNext={goForward} />;
       case STEP_OVERLAY_PERMISSIONS:
@@ -754,6 +796,7 @@ function OnboardingOverlayContent({ onComplete }: OnboardingOverlayContentProps)
           />
         );
       case STEP_STAY_CONNECTED:
+        if (simpleMode) return <SimpleConnectionsScreen onNext={goForward} />;
         return (
           <StayConnectedScreen
             authenticatedEmail={user?.email ?? undefined}
@@ -763,7 +806,9 @@ function OnboardingOverlayContent({ onComplete }: OnboardingOverlayContentProps)
           />
         );
       case STEP_WORKSPACE_CHOICE:
-        return <WorkspaceChoiceScreen onFinish={handleWorkspaceChoiceFinish} />;
+        return simpleMode
+          ? <SimpleWorkspaceChoiceScreen onFinish={handleWorkspaceChoiceFinish} />
+          : <WorkspaceChoiceScreen onFinish={handleWorkspaceChoiceFinish} />;
       case STEP_AI_SETUP:
         return <AiSetupScreen onComplete={handleAiSetupComplete} />;
       case STEP_FEEDBACK:
@@ -835,12 +880,13 @@ function OnboardingOverlayContent({ onComplete }: OnboardingOverlayContentProps)
 interface OnboardingOverlayProps {
   /** Called when onboarding is complete and the overlay should begin its exit */
   onComplete: () => void;
+  simpleMode?: boolean;
 }
 
-export function OnboardingOverlay({ onComplete }: OnboardingOverlayProps) {
+export function OnboardingOverlay({ onComplete, simpleMode = false }: OnboardingOverlayProps) {
   return (
     <OnboardingProvider totalSteps={TOTAL_STEPS}>
-      <OnboardingOverlayContent onComplete={onComplete} />
+      <OnboardingOverlayContent onComplete={onComplete} simpleMode={simpleMode} />
     </OnboardingProvider>
   );
 }

@@ -69,6 +69,21 @@ describe("thread history guards", () => {
     assert.equal(isThreadReadResponse({ thread: invalidThread }), false);
   });
 
+  test("should_accept_current_codex_thread_item_types", () => {
+    const thread = makeValidThread();
+    (thread.turns[0]!.items as Array<unknown>).push(
+      {
+        type: "subAgentActivity",
+        id: "activity-1",
+        kind: { type: "spawn" },
+        agentThreadId: "thread-2",
+        agentPath: "/root/research",
+      },
+      { type: "sleep", id: "sleep-1", durationMs: 100 },
+    );
+    assert.equal(isThreadReadResponse({ thread }), true);
+  });
+
   test("should_reject_thread_when_turn_status_is_invalid", () => {
     const invalidThread = makeValidThread();
     (invalidThread.turns[0] as { status: string }).status = "done";

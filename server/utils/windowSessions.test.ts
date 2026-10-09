@@ -8,12 +8,14 @@ import {
   getWindowSessionKeyForWindowId,
   getWindowSessionKeysForWorkspace,
   getWindowSessionWorkspace,
+  getWindowSessionSimpleProject,
   listWindowSessions,
   registerWindowSession,
   resolveSessionWorkspaceOverride,
   runWithWindowSessionOverride,
   unregisterWindowSession,
   updateWindowSessionWorkspace,
+  updateWindowSessionSimpleProject,
 } from './windowSessions';
 
 const registeredWindowIds = new Set<number>();
@@ -47,6 +49,23 @@ describe('windowSessions', () => {
     expect(getWindowSessionKeysForWorkspace('/workspace/two')).toEqual(['session-a']);
     expect(getWindowIdsForWorkspace('/workspace/two')).toEqual([101]);
     expect(listWindowSessions()).toHaveLength(1);
+  });
+
+  it('keeps the active Simple interface scoped to its owning window', () => {
+    registerWindowSession({
+      sessionKey: 'simple-a', windowId: 111, workspacePath: '/control', simpleProjectPath: '/interfaces/a',
+    });
+    registerWindowSession({
+      sessionKey: 'simple-b', windowId: 112, workspacePath: '/control', simpleProjectPath: '/interfaces/b',
+    });
+    registeredWindowIds.add(111);
+    registeredWindowIds.add(112);
+
+    expect(getWindowSessionSimpleProject('simple-a')).toBe('/interfaces/a');
+    expect(getWindowSessionSimpleProject('simple-b')).toBe('/interfaces/b');
+    updateWindowSessionSimpleProject('simple-a', '/interfaces/c');
+    expect(getWindowSessionSimpleProject('simple-a')).toBe('/interfaces/c');
+    expect(getWindowSessionSimpleProject('simple-b')).toBe('/interfaces/b');
   });
 
   it('replaces an existing session when a window id is reused', () => {
