@@ -121,6 +121,20 @@ async function deleteProfiles(page: import('@playwright/test').Page, profileIds:
   }
 }
 
+async function selectAdvancedMode(page: import('@playwright/test').Page): Promise<void> {
+  // This suite exercises the Advanced composer and settings popover. Simple is
+  // the default, including after clearUserConfig reloads the renderer.
+  await page.evaluate(() => (window as any).electron.uiSettings.setAdvancedMode(true));
+  await expect(page.locator('.app-workspace-shell')).toBeVisible({ timeout: 15000 });
+  await expect(page.locator(sel('agentSettingsButton'))).toBeVisible({ timeout: 15000 });
+}
+
+async function resetToAdvancedMode(page: import('@playwright/test').Page): Promise<void> {
+  await clearUserConfig(page);
+  await waitForAppReady(page);
+  await selectAdvancedMode(page);
+}
+
 test.describe('Reasoning and profile switching', () => {
   test('settings does not expose hosted profile reasoning defaults', async ({ page }) => {
     test.setTimeout(60000);
@@ -128,8 +142,7 @@ test.describe('Reasoning and profile switching', () => {
     const profileId = `reasoning-default-${Date.now()}`;
     try {
       writeOpenRouterReasoningModelCache();
-      await clearUserConfig(page);
-      await waitForAppReady(page);
+      await resetToAdvancedMode(page);
       await createHostedProfile(page, {
         id: profileId,
         name: 'Reasoning Default Test',
@@ -171,8 +184,7 @@ test.describe('Reasoning and profile switching', () => {
     };
     try {
       writeOpenRouterReasoningModelCache();
-      await clearUserConfig(page);
-      await waitForAppReady(page);
+      await resetToAdvancedMode(page);
       await createHostedProfile(page, profileA);
       await createHostedProfile(page, profileB);
 
@@ -288,8 +300,7 @@ test.describe('Reasoning and profile switching', () => {
       releaseSecondStream = resolve;
     });
 
-    await clearUserConfig(page);
-    await waitForAppReady(page);
+    await resetToAdvancedMode(page);
     await setWorkspace(page, getTestWorkspace());
 
     await page.route('**/api/agent/chat/stream**', async (route) => {
@@ -381,8 +392,7 @@ test.describe('Reasoning and profile switching', () => {
 
     try {
       writeOpenRouterReasoningModelCache();
-      await clearUserConfig(page);
-      await waitForAppReady(page);
+      await resetToAdvancedMode(page);
       await createHostedProfile(page, profileA);
       await createHostedProfile(page, profileB);
 
@@ -514,8 +524,7 @@ test.describe('Reasoning and profile switching', () => {
 
     const createdProfileIds: string[] = [];
     try {
-      await clearUserConfig(page);
-      await waitForAppReady(page);
+      await resetToAdvancedMode(page);
 
       const runId = Date.now();
       const createdProfiles: string[] = [];
@@ -580,8 +589,7 @@ test.describe('Reasoning and profile switching', () => {
     test.setTimeout(60000);
 
     const threadId = randomUUID();
-    await clearUserConfig(page);
-    await waitForAppReady(page);
+    await resetToAdvancedMode(page);
 
     const workspaceA = getTestWorkspace();
     const workspaceB = fs.mkdtempSync(path.join(os.tmpdir(), 'workstation-chat-workspace-'));
@@ -626,6 +634,8 @@ test.describe('Reasoning and profile switching', () => {
 
   test('reloading the app keeps the active conversation on the same thread and model', async ({ page }) => {
     test.setTimeout(60000);
+
+    await selectAdvancedMode(page);
 
     const threadId = randomUUID();
     const profile = {
