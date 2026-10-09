@@ -79,13 +79,15 @@ versions are recorded in each package's `versions.json`.
 - Current source archive: https://github.com/lovell/sharp-libvips/archive/refs/tags/v1.3.3.tar.gz
 - v1.3.4 packaging/build source: https://github.com/lovell/sharp-libvips/tree/v1.3.4
 - v1.3.4 source archive: https://github.com/lovell/sharp-libvips/archive/refs/tags/v1.3.4.tar.gz
+- Updated packaging/build source, as identified by the published npm package:
+  https://github.com/lovell/sharp-libvips/tree/ebb95f8add54eee8bed840e3fb587e4cbec857d7
 - Preserved upstream component notices:
   `sharp-libvips-v1.2.4-THIRD-PARTY-NOTICES.md` and
   `sharp-libvips-v1.3.2-THIRD-PARTY-NOTICES.md`, and
   `sharp-libvips-v1.3.3-THIRD-PARTY-NOTICES.md`, and
-  `sharp-libvips-v1.3.4-THIRD-PARTY-NOTICES.md` (links to upstream's exact
-  component notices; cairo is MPL 1.1 in that release)
-- License texts: `LGPL-3.0.txt` and its incorporated `GPL-3.0.txt`
+  `sharp-libvips-v1.3.4-THIRD-PARTY-NOTICES.md`
+- License texts: `LGPL-3.0.txt`, its incorporated `GPL-3.0.txt`, and
+  `MPL-1.1.txt` for cairo as identified in the 1.3.4 component notices
 
 The frozen pnpm inventory conservatively reports the 1.3.4 packages even when a
 target artifact does not contain them. The separately generated browser relay

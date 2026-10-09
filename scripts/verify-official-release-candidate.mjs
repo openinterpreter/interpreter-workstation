@@ -8,7 +8,12 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const distRoot = path.join(root, 'dist');
-const appBundle = path.join(distRoot, 'mac-arm64', 'Interpreter.app');
+const archArg = process.argv.slice(2).find((arg) => arg.startsWith('--arch='));
+const arch = archArg?.slice('--arch='.length) ?? 'arm64';
+if (arch !== 'arm64' && arch !== 'x64') {
+  throw new Error(`Unsupported macOS release candidate architecture: ${arch}`);
+}
+const appBundle = path.join(distRoot, `mac-${arch}`, 'Interpreter.app');
 const resources = path.join(appBundle, 'Contents', 'Resources');
 const appAsar = path.join(resources, 'app.asar');
 const infoPlist = path.join(appBundle, 'Contents', 'Info.plist');
@@ -47,9 +52,11 @@ for (const relativePath of [
   'licenses/sharp-libvips-v1.2.4-THIRD-PARTY-NOTICES.md',
   'licenses/sharp-libvips-v1.3.2-THIRD-PARTY-NOTICES.md',
   'licenses/sharp-libvips-v1.3.3-THIRD-PARTY-NOTICES.md',
+  'licenses/sharp-libvips-v1.3.4-THIRD-PARTY-NOTICES.md',
   'licenses/release-policy.json',
   'licenses/LGPL-3.0.txt',
   'licenses/GPL-3.0.txt',
+  'licenses/MPL-1.1.txt',
   'oix/bin/interpreter',
   'oix/bin/i',
   'cua-driver/cua-driver',

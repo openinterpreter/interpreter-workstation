@@ -719,7 +719,7 @@ describe("formatTurnError", () => {
     );
     assert.equal(
       result,
-      "This OpenAI model does not support Interpreter's custom/freeform agent tools. Use gpt-5.4-nano, or another model that supports Responses custom tools.",
+      "This OpenAI model does not support Interpreter's custom/freeform agent tools. Use gpt-5.6-luna, or another model that supports Responses custom tools.",
     );
   });
 
@@ -733,7 +733,7 @@ describe("formatTurnError", () => {
     );
     assert.equal(
       result,
-      "This OpenAI model does not support Interpreter's custom/freeform agent tools. Use gpt-5.4-nano, or another model that supports Responses custom tools.",
+      "This OpenAI model does not support Interpreter's custom/freeform agent tools. Use gpt-5.6-luna, or another model that supports Responses custom tools.",
     );
   });
 
@@ -747,7 +747,7 @@ describe("formatTurnError", () => {
     );
     assert.equal(
       result,
-      "This OpenAI model does not support Interpreter's custom/freeform agent tools. Use gpt-5.4-nano, or another model that supports Responses custom tools.",
+      "This OpenAI model does not support Interpreter's custom/freeform agent tools. Use gpt-5.6-luna, or another model that supports Responses custom tools.",
     );
   });
 
@@ -761,7 +761,7 @@ describe("formatTurnError", () => {
     );
     assert.equal(
       result,
-      "This OpenAI model does not support Interpreter's custom/freeform agent tools. Use gpt-5.4-nano, or another model that supports Responses custom tools.",
+      "This OpenAI model does not support Interpreter's custom/freeform agent tools. Use gpt-5.6-luna, or another model that supports Responses custom tools.",
     );
   });
 

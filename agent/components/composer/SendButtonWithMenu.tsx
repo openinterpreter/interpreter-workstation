@@ -28,6 +28,7 @@ interface SendButtonWithMenuProps {
   disabled?: boolean;
   showOnboardingPulse?: boolean;
   onOnboardingPulseEnd?: () => void;
+  conciseStreamingActions?: boolean;
 }
 
 export function SendButtonWithMenu({
@@ -42,6 +43,7 @@ export function SendButtonWithMenu({
   disabled,
   showOnboardingPulse = false,
   onOnboardingPulseEnd,
+  conciseStreamingActions = false,
 }: SendButtonWithMenuProps) {
   const { t } = useTranslation();
   const isStopMode = isStreaming && !hasInput;
@@ -62,7 +64,7 @@ export function SendButtonWithMenu({
     {
       key: 'after-next-tool',
       icon: <CornerDownRight className="size-4" />,
-      label: t('composer.sendMenu.afterNextToolCall'),
+      label: conciseStreamingActions ? 'Steer' : t('composer.sendMenu.afterNextToolCall'),
       helpTitle: t('composer.sendMenu.afterNextToolCall'),
       helpDescription: t('composer.sendMenu.afterNextToolCallDescription'),
       onClick: onSendAfterNextTool,
@@ -70,12 +72,13 @@ export function SendButtonWithMenu({
     {
       key: 'queue-end-of-turn',
       icon: <Clock3 className="size-4" />,
-      label: t('composer.sendMenu.endOfTurn'),
+      label: conciseStreamingActions ? 'Queue' : t('composer.sendMenu.endOfTurn'),
       helpTitle: t('composer.sendMenu.endOfTurn'),
       helpDescription: t('composer.sendMenu.endOfTurnDescription'),
+      trailing: conciseStreamingActions ? <span className="text-xs opacity-55">⌘↵</span> : undefined,
       onClick: onQueueForEndOfTurn,
     },
-  ], [onQueueForEndOfTurn, onSendAfterNextTool, t]);
+  ], [conciseStreamingActions, onQueueForEndOfTurn, onSendAfterNextTool, t]);
 
   const isButtonDisabled = isStopMode ? false : disabled;
 
