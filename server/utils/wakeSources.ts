@@ -1,6 +1,6 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { spawn } from 'node:child_process';
-import { mkdir, readFile, open, rename, rm } from 'node:fs/promises';
+import { execFileSync, spawn } from 'node:child_process';
+import { mkdir, readFile, open, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { getInterpreterAppDataDir } from '../configStore';
 import { nextCivilDaily } from './civilSchedule';
@@ -63,6 +63,25 @@ export function wakeTokenValid(actual: string | undefined, supplied: string | un
   const a = Buffer.from(actual);
   const b = Buffer.from(supplied);
   return a.length === b.length && timingSafeEqual(a, b);
+}
+
+type LinuxProcessIdentity = { bootId: string; startTicks: string; startedAtMs: number };
+async function linuxProcessIdentity(pid: number): Promise<LinuxProcessIdentity | undefined> {
+  if (process.platform !== 'linux') return undefined;
+  // /proc/<pid>/stat has a parenthesized command which may itself contain spaces.
+  const [raw, bootId, uptime] = await Promise.all([
+    readFile(`/proc/${pid}/stat`, 'utf8'),
+    readFile('/proc/sys/kernel/random/boot_id', 'utf8'),
+    readFile('/proc/uptime', 'utf8'),
+  ]);
+  const fields = raw.slice(raw.lastIndexOf(')') + 2).trim().split(/\s+/);
+  const startTicks = fields[19]; // field 22, after pid and comm
+  const ticksPerSecond = Number(execFileSync('getconf', ['CLK_TCK'], { encoding: 'utf8', timeout: 1000 }).trim());
+  const uptimeSeconds = Number(uptime.split(' ')[0]);
+  if (!/^\d+$/.test(startTicks) || !Number.isSafeInteger(ticksPerSecond) || ticksPerSecond < 1 ||
+      !Number.isFinite(uptimeSeconds) || uptimeSeconds < 0) throw new Error('Process identity unavailable');
+  return { bootId: bootId.trim(), startTicks,
+    startedAtMs: Date.now() - (uptimeSeconds - Number(startTicks) / ticksPerSecond) * 1000 };
 }
 
 export interface WakeNative {
@@ -154,6 +173,9 @@ export class WakeSources {
   }
 
   private async claimOwner(): Promise<void> {
+    // Resolve our identity before creating a lock, so an unavailable /proc or
+    // getconf never strands a newly created, ownerless lock directory.
+    const ownIdentity = await linuxProcessIdentity(process.pid);
     try {
       await mkdir(this.lock, { mode: 0o700 });
     } catch (error) {
@@ -163,16 +185,34 @@ export class WakeSources {
       const recovery = `${this.lock}.recovery`;
       await mkdir(recovery, { mode: 0o700 });
       try {
-        const prior = JSON.parse(await readFile(path.join(this.lock, 'owner.json'), 'utf8')) as { pid: number; owner: string };
+        const ownerFile = path.join(this.lock, 'owner.json');
+        const prior = JSON.parse(await readFile(ownerFile, 'utf8')) as {
+          pid: number; owner: string; linuxIdentity?: Pick<LinuxProcessIdentity, 'bootId' | 'startTicks'>
+        };
         if (!Number.isInteger(prior.pid) || typeof prior.owner !== 'string') throw new Error('Invalid wake owner');
-        try { process.kill(prior.pid, 0); throw new Error('Another Workstation owns wake dispatch'); }
-        catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ESRCH') throw e; }
+        let alive = true;
+        try { process.kill(prior.pid, 0); }
+        catch (e) { if ((e as NodeJS.ErrnoException).code === 'ESRCH') alive = false; else throw e; }
+        if (alive) {
+          // A PID can be recycled across host restarts. Never evict a live
+          // matching process; fail closed when the identity cannot be proved.
+          const current = await linuxProcessIdentity(prior.pid);
+          if (!current || (prior.linuxIdentity
+            ? current.bootId === prior.linuxIdentity.bootId && current.startTicks === prior.linuxIdentity.startTicks
+            : current.startedAtMs <= (await stat(ownerFile)).mtimeMs + 60_000)) {
+            throw new Error('Another Workstation owns wake dispatch');
+          }
+        }
         await rm(this.lock, { recursive: true });
         await mkdir(this.lock, { mode: 0o700 });
       } finally { await rm(recovery, { recursive: true, force: true }); }
     }
     const handle = await open(path.join(this.lock, 'owner.json'), 'wx', 0o600);
-    try { await handle.writeFile(JSON.stringify({ pid: process.pid, owner: this.owner })); await handle.sync(); }
+    try {
+      await handle.writeFile(JSON.stringify({ pid: process.pid, owner: this.owner,
+        ...(ownIdentity && { linuxIdentity: { bootId: ownIdentity.bootId, startTicks: ownIdentity.startTicks } }) }));
+      await handle.sync();
+    }
     finally { await handle.close(); }
   }
 
