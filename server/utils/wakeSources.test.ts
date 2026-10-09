@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { WakeSources, wakeClientId, wakeInput, wakeTokenValid, type WakeNative } from './wakeSources';
@@ -27,6 +27,59 @@ async function fixture() {
 }
 
 describe('durable thread wake sources', () => {
+  test.skipIf(process.platform !== 'linux')('reclaims a legacy lock after PID reuse, without evicting a live owner', async () => {
+    const f = await fixture();
+    try {
+      const lock = path.join(f.root, 'wake-sources.json.owner');
+      await mkdir(lock);
+      const ownerFile = path.join(lock, 'owner.json');
+      await writeFile(ownerFile, JSON.stringify({ pid: process.pid, owner: 'prior-process' }));
+      const old = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      await utimes(ownerFile, old, old);
+      const wake = await f.make();
+      const owner = JSON.parse(await readFile(ownerFile, 'utf8'));
+      expect(owner.pid).toBe(process.pid);
+      expect(owner.owner).not.toBe('prior-process');
+      expect(owner.linuxIdentity.startTicks).toMatch(/^\d+$/);
+      const competitor = new WakeSources({ inspect: async () => ({ messages: [] }),
+        steer: async () => '', start: async () => '' }, f.root);
+      await expect(competitor.initialize()).rejects.toThrow('Another Workstation owns wake dispatch');
+      await wake.stop();
+    } finally { await f.cleanup(); }
+  });
+  test.skipIf(process.platform !== 'linux')('retains a fresh legacy owner and recovers a mismatched process identity', async () => {
+    const f = await fixture();
+    const lock = path.join(f.root, 'wake-sources.json.owner');
+    const ownerFile = path.join(lock, 'owner.json');
+    const native: WakeNative = { inspect: async () => ({ messages: [] }),
+      steer: async () => '', start: async () => '' };
+    try {
+      await mkdir(lock);
+      await writeFile(ownerFile, JSON.stringify({ pid: process.pid, owner: 'live-legacy' }));
+      await expect(new WakeSources(native, f.root).initialize()).rejects.toThrow('Another Workstation owns wake dispatch');
+      expect(JSON.parse(await readFile(ownerFile, 'utf8')).owner).toBe('live-legacy');
+      await writeFile(ownerFile, JSON.stringify({ pid: process.pid, owner: 'old-pid',
+        linuxIdentity: { bootId: 'previous-boot', startTicks: '0' } }));
+      const recovered = await f.make();
+      expect(JSON.parse(await readFile(ownerFile, 'utf8')).owner).not.toBe('old-pid');
+      await recovered.stop();
+    } finally { await f.cleanup(); }
+  });
+  test.skipIf(process.platform !== 'linux')('new locks use exact identity without executing a PATH-provided getconf', async () => {
+    const f = await fixture();
+    const previousPath = process.env.PATH;
+    try {
+      process.env.PATH = '';
+      const wake = await f.make();
+      const owner = JSON.parse(await readFile(path.join(f.root, 'wake-sources.json.owner', 'owner.json'), 'utf8'));
+      expect(owner.linuxIdentity.startTicks).toMatch(/^\d+$/);
+      expect(owner.linuxIdentity.bootId).toMatch(/^[0-9a-f-]{36}$/);
+      await wake.stop();
+    } finally {
+      process.env.PATH = previousPath;
+      await f.cleanup();
+    }
+  });
   test('a second dispatcher cannot own the same home; a dead owner is recovered', async () => {
     const f = await fixture();
     try {
