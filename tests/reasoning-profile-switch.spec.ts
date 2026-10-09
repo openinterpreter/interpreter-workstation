@@ -436,7 +436,12 @@ test.describe('Reasoning and profile switching', () => {
       await popover.locator(sel.profileCard(profileA.id)).press('Enter');
       await expect(popover).toHaveAttribute('data-state', 'closed', { timeout: 5000 });
 
-      await composer.click();
+      // Profile persistence and editor layout settle independently. Wait for
+      // the selected model before focusing the contenteditable composer;
+      // a physical click can chase the composer while its tab is relocating.
+      await expect(settingsButton).toContainText(profileA.name, { timeout: 10000 });
+      await composer.focus();
+      await expect(composer).toBeFocused();
       await page.keyboard.type('First request to create thread.', { delay: 10 });
       await page.keyboard.press('Enter');
 
@@ -448,7 +453,9 @@ test.describe('Reasoning and profile switching', () => {
       await popover.locator(sel.profileCard(profileB.id)).press('Enter');
       await expect(popover).toHaveAttribute('data-state', 'closed', { timeout: 5000 });
 
-      await composer.click();
+      await expect(settingsButton).toContainText(profileB.name, { timeout: 10000 });
+      await composer.focus();
+      await expect(composer).toBeFocused();
       await page.keyboard.type('Second request after switching profile.', { delay: 10 });
       const errorBlock = page.locator(sel('errorMessage'));
       pauseErrorChecking(page);
@@ -501,7 +508,9 @@ test.describe('Reasoning and profile switching', () => {
   });
 
   test('popover stays within the window and scrolls when many profiles exist', async ({ page }) => {
-    test.setTimeout(60000);
+    // Eighteen persisted profile writes and the corresponding UI refreshes
+    // can consume most of a minute on a shared desktop test host.
+    test.setTimeout(120000);
 
     const createdProfileIds: string[] = [];
     try {
@@ -531,6 +540,11 @@ test.describe('Reasoning and profile switching', () => {
       });
 
       const viewportHeight = await page.evaluate(() => window.innerHeight);
+      // The list grows after the popover first opens. Assert its final
+      // collision-aware placement rather than an intermediate animation frame.
+      await expect.poll(async () => (await popover.boundingBox())?.y ?? -Infinity, {
+        timeout: 10000,
+      }).toBeGreaterThanOrEqual(8);
       const bounds = await popover.boundingBox();
       expect(bounds).not.toBeNull();
       expect(viewportHeight).toBeGreaterThan(0);
