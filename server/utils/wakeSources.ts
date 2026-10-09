@@ -65,7 +65,7 @@ export function wakeTokenValid(actual: string | undefined, supplied: string | un
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-type LinuxProcessIdentity = { bootId: string; startTicks: string; startedAtMs: number };
+type LinuxProcessIdentity = { bootId: string; startTicks: string; startedAtMs?: number };
 async function linuxProcessIdentity(pid: number): Promise<LinuxProcessIdentity | undefined> {
   if (process.platform !== 'linux') return undefined;
   // /proc/<pid>/stat has a parenthesized command which may itself contain spaces.
@@ -76,12 +76,19 @@ async function linuxProcessIdentity(pid: number): Promise<LinuxProcessIdentity |
   ]);
   const fields = raw.slice(raw.lastIndexOf(')') + 2).trim().split(/\s+/);
   const startTicks = fields[19]; // field 22, after pid and comm
-  const ticksPerSecond = Number(execFileSync('getconf', ['CLK_TCK'], { encoding: 'utf8', timeout: 1000 }).trim());
+  if (!/^\d+$/.test(startTicks) || !/^[0-9a-f-]{36}$/.test(bootId.trim()))
+    throw new Error('Process identity unavailable');
+  // Only legacy locks need a wall-clock comparison. Minimal Linux desktops
+  // without getconf still use exact boot/start identity for all new locks.
+  let ticksPerSecond: number | undefined;
+  try { ticksPerSecond = Number(execFileSync('getconf', ['CLK_TCK'], { encoding: 'utf8', timeout: 1000 }).trim()); }
+  catch { /* Legacy live locks remain conservatively owned. */ }
   const uptimeSeconds = Number(uptime.split(' ')[0]);
-  if (!/^\d+$/.test(startTicks) || !Number.isSafeInteger(ticksPerSecond) || ticksPerSecond < 1 ||
-      !Number.isFinite(uptimeSeconds) || uptimeSeconds < 0) throw new Error('Process identity unavailable');
   return { bootId: bootId.trim(), startTicks,
-    startedAtMs: Date.now() - (uptimeSeconds - Number(startTicks) / ticksPerSecond) * 1000 };
+    ...(ticksPerSecond && Number.isSafeInteger(ticksPerSecond) && ticksPerSecond > 0 &&
+      Number.isFinite(uptimeSeconds) && uptimeSeconds >= 0
+      ? { startedAtMs: Date.now() - (uptimeSeconds - Number(startTicks) / ticksPerSecond) * 1000 }
+      : {}) };
 }
 
 export interface WakeNative {
@@ -199,7 +206,7 @@ export class WakeSources {
           const current = await linuxProcessIdentity(prior.pid);
           if (!current || (prior.linuxIdentity
             ? current.bootId === prior.linuxIdentity.bootId && current.startTicks === prior.linuxIdentity.startTicks
-            : current.startedAtMs <= (await stat(ownerFile)).mtimeMs + 60_000)) {
+            : current.startedAtMs === undefined || current.startedAtMs <= (await stat(ownerFile)).mtimeMs + 60_000)) {
             throw new Error('Another Workstation owns wake dispatch');
           }
         }
