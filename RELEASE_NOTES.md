@@ -1,9 +1,10 @@
 ## What's new
 
-- The direct DeepSeek API integration now honors an explicit Responses API selection while retaining Chat Completions as the default.
-- The bundled Interpreter coding runtime is updated to 0.0.45, based on the latest stable Codex baseline.
-- DeepSeek Flash now supports image input and a 1M context window, and model choices include DeepSeek V4 Flash and DeepSeek V4 Pro alongside GLM-5.3 and GLM-5.3-Flash, GPT-6 Astra, GPT-5.6 Sol, Terra, and Luna, Gemini 3.8 and 3.7 Flash, and current Z.AI/GLM options.
-- Provider compatibility includes the Responses API, Chat Completions, ACP, and improved local-model diagnostics.
+- Simple mode now opens by default, with standalone React interface projects, a compact composer, and live updates from project files.
+- Settings can switch between Simple and Advanced without removing Advanced windows or overlay behavior.
+- First-run setup focuses on Simple mode, offers Chrome extension setup, and shows MCP guidance only when a relevant configuration is detected.
+- Simple settings retain stored model profiles and GPT Live. Generated interfaces use the app-owned runtime and preserve the last working render when an edit fails to compile.
+- On Windows, sandboxed agent execution may require one-time administrator approval to set up local sandbox accounts.
 
 ## Distribution
 

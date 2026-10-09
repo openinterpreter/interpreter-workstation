@@ -4,6 +4,7 @@ import { BUILTIN_PROFILES } from '../shared/types/profile';
 import { BUILTIN_PROVIDERS } from '../shared/types/provider';
 import {
   applySettingsSnapshot,
+  assertValidAppConfig,
   assertValidSettingsSnapshot,
   buildSettingsSnapshot,
 } from './settingsSnapshot';
@@ -26,6 +27,7 @@ describe('settings snapshot helpers', () => {
       showHelpPanelPreview: false,
       reviewMarkdownEdits: true,
       launchAtLogin: false,
+      advancedMode: false,
       autoApproveLowRiskMediaCards: false,
       telemetryEnabled: false,
       allowAgentAddTools: true,
@@ -71,6 +73,14 @@ describe('settings snapshot helpers', () => {
     expect(nextConfig.mcpServers).toEqual(baseConfig.mcpServers);
   });
 
+  test('Simple is the default and Advanced survives a settings snapshot round trip', () => {
+    const initial = buildSettingsSnapshot({ agents: {} });
+    expect(initial.advancedMode).toBe(false);
+    const advanced = applySettingsSnapshot({ agents: {} }, { ...initial, advancedMode: true });
+    expect(buildSettingsSnapshot(advanced).advancedMode).toBe(true);
+    expect(buildSettingsSnapshot({ agents: {} }).advancedMode).toBe(false);
+  });
+
   test('assertValidSettingsSnapshot rejects invalid snapshots', () => {
     expect(() =>
       assertValidSettingsSnapshot({
@@ -78,5 +88,29 @@ describe('settings snapshot helpers', () => {
         theme: 'neon' as any,
       }),
     ).toThrow('Invalid settings snapshot');
+  });
+
+  test('assertValidAppConfig repairs legacy overlay settings before saving', () => {
+    const config = assertValidAppConfig({
+      agents: {},
+      interpreterOverlay: {
+        accountUserId: null,
+        enabled: false,
+        permissionSetupPending: false,
+        hotkey: 'Control+Space',
+        preferredWorkspacePath: null,
+        preferredNoWorkspace: false,
+        preferredProfileId: null,
+        advancedVoiceEnabled: true,
+        advancedVoiceWorkspacePath: null,
+        advancedVoiceModel: 'interpreter-fast',
+      } as any,
+    });
+
+    expect(config.interpreterOverlay?.hiddenAgentModel).toBe('interpreter-fast');
+    expect(config.interpreterOverlay?.readToolPromptInjectionGuard).toEqual({
+      enabled: false,
+      modelProfileId: null,
+    });
   });
 });
