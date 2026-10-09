@@ -7,6 +7,14 @@ on:
         description: Type release to build and publish the public production release
         required: true
         type: string
+      platforms:
+        description: Platforms to build; Windows/Linux does not start macOS signing
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - windows-linux
 
 concurrency:
   group: official-production-release
@@ -26,6 +34,8 @@ jobs:
     outputs:
       version: ${{ steps.release.outputs.version }}
       tag: ${{ steps.release.outputs.tag }}
+      mode: ${{ steps.release.outputs.mode }}
+      matrix: ${{ steps.release.outputs.matrix }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -34,7 +44,9 @@ jobs:
         name: Validate the immutable release identity
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_PLATFORM_REQUEST: ${{ inputs.platforms }}
         run: |
+          node scripts/ci/release-platform-selection.mjs "$RELEASE_PLATFORM_REQUEST" >> "$GITHUB_OUTPUT"
           version=$(node -p "require('./package.json').publicVersion")
           tag="v${version}"
           node -e "const value=process.argv[1]; if (!/^0\\.2\\.[0-9]+$/.test(value)) throw new Error('Unexpected public release version: '+value)" "$version"
@@ -80,6 +92,7 @@ jobs:
       - run: pnpm typecheck
       - run: node --test scripts/ci/release-workflow.test.mjs
       - run: node --test scripts/ci/release-platform-mode.test.mjs
+      - run: node --test scripts/ci/release-platform-selection.test.mjs
       - run: pnpm run test:unit
       - run: node --test scripts/electron-builder/sign-windows.test.cjs
       - run: pnpm run release:licenses:check
@@ -91,24 +104,7 @@ jobs:
     timeout-minutes: 150
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - id: macos-arm64
-            runner: macos-26
-            os: macos
-            arch: arm64
-          - id: macos-x64
-            runner: macos-15-intel
-            os: macos
-            arch: x64
-          - id: windows-x64
-            runner: windows-2025
-            os: windows
-            arch: x64
-          - id: linux-x64
-            runner: ubuntu-24.04
-            os: linux
-            arch: x64
+      matrix: ${{ fromJSON(needs.authorize.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
     env:
       NODE_OPTIONS: --max-old-space-size=8192
@@ -246,7 +242,8 @@ jobs:
     if: >-
       always() && needs.authorize.result == 'success' &&
       needs.verify.result == 'success' &&
-      (needs.build.result == 'success' || needs.build.result == 'failure')
+      (needs.build.result == 'success' ||
+       (needs.authorize.outputs.mode == 'all' && needs.build.result == 'failure'))
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     environment: production-release
@@ -259,6 +256,7 @@ jobs:
     env:
       RELEASE_VERSION: ${{ needs.authorize.outputs.version }}
       RELEASE_TAG: ${{ needs.authorize.outputs.tag }}
+      RELEASE_PLATFORM_REQUEST: ${{ needs.authorize.outputs.mode }}
       AWS_REGION: us-west-1
       AWS_ENDPOINT_URL: https://neyguovvcjxfzhqpkicj.storage.supabase.co/storage/v1/s3
     steps:
