@@ -4,6 +4,7 @@ export interface WindowSessionRecord {
   sessionKey: string;
   windowId: number;
   workspacePath: string | null;
+  simpleProjectPath: string | null;
   createdAt: number;
 }
 
@@ -15,6 +16,7 @@ export function registerWindowSession(input: {
   sessionKey: string;
   windowId: number;
   workspacePath: string | null;
+  simpleProjectPath?: string | null;
 }): WindowSessionRecord {
   const existingSessionKey = sessionKeyByWindowId.get(input.windowId);
   if (existingSessionKey && existingSessionKey !== input.sessionKey) {
@@ -25,12 +27,30 @@ export function registerWindowSession(input: {
     sessionKey: input.sessionKey,
     windowId: input.windowId,
     workspacePath: input.workspacePath,
+    simpleProjectPath: input.simpleProjectPath ?? null,
     createdAt: Date.now(),
   };
 
   sessionKeyByWindowId.set(input.windowId, input.sessionKey);
   sessionsByKey.set(input.sessionKey, nextRecord);
   return nextRecord;
+}
+
+export function updateWindowSessionSimpleProject(
+  sessionKey: string,
+  simpleProjectPath: string | null,
+): WindowSessionRecord | null {
+  const existingRecord = sessionsByKey.get(sessionKey);
+  if (!existingRecord) return null;
+  const nextRecord = { ...existingRecord, simpleProjectPath };
+  sessionsByKey.set(sessionKey, nextRecord);
+  return nextRecord;
+}
+
+export function getWindowSessionSimpleProject(
+  sessionKey: string | null | undefined,
+): string | null {
+  return getWindowSessionByKey(sessionKey)?.simpleProjectPath ?? null;
 }
 
 export function unregisterWindowSession(windowId: number): WindowSessionRecord | null {

@@ -913,7 +913,7 @@ export function Overlay() {
   const scopeEditorGestureRef = useRef<ScopeEditorGesture | null>(null);
   const draftScopeBoundsRef = useRef<Bounds | null>(null);
   const prefersReducedMotion = false;
-  const usesPillInputDesign = INTERPRETER_OVERLAY_INPUT_DESIGN === 'pill';
+  const usesPillInputDesign = INTERPRETER_OVERLAY_INPUT_DESIGN === 'pill' && !state.simpleMode;
   const showInput = state.mode === 'input';
   const [, setOverlayBootstrap] = useState<OverlayBootstrapData | null>(null);
   const advancedVoicePeerRef = useRef<RTCPeerConnection | null>(null);
@@ -2882,6 +2882,7 @@ export function Overlay() {
 
             {!usesPillInputDesign && (
               <InputPanel
+                simpleMode={state.simpleMode}
                 visible={showInput}
                 shown={inputComposerVisible}
                 screenshot={state.screenshot}

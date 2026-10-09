@@ -20,6 +20,7 @@ export const ONBOARDING_STEPS = [
   { id: 'overlay-first-use', telemetryName: 'overlay_first_use', enabled: true, includeWhenBucketDetected: true },
   { id: 'overlay-permissions', telemetryName: 'overlay_permissions', enabled: true, includeWhenBucketDetected: true },
   { id: 'tool-addons', telemetryName: 'tool_addons', enabled: true, includeWhenBucketDetected: true },
+  { id: 'simple-mcp', telemetryName: 'simple_mcp', enabled: false, includeWhenBucketDetected: false },
   { id: 'models-card', telemetryName: 'models_card', enabled: false, includeWhenBucketDetected: true },
   { id: 'ai-setup', telemetryName: 'ai_setup', enabled: true, includeWhenBucketDetected: true },
   { id: 'model-setup', telemetryName: 'model_setup', enabled: true, includeWhenBucketDetected: true },

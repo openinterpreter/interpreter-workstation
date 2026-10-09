@@ -2,6 +2,7 @@
 
 const path = require('path');
 const fs = require('fs');
+const { createRequire } = require('module');
 const { listPackage } = require('@electron/asar');
 const { assertBundledCodexSkills } = require('./checkBundledCodexSkills.cjs');
 
@@ -23,6 +24,76 @@ function copyDirectory(source, destination) {
   fs.rmSync(destination, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   fs.cpSync(source, destination, { recursive: true });
+}
+
+const SIMPLE_INTERFACE_RUNTIME_ROOTS = [
+  'react',
+  'react-dom',
+  'react-markdown',
+  'remark-gfm',
+  'motion',
+];
+
+function findPackageManifest(packageName, fromManifest) {
+  const resolver = fromManifest ? createRequire(fromManifest) : require;
+  const entry = resolver.resolve(packageName);
+  let directory = path.dirname(fs.realpathSync(entry));
+  while (directory !== path.dirname(directory)) {
+    const manifestPath = path.join(directory, 'package.json');
+    if (fs.existsSync(manifestPath)) {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      if (manifest.name === packageName) return { directory, manifest, manifestPath };
+    }
+    directory = path.dirname(directory);
+  }
+  throw new Error(`[afterPack] Could not locate package root for ${packageName}`);
+}
+
+function copySimpleInterfaceRuntime(resourcesRoot) {
+  const runtimeRoot = path.join(resourcesRoot, 'simple-interface-runtime');
+  const runtimeNodeModules = path.join(runtimeRoot, 'node_modules');
+  fs.rmSync(runtimeRoot, { recursive: true, force: true });
+  fs.mkdirSync(runtimeNodeModules, { recursive: true });
+  fs.writeFileSync(path.join(runtimeRoot, 'package.json'), JSON.stringify({ private: true }, null, 2));
+
+  const packages = new Map();
+  const visit = (packageName, fromManifest) => {
+    // Type-only packages are referenced by some published manifests as regular
+    // dependencies, but they are never loaded by the browser runtime and pnpm
+    // may legitimately omit them from the production graph.
+    if (packageName.startsWith('@types/')) return;
+    let located;
+    try {
+      located = findPackageManifest(packageName, fromManifest);
+    } catch (error) {
+      const parent = fromManifest ? JSON.parse(fs.readFileSync(fromManifest, 'utf8')) : null;
+      if (parent?.optionalDependencies?.[packageName]) return;
+      throw error;
+    }
+    const existing = packages.get(packageName);
+    if (existing) {
+      if (existing.manifest.version !== located.manifest.version) {
+        throw new Error(
+          `[afterPack] Simple runtime has conflicting ${packageName} versions: ${existing.manifest.version} and ${located.manifest.version}`,
+        );
+      }
+      return;
+    }
+    packages.set(packageName, located);
+    const dependencies = {
+      ...(located.manifest.dependencies || {}),
+      ...(located.manifest.optionalDependencies || {}),
+    };
+    for (const dependency of Object.keys(dependencies)) visit(dependency, located.manifestPath);
+  };
+
+  for (const packageName of SIMPLE_INTERFACE_RUNTIME_ROOTS) visit(packageName);
+  for (const [packageName, located] of packages) {
+    const destination = path.join(runtimeNodeModules, ...packageName.split('/'));
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.cpSync(located.directory, destination, { recursive: true, dereference: true });
+  }
+  console.log(`[afterPack] Copied ${packages.size} Simple interface runtime packages.`);
 }
 
 function wildcardMatches(pattern, value) {
@@ -284,6 +355,7 @@ async function afterPack(context) {
   }
 
   assertBundledCodexSkills(path.join(resourcesRoot, 'codex-skills'));
+  copySimpleInterfaceRuntime(resourcesRoot);
 
   if (isMac) {
     const appBundleRoot = path.join(appOutDir, `${appName}.app`);

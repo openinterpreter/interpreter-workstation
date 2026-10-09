@@ -1200,6 +1200,30 @@ describe('codexServerRequestApprovals', () => {
     assert.deepEqual(response, { action: 'accept', content: null, _meta: null });
   });
 
+  test('cancels unsupported extended MCP forms under both runtime spellings', async () => {
+    const { deps, approvalCalls, questionCalls } = createDeps(true);
+    for (const mode of ['openai/form', 'openaiForm'] as const) {
+      let response: unknown;
+      const request: ServerRequest = {
+        id: 94,
+        method: SERVER_REQUEST_METHOD.mcpServerElicitationRequest,
+        params: {
+          threadId: 'thr_mcp_3',
+          turnId: null,
+          serverName: 'generic-mcp',
+          mode,
+          message: 'Unexpected extended form',
+          requestedSchema: { type: 'object', properties: {} },
+          _meta: null,
+        },
+      };
+      await handleCodexServerRequest(request, (result) => { response = result; }, deps);
+      assert.deepEqual(response, { action: 'cancel', content: null, _meta: null });
+    }
+    assert.equal(approvalCalls.length, 0);
+    assert.equal(questionCalls.length, 0);
+  });
+
   test('attaches request listener once per client instance', () => {
     const { deps } = createDeps(true);
     const handlers: Array<(request: ServerRequest, respond: (result: unknown) => void) => void> = [];

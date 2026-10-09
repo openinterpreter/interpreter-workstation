@@ -19,6 +19,7 @@ import {
   getCuaAccessPolicy,
   getInterpreterOverlaySettings,
   getOnboardingState,
+  getBooleanUISettingSync,
   setOnboardingState,
   setInterpreterOverlaySettings,
 } from '../../../server/configStore';
@@ -26,6 +27,7 @@ import { createProfile, listProfiles, updateProfile } from '../../../server/hand
 import { getSkills } from '../../../server/handlers/skills';
 import { callTool as callInterpreterTool } from '../../../server/handlers/toolServers';
 import { onServerAuthChanged } from '../../../server/lib/auth-events';
+import { onBooleanUISettingChanged } from '../../../server/lib/boolean-ui-setting-events';
 import {
   overlaySessionManager,
   type OverlayDrawingRequest,
@@ -46,7 +48,7 @@ import {
   getBrowserControlPageElementInventory,
   getBrowserControlStatus,
 } from '../../../server/utils/browserExtensionRelay';
-import { getWindowSessionByKey, listWindowSessions } from '../../../server/utils/windowSessions';
+import { getWindowSessionByKey, getWindowSessionByWindowId, listWindowSessions } from '../../../server/utils/windowSessions';
 import { callHiddenAgentTool } from '../../../server/tools/builtin-tools/interpreter-overlay/hiddenAgentTool';
 import type { StreamImageAttachment } from '../../../src/lib/codex/api-types';
 import { isTerminalProfile, profileToModelConfig, type Profile } from '../../../shared/types/profile';
@@ -219,6 +221,8 @@ import {
 import { mergeSelectedContextRefsIntoRunEngineElements } from './selected-context-run-engine-elements.js';
 import { buildOverlayTextControllerToolCatalogText } from './text-controller-tool-catalog.js';
 import { hitsOverlayDrawingAction } from './overlay-drawing-hit-test.js';
+import { buildSimpleOverlayMessage, resolveSimpleOverlayWindowSessionKey } from './simple-overlay-message.js';
+import { IPC_CHANNELS } from '../../../electron/ipc/registry';
 import {
   BrowserWindow,
   dialog,
@@ -1825,6 +1829,7 @@ export class InterpreterOverlayService {
   private inputOpeningInFlight = false;
   private settingsListenerCleanup: (() => void) | null = null;
   private authListenerCleanup: (() => void) | null = null;
+  private experienceModeListenerCleanup: (() => void) | null = null;
   private currentSettings: InterpreterOverlaySettings = { ...DEFAULT_INTERPRETER_OVERLAY_SETTINGS };
   private effectiveSettings: InterpreterOverlaySettings = { ...DEFAULT_INTERPRETER_OVERLAY_SETTINGS };
   private accessState: InterpreterOverlayAccessState = { allowed: false, reason: 'signed-out' };
@@ -1916,6 +1921,8 @@ export class InterpreterOverlayService {
   private worldOverlayPreparedInputCycleId: number | null = null;
   private activeAttachedSessionId: string | null = null;
   private activeAttachedAgentId: string | null = null;
+  private simpleComposerWindowSessionKey: string | null = null;
+  private readonly simpleComposerStates = new Map<string, { draft: string }>();
   private presentationTimings: Omit<InterpreterOverlayPresentationTimings, 'durationsMs'> = {
     cycleId: 0,
     source: null,
@@ -1954,6 +1961,27 @@ export class InterpreterOverlayService {
     });
   }
 
+  getSimpleComposerState(windowSessionKey: string): { draft: string } {
+    return this.simpleComposerStates.get(windowSessionKey) ?? { draft: '' };
+  }
+
+  setSimpleComposerState(windowSessionKey: string, state: { draft: string }): void {
+    const next = { draft: state.draft.slice(0, 20_000) };
+    this.simpleComposerStates.set(windowSessionKey, next);
+    if (this.simpleComposerWindowSessionKey === windowSessionKey && this.overlayState.mode === 'input') {
+      this.send({ transcript: next.draft });
+    }
+  }
+
+  private publishSimpleComposerState(windowSessionKey: string, state: { draft: string }): void {
+    this.simpleComposerStates.set(windowSessionKey, state);
+    const windowId = getWindowSessionByKey(windowSessionKey)?.windowId ?? null;
+    const target = windowId ? BrowserWindow.fromId(windowId) : null;
+    if (target && !target.isDestroyed() && !target.webContents.isDestroyed()) {
+      target.webContents.send(IPC_CHANNELS.SIMPLE_COMPOSER_STATE_CHANGED, state);
+    }
+  }
+
   async start(): Promise<void> {
     if (this.started) {
       return;
@@ -1971,6 +1999,11 @@ export class InterpreterOverlayService {
     this.authListenerCleanup = onServerAuthChanged(() => {
       void this.applySettings(this.currentSettings).catch((error) => {
         console.error('[InterpreterOverlay] Failed to refresh auth state:', error);
+      });
+    });
+    this.experienceModeListenerCleanup = onBooleanUISettingChanged('advancedMode', () => {
+      void this.applySettings(this.currentSettings).catch((error) => {
+        console.error('[InterpreterOverlay] Failed to apply the experience mode:', error);
       });
     });
     await this.applySettings(this.currentSettings);
@@ -1991,6 +2024,8 @@ export class InterpreterOverlayService {
     this.settingsListenerCleanup = null;
     this.authListenerCleanup?.();
     this.authListenerCleanup = null;
+    this.experienceModeListenerCleanup?.();
+    this.experienceModeListenerCleanup = null;
     this.agentTabCompletionCleanup?.();
     this.agentTabCompletionCleanup = null;
     this.clearProgressiveBlurCloseTimer();
@@ -5542,7 +5577,21 @@ ${promptBody}
       this.accessState,
       this.benchmarkMode,
     );
-    if (this.effectiveSettings.enabled && !this.baseUrl) {
+    const simpleMode = !getBooleanUISettingSync('advancedMode');
+    const simpleOverlayDisabledForSession =
+      process.env.INTERPRETER_DISABLE_SIMPLE_OVERLAY === '1';
+    if (simpleOverlayDisabledForSession) {
+      this.effectiveSettings = {
+        ...this.effectiveSettings,
+        enabled: false,
+      };
+    } else if (simpleMode && this.accessState.allowed) {
+      this.effectiveSettings = {
+        ...this.effectiveSettings,
+        enabled: true,
+      };
+    }
+    if (this.effectiveSettings.enabled && !this.baseUrl && !simpleMode) {
       console.warn(
         '[InterpreterOverlay] Disabled because this distribution does not configure an overlay server',
       );
@@ -6295,6 +6344,7 @@ ${promptBody}
     const hideForExecutingAction = this.overlayHiddenForExecution;
     const renderedState: OverlayState = {
       ...this.overlayState,
+      simpleMode: !getBooleanUISettingSync('advancedMode'),
       displayScaleFactor: this.interactionDisplay?.scaleFactor ?? this.overlayState.displayScaleFactor,
       displayWorkArea: this.getWindowLocalWorkArea() ?? this.overlayState.displayWorkArea,
       tracePrimaryColor: this.tracePrimaryColor,
@@ -6512,6 +6562,23 @@ ${promptBody}
       return;
     }
 
+    const previouslyFocusedWindow = BrowserWindow.getFocusedWindow();
+    if (!getBooleanUISettingSync('advancedMode') && previouslyFocusedWindow !== this.overlay.getWindow()) {
+      const focusedSession = getWindowSessionByWindowId(previouslyFocusedWindow?.id ?? null);
+      if (focusedSession) {
+        this.simpleComposerWindowSessionKey = focusedSession.sessionKey;
+      } else if (!getWindowSessionByKey(this.simpleComposerWindowSessionKey)) {
+        // A global hotkey is often invoked while another app owns focus. Keep
+        // the last Simple interface when possible; on first use, prefer the
+        // newest visible Workstation window instead of routing arbitrarily.
+        this.simpleComposerWindowSessionKey = listWindowSessions()
+          .filter((session) => {
+            const candidate = BrowserWindow.fromId(session.windowId);
+            return candidate && !candidate.isDestroyed() && candidate.isVisible();
+          })
+          .sort((left, right) => right.createdAt - left.createdAt)[0]?.sessionKey ?? null;
+      }
+    }
     this.inputOpeningInFlight = true;
     try {
       this.clearProgressiveBlurCloseTimer();
@@ -6558,7 +6625,9 @@ ${promptBody}
         mode: 'input',
         action: null,
         screenshot: null,
-        transcript: '',
+        transcript: this.simpleComposerWindowSessionKey
+          ? this.getSimpleComposerState(this.simpleComposerWindowSessionKey).draft
+          : '',
         inputReady: false,
         isRecording: false,
         amplitude: 0,
@@ -7387,6 +7456,11 @@ ${promptBody}
           ...this.overlayState,
           transcript: action.text,
         };
+        if (!getBooleanUISettingSync('advancedMode') && this.simpleComposerWindowSessionKey) {
+          this.publishSimpleComposerState(this.simpleComposerWindowSessionKey, {
+            draft: action.text.slice(0, 20_000),
+          });
+        }
         break;
 
       case 'scope-selection-started':
@@ -7695,6 +7769,60 @@ ${promptBody}
             mode: this.overlayState.mode,
             textLength: action.text.trim().length,
           });
+          break;
+        }
+
+        // Simple has one durable conversation. Never launch an overlay-specific
+        // agent here: deliver to the mounted Simple composer instead, including
+        // the origin/selection envelope. Advanced keeps its existing controller.
+        if (!getBooleanUISettingSync('advancedMode')) {
+          if (action.attachments?.length) {
+            this.send({ pill: { kind: 'error', message: 'Overlay attachments are not yet supported in Simple. Open Interpreter to attach a file.' } });
+            break;
+          }
+          const overlayWindow = this.overlay.getWindow();
+          let simpleWindow: InstanceType<typeof BrowserWindow> | null = null;
+          const contextItems = action.contextItems ?? this.overlayState.contextItems;
+          const requestedSessionKey = resolveSimpleOverlayWindowSessionKey(
+            action.targetWindowSessionKey,
+            contextItems,
+          );
+          const requestedWindowId = requestedSessionKey
+            ? getWindowSessionByKey(requestedSessionKey)?.windowId ?? null
+            : null;
+          for (const candidate of BrowserWindow.getAllWindows()) {
+            if (candidate === overlayWindow || candidate.isDestroyed() || candidate.webContents.isDestroyed() || candidate.webContents.isLoading()) continue;
+            if (requestedWindowId !== null && candidate.id !== requestedWindowId) continue;
+            try {
+              if (await candidate.webContents.executeJavaScript('Boolean(document.querySelector("[data-simple-shell]"))', true)) {
+                simpleWindow = candidate;
+                break;
+              }
+            } catch { /* Not the Simple renderer. */ }
+          }
+          if (!simpleWindow) {
+            this.send({ pill: { kind: 'error', message: 'Open the Simple workspace before sending from the overlay.' } });
+            break;
+          }
+          const text = buildSimpleOverlayMessage(action.text, contextItems);
+          if (!action.text.trim() && contextItems.length === 0) break;
+          const targetSession = getWindowSessionByWindowId(simpleWindow.id);
+          simpleWindow.webContents.send(IPC_CHANNELS.SIMPLE_PRIMARY_OVERLAY_SUBMIT, {
+            text,
+            source: {
+              kind: 'simple-overlay',
+              windowSessionKey: targetSession?.sessionKey ?? null,
+              interfacePath: targetSession?.simpleProjectPath ?? null,
+            },
+          });
+          if (this.simpleComposerWindowSessionKey && this.simpleComposerWindowSessionKey !== targetSession?.sessionKey) {
+            this.publishSimpleComposerState(this.simpleComposerWindowSessionKey, { draft: '' });
+          }
+          if (targetSession?.sessionKey) {
+            this.simpleComposerWindowSessionKey = targetSession.sessionKey;
+            this.publishSimpleComposerState(targetSession.sessionKey, { draft: '' });
+          }
+          await this.handleEscape();
           break;
         }
 

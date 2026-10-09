@@ -1260,6 +1260,25 @@ describe('interpreterCliRuntime', () => {
     }
   });
 
+  test('forwards a configured FAL key into the rebuilt agent shell environment', async () => {
+    const tempHome = await useTempInterpreterDataDir('interpreter-cli-fal-env-');
+
+    try {
+      const policy = buildInterpreterCliShellEnvironmentPolicy(
+        'agtok_fal',
+        { PATH: '/usr/bin:/bin', INTERPRETER_HOME: tempHome, FAL_KEY: 'fal-test-key' },
+        'darwin',
+        undefined,
+        undefined,
+        null,
+      );
+
+      expect(policy.set.FAL_KEY).toBe('fal-test-key');
+    } finally {
+      await rm(tempHome, { recursive: true, force: true });
+    }
+  });
+
   test('exposes Unix shell runtime as a macOS sandbox readable root', async () => {
     const tempHome = await useTempInterpreterDataDir('interpreter-cli-readable-root-');
 
