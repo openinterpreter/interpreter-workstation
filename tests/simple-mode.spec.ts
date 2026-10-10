@@ -227,6 +227,12 @@ test('Simple first run offers Chrome, optional GPT Live, and the control folder 
     await expect(page.getByRole('heading', { name: 'WhatsApp' })).toHaveCount(0);
     await expect(page.locator('video')).toHaveCount(0);
 
+    // The ten built-in tool servers are not configured MCP connections. On a
+    // clean profile Chrome should lead straight to model selection.
+    await page.getByRole('button', { name: 'Next step' }).click();
+    await expect(page.getByRole('heading', { name: 'Models', exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('heading', { name: 'Your existing connections' })).toHaveCount(0);
+
     await setOnboardingState(page, {
       ...createDefaultOnboardingState(),
       completed: false,

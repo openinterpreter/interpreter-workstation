@@ -26,8 +26,22 @@ describe('Simple MCP onboarding visibility', () => {
     expect(summary).toEqual({ configured: [], discovered: [] });
   });
 
+  it('ignores built-in tool servers in the shared listing on a zero-MCP machine', async () => {
+    list.mockResolvedValue({ servers: [
+      { id: 'builtin-interpreter', name: 'Interpreter' },
+      { id: 'builtin-browser', name: 'Browser', globallyDisabled: true },
+      { name: 'Incomplete entry' },
+    ] });
+    const summary = await discoverSimpleMcps();
+    expect(summary).toEqual({ configured: [], discovered: [] });
+    expect(shouldShowSimpleMcpStep(summary)).toBe(false);
+  });
+
   it('shows already-configured MCPs without disclosing server credentials', async () => {
-    list.mockResolvedValue({ servers: [{ name: 'Calendar', secret: 'never-render-this' }] });
+    list.mockResolvedValue({ servers: [
+      { id: 'builtin-interpreter', name: 'Interpreter' },
+      { id: 'calendar', name: 'Calendar', secret: 'never-render-this' },
+    ] });
     const summary = await discoverSimpleMcps();
     expect(summary).toEqual({ configured: ['Calendar'], discovered: [] });
     expect(shouldShowSimpleMcpStep(summary)).toBe(true);
