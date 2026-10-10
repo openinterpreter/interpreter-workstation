@@ -631,6 +631,8 @@
   "settings.profiles.provider.hosted.emptyState": "没有匹配的模型。",
   "settings.profiles.provider.hosted.cachedModelsNotice": "正在后台刷新时显示缓存模型。",
   "settings.profiles.provider.openaiOauth.modelDescription": "选择一个 GPT 模型。",
+  "settings.profiles.provider.openaiOauth.modelUnavailable": "{{model}} 不在此 ChatGPT 登录账号返回的模型列表中。OpenAI API 的模型列表不代表 ChatGPT 订阅权限。请检查账号资格或刷新列表；模型和计费方式均未更改。",
+  "settings.profiles.provider.api.modelUnavailable": "{{model}} 不在此提供商当前可选模型列表中。该模型可能不可用、已弃用或因兼容性而被过滤；请刷新列表并向提供商核实权限。您的选择和计费方式均未更改。",
   "settings.profiles.provider.openaiOauth.waitingAuth": "正在等待浏览器中的身份验证...",
   "settings.profiles.provider.openaiOauth.connectedAs": "已连接为 {{email}}",
   "settings.profiles.provider.openaiOauth.connectedAsDefault": "OpenAI 用户",

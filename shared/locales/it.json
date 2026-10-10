@@ -650,6 +650,8 @@
   "settings.profiles.provider.hosted.emptyState": "Nessun modello corrispondente.",
   "settings.profiles.provider.hosted.cachedModelsNotice": "Visualizzazione dei modelli memorizzati nella cache durante l'aggiornamento in background.",
   "settings.profiles.provider.openaiOauth.modelDescription": "Scegli un modello GPT.",
+  "settings.profiles.provider.openaiOauth.modelUnavailable": "{{model}} non compare nell'elenco dei modelli restituito da questo account ChatGPT. La presenza nel catalogo API di OpenAI non implica l'accesso tramite abbonamento ChatGPT. Verifica l'idoneità dell'account o aggiorna l'elenco; modello e metodo di fatturazione non sono stati modificati.",
+  "settings.profiles.provider.api.modelUnavailable": "{{model}} non compare nell'elenco attuale dei modelli selezionabili del provider. Potrebbe non essere disponibile, essere deprecato o escluso per compatibilità; aggiorna l'elenco e verifica l'accesso con il provider. Selezione e metodo di fatturazione non sono stati modificati.",
   "settings.profiles.provider.openaiOauth.waitingAuth": "In attesa dell'autenticazione nel browser...",
   "settings.profiles.provider.openaiOauth.connectedAs": "Connesso come {{email}}",
   "settings.profiles.provider.openaiOauth.connectedAsDefault": "Utente OpenAI",
