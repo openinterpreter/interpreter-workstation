@@ -330,7 +330,7 @@ jobs:
           mkdir release-sbom-source
           cp package.json pnpm-lock.yaml release-sbom-source/
       - name: Generate SPDX software bill of materials
-        uses: anchore/sbom-action@v0.24.2
+        uses: anchore/sbom-action@v0.24.3
         with:
           # Scan the immutable package manifest and lockfile, not the downloaded
           # installers or recursive checkout. Those duplicate source trees and
