@@ -316,7 +316,7 @@
     "remark-gfm": "4.0.1",
     "semver": "7.8.5",
     "sherpa-onnx": "1.13.8",
-    "smol-toml": "^1.8.0",
+    "smol-toml": "^1.9.0",
     "tailwind-merge": "3.7.0",
     "tailwindcss-animate": "1.0.7",
     "tar-stream": "3.2.1",
