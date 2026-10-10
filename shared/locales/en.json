@@ -650,6 +650,7 @@
   "settings.profiles.provider.hosted.emptyState": "No matching models.",
   "settings.profiles.provider.hosted.cachedModelsNotice": "Showing cached models while refreshing in the background.",
   "settings.profiles.provider.openaiOauth.modelDescription": "Choose a GPT model.",
+  "settings.profiles.provider.openaiOauth.modelUnavailable": "{{model}} is not in the model list returned for this signed-in ChatGPT account. An OpenAI API listing does not establish ChatGPT subscription access. Check account eligibility or refresh the list; no model or billing method was changed.",
   "settings.profiles.provider.openaiOauth.waitingAuth": "Waiting for authentication in your browser...",
   "settings.profiles.provider.openaiOauth.connectedAs": "Connected as {{email}}",
   "settings.profiles.provider.openaiOauth.connectedAsDefault": "OpenAI user",

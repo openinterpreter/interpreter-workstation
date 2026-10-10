@@ -539,7 +539,10 @@ export function ProfileProviderConfig({ profile, onChange }: ProfileProviderConf
 
     const options = toOpenAiOAuthModelOptions(models);
     const currentModelId = profile.modelId?.trim();
-    if (currentModelId && options.some((option) => option.id === currentModelId)) {
+    // A model that has disappeared from this account's live catalog must not be
+    // silently replaced. Its absence is not permission to change the user's
+    // chosen model or switch to API billing; show the account-scoped reason below.
+    if (currentModelId) {
       return;
     }
 
@@ -1160,6 +1163,13 @@ export function ProfileProviderConfig({ profile, onChange }: ProfileProviderConf
 
                   {oauthError ? (
                     <StatusPanel tone="warning">{oauthError}</StatusPanel>
+                  ) : null}
+
+                  {openAiModelOptions.length > 0 && profile.modelId?.trim()
+                    && !openAiModelOptions.some((option) => option.id === profile.modelId.trim()) ? (
+                    <StatusPanel tone="warning">
+                      {t('settings.profiles.provider.openaiOauth.modelUnavailable', { model: profile.modelId.trim() })}
+                    </StatusPanel>
                   ) : null}
 
                   {openAiModelOptions.length > 0 ? (

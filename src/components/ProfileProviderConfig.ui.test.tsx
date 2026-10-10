@@ -88,6 +88,22 @@ function Harness({ profile, onChangeSpy }: { profile: Profile; onChangeSpy: (upd
 }
 
 describe('ProfileProviderConfig', () => {
+  test('preserves an OAuth model absent from the account catalog and explains the boundary', async () => {
+    const onChangeSpy = vi.fn();
+    providersMocks.getOAuthStatus.mockResolvedValueOnce({ isConnected: true } as never);
+    providersMocks.listOpenAIOAuthModels.mockResolvedValueOnce({ models: [
+      { id: 'gpt-6-sol', name: 'GPT-6 Sol', isDefault: true },
+    ] } as never);
+    render(<Harness profile={{
+      id: 'oauth-profile', name: 'Chosen Sol', modelId: 'gpt-6.1-sol',
+      isBuiltin: false, provider: 'openai-oauth', providerId: 'builtin:openai-oauth',
+    }} onChangeSpy={onChangeSpy} />);
+
+    expect(await screen.findByText(/gpt-6\.1-sol is not in the model list returned/)).toBeInTheDocument();
+    expect(screen.getByText(/OpenAI API listing does not establish ChatGPT subscription access/)).toBeInTheDocument();
+    expect(onChangeSpy).not.toHaveBeenCalledWith(expect.objectContaining({ modelId: 'gpt-6-sol' }));
+  });
+
   test('allows a local profile to switch to a custom model id', async () => {
     const user = userEvent.setup();
     const onChangeSpy = vi.fn();
