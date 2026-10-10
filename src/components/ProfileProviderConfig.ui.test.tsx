@@ -88,6 +88,27 @@ function Harness({ profile, onChangeSpy }: { profile: Profile; onChangeSpy: (upd
 }
 
 describe('ProfileProviderConfig', () => {
+  test('marks a persisted API model absent from its provider catalog without switching it', async () => {
+    const onChangeSpy = vi.fn();
+    const original = providersMocks.listInterpreterModels.getMockImplementation();
+    providersMocks.listInterpreterModels.mockResolvedValue({ models: [
+      { id: 'gpt-6-sol', name: 'GPT-6 Sol', isDefault: true },
+    ] } as never);
+    try {
+      render(<Harness profile={{
+        id: 'api-profile', name: 'Chosen API model', modelId: 'gpt-6.1-sol',
+        isBuiltin: false, provider: 'api', apiFormat: 'openai',
+        baseURL: 'https://api.openai.com/v1',
+      }} onChangeSpy={onChangeSpy} />);
+
+      expect(await screen.findByText(/gpt-6\.1-sol is not in this provider's current selectable model list/)).toBeInTheDocument();
+      expect(screen.getByText(/Your selection and billing method were not changed/)).toBeInTheDocument();
+      expect(onChangeSpy).not.toHaveBeenCalledWith(expect.objectContaining({ modelId: 'gpt-6-sol' }));
+    } finally {
+      if (original) providersMocks.listInterpreterModels.mockImplementation(original);
+    }
+  });
+
   test('preserves an OAuth model absent from the account catalog and explains the boundary', async () => {
     const onChangeSpy = vi.fn();
     providersMocks.getOAuthStatus.mockResolvedValueOnce({ isConnected: true } as never);

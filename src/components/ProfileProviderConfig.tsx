@@ -1535,6 +1535,17 @@ export function ProfileProviderConfig({ profile, onChange }: ProfileProviderConf
                   />
                 </Field>
               )}
+
+              {apiModelField.kind === 'select' && apiModelField.options.length > 0
+                && profile.modelId?.trim()
+                && !apiModelField.options.some((option) => option.id === profile.modelId.trim())
+                && (apiModelField.provider === 'openrouter'
+                  ? Boolean(hostedCatalog) && !hostedCatalogLoading && !hostedCatalogError
+                  : Boolean(apiProviderModels) && !apiModelsLoading && !apiModelsError) ? (
+                <StatusPanel tone="warning">
+                  {t('settings.profiles.provider.api.modelUnavailable', { model: profile.modelId.trim() })}
+                </StatusPanel>
+              ) : null}
             </FieldGroup>
           </ProviderPanel>
         );
