@@ -14,7 +14,16 @@ export async function discoverSimpleMcps(): Promise<SimpleMcpSummary> {
       : mcpDiscovery.discover(),
   ]);
   return {
-    configured: (existing.servers ?? []).map((server: { name: string }) => server.name),
+    // The shared tool-server list includes Workstation's built-in tools. Only
+    // configured MCP servers belong in this optional onboarding step.
+    configured: (existing.servers ?? [])
+      .filter((server: { id?: string; name?: string }) =>
+        typeof server.id === 'string'
+        && server.id.length > 0
+        && !server.id.startsWith('builtin-')
+        && typeof server.name === 'string'
+        && server.name.length > 0)
+      .map((server: { name: string }) => server.name),
     discovered: ('candidates' in imported && Array.isArray(imported.candidates)
       ? imported.candidates
       : imported.discovered ?? []).map((candidate: { name: string }) => candidate.name),
