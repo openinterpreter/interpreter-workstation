@@ -28,6 +28,14 @@ remain on their previous release. The release notes and manifest identify the
 platforms actually published. A later full retry must satisfy the macOS
 signature, notarization, and stapling gates before advancing macOS.
 
+The manual workflow also accepts the explicit `windows-linux` platform choice
+when Apple signing should not be attempted. This choice schedules only the
+Windows and Linux build jobs; the current-run verifier rejects an unexpected
+macOS job or an incomplete/failed Windows or Linux job. The default `all`
+choice retains the full four-platform build and its existing macOS failure
+fallback. A later full-platform retry must use the same protected source
+commit for that version and pass the Apple gates before publishing macOS.
+
 A local package, a pull-request artifact, or an internal candidate is useful
 for review but is not an official build.
 
@@ -70,8 +78,9 @@ are public. Those manifests are the final commit point for installed clients.
 
 1. Merge a version bump and all intended release changes to protected `main`.
 2. Confirm all required CI and DCO checks pass on that commit.
-3. Dispatch `Official release` from `main` with the confirmation value
-   `release`.
+3. Dispatch `Official release` from `main` with confirmation `release` and the
+   `all` platform choice (default), or explicitly choose `windows-linux` when
+   macOS signing must not run.
 4. Review and approve the pending `production-release` deployment.
 5. Let every platform build and signature check finish. If macOS packaging
    fails, confirm the Windows/Linux-only gate accepted both successful build
