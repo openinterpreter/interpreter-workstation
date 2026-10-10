@@ -2334,6 +2334,7 @@ main().catch((error) => {
 
 function buildWindowsInterpreterCliPowerShellScript(): string {
   return `$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Net.Http
 
 $callerToken = $env:${INTERPRETER_CALLER_TOKEN_ENV}
 $serverConnectionEnv = $env:${INTERPRETER_CLI_SERVER_CONNECTION_ENV}
