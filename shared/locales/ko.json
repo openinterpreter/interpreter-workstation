@@ -631,6 +631,8 @@
   "settings.profiles.provider.hosted.emptyState": "일치하는 모델이 없습니다.",
   "settings.profiles.provider.hosted.cachedModelsNotice": "백그라운드에서 새로고침하는 동안 캐시된 모델을 표시합니다.",
   "settings.profiles.provider.openaiOauth.modelDescription": "GPT 모델을 선택하세요.",
+  "settings.profiles.provider.openaiOauth.modelUnavailable": "{{model}}은(는) 이 ChatGPT 계정이 반환한 모델 목록에 없습니다. OpenAI API 목록에 있다고 해서 ChatGPT 구독으로 사용할 수 있는 것은 아닙니다. 계정 자격을 확인하거나 목록을 새로 고치세요. 모델과 결제 방법은 변경되지 않았습니다.",
+  "settings.profiles.provider.api.modelUnavailable": "{{model}}은(는) 이 제공자의 현재 선택 가능한 모델 목록에 없습니다. 사용할 수 없거나 지원이 중단될 예정이거나 호환성 때문에 제외되었을 수 있습니다. 목록을 새로 고치고 제공자에게 사용 권한을 확인하세요. 선택과 결제 방법은 변경되지 않았습니다.",
   "settings.profiles.provider.openaiOauth.waitingAuth": "브라우저에서 인증을 기다리는 중...",
   "settings.profiles.provider.openaiOauth.connectedAs": "{{email}}(으)로 연결됨",
   "settings.profiles.provider.openaiOauth.connectedAsDefault": "OpenAI 사용자",

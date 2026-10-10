@@ -650,6 +650,8 @@
   "settings.profiles.provider.hosted.emptyState": "Нет подходящих моделей.",
   "settings.profiles.provider.hosted.cachedModelsNotice": "Показаны кэшированные модели, пока выполняется фоновое обновление.",
   "settings.profiles.provider.openaiOauth.modelDescription": "Выберите модель GPT.",
+  "settings.profiles.provider.openaiOauth.modelUnavailable": "{{model}} отсутствует в списке моделей, возвращённом для этой учётной записи ChatGPT. Наличие в каталоге OpenAI API не означает доступ по подписке ChatGPT. Проверьте доступность для учётной записи или обновите список; модель и способ оплаты не изменены.",
+  "settings.profiles.provider.api.modelUnavailable": "{{model}} отсутствует в текущем списке доступных для выбора моделей этого провайдера. Модель может быть недоступна, устареть или быть исключена из-за несовместимости; обновите список и проверьте доступ у провайдера. Выбор и способ оплаты не изменены.",
   "settings.profiles.provider.openaiOauth.waitingAuth": "Ожидание проверки подлинности в браузере...",
   "settings.profiles.provider.openaiOauth.connectedAs": "Вы вошли как {{email}}",
   "settings.profiles.provider.openaiOauth.connectedAsDefault": "Пользователь OpenAI",

@@ -631,6 +631,8 @@
   "settings.profiles.provider.hosted.emptyState": "一致するモデルがありません。",
   "settings.profiles.provider.hosted.cachedModelsNotice": "バックグラウンドで更新しながらキャッシュ済みモデルを表示しています。",
   "settings.profiles.provider.openaiOauth.modelDescription": "GPT モデルを選択してください。",
+  "settings.profiles.provider.openaiOauth.modelUnavailable": "{{model}} は、この ChatGPT アカウントから返されたモデル一覧にありません。OpenAI API の掲載は ChatGPT サブスクリプションでの利用権を意味しません。アカウントの利用条件を確認するか一覧を更新してください。モデルと課金方法は変更されていません。",
+  "settings.profiles.provider.api.modelUnavailable": "{{model}} は、このプロバイダーの現在選択可能なモデル一覧にありません。利用不可、非推奨、または互換性により除外された可能性があります。一覧を更新し、プロバイダーで利用権を確認してください。選択と課金方法は変更されていません。",
   "settings.profiles.provider.openaiOauth.waitingAuth": "ブラウザでの認証を待っています...",
   "settings.profiles.provider.openaiOauth.connectedAs": "{{email}} として接続済み",
   "settings.profiles.provider.openaiOauth.connectedAsDefault": "OpenAI ユーザー",

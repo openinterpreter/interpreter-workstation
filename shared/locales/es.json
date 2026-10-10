@@ -631,6 +631,8 @@
   "settings.profiles.provider.hosted.emptyState": "No hay modelos coincidentes.",
   "settings.profiles.provider.hosted.cachedModelsNotice": "Mostrando modelos en caché mientras se actualizan en segundo plano.",
   "settings.profiles.provider.openaiOauth.modelDescription": "Elige un modelo GPT.",
+  "settings.profiles.provider.openaiOauth.modelUnavailable": "{{model}} no aparece en la lista de modelos de esta cuenta de ChatGPT. Que figure en la API de OpenAI no implica acceso mediante la suscripción de ChatGPT. Comprueba la elegibilidad de la cuenta o actualiza la lista; no se cambiaron el modelo ni el método de facturación.",
+  "settings.profiles.provider.api.modelUnavailable": "{{model}} no aparece en la lista actual de modelos seleccionables de este proveedor. Puede no estar disponible, estar obsoleto o filtrado por compatibilidad; actualiza la lista y verifica el acceso con el proveedor. No se cambiaron la selección ni el método de facturación.",
   "settings.profiles.provider.openaiOauth.waitingAuth": "Esperando autenticación en tu navegador...",
   "settings.profiles.provider.openaiOauth.connectedAs": "Conectado como {{email}}",
   "settings.profiles.provider.openaiOauth.connectedAsDefault": "Usuario de OpenAI",
