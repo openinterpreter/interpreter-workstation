@@ -4,7 +4,7 @@ import { lstat, mkdir, open, readdir, readFile, rename, rm, writeFile } from 'no
 import { createRequire } from 'node:module';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { build, type Plugin } from 'esbuild';
+import type { Plugin } from 'esbuild';
 import { assertSimpleProjectChildPath, getActiveSimpleProject } from '../simpleProjects';
 import {
   SIMPLE_INTERFACE_COMPONENT_CSS,
@@ -47,11 +47,26 @@ export function packagedEsbuildBinaryPath(
     ...(platform === 'win32' ? ['esbuild.exe'] : ['bin', 'esbuild']));
 }
 
-/** Point esbuild at the physical unpacked executable before its service starts. */
-function configurePackagedEsbuildBinary(): void {
-  if (process.env.ESBUILD_BINARY_PATH || typeof process.resourcesPath !== 'string') return;
-  const unpacked = packagedEsbuildBinaryPath(process.resourcesPath);
+/** The esbuild JavaScript module snapshots ESBUILD_BINARY_PATH when loaded.
+ * Select the physical binary before loading that module, not just before its
+ * first build: a late assignment leaves packaged Windows trying to spawn the
+ * nonexistent executable inside app.asar.
+ */
+function configurePackagedEsbuildBinary(resourcesRoot: string | undefined): void {
+  if (process.env.ESBUILD_BINARY_PATH || !resourcesRoot) return;
+  const unpacked = packagedEsbuildBinaryPath(resourcesRoot);
   if (unpacked && existsSync(unpacked)) process.env.ESBUILD_BINARY_PATH = unpacked;
+}
+
+export function loadSimpleAppCompiler(
+  loadModule: (id: string) => typeof import('esbuild') = (id) =>
+    createRequire(join(__dirname, '..', '..', 'package.json'))(id) as typeof import('esbuild'),
+  resourcesRoot: string | undefined = process.resourcesPath,
+): typeof import('esbuild') {
+  configurePackagedEsbuildBinary(resourcesRoot);
+  // Keep this require lazy and outside the main bundle. Static imports cause
+  // esbuild's module to evaluate before the packaged binary can be selected.
+  return loadModule('esbuild');
 }
 
 /**
@@ -339,8 +354,7 @@ export async function promoteSimpleApp(): Promise<SimpleAppStatus> {
   if (previous.ready && previous.sourceRevision === source.revision && !previous.diagnostic) return previous;
 
   try {
-    configurePackagedEsbuildBinary();
-    const result = await build({
+    const result = await loadSimpleAppCompiler().build({
       entryPoints: [join(sourcePath, 'main.jsx')],
       absWorkingDir: sourcePath,
       bundle: true,
