@@ -130,6 +130,28 @@ and edits retain the same thread and permission checks.
 
 Interpreter workstation tools are model-facing through the `interpreter-app` CLI only.
 
+### Native desktop authorization on a headless computer
+
+`codexApprovalPolicy` and `codexSandboxMode` do not grant native Computer Use
+access. The independent `cuaAccessPolicy` has separate `inspect` and `control`
+modes (`ask`, `deny`, `all`); discovery follows the **inspect** mode. An owner
+may explicitly set both to `all` in the config of an isolated computer whose
+agent controls that computer's own desktop. The setting is local to that
+Workstation installation, not an authorization to reach another computer,
+change a different machine's policy, use an external MCP tool, or bypass
+protected desktop targets. Unconfigured installations continue to ask.
+External MCP tools retain their own per-tool approval mode.
+
+The driver requests any required approval **before** taking the cross-process
+desktop lock. An unresolved permission request must not block already-permitted
+desktop actions. Do not resolve old requests merely because the policy changes;
+review their original owner and action in the ordinary Approvals UI.
+
+For ordinary local video inspection, prefer `ffprobe` for stream metadata,
+`ffmpeg` for bounded frames/contact sheets, and a supported full-speed player
+for final motion/audio review. Listing desktop apps is not needed to parse an
+MP4, and contact sheets alone do not prove full-speed playback quality.
+
 - Builtins and configured MCP servers are discovered and called through the CLI.
 - Do not add a second direct model-facing tool surface for workstation tools.
 - Codex-native capabilities such as shell execution and patching remain native runtime features. `js_repl` is a builtin workstation tool (`builtin-js-repl`) backed by a persistent Node kernel in the Express backend (`server/tools/builtin-tools/js-repl/`).
