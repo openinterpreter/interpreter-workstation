@@ -3059,10 +3059,18 @@ export async function withMacCuaDriverProcessLockForTest<T>(
   }
 }
 
-async function withMacCuaDriverProcessLock<T>(fn: () => Promise<T>): Promise<T> {
-  const release = await acquireMacCuaDriverProcessLock();
+// An approval can wait indefinitely for a person. It must never own the
+// cross-process desktop lock while it waits: unrelated, already-authorized
+// desktop calls must remain responsive.
+export async function withMacCuaDriverApprovalAndProcessLock<T>(
+  approve: () => Promise<void>,
+  invoke: () => Promise<T>,
+  lockDir = MAC_CUA_DRIVER_CALL_LOCK_DIR,
+): Promise<T> {
+  await approve();
+  const release = await acquireMacCuaDriverProcessLock(lockDir);
   try {
-    return await fn();
+    return await withMacCuaDriverSerialized(invoke);
   } finally {
     release();
   }
@@ -3258,6 +3266,15 @@ async function requestApproval(
   }
 
   if (DISCOVERY_TOOLS.has(toolName)) {
+    const discoveryMode = resolveCuaAccessPolicyMode(
+      await cuaAccessPolicyProvider(),
+      null,
+      'inspect',
+    );
+    if (discoveryMode === 'all') return;
+    if (discoveryMode === 'deny') {
+      throw new Error('Computer Use inspect access to the desktop is denied by Settings > Permissions.');
+    }
     const copy = process.platform === 'win32'
       ? windowsDiscoveryApprovalCopy(toolName)
       : {
@@ -3353,9 +3370,14 @@ async function callCuaDriverCli(
 ): Promise<ToolCallResponse> {
   assertNotProtectedDesktopAutomationTarget(toolName, args);
   if (process.platform === 'darwin' || process.platform === 'linux') {
-    return withMacCuaDriverProcessLock(() => (
-      withMacCuaDriverSerialized(() => callMacCuaDriverCli(toolName, args, context, imageOutputPath, approvalArgs))
-    ));
+    if (toolName === 'check_permissions' && !booleanArg(args, 'prompt')) {
+      return macPermissionStatusResponse(await getMacComputerUsePermissionStatus());
+    }
+    await ensureMacComputerUsePermissionsBeforeDaemon();
+    return withMacCuaDriverApprovalAndProcessLock(
+      () => requestApproval(toolName, approvalArgs ?? args, context),
+      () => callMacCuaDriverCli(toolName, args, context, imageOutputPath),
+    );
   }
   await requestApproval(toolName, approvalArgs ?? args, context);
   await requestWindowsForegroundApprovalForPointerIfNeeded(toolName, args, context);
@@ -3376,14 +3398,7 @@ async function callMacCuaDriverCli(
   args: Record<string, unknown>,
   context?: BuiltinToolContext,
   imageOutputPath?: string,
-  approvalArgs?: Record<string, unknown>,
 ): Promise<ToolCallResponse> {
-  if (toolName === 'check_permissions' && !booleanArg(args, 'prompt')) {
-    return macPermissionStatusResponse(await getMacComputerUsePermissionStatus());
-  }
-  await ensureMacComputerUsePermissionsBeforeDaemon();
-  await requestApproval(toolName, approvalArgs ?? args, context);
-
   const binary = resolveCuaDriverBinary();
   await ensureCuaDriverDaemon(binary);
   await requestMacForegroundApprovalIfNeeded(toolName, args, context);

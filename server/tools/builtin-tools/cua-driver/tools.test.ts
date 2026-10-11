@@ -28,6 +28,7 @@ import {
   setWindowsCuaDriverToolProviderForTest,
   shutdownCuaDriverProcesses,
   withMacCuaDriverProcessLockForTest,
+  withMacCuaDriverApprovalAndProcessLock,
 } from './tools';
 import type { BrowserControlStatus } from '../../../../shared/types/browserControl';
 import type { BrowserAccessPolicy, BrowserAccessPolicyMode, BrowserAccessProfilePolicy } from '../../../../shared/browserAccessPolicy';
@@ -497,6 +498,33 @@ describe('macOS Computer Use wrapper behavior', () => {
     fs.rmSync(lockRoot, { recursive: true, force: true });
   });
 
+  test('pending discovery approval never holds the desktop process lock', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cua-driver-approval-lock-test-'));
+    const lockDir = path.join(root, 'driver.lock');
+    let releaseApproval!: () => void;
+    const pendingApproval = new Promise<void>((resolve) => { releaseApproval = resolve; });
+    let started!: () => void;
+    const approvalStarted = new Promise<void>((resolve) => { started = resolve; });
+    const call = withMacCuaDriverApprovalAndProcessLock(
+      async () => { started(); await pendingApproval; },
+      async () => 'approved-call',
+      lockDir,
+    );
+    try {
+      await approvalStarted;
+      expect(fs.existsSync(lockDir)).toBe(false);
+      await expect(withMacCuaDriverProcessLockForTest(lockDir, async () => 'other-call'))
+        .resolves.toBe('other-call');
+      releaseApproval();
+      await expect(call).resolves.toBe('approved-call');
+      expect(fs.existsSync(lockDir)).toBe(false);
+    } finally {
+      releaseApproval();
+      await call;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('summarizes actionable indexed controls before the full accessibility tree', () => {
     const summary = buildComputerUseInteractiveElementsSummaryForTest([
       'application Chromium',
@@ -672,6 +700,31 @@ describe('macOS Computer Use wrapper behavior', () => {
         );
       } finally {
         setCuaAccessPolicyProviderForCuaDriverTest(null);
+      }
+    });
+  });
+
+  test('explicit local desktop inspect/control grant skips discovery while deny stays enforced', async () => {
+    await withPlatform('linux', async () => {
+      setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+        permissions: { inspect: { mode: 'all' }, control: { mode: 'all' } },
+        appPolicies: [],
+      }));
+      try {
+        await expect(requestApprovalForTest('list_apps', {})).resolves.toBeUndefined();
+        await expect(requestApprovalForTest('get_app_state', { app: 'LocalApp' })).resolves.toBeUndefined();
+        await expect(requestApprovalForTest('click', { app: 'LocalApp' })).resolves.toBeUndefined();
+      } finally {
+        setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+          permissions: { inspect: { mode: 'deny' }, control: { mode: 'deny' } },
+          appPolicies: [],
+        }));
+        try {
+          await expect(requestApprovalForTest('list_apps', {})).rejects.toThrow('denied by Settings');
+          await expect(requestApprovalForTest('click', { app: 'LocalApp' })).rejects.toThrow('denied by Settings');
+        } finally {
+          setCuaAccessPolicyProviderForCuaDriverTest(null);
+        }
       }
     });
   });
