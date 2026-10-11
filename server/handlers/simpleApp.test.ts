@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { clearConfigCache, setInterpreterHomeDir } from '../configStore';
 import { getSimpleWorkspacePath } from '../simpleWorkspace';
 import { createSimpleProject, getActiveSimpleProject } from '../simpleProjects';
 import {
   packagedEsbuildBinaryPath,
+  loadSimpleAppCompiler,
   promoteSimpleApp,
   readSimpleAppRuntime,
   readSimpleAppState,
@@ -59,6 +60,31 @@ describe('packaged Simple compiler executable', () => {
     expect(packagedEsbuildBinaryPath('/resources', 'darwin', 'arm64'))
       .toBe(join('/resources', 'app.asar.unpacked', 'node_modules', '@esbuild', 'darwin-arm64', 'bin', 'esbuild'));
     expect(packagedEsbuildBinaryPath('/resources', 'freebsd', 'x64')).toBeNull();
+  });
+
+  test('selects the unpacked binary before evaluating the compiler module', () => {
+    const root = mkdtempSync(join(tmpdir(), 'interpreter-esbuild-resources-'));
+    const binary = packagedEsbuildBinaryPath(root);
+    expect(binary).not.toBeNull();
+    mkdirSync(dirname(binary!), { recursive: true });
+    writeFileSync(binary!, 'fixture');
+    const previous = process.env.ESBUILD_BINARY_PATH;
+    delete process.env.ESBUILD_BINARY_PATH;
+    try {
+      let loaded = false;
+      const compiler = loadSimpleAppCompiler((id) => {
+        expect(id).toBe('esbuild');
+        expect(process.env.ESBUILD_BINARY_PATH).toBe(binary);
+        loaded = true;
+        return { version: 'test' } as typeof import('esbuild');
+      }, root);
+      expect(loaded).toBe(true);
+      expect(compiler.version).toBe('test');
+    } finally {
+      if (previous === undefined) delete process.env.ESBUILD_BINARY_PATH;
+      else process.env.ESBUILD_BINARY_PATH = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
