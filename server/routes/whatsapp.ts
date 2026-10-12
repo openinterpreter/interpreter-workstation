@@ -23,11 +23,27 @@ const router = Router();
 
 function localSameOrigin(req: Request): boolean {
   if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '')) return false;
+  // A loopback socket alone does not authenticate the Host header: DNS
+  // rebinding can direct a browser to loopback under an attacker's hostname.
+  const host = req.get('host');
+  if (!host) return false;
+  let destination: URL;
+  try { destination = new URL(`http://${host}`); }
+  catch { return false; }
+  if (!['localhost', '127.0.0.1', '[::1]'].includes(destination.hostname) ||
+      destination.username || destination.password || destination.pathname !== '/' ||
+      destination.search || destination.hash || !destination.port || destination.host !== host.toLowerCase()) return false;
+  const actualPort = req.socket.localPort;
+  const forwardedDevPort = Number(destination.port) >= 5173 && Number(destination.port) <= 5193;
   const origin = req.get('origin');
-  if (!origin) return true; // Local CLI/desktop clients, never a cross-site browser.
+  if (!origin) return Number(destination.port) === actualPort; // Local native clients must address this server.
   // Opaque origins are not app identity: packaged Electron uses its trusted
   // main-frame IPC proxy, which makes a loopback request without Origin.
-  try { return new URL(origin).host === req.get('host'); }
+  try {
+    const source = new URL(origin);
+    return source.protocol === 'http:' && !source.username && !source.password &&
+      source.origin === destination.origin && (Number(destination.port) === actualPort || forwardedDevPort);
+  }
   catch { return false; }
 }
 
