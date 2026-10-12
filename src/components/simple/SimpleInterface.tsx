@@ -448,7 +448,9 @@ export function SimpleInterface({ onMessage }: Props) {
               data-simple-interface-frame
               title="Interpreter interface"
               src={runtimeUrl}
-              sandbox="allow-scripts"
+              // React onSubmit requires allow-forms. The runtime document CSP
+              // confines native form navigation to its GET-only app document.
+              sandbox="allow-scripts allow-forms"
               onFocus={() => window.dispatchEvent(new CustomEvent("simple-interface:interaction"))}
               className="absolute inset-0 size-full border-0 bg-transparent"
             />
