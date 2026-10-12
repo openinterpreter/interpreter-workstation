@@ -36,4 +36,19 @@ describe('Simple versioned update note', () => {
     await waitFor(() => expect(topNotices.list).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole('region', { name: "What's New" })).not.toBeInTheDocument();
   });
+
+  test('a successful retry clears a previous dismissal error', async () => {
+    const user = userEvent.setup();
+    topNotices.dismiss.mockRejectedValueOnce(new Error('temporary write failure'));
+    render(<SimpleWhatsNew firstRunSession={false} onVisibilityChange={vi.fn()} />);
+    await screen.findByRole('region', { name: "What's New" });
+
+    await user.click(screen.getByRole('button', { name: "Dismiss What's New" }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not save this change. Try again.');
+
+    await user.click(screen.getByRole('button', { name: "Dismiss What's New" }));
+    await waitFor(() => expect(screen.queryByRole('region', { name: "What's New" })).not.toBeInTheDocument());
+    expect(screen.queryByText('Could not save this change. Try again.')).not.toBeInTheDocument();
+    expect(topNotices.dismiss).toHaveBeenCalledTimes(2);
+  });
 });
