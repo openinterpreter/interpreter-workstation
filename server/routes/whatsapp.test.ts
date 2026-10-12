@@ -251,6 +251,7 @@ test('opaque and unrelated browser origins cannot mutate binding; native loopbac
     expect((await fetch(url, { method: 'PUT', headers: { Host: 'malicious.example:5173', 'Content-Type': 'application/json' }, body: JSON.stringify({ threadId: '../invalid' }) })).status).toBe(403);
     expect((await fetch(url, { method: 'PUT', headers: { Origin: 'http://localhost:5174', Host: 'localhost:5173', 'Content-Type': 'application/json' }, body: JSON.stringify({ threadId: '../invalid' }) })).status).toBe(403);
     expect((await fetch(url, { method: 'PUT', headers: { Host: 'localhost:5173', 'Content-Type': 'application/json' }, body: JSON.stringify({ threadId: '../invalid' }) })).status).toBe(403);
+    expect((await fetch(url, { method: 'GET', headers: { Host: 'localhost:5173' } })).status).toBe(200);
     // The Vite browser-dev proxy preserves its Host and Origin while forwarding
     // to this loopback socket; an invalid thread then reaches normal validation.
     expect((await fetch(url, { method: 'PUT', headers: { Origin: 'http://localhost:5173', Host: 'localhost:5173', 'Content-Type': 'application/json' }, body: JSON.stringify({ threadId: '../invalid' }) })).status).toBe(400);

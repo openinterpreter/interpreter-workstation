@@ -36,7 +36,11 @@ function localSameOrigin(req: Request): boolean {
   const actualPort = req.socket.localPort;
   const forwardedDevPort = Number(destination.port) >= 5173 && Number(destination.port) <= 5193;
   const origin = req.get('origin');
-  if (!origin) return Number(destination.port) === actualPort; // Local native clients must address this server.
+  if (!origin) {
+    // Same-origin browser GETs omit Origin. Vite preserves its own loopback
+    // Host while proxying the read-only status route to Express.
+    return Number(destination.port) === actualPort || (req.method === 'GET' && forwardedDevPort);
+  }
   // Opaque origins are not app identity: packaged Electron uses its trusted
   // main-frame IPC proxy, which makes a loopback request without Origin.
   try {
