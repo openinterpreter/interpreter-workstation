@@ -1143,7 +1143,7 @@ export function SimpleShell({
                         </button>
                       </section>
                       <SimpleThemeSettings />
-                      <ExperienceSectionContent />
+                      <ExperienceSectionContent compact />
                       <SimpleChannelsSettings threadId={threadId} />
                       <div className="mt-7 border-t border-foreground/[0.08] pt-5">
                         <SimpleConnectionsSettings />

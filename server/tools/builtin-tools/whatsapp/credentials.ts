@@ -110,9 +110,9 @@ export function enqueueSaveCreds(saveCreds: () => Promise<void> | void): void {
 /**
  * Check if Baileys auth state exists on disk (has valid creds.json).
  */
-export function hasAuthState(): boolean {
+export function hasAuthState(authDir: string = AUTH_DIR): boolean {
   try {
-    const credsPath = resolveCredsPath();
+    const credsPath = join(authDir, 'creds.json');
     const stats = statSync(credsPath);
     if (!stats.isFile() || stats.size <= 1) return false;
     const raw = readFileSync(credsPath, 'utf-8');

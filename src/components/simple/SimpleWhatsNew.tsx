@@ -31,6 +31,7 @@ export function SimpleWhatsNew({ firstRunSession, onVisibilityChange }: {
   const dismiss = async () => {
     try {
       await topNotices.dismiss(NOTICE_ID);
+      setError(null);
       setVersion(null);
     } catch {
       setError('Could not save this change. Try again.');
