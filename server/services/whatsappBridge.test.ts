@@ -32,7 +32,7 @@ const sendMessageMock = mock(async (params: any) => {
   const part = {
     kind: 'text' as const,
     textForEcho: text,
-    messageId: `mock-msg-${Date.now()}-${Math.random()}`,
+    messageId: `mock-msg-${Date.now()}-${Math.random().toString(36).slice(2)}`,
   };
   params.options?.onBeforeSend?.(part);
   params.options?.onSent?.(part);
@@ -41,11 +41,15 @@ const sendMessageMock = mock(async (params: any) => {
 const broadcastSpy = mock(() => {});
 const notifySpy = mock(() => {});
 let durableBinding: { threadId: string; accountId: string } | null = null;
+let advancedMode = true;
 const wakeIngest = mock(async (_threadId: string, _sourceId: string, _eventId: string, _message: string) => ({ status: 'pending' }));
 const wakeTick = mock(async () => {});
 const wakeList = mock((_threadId: string) => ({ events: [] as Array<{ sourceId: string; turnId: string; status: string }> }));
 const offerReply = mock(async () => true);
 const confirmReply = mock(async () => {});
+const holdReply = mock(async () => {});
+const rememberIds = mock(async (_ids: string[]) => {});
+const knownId = mock(async (_id: string) => false);
 let onCompleted: (event: unknown) => void = () => {};
 
 mock.module('./whatsappBridgeDependencies', () => ({
@@ -61,6 +65,10 @@ mock.module('./whatsappBridgeDependencies', () => ({
   subscribeCodexNotifications: (callback: (event: unknown) => void) => { onCompleted = callback; return () => {}; },
   offerWhatsAppReply: offerReply,
   confirmWhatsAppReply: confirmReply,
+  holdWhatsAppReply: holdReply,
+  rememberWhatsAppOutboundIds: rememberIds,
+  isKnownWhatsAppOutboundId: knownId,
+  loadConfig: async () => ({ advancedMode }),
 }));
 
 const {
@@ -112,11 +120,16 @@ describe('whatsappBridge', () => {
     sendMessageMock.mockClear();
     fakePhoneNumber = '+15551234567';
     durableBinding = null;
+    advancedMode = true;
     wakeIngest.mockClear();
     wakeTick.mockClear();
     wakeList.mockClear();
     offerReply.mockClear();
+    offerReply.mockResolvedValue(true);
     confirmReply.mockClear();
+    holdReply.mockClear();
+    rememberIds.mockClear();
+    knownId.mockClear();
     resetBridgeSession();
   });
 
@@ -141,6 +154,23 @@ describe('whatsappBridge', () => {
     expect(broadcastSpy).not.toHaveBeenCalledWith('agent-tab:create-requested', expect.anything());
   });
 
+  test('unbound paired Simple self-chat does not start a separate Advanced agent', async () => {
+    advancedMode = false;
+    fakeConnectionEvents.emit('message', makeSelfChatMessage({ id: 'unbound-simple-123' }));
+    await waitForBatchFlush();
+    expect(wakeIngest).not.toHaveBeenCalled();
+    expect(broadcastSpy).not.toHaveBeenCalledWith('agent-tab:create-requested', expect.anything());
+  });
+
+  test('a persisted outbound transport ID never wakes a durable thread on reconnect', async () => {
+    durableBinding = { threadId: 'thread-12345678', accountId: '15551234567' };
+    knownId.mockResolvedValue(true);
+    fakeConnectionEvents.emit('message', makeSelfChatMessage({ id: 'replayed-outbound-123', body: 'Finished interface' }));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(knownId).toHaveBeenCalledWith('replayed-outbound-123');
+    expect(wakeIngest).not.toHaveBeenCalled();
+  });
+
   test('sends one completed durable response to the matching paired self-chat, suppressing its echo', async () => {
     durableBinding = { threadId: 'thread-12345678', accountId: '15551234567' };
     wakeList.mockReturnValue({ events: [{ sourceId: 'whatsapp-self', turnId: 'turn-12345678', status: 'admitted' }] });
@@ -152,10 +182,23 @@ describe('whatsappBridge', () => {
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
     expect(offerReply).toHaveBeenCalledWith('thread-12345678', 'turn-12345678');
     expect(confirmReply).toHaveBeenCalledWith('thread-12345678', 'turn-12345678');
+    expect(rememberIds).toHaveBeenCalledWith([expect.stringMatching(/^mock-msg-/)]);
     offerReply.mockResolvedValue(false);
     onCompleted(completed);
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  test('holds a failed durable reply for visible manual recovery without automatic replay', async () => {
+    durableBinding = { threadId: 'thread-12345678', accountId: '15551234567' };
+    wakeList.mockReturnValue({ events: [{ sourceId: 'whatsapp-self', turnId: 'turn-failed0001', status: 'admitted' }] });
+    sendMessageMock.mockImplementationOnce(async () => { throw new Error('offline'); });
+    onCompleted({ method: 'turn/completed', params: { threadId: 'thread-12345678', turn: {
+      id: 'turn-failed0001', status: 'completed', items: [{ type: 'agentMessage', text: 'Ready', phase: 'final_answer' }],
+    } } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(holdReply).toHaveBeenCalledWith('thread-12345678', 'turn-failed0001');
+    expect(confirmReply).not.toHaveBeenCalled();
   });
 
   // ===========================================================================

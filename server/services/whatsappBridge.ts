@@ -20,6 +20,10 @@ import {
   subscribeCodexNotifications,
   offerWhatsAppReply,
   confirmWhatsAppReply,
+  holdWhatsAppReply,
+  rememberWhatsAppOutboundIds,
+  isKnownWhatsAppOutboundId,
+  loadConfig,
 } from './whatsappBridgeDependencies';
 import {
   extractDownloadableMedia,
@@ -576,6 +580,7 @@ async function buildInboundAgentMessagePayload(
 async function handleInboundMessage(message: CachedMessage, rawMessage?: WAMessage): Promise<void> {
   if (!isSelfChat(message.chatId)) return;
   if (isIgnoredOutboundEcho(message)) return;
+  if (await isKnownWhatsAppOutboundId(message.id)) return;
 
   const inboundPayload = await buildInboundAgentMessagePayload(message, rawMessage);
   if (!inboundPayload) return;
@@ -590,6 +595,9 @@ async function handleInboundMessage(message: CachedMessage, rawMessage?: WAMessa
     void wakeSources.tick().catch((error) => console.error('[WhatsAppBridge] Durable wake unavailable:', error));
     return;
   }
+  // Simple has one durable conversation. Pairing during onboarding does not
+  // create an unrelated legacy agent tab before the user binds that thread.
+  if (!(await loadConfig()).advancedMode) return;
   queueInboundPayload(message.chatId, inboundPayload);
 }
 
@@ -622,7 +630,8 @@ export function initializeWhatsAppBridge(): void {
     const replies = turn.items.flatMap((item) => item.type === 'agentMessage' && item.phase !== 'commentary' && item.text.trim() ? [item.text.trim()] : []);
     const reply = replies[replies.length - 1];
     if (!reply) return;
-    void sendDurableWhatsAppReply(threadId, turn.id, reply).catch((error) => {
+    void sendDurableWhatsAppReply(threadId, turn.id, reply).catch(async (error) => {
+      await holdWhatsAppReply(threadId, turn.id).catch(() => undefined);
       console.error('[WhatsAppBridge] Could not send durable reply; check channel status:', error);
     });
   });
@@ -637,13 +646,23 @@ async function sendDurableWhatsAppReply(threadId: string, turnId: string, text: 
   const chatId = `${binding.accountId}@s.whatsapp.net`;
   // The durable offered receipt is written before the outbound side effect.
   // A failed/ambiguous send is not retried automatically and cannot duplicate.
-  const result = await sendWhatsAppMessageWithRetry({
-    sock, chatId, text,
-    options: {
-      onBeforeSend: (part) => { if (part.textForEcho) markOutboundEchoToIgnore(chatId, undefined, part.textForEcho); },
-      onSent: (part) => markOutboundEchoToIgnore(chatId, part.messageId ?? undefined, part.textForEcho ?? ''),
-    },
-  });
+  const sentIds: string[] = [];
+  let result;
+  try {
+    result = await sendWhatsAppMessageWithRetry({
+      sock, chatId, text,
+      options: {
+        onBeforeSend: (part) => { if (part.textForEcho) markOutboundEchoToIgnore(chatId, undefined, part.textForEcho); },
+        onSent: (part) => {
+          markOutboundEchoToIgnore(chatId, part.messageId ?? undefined, part.textForEcho ?? '');
+          if (part.messageId) sentIds.push(part.messageId);
+        },
+      },
+    });
+  } finally {
+    // A multi-part send may have delivered one part before a later part failed.
+    await rememberWhatsAppOutboundIds(sentIds);
+  }
   if (result.parts.length === 0) throw new Error('WhatsApp accepted no reply parts.');
   await confirmWhatsAppReply(threadId, turnId);
 }

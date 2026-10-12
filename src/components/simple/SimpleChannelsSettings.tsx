@@ -7,6 +7,7 @@ type ChannelStatus = {
   configured: boolean;
   connected: boolean;
   accountMatches: boolean;
+  heldReplies?: number;
 };
 
 async function channelRequest(path: string, method = 'GET', body?: unknown) {
@@ -90,6 +91,9 @@ export function SimpleChannelsSettings({ threadId }: { threadId: string | null }
           )}
         </div>
       </div>
+      {!!status?.heldReplies && <p role="alert" className="mt-2 text-ui-xs text-destructive">
+        {status.heldReplies} WhatsApp reply may not have been delivered. Check your self-chat and send the response manually if missing; automatic retry is disabled to avoid duplicate messages.
+      </p>}
       {pairing && <div className="mt-3 overflow-hidden rounded-2xl border border-foreground/[0.1]">
         <InboxSetupWhatsApp onConnected={() => { setPairing(false); void refresh(); }} onCancel={() => setPairing(false)} />
       </div>}

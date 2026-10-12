@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { bindWhatsAppThread, getWhatsAppThreadBinding, unbindWhatsAppThread, offerWhatsAppReply, confirmWhatsAppReply } from './whatsappThreadBinding';
+import { bindWhatsAppThread, getWhatsAppThreadBinding, unbindWhatsAppThread, offerWhatsAppReply, confirmWhatsAppReply, holdWhatsAppReply, getHeldWhatsAppReplyCount, rememberWhatsAppOutboundIds, isKnownWhatsAppOutboundId } from './whatsappThreadBinding';
 import type { AppConfig } from '../configStore';
 
 function fixture() {
@@ -42,5 +42,17 @@ describe('WhatsApp durable conversation binding', () => {
     expect(await offerWhatsAppReply('thread-12345678', 'turn-12345678', deps)).toBe(false);
     setAccount('+15559999999');
     expect(await offerWhatsAppReply('thread-12345678', 'turn-new00001', deps)).toBe(false);
+  });
+
+  test('holds an ambiguous reply for visible recovery and remembers outbound IDs without message text', async () => {
+    const { deps } = fixture();
+    await bindWhatsAppThread('thread-12345678', deps);
+    expect(await offerWhatsAppReply('thread-12345678', 'turn-ambiguous001', deps)).toBe(true);
+    await holdWhatsAppReply('thread-12345678', 'turn-ambiguous001', deps);
+    expect(await getHeldWhatsAppReplyCount('thread-12345678', deps)).toBe(1);
+    expect(await offerWhatsAppReply('thread-12345678', 'turn-ambiguous001', deps)).toBe(false);
+    await rememberWhatsAppOutboundIds(['transport-outbound-123'], deps);
+    expect(await isKnownWhatsAppOutboundId('transport-outbound-123', deps)).toBe(true);
+    expect(await isKnownWhatsAppOutboundId('different', deps)).toBe(false);
   });
 });

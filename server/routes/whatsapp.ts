@@ -16,7 +16,7 @@ import {
   isConfigured,
 } from './whatsappSetupDependencies';
 import type { CloseReason } from '../tools/builtin-tools/whatsapp/types';
-import { bindWhatsAppThread, getWhatsAppThreadBinding, unbindWhatsAppThread } from '../handlers/whatsappThreadBinding';
+import { bindWhatsAppThread, getHeldWhatsAppReplyCount, getWhatsAppThreadBinding, unbindWhatsAppThread } from '../handlers/whatsappThreadBinding';
 import { closeWhatsAppBridgeSession } from '../services/whatsappBridge';
 
 const router = Router();
@@ -25,6 +25,9 @@ function localSameOrigin(req: Request): boolean {
   if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '')) return false;
   const origin = req.get('origin');
   if (!origin) return true; // Local CLI/desktop clients, never a cross-site browser.
+  // Electron's packaged file:// renderer has an opaque "null" origin. The
+  // global remote-host middleware still rejects mutations in remote mode.
+  if (origin === 'null') return true;
   try { return new URL(origin).host === req.get('host'); }
   catch { return false; }
 }
@@ -35,7 +38,8 @@ router.get('/thread-binding', async (req, res) => {
     const binding = await getWhatsAppThreadBinding();
     const account = getPhoneNumber()?.replace(/\D/g, '') ?? null;
     res.json({ threadId: binding?.threadId ?? null, configured: isConfigured(), connected: getConnectionState() === 'connected',
-      accountMatches: !!binding && account === binding.accountId });
+      accountMatches: !!binding && account === binding.accountId,
+      heldReplies: binding ? await getHeldWhatsAppReplyCount(binding.threadId) : 0 });
   } catch { res.status(503).json({ error: 'Channel status unavailable.' }); }
 });
 

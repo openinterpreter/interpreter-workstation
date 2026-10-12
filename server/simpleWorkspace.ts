@@ -133,7 +133,18 @@ function seedWorkspaceGuidance(workspacePath: string): void {
 }
 
 /** Resolve a persisted workspace or create the first-run Documents/Interpreter directory. */
+let pendingWorkspaceSelection: Promise<string> | null = null;
+
 export async function getSimpleWorkspacePath(defaultHomePath: string = homedir()): Promise<string> {
+  // Concurrent first-run windows must observe the same persisted reservation.
+  if (pendingWorkspaceSelection) return pendingWorkspaceSelection;
+  const selection = resolveSimpleWorkspacePath(defaultHomePath);
+  pendingWorkspaceSelection = selection;
+  try { return await selection; }
+  finally { if (pendingWorkspaceSelection === selection) pendingWorkspaceSelection = null; }
+}
+
+async function resolveSimpleWorkspacePath(defaultHomePath: string): Promise<string> {
   const saved = await getSimpleWorkspaceSetting();
   if (saved) {
     // A removable/deleted workspace must not trap the entire app behind its
@@ -175,6 +186,8 @@ export async function getSimpleWorkspacePath(defaultHomePath: string = homedir()
 
 /** Settings selection: an existing, dedicated folder; never silently create an arbitrary path. */
 export async function setSimpleWorkspacePath(inputPath: string): Promise<string> {
+  // A Settings selection takes precedence over any in-flight first-run allocation.
+  await pendingWorkspaceSelection?.catch(() => undefined);
   const path = validateSimpleWorkspacePath(inputPath);
   seedWorkspaceGuidance(path);
   await setSimpleWorkspaceSetting(path);

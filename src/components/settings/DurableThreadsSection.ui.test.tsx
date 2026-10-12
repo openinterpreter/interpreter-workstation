@@ -2,13 +2,21 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/ipc', () => ({ getApiUrl: async (path: string) => path }));
+const { setAdvancedMode } = vi.hoisted(() => ({ setAdvancedMode: vi.fn(async () => ({ success: true })) }));
+vi.mock('@/ipc', () => ({ getApiUrl: async (path: string) => path, uiSettings: { setAdvancedMode } }));
 vi.mock('../../../agent/components/ThreadWakeSources', () => ({ ThreadWakeSources: ({ threadId }: { threadId: string }) => <p>Wake methods for {threadId}</p> }));
 vi.mock('../simple/SimpleChannelsSettings', () => ({ SimpleChannelsSettings: ({ threadId }: { threadId: string }) => <p>Channel binding for {threadId}</p> }));
 import { DurableThreadsSectionContent } from './DurableThreadsSection';
 
 describe('Advanced durable threads settings', () => {
   beforeEach(() => vi.restoreAllMocks());
+
+  it('offers a deliberate way from an empty Advanced list into the durable composer', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ data: [], nextCursor: null }) })));
+    render(<DurableThreadsSectionContent />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Create conversation in Simple' }));
+    expect(setAdvancedMode).toHaveBeenCalledWith(false);
+  });
 
   it('selects an actual listed thread and exposes channel and wake management only for it', async () => {
     const fetcher = vi.fn(async () => ({ ok: true, json: async () => ({ data: [{ id: 'thread-one', preview: 'A useful interface' }], nextCursor: null }) }));
