@@ -105,6 +105,16 @@ describe('approvalQueue', () => {
     expect(filterApprovalQueueItems(items).map((item) => item.approval.id)).toEqual(['a1', 'a2']);
   });
 
+  test('filters Simple drawer approvals by durable thread rather than a layout tab', () => {
+    const items = buildApprovalQueueItems([
+      makeApproval({ id: 'simple-one', owner: makeOwner({ identity: { agentId: null, threadId: 'simple-thread', windowSessionKey: 'simple-window' } }) }),
+      makeApproval({ id: 'other-window', owner: makeOwner({ identity: { agentId: null, threadId: 'other-thread', windowSessionKey: 'other-window' } }) }),
+      makeApproval({ id: 'simple-two', owner: makeOwner({ identity: { agentId: null, threadId: 'simple-thread', windowSessionKey: 'simple-window' } }) }),
+    ], {});
+    expect(filterApprovalQueueItems(items, undefined, 'simple-thread').map((item) => item.approval.id))
+      .toEqual(['simple-one', 'simple-two']);
+  });
+
   test('groups non-tab overlay and hidden-agent approvals without dropping them', () => {
     const items = buildApprovalQueueItems([
       makeApproval({

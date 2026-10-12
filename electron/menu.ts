@@ -11,9 +11,10 @@ import {
   emitNewSidebarAgent,
   emitOpenInbox,
   emitOpenSettings,
+  emitOpenFeedback,
   emitSimpleProjectAction,
 } from './ipc/events';
-import { getBooleanUISetting, getRecentFolders, setZoomFactor } from '../server/configStore';
+import { getBooleanUISetting, getRecentFolders, setBooleanUISetting, setZoomFactor } from '../server/configStore';
 import { listSimpleProjects } from '../server/simpleProjects';
 import {
   clearWorkspaceForWindow,
@@ -126,6 +127,7 @@ export async function buildApplicationMenu(): Promise<void> {
   const isMac = process.platform === 'darwin';
   const isDev = !app.isPackaged;
   const advancedMode = await getBooleanUISetting('advancedMode');
+  const showSimpleFeedback = await getBooleanUISetting('showSimpleFeedback');
 
   // Load recent folders from config
   const recentFolders = await getRecentFolders();
@@ -410,6 +412,23 @@ export async function buildApplicationMenu(): Promise<void> {
     {
       role: 'help',
       submenu: [
+        ...(!advancedMode ? [
+          {
+            label: 'Leave Feedback…',
+            click: (_menuItem: MenuItem, browserWindow: BaseWindow | undefined) =>
+              emitOpenFeedback(toBrowserWindow(browserWindow) ?? BrowserWindow.getFocusedWindow()),
+          },
+          {
+            label: 'Show Feedback Button',
+            type: 'checkbox' as const,
+            checked: showSimpleFeedback,
+            click: async (item: MenuItem) => {
+              await setBooleanUISetting('showSimpleFeedback', item.checked);
+              await buildApplicationMenu();
+            },
+          },
+          { type: 'separator' as const },
+        ] : []),
         {
           label: t('menu.help.learnMore'),
           click: async () => {

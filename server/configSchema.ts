@@ -211,6 +211,7 @@ export const SettingsSnapshotSchema = z.object({
   reviewMarkdownEdits: z.boolean(),
   launchAtLogin: z.boolean(),
   advancedMode: z.boolean(),
+  showSimpleFeedback: z.boolean(),
   autoApproveLowRiskMediaCards: z.boolean(),
   telemetryEnabled: z.boolean(),
   allowAgentAddTools: z.boolean(),
@@ -283,6 +284,7 @@ export const AppConfigSchema = z.object({
   reviewMarkdownEdits: z.boolean().optional(),
   launchAtLogin: z.boolean().optional(),
   advancedMode: z.boolean().optional(),
+  showSimpleFeedback: z.boolean().optional(),
   autoApproveLowRiskMediaCards: z.boolean().optional(),
   whatsNewDismissed: z.boolean().optional(), // Whether the "What's new" video has been dismissed
   dismissedTopNoticeVersions: z.record(z.string(), z.string()).optional(),

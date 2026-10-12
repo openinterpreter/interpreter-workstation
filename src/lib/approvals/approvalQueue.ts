@@ -108,7 +108,11 @@ export function buildApprovalQueueItems(
 export function filterApprovalQueueItems(
   items: ApprovalQueueItem[],
   ownerAgentId?: string,
+  ownerThreadId?: string | null,
 ): ApprovalQueueItem[] {
+  if (ownerThreadId) {
+    return items.filter((item) => item.owner.threadId === ownerThreadId);
+  }
   if (!ownerAgentId) {
     return items;
   }

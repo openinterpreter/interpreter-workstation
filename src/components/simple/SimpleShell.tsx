@@ -19,6 +19,8 @@ import {
 } from "lucide-react";
 import { animate, motion, useDragControls, useMotionValue } from "motion/react";
 import { AgentThread } from "../../../agent/components/AgentThread";
+import { Approvals } from "../Approvals";
+import { getApprovalsSnapshot, refreshApprovals, subscribeApprovals } from "../../stores/approvalsStore";
 import { ComposerArea } from "../../../agent/components/ComposerArea";
 import type { BaseTiptapComposerRef } from "../../../agent/components/composer/BaseTiptapComposer";
 import { AgentMetadataProvider, type AgentMetadata } from "../../../agent/contexts/AgentMetadataContext";
@@ -37,6 +39,9 @@ import {
 import { useSimpleLive } from "./useSimpleLive";
 import { useSimpleStoredProfile } from "./useSimpleStoredProfile";
 import { SimpleConnectionsSettings } from "./SimpleConnectionsSettings";
+import { SimpleThemeSettings } from "./SimpleThemeSettings";
+import { SimpleWhatsNew } from "./SimpleWhatsNew";
+import { SimpleChannelsSettings } from "./SimpleChannelsSettings";
 import {
   simpleInterfaceClient,
   type SimplePresentation,
@@ -98,6 +103,7 @@ export function sendSimpleMessage(
 }
 
 interface SimpleShellProps {
+  firstRunSession?: boolean;
   workspacePath: string;
   initialThreadId: string | null;
   onBindThread: (threadId: string) => void | Promise<void>;
@@ -109,6 +115,7 @@ interface SimpleShellProps {
 
 /** Simple is a separate surface: no explorer, tabs, sidebars, or second-chat affordances. */
 export function SimpleShell({
+  firstRunSession = false,
   workspacePath,
   initialThreadId,
   onBindThread,
@@ -124,7 +131,18 @@ export function SimpleShell({
     Exclude<SimpleSurfaceMode, "compact">
   >(settingsOpen ? "settings" : "conversation");
   const [settingsView, setSettingsView] = useState<SimpleSettingsView>("main");
+  const [voiceSetupRequired, setVoiceSetupRequired] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(initialThreadId);
+  const [approvalCount, setApprovalCount] = useState(0);
+  const [whatsNewVisible, setWhatsNewVisible] = useState(false);
+  useEffect(() => {
+    const update = () => setApprovalCount(getApprovalsSnapshot().filter((approval) =>
+      threadId !== null && (approval.owner?.identity.threadId ?? approval.context?.threadId) === threadId,
+    ).length);
+    const unsubscribe = subscribeApprovals(update);
+    void refreshApprovals().catch(() => {});
+    return unsubscribe;
+  }, [threadId]);
   const storedProfile = useSimpleStoredProfile();
   const modelConfig = storedProfile.modelConfig;
   const modelStatus = storedProfile.status;
@@ -438,9 +456,10 @@ export function SimpleShell({
   const isPresentationOpen = surfaceMode === "presentation";
   const isSettingsOpen = surfaceMode === "settings";
   const isCompact = surfaceMode === "compact";
+  const drawerVisible = !isCompact || approvalCount > 0 || whatsNewVisible;
   const visibleDrawerMode = isCompact ? lastExpandedSurfaceMode : surfaceMode;
   const drawerHeight =
-    visibleDrawerMode === "conversation"
+    isCompact ? "auto" : visibleDrawerMode === "conversation"
       ? "min(72vh, 680px)"
       : visibleDrawerMode === "settings"
         ? "min(68vh, 640px)"
@@ -562,11 +581,16 @@ export function SimpleShell({
             }
             aria-pressed={live.state === "active"}
             title={live.error ?? undefined}
-            onClick={() =>
-              live.state === "active" || live.state === "connecting"
-                ? live.stop()
-                : void live.start()
-            }
+            onClick={() => {
+              if (live.state === "active" || live.state === "connecting") { live.stop(); return; }
+              if (live.configured === false) {
+                setVoiceSetupRequired(true);
+                openSettings();
+                setSettingsView("models");
+                return;
+              }
+              void live.start();
+            }}
             className="simple-live-button flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-[scale,filter] duration-150 hover:brightness-110 active:scale-[0.95]"
           >
             {live.state === "connecting" ? (
@@ -625,6 +649,7 @@ export function SimpleShell({
       ref={dragBoundsRef}
       className="relative flex h-screen w-full flex-col overflow-hidden bg-background text-foreground"
       data-simple-shell="true"
+      data-simple-thread-id={threadId ?? undefined}
       data-primary-thread-error={persistenceError ? "true" : undefined}
     >
       <main
@@ -797,13 +822,13 @@ export function SimpleShell({
 
                 <motion.div
                   data-simple-drawer="true"
-                  aria-hidden={isCompact}
-                  {...(isCompact ? { inert: true } : {})}
+                  aria-hidden={!drawerVisible}
+                  {...(!drawerVisible ? { inert: true } : {})}
                   initial={false}
                   animate={{
-                    opacity: isCompact ? 0 : 1,
-                    y: isCompact ? 4 : 0,
-                    clipPath: isCompact
+                    opacity: drawerVisible ? 1 : 0,
+                    y: drawerVisible ? 0 : 4,
+                    clipPath: !drawerVisible
                       ? "inset(100% 0 0 0 round 20px 20px 0 0)"
                       : "inset(0% 0 0 0 round 20px 20px 0 0)",
                   }}
@@ -811,7 +836,7 @@ export function SimpleShell({
                     duration: isCompact ? 0.18 : 0.26,
                     ease: [0.16, 1, 0.3, 1],
                   }}
-                  className={`simple-drawer absolute bottom-[calc(100%-1px)] left-5 right-5 z-0 flex flex-col overflow-hidden rounded-t-[20px] ${isCompact ? "pointer-events-none" : "pointer-events-auto"}`}
+                  className={`simple-drawer absolute bottom-[calc(100%-1px)] left-5 right-5 z-0 flex flex-col overflow-hidden rounded-t-[20px] ${drawerVisible ? "pointer-events-auto" : "pointer-events-none"}`}
                   style={{
                     height: drawerHeight,
                     transformOrigin: "bottom center",
@@ -851,6 +876,13 @@ export function SimpleShell({
                             : "Conversation"}
                       </span>
                     </motion.header>
+                  )}
+
+                  {isConversationOpen && (
+                    <details className="shrink-0 border-t border-foreground/[0.06] px-5 py-2 text-ui-xs text-muted-foreground" data-simple-activity-details>
+                      <summary className="cursor-pointer select-none rounded-md py-1 font-medium text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground">Activity details</summary>
+                      <p role="status" className="mt-1 pb-1 leading-5">{isStreaming ? 'Working' : 'Ready'} · {displayedActivitySummary} · {messageCount} messages in this conversation</p>
+                    </details>
                   )}
 
                   {isPresentationOpen && presentation && (
@@ -1110,7 +1142,9 @@ export function SimpleShell({
                           Add or manage models
                         </button>
                       </section>
+                      <SimpleThemeSettings />
                       <ExperienceSectionContent />
+                      <SimpleChannelsSettings threadId={threadId} />
                       <div className="mt-7 border-t border-foreground/[0.08] pt-5">
                         <SimpleConnectionsSettings />
                         {live.error && (
@@ -1138,6 +1172,9 @@ export function SimpleShell({
                       className="min-h-0 flex-1 overflow-y-auto border-t border-foreground/[0.06] px-6 py-5"
                       aria-label="Models"
                     >
+                      {voiceSetupRequired && <div role="status" className="mb-4 rounded-xl border border-foreground/[0.12] p-3 text-ui-sm leading-5 text-foreground">
+                        GPT Live needs an OpenAI API key with Realtime access. Add an API-key model below, then return to the microphone button. ChatGPT sign-in may support text responses but does not establish Realtime access.
+                      </div>}
                       <ProfilesSectionContent
                         selectedProfileId={selectedProfileId}
                         onProfileUpdate={() => {
@@ -1146,6 +1183,13 @@ export function SimpleShell({
                       />
                     </motion.div>
                   )}
+                  {approvalCount > 0 && threadId && (
+                    <section aria-label="Approvals" className="max-h-[45vh] min-h-0 overflow-y-auto border-t border-foreground/[0.08] px-4 py-3">
+                      <h2 className="mb-2 text-ui-sm font-medium text-foreground">Approval needed · {approvalCount}</h2>
+                      <Approvals ownerThreadId={threadId} />
+                    </section>
+                  )}
+                  <SimpleWhatsNew firstRunSession={firstRunSession} onVisibilityChange={setWhatsNewVisible} />
                 </motion.div>
 
                 <motion.div

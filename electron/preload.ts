@@ -686,6 +686,7 @@ export interface ElectronAPI {
     onNewSidebarAgent: (callback: () => void) => () => void;
     onOpenInbox: (callback: () => void) => () => void;
     onOpenSettings: (callback: () => void) => () => void;
+    onOpenFeedback: (callback: () => void) => () => void;
     onSimpleProjectAction: (
       callback: (event: import('./ipc/events').SimpleProjectMenuAction) => void,
     ) => () => void;
@@ -1698,6 +1699,11 @@ contextBridge.exposeInMainWorld('electron', {
       const listener = () => callback();
       ipcRenderer.on(IPC_CHANNELS.OPEN_SETTINGS, listener);
       return () => ipcRenderer.removeListener(IPC_CHANNELS.OPEN_SETTINGS, listener);
+    },
+    onOpenFeedback: (callback: () => void) => {
+      const listener = () => callback();
+      ipcRenderer.on(IPC_CHANNELS.OPEN_FEEDBACK, listener);
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.OPEN_FEEDBACK, listener);
     },
     onSimpleProjectAction: (
       callback: (event: import('./ipc/events').SimpleProjectMenuAction) => void,

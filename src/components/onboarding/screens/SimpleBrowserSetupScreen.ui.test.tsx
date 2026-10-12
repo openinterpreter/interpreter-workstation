@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const { getStatus, openExternal, onChanged, setFooterConfig } = vi.hoisted(() => ({
   getStatus: vi.fn(),
   openExternal: vi.fn(async () => undefined),
-  onChanged: vi.fn(() => () => {}),
+  onChanged: vi.fn((_callback: () => void) => () => {}),
   setFooterConfig: vi.fn(),
 }));
 vi.mock('../../../ipc', () => ({ browserControl: { getStatus, onChanged }, openExternal }));
@@ -56,9 +56,33 @@ describe('Simple Chrome onboarding', () => {
     expect(screen.getByRole('status').textContent).toContain('Could not check Chrome connection');
 
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(350); });
     expect(screen.getByRole('status').textContent).toBe('Chrome is not connected yet.');
     await act(async () => { finishFirst({ connectedBrowsers: 1, profiles: [] }); });
+    expect(screen.getByRole('status').textContent).toBe('Chrome is not connected yet.');
+  });
+
+  it('holds a settled connection through transient attach/detach events and confirms real disconnect', async () => {
+    let changed: () => void = () => {};
+    onChanged.mockImplementation((callback) => { changed = callback; return () => {}; });
+    getStatus.mockResolvedValueOnce({ connectedBrowsers: 1, profiles: [] });
+    render(<SimpleBrowserSetupScreen onNext={vi.fn()} discoveryReady />);
+    expect(await screen.findByText('Chrome is connected.')).toBeVisible();
+
+    vi.useFakeTimers();
+    getStatus.mockResolvedValueOnce({ connectedBrowsers: 0, profiles: [] });
+    act(() => changed());
+    await act(async () => { await vi.advanceTimersByTimeAsync(120); });
+    expect(screen.getByRole('status').textContent).toBe('Chrome is connected.');
+
+    getStatus.mockResolvedValueOnce({ connectedBrowsers: 1, profiles: [] });
+    act(() => changed());
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(screen.getByRole('status').textContent).toBe('Chrome is connected.');
+
+    getStatus.mockResolvedValueOnce({ connectedBrowsers: 0, profiles: [] });
+    act(() => changed());
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
     expect(screen.getByRole('status').textContent).toBe('Chrome is not connected yet.');
   });
 });

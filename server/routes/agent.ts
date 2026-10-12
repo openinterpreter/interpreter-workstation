@@ -727,9 +727,14 @@ export function getAgentServiceTierConfig(
 router.get('/threads', async (req: Request, res: Response) => {
   try {
     const archived = req.query.archived === '1' || req.query.archived === 'true';
+    const cursor = req.query.cursor;
+    if (cursor !== undefined && (typeof cursor !== 'string' || cursor.length > 2048)) {
+      return res.status(400).json({ error: 'Invalid pagination cursor.' });
+    }
     const result = await getCodexService().listThreads({
       ...THREAD_LIST_DEFAULTS,
       archived,
+      ...(cursor ? { cursor } : {}),
     });
     res.json(result);
   } catch (error) {

@@ -148,9 +148,7 @@ test('Simple React interface is default, preserves live state, exposes its setti
   await editorArea.getByRole('button', { name: 'Raw' }).click();
   const rawMarkdown = editorArea.getByRole('textbox');
   await expect(rawMarkdown).toHaveValue(/Canonical Markdown/);
-  await rawMarkdown.click();
-  await rawMarkdown.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
-  await rawMarkdown.pressSequentially('# Edited inside Simple mode\n\nThis was saved by the canonical Workstation editor.\n');
+  await rawMarkdown.fill('# Edited inside Simple mode\n\nThis was saved by the canonical Workstation editor.\n');
   await expect(rawMarkdown).toHaveValue(/Edited inside Simple mode/);
   await rawMarkdown.press('Tab');
   await expect.poll(async () => readFile(notePath, 'utf8'), { timeout: 10_000 })
@@ -171,7 +169,22 @@ test('Simple React interface is default, preserves live state, exposes its setti
   await expect(page.locator('[data-simple-host-view="folder"]')).toBeVisible({ timeout: 15_000 });
   const fileTreeEntry = page.locator(sel.fileEntryByName('reference.md'));
   await expect(fileTreeEntry).toBeVisible({ timeout: 10_000 });
-  await fileTreeEntry.dblclick();
+  // The live folder viewer replaces virtualized rows during filesystem
+  // refreshes. Aim a real double-click at the visible row's current bounds;
+  // Playwright's locator action otherwise retries its scroll phase whenever
+  // that row is recycled before the click can be dispatched.
+  await fileTreeEntry.evaluate((element) => element.scrollIntoView({ block: 'center' }));
+  // Scrolling can recycle the very row that initiated it; reacquire it after
+  // the scroll instead of measuring a detached (zero-rect) DOM node.
+  const treeEntryRect = await fileTreeEntry.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  });
+  const clickPoint = { x: treeEntryRect.x + Math.min(48, treeEntryRect.width / 2), y: treeEntryRect.y + treeEntryRect.height / 2 };
+  const hitName = await page.evaluate(({ x, y }) =>
+    document.elementFromPoint(x, y)?.closest('[role="treeitem"]')?.getAttribute('data-name'), clickPoint);
+  expect(hitName, `Folder viewer row is not hit-testable at ${JSON.stringify(clickPoint)}`).toBe('reference.md');
+  await page.mouse.dblclick(clickPoint.x, clickPoint.y);
   await expect(canvas.getByText(`Opened: ${nestedPath}`)).toBeVisible({ timeout: 10_000 });
 
   await writeFile(candidate, makeApp('Recovered canvas'), 'utf8');
@@ -182,7 +195,8 @@ test('Simple React interface is default, preserves live state, exposes its setti
 
   await page.getByRole('button', { name: 'Open Settings' }).click();
   await expect(page.getByRole('heading', { name: 'GPT Live' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'WhatsApp' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'WhatsApp' })).toBeVisible();
+  await expect(page.getByRole('radiogroup', { name: 'Appearance' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Add or manage models' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'New interface' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Open folder' })).toBeVisible();
@@ -258,7 +272,7 @@ test('generated React forms submit into durable project state without opening a 
   }
 });
 
-test('Simple first run offers Chrome, optional GPT Live, and the control folder without Advanced setup', async ({ page }) => {
+test('Simple first run offers Chrome and optional WhatsApp without Advanced setup or a voice gate', async ({ page }) => {
   test.setTimeout(60_000);
   const original = await onboardingState(page);
   try {
@@ -296,22 +310,14 @@ test('Simple first run offers Chrome, optional GPT Live, and the control folder 
     });
     await reloadAndWaitForPageLoadSignals(page);
     await waitForUiStability(page);
-    await expect(page.getByRole('heading', { name: 'Talk to Interpreter' })).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByRole('heading', { name: 'GPT Live' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'WhatsApp' })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Connect WhatsApp' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('button', { name: 'Pair WhatsApp' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Talk to Interpreter' })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Choose where Interpreter works' })).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Private connection' })).toHaveCount(0);
     await expect(page.locator('video')).toHaveCount(0);
     await expect(page.getByText('More coming soon')).toHaveCount(0);
 
-    await setOnboardingState(page, {
-      ...createDefaultOnboardingState(),
-      completed: false,
-      completedStepIds: ['name', 'privacy', 'tool-addons', 'simple-mcp', 'model-setup', 'model-review', 'model-credits', 'stay-connected'],
-    });
-    await reloadAndWaitForPageLoadSignals(page);
-    await waitForUiStability(page);
-    await expect(page.getByRole('heading', { name: 'Choose where Interpreter works' })).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText(/Interface projects stay in their own folders beside it/)).toBeVisible();
   } finally {
     await setOnboardingState(page, original);
     await reloadAndWaitForPageLoadSignals(page).catch(() => {});

@@ -26,10 +26,12 @@ export function LowerLeftNoticeViewport({
     return null;
   }
 
-  return createPortal(
-    <div
+  const viewport = (side: 'left' | 'right') => <div
+      key={side}
       className="pointer-events-none fixed z-[2147483000] flex flex-col items-start gap-2"
-      style={leftSidebarOpen
+      style={side === 'right'
+        ? { right: '16px', width: 'min(calc(100vw - 32px), 320px)', bottom: '16px' }
+        : leftSidebarOpen
         ? {
             left: `${SIDEBAR_INSET_REM}rem`,
             width: `min(calc(100vw - 32px), max(${MIN_WIDTH_PX}px, calc(${leftSidebarWidth}px - ${SIDEBAR_INSET_REM * 2}rem)))`,
@@ -41,12 +43,15 @@ export function LowerLeftNoticeViewport({
             bottom: '16px',
           }}
     >
-      {sortedNotices.map((notice) => (
+      {sortedNotices.filter((notice) => (notice.side ?? 'left') === side).map((notice) => (
         <div key={notice.id} className="pointer-events-auto">
           {notice.content}
         </div>
       ))}
-    </div>,
+    </div>;
+
+  return createPortal(
+    <>{viewport('left')}{viewport('right')}</>,
     document.body,
   );
 }

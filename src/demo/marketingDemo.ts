@@ -2822,6 +2822,9 @@ export const marketingDemoPrimaryColorIpc = {
 };
 
 export const marketingDemoUiSettingsIpc = {
+  getShowSimpleFeedback: async () => ({ enabled: true }),
+  setShowSimpleFeedback: async (enabled: boolean) => ({ success: true, enabled }),
+  onShowSimpleFeedbackChanged: (_callback: (event: unknown) => void) => NOOP_UNSUBSCRIBE,
   getAdvancedMode: async () => ({ enabled: true }),
   setAdvancedMode: async (enabled: boolean) => ({ success: true, enabled }),
   onAdvancedModeChanged: (_callback: (event: unknown) => void) => NOOP_UNSUBSCRIBE,

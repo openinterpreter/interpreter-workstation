@@ -361,7 +361,7 @@ const PRESET_SCAFFOLDING: Record<PresetKey, ProfilePreset> = {
     description: 'Use a supported Chat Completions or Responses API endpoint.',
     icon: <Key className="size-5 text-muted-foreground" />,
     group: 'api',
-    defaultName: 'GPT-5.6 Luna',
+    defaultName: 'GPT-6 Sol',
     provider: 'api',
     modelId: DEFAULT_OPENAI_RESPONSES_CUSTOM_TOOL_MODEL_ID,
     codexProfileId: 'custom',

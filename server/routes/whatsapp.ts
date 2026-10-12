@@ -3,7 +3,7 @@
  * Handles QR code pairing, connection status, and disconnection.
  */
 
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import QRCode from 'qrcode';
 import { DisconnectReason } from '@whiskeysockets/baileys';
 import {
@@ -16,8 +16,45 @@ import {
   isConfigured,
 } from './whatsappSetupDependencies';
 import type { CloseReason } from '../tools/builtin-tools/whatsapp/types';
+import { bindWhatsAppThread, getWhatsAppThreadBinding, unbindWhatsAppThread } from '../handlers/whatsappThreadBinding';
+import { closeWhatsAppBridgeSession } from '../services/whatsappBridge';
 
 const router = Router();
+
+function localSameOrigin(req: Request): boolean {
+  if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '')) return false;
+  const origin = req.get('origin');
+  if (!origin) return true; // Local CLI/desktop clients, never a cross-site browser.
+  try { return new URL(origin).host === req.get('host'); }
+  catch { return false; }
+}
+
+router.get('/thread-binding', async (req, res) => {
+  if (!localSameOrigin(req)) return res.status(403).json({ error: 'Local access required.' });
+  try {
+    const binding = await getWhatsAppThreadBinding();
+    const account = getPhoneNumber()?.replace(/\D/g, '') ?? null;
+    res.json({ threadId: binding?.threadId ?? null, configured: isConfigured(), connected: getConnectionState() === 'connected',
+      accountMatches: !!binding && account === binding.accountId });
+  } catch { res.status(503).json({ error: 'Channel status unavailable.' }); }
+});
+
+router.put('/thread-binding', async (req, res) => {
+  if (!localSameOrigin(req)) return res.status(403).json({ error: 'Local access required.' });
+  try {
+    const binding = await bindWhatsAppThread(req.body?.threadId);
+    closeWhatsAppBridgeSession();
+    res.json({ threadId: binding.threadId, connected: true });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : 'Could not bind this conversation.' });
+  }
+});
+
+router.delete('/thread-binding', async (req, res) => {
+  if (!localSameOrigin(req)) return res.status(403).json({ error: 'Local access required.' });
+  try { await unbindWhatsAppThread(req.body?.threadId); res.json({ success: true }); }
+  catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : 'Could not unbind this conversation.' }); }
+});
 
 function isRestartRequiredDisconnect(reason: CloseReason): boolean {
   return reason.status === DisconnectReason.restartRequired;

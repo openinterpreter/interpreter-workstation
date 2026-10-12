@@ -42,9 +42,8 @@ import { ModelSetupScreen, type ModelPackReviewState } from './screens/ModelSetu
 import { StayConnectedScreen } from './screens/StayConnectedScreen';
 import { FeedbackScreen } from './screens/FeedbackScreen';
 import { WorkspaceChoiceScreen } from './screens/WorkspaceChoiceScreen';
-import { SimpleWorkspaceChoiceScreen } from './screens/SimpleWorkspaceChoiceScreen';
-import { SimpleConnectionsScreen } from './screens/SimpleConnectionsScreen';
 import { SimpleBrowserSetupScreen } from './screens/SimpleBrowserSetupScreen';
+import { SimpleWhatsAppSetupScreen } from './screens/SimpleWhatsAppSetupScreen';
 import { SimpleMcpSetupScreen } from './screens/SimpleMcpSetupScreen';
 import { discoverSimpleMcps, shouldShowSimpleMcpStep, type SimpleMcpSummary } from './simpleSetupDiscovery';
 import { AiSetupScreen } from './screens/AiSetupScreen';
@@ -67,6 +66,7 @@ import {
   userEmail as userEmailIpc,
   newsletter as newsletterIpc,
   theme as themeIpc,
+  workspace as workspaceIpc,
   showContextMenu,
   type ContextMenuItem,
 } from '../../ipc';
@@ -88,6 +88,7 @@ const STEP_FEATURE_3 = ONBOARDING_STEP_INDEX['feature-3'];
 const STEP_FEATURE_4 = ONBOARDING_STEP_INDEX['feature-4'];
 const STEP_TOOL_ADDONS = ONBOARDING_STEP_INDEX['tool-addons'];
 const STEP_SIMPLE_MCP = ONBOARDING_STEP_INDEX['simple-mcp'];
+const STEP_SIMPLE_WHATSAPP = ONBOARDING_STEP_INDEX['simple-whatsapp'];
 const STEP_OVERLAY_FIRST_USE = ONBOARDING_STEP_INDEX['overlay-first-use'];
 const STEP_OVERLAY_PERMISSIONS = ONBOARDING_STEP_INDEX['overlay-permissions'];
 const STEP_MODEL_SETUP = ONBOARDING_STEP_INDEX['model-setup'];
@@ -107,8 +108,7 @@ const SIMPLE_ENABLED_STEPS = [
   STEP_MODEL_SETUP,
   STEP_MODEL_REVIEW,
   STEP_MODEL_CREDITS,
-  STEP_STAY_CONNECTED,
-  STEP_WORKSPACE_CHOICE,
+  STEP_SIMPLE_WHATSAPP,
 ];
 const ONBOARDING_PROFILE_LOAD_TIMEOUT_MS = 1500;
 const ONBOARDING_PROFILE_LOAD_MAX_ATTEMPTS = 3;
@@ -567,6 +567,10 @@ function OnboardingOverlayContent({ onComplete, simpleMode }: OnboardingOverlayC
       return false;
     }
 
+    // Provision the private control workspace automatically before the first
+    // Simple conversation. The user can move it later from Settings.
+    if (simpleMode) await workspaceIpc.getSimple();
+
     telemetryIpc.trackOnboarding('onboarding_completed', {}).catch(() => {});
     const { state } = await getOnboardingState();
     await setOnboardingState({
@@ -577,15 +581,11 @@ function OnboardingOverlayContent({ onComplete, simpleMode }: OnboardingOverlayC
     completeOnboarding();
     onComplete();
     return true;
-  }, [activeStepIndices, completeOnboarding, goToStep, onComplete]);
+  }, [activeStepIndices, completeOnboarding, goToStep, onComplete, simpleMode]);
 
   const handleWorkspaceChoiceFinish = useCallback(async () => {
-    if (simpleMode) {
-      await handleOnboardingComplete();
-      return;
-    }
     goToStep(STEP_FEEDBACK);
-  }, [goToStep, handleOnboardingComplete, simpleMode]);
+  }, [goToStep]);
 
   const handleAiSetupComplete = useCallback(async (answers: OnboardingInterviewAnswers) => {
     const { interviewDraft, interviewResult } = buildOnboardingInterviewResult(
@@ -776,6 +776,8 @@ function OnboardingOverlayContent({ onComplete, simpleMode }: OnboardingOverlayC
         return simpleMode && shouldShowSimpleMcpStep(simpleMcpSummary) && simpleMcpSummary
           ? <SimpleMcpSetupScreen summary={simpleMcpSummary} onNext={goForward} />
           : null;
+      case STEP_SIMPLE_WHATSAPP:
+        return simpleMode ? <SimpleWhatsAppSetupScreen onFinish={handleOnboardingComplete} /> : null;
       case STEP_OVERLAY_FIRST_USE:
         return <OverlayFirstUseScreen onNext={goForward} />;
       case STEP_OVERLAY_PERMISSIONS:
@@ -796,7 +798,6 @@ function OnboardingOverlayContent({ onComplete, simpleMode }: OnboardingOverlayC
           />
         );
       case STEP_STAY_CONNECTED:
-        if (simpleMode) return <SimpleConnectionsScreen onNext={goForward} />;
         return (
           <StayConnectedScreen
             authenticatedEmail={user?.email ?? undefined}
@@ -806,9 +807,7 @@ function OnboardingOverlayContent({ onComplete, simpleMode }: OnboardingOverlayC
           />
         );
       case STEP_WORKSPACE_CHOICE:
-        return simpleMode
-          ? <SimpleWorkspaceChoiceScreen onFinish={handleWorkspaceChoiceFinish} />
-          : <WorkspaceChoiceScreen onFinish={handleWorkspaceChoiceFinish} />;
+        return <WorkspaceChoiceScreen onFinish={handleWorkspaceChoiceFinish} />;
       case STEP_AI_SETUP:
         return <AiSetupScreen onComplete={handleAiSetupComplete} />;
       case STEP_FEEDBACK:

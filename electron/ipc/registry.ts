@@ -180,6 +180,7 @@ export const IPC_CHANNELS = {
   NEW_SIDEBAR_AGENT: 'new-sidebar-agent',
   OPEN_INBOX: 'open-inbox',
   OPEN_SETTINGS: 'open-settings',
+  OPEN_FEEDBACK: 'open-feedback',
   SIMPLE_PROJECT_ACTION: 'simple-project-action',
 
   // PDF

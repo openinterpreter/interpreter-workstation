@@ -127,6 +127,7 @@ export interface AppConfig {
   backgroundOpacity?: number; // Background opacity (0-1 range)
   zoomFactor?: number; // Interface zoom factor (0.5-3 range)
   theme?: 'light' | 'dark' | 'system'; // Theme preference
+  showSimpleFeedback?: boolean; // Floating Simple feedback button (menu action remains available)
   primaryColor?: string; // Primary accent color (e.g., "blue", "purple")
   lastWorkspace?: string | null; // Last opened workspace path
   /** The durable Simple conversation is scoped to its workspace, not an Advanced tab. */
@@ -135,6 +136,8 @@ export interface AppConfig {
   simpleProjectPath?: string; // Active standalone interface project
   simpleRecentProjectPaths?: string[];
   simpleOpenProjectPaths?: string[]; // Interface windows restored on the next launch
+  whatsappThreadBinding?: { threadId: string; accountId: string }; // One paired self-chat account to one existing thread
+  whatsappReplyReceipts?: Record<string, 'offered' | 'sent'>; // Durable no-replay receipts for channel replies
   recentFolders?: RecentFolder[]; // Recent workspace folders
   detectedNoteWorkspaces?: DetectedNoteWorkspace[]; // Results from the last user-requested note workspace scan
 
