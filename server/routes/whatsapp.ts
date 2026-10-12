@@ -25,9 +25,8 @@ function localSameOrigin(req: Request): boolean {
   if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '')) return false;
   const origin = req.get('origin');
   if (!origin) return true; // Local CLI/desktop clients, never a cross-site browser.
-  // Electron's packaged file:// renderer has an opaque "null" origin. The
-  // global remote-host middleware still rejects mutations in remote mode.
-  if (origin === 'null') return true;
+  // Opaque origins are not app identity: packaged Electron uses its trusted
+  // main-frame IPC proxy, which makes a loopback request without Origin.
   try { return new URL(origin).host === req.get('host'); }
   catch { return false; }
 }

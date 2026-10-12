@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { getAppServerOrigin, isBrowserDevMode } from '@/ipc';
+import { apiRequest } from '@/ipc';
 import { InboxSetupWhatsApp } from '../InboxSetupWhatsApp';
 
 type ChannelStatus = {
@@ -11,14 +11,10 @@ type ChannelStatus = {
 };
 
 async function channelRequest(path: string, method = 'GET', body?: unknown) {
-  const origin = isBrowserDevMode() ? '' : await getAppServerOrigin();
-  const response = await fetch(`${origin}/api/servers/whatsapp/${path}`, {
-    method,
-    credentials: 'include',
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const payload = await response.json();
+  // Electron forwards this through its trusted main-frame IPC proxy. Browser
+  // dev uses the normal same-origin API path, never an opaque file origin.
+  const response = await apiRequest({ method, path: `/api/servers/whatsapp/${path}`, body });
+  const payload = response.data as { error?: string } | null;
   if (!response.ok) throw new Error(payload?.error || 'WhatsApp is unavailable. Try again.');
   return payload;
 }

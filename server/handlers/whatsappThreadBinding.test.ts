@@ -48,6 +48,7 @@ describe('WhatsApp durable conversation binding', () => {
     const { deps } = fixture();
     await bindWhatsAppThread('thread-12345678', deps);
     expect(await offerWhatsAppReply('thread-12345678', 'turn-ambiguous001', deps)).toBe(true);
+    expect(await getHeldWhatsAppReplyCount('thread-12345678', deps)).toBe(1); // Crash before send/confirm.
     await holdWhatsAppReply('thread-12345678', 'turn-ambiguous001', deps);
     expect(await getHeldWhatsAppReplyCount('thread-12345678', deps)).toBe(1);
     expect(await offerWhatsAppReply('thread-12345678', 'turn-ambiguous001', deps)).toBe(false);

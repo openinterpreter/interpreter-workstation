@@ -53,6 +53,16 @@ async function waitForInterfaceFrame(
   return active;
 }
 
+test('the app main frame proxies channel mutations without granting opaque web origins access', async ({ page }) => {
+  await waitForAppReady(page);
+  const response = await page.evaluate(async () => (window as any).electron.apiRequest({
+    method: 'PUT', path: '/api/servers/whatsapp/thread-binding', body: { threadId: '../not-a-thread' },
+  }));
+  // Invalid input reaches normal validation via the registered main-frame IPC
+  // proxy. A direct browser request with Origin:null is rejected (server test).
+  expect(response.status).toBe(400);
+});
+
 test('Simple React interface is default, preserves live state, exposes its settings, and switches reversibly to Advanced', async ({ page }) => {
   test.setTimeout(90_000); // A real Electron renderer reload can take >15 seconds under CI.
   await waitForAppReady(page);

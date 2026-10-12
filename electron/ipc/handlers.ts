@@ -655,6 +655,14 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
   registerHandle(
     IPC_CHANNELS.API_REQUEST,
     async (event, params: ApiRequestParams): Promise<ApiRequestResponse> => {
+      if (params.path === '/api/servers/whatsapp/thread-binding') {
+        // Never treat an opaque HTTP Origin as proof of the packaged renderer.
+        // Only the registered app window's main frame can proxy this mutation.
+        assertTrustedFileIpcSender(event);
+        if (!getWindowSessionKeyForWindowId(getEventWindowId(event))) {
+          throw new Error('Access denied: no registered application window.');
+        }
+      }
       return new Promise((resolve, reject) => {
         const url = `http://${APP_SERVER_HOST}:${serverPort}${params.path}`;
         const senderWindowId = getEventWindowId(event);

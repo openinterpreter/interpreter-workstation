@@ -233,7 +233,7 @@ function formatDisconnectMessageForTest(reason: { isLoggedOut: boolean; status?:
   return 'WhatsApp connection failed. Check your network/firewall and try again.';
 }
 
-test('packaged file renderer may reach local binding; unrelated browser origins are rejected', async () => {
+test('opaque and unrelated browser origins cannot mutate binding; native loopback proxy can', async () => {
   const server: Server = await new Promise(resolve => {
     const s = createTestApp().listen(0, '127.0.0.1', () => resolve(s));
   });
@@ -246,8 +246,11 @@ test('packaged file renderer may reach local binding; unrelated browser origins 
       body: JSON.stringify({ threadId: '../invalid' }),
     });
     expect((await request('https://unrelated.example')).status).toBe(403);
-    // A 400 indicates the packaged renderer passed origin checks and the
-    // malformed thread ID was rejected by normal validation.
-    expect((await request('null')).status).toBe(400);
+    expect((await request('null')).status).toBe(403);
+    // The trusted Electron main-frame IPC handler proxies without Origin;
+    // normal thread-ID validation still rejects the malformed value.
+    const native = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ threadId: '../invalid' }) });
+    expect(native.status).toBe(400);
   } finally { await closeTestServer(server); }
 });

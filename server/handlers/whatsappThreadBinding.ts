@@ -96,7 +96,10 @@ export async function holdWhatsAppReply(threadId: string, turnId: string, deps: 
 
 export async function getHeldWhatsAppReplyCount(threadId: string, deps: Persistence = runtime): Promise<number> {
   const receipts = (await deps.load()).whatsappReplyReceipts ?? {};
-  return Object.entries(receipts).filter(([key, status]) => key.startsWith(`${threadId}:`) && status === 'held').length;
+  // An `offered` receipt left by a process crash is equally ambiguous: the
+  // network may have delivered it. Surface it; never replay automatically.
+  return Object.entries(receipts).filter(([key, status]) =>
+    key.startsWith(`${threadId}:`) && (status === 'held' || status === 'offered')).length;
 }
 
 /** Store only transport IDs; no message text or credentials enter receipts. */
