@@ -232,3 +232,22 @@ function formatDisconnectMessageForTest(reason: { isLoggedOut: boolean; status?:
   if (typeof reason.status === 'number') return `WhatsApp connection failed (status ${reason.status}).`;
   return 'WhatsApp connection failed. Check your network/firewall and try again.';
 }
+
+test('packaged file renderer may reach local binding; unrelated browser origins are rejected', async () => {
+  const server: Server = await new Promise(resolve => {
+    const s = createTestApp().listen(0, '127.0.0.1', () => resolve(s));
+  });
+  const addr = server.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 0;
+  try {
+    const url = `http://127.0.0.1:${port}/api/servers/whatsapp/thread-binding`;
+    const request = (origin: string) => fetch(url, {
+      method: 'PUT', headers: { Origin: origin, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ threadId: '../invalid' }),
+    });
+    expect((await request('https://unrelated.example')).status).toBe(403);
+    // A 400 indicates the packaged renderer passed origin checks and the
+    // malformed thread ID was rejected by normal validation.
+    expect((await request('null')).status).toBe(400);
+  } finally { await closeTestServer(server); }
+});

@@ -286,6 +286,12 @@ export function buildOpenAIOAuthOnboardingPack(
   };
 }
 
+/** Match provider model roles to stored-profile identities, never profile IDs to model IDs. */
+export function getOpenAIOAuthFastProfileId(pack: OnboardingModelPack): string | undefined {
+  const fastId = chooseOpenAIModelRoles(pack.profiles.map((profile) => ({ id: profile.modelId }))).fastModelId;
+  return pack.profiles.find((profile) => profile.modelId === fastId)?.id;
+}
+
 export function getOpenAIOAuthInitialSelectedProfileIds(
   pack: OnboardingModelPack,
   limit = 3,

@@ -137,7 +137,8 @@ export interface AppConfig {
   simpleRecentProjectPaths?: string[];
   simpleOpenProjectPaths?: string[]; // Interface windows restored on the next launch
   whatsappThreadBinding?: { threadId: string; accountId: string }; // One paired self-chat account to one existing thread
-  whatsappReplyReceipts?: Record<string, 'offered' | 'sent'>; // Durable no-replay receipts for channel replies
+  whatsappReplyReceipts?: Record<string, 'offered' | 'sent' | 'held'>; // Durable no-replay receipts for channel replies
+  whatsappOutboundMessageIds?: string[]; // Bounded sent-message IDs, suppress late Baileys history replay
   recentFolders?: RecentFolder[]; // Recent workspace folders
   detectedNoteWorkspaces?: DetectedNoteWorkspace[]; // Results from the last user-requested note workspace scan
 

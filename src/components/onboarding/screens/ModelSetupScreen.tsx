@@ -51,6 +51,7 @@ import {
   buildOpenAIOAuthOnboardingPack,
   chooseOpenAIModelRoles,
   getHostedOnboardingFastProfileId,
+  getOpenAIOAuthFastProfileId,
   getOpenAIOAuthInitialSelectedProfileIds,
   getOnboardingModelPack,
   inferPreferredProfileIdFromOnboardingText,
@@ -723,11 +724,6 @@ export function ModelSetupScreen({
   const loadOpenAIOAuthPack = useCallback(async (): Promise<OnboardingModelPack> => {
     const { models } = await providersIpc.listOpenAIOAuthModels();
     return buildOpenAIOAuthOnboardingPack(models);
-  }, []);
-
-  const getOpenAIOAuthFastProfileId = useCallback((pack: OnboardingModelPack): string | undefined => {
-    const fastId = chooseOpenAIModelRoles(pack.profiles).fastModelId;
-    return pack.profiles.find((profile) => profile.modelId === fastId)?.id;
   }, []);
 
   const openApiKeyPackReview = useCallback(async (

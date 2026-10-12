@@ -7,6 +7,7 @@ import {
   getDefaultOpenAIOAuthModelId,
   getHostedOnboardingFastProfileId,
   getOpenAIOAuthInitialSelectedProfileIds,
+  getOpenAIOAuthFastProfileId,
   inferPreferredProfileIdFromOnboardingText,
   inferPreferredModelPackIdsFromOnboardingText,
   LOCAL_MODEL_DEFAULTS,
@@ -15,6 +16,16 @@ import {
 } from './modelDefaults';
 
 describe('ONBOARDING_MODEL_PACKS', () => {
+  test('selects the fast OAuth profile by its actual model ID, not its stored profile ID', () => {
+    const pack = buildOpenAIOAuthOnboardingPack([
+      { id: 'gpt-6-sol', name: 'Sol', isDefault: true },
+      { id: 'gpt-6-luna', name: 'Luna', isDefault: false },
+    ]);
+    expect(getOpenAIOAuthFastProfileId(pack)).toBe('onboarding:openai-gpt-6-luna');
+    expect(getOpenAIOAuthFastProfileId(buildOpenAIOAuthOnboardingPack([
+      { id: 'gpt-6-sol', name: 'Sol', isDefault: true },
+    ]))).toBeUndefined();
+  });
   test('builds the OpenAI OAuth onboarding pack from supported models in server order', () => {
     const pack = buildOpenAIOAuthOnboardingPack([
       { id: 'gpt-5.2', name: 'GPT 5.2', isDefault: false },

@@ -82,3 +82,35 @@ export async function confirmWhatsAppReply(threadId: string, turnId: string, dep
     await deps.save(config);
   });
 }
+
+/** Sending can fail ambiguously. Hold rather than retry and duplicate a possible delivery. */
+export async function holdWhatsAppReply(threadId: string, turnId: string, deps: Persistence = runtime): Promise<void> {
+  return serialize(async () => {
+    const config = await deps.load();
+    const key = `${threadId}:${turnId}`;
+    if (config.whatsappReplyReceipts?.[key] !== 'offered') return;
+    config.whatsappReplyReceipts = { ...config.whatsappReplyReceipts, [key]: 'held' };
+    await deps.save(config);
+  });
+}
+
+export async function getHeldWhatsAppReplyCount(threadId: string, deps: Persistence = runtime): Promise<number> {
+  const receipts = (await deps.load()).whatsappReplyReceipts ?? {};
+  return Object.entries(receipts).filter(([key, status]) => key.startsWith(`${threadId}:`) && status === 'held').length;
+}
+
+/** Store only transport IDs; no message text or credentials enter receipts. */
+export async function rememberWhatsAppOutboundIds(ids: string[], deps: Persistence = runtime): Promise<void> {
+  const valid = ids.filter((id) => /^[\w-]{6,160}$/.test(id));
+  if (!valid.length) return;
+  return serialize(async () => {
+    const config = await deps.load();
+    config.whatsappOutboundMessageIds = Array.from(new Set([...(config.whatsappOutboundMessageIds ?? []), ...valid])).slice(-512);
+    await deps.save(config);
+  });
+}
+
+export async function isKnownWhatsAppOutboundId(id: string, deps: Persistence = runtime): Promise<boolean> {
+  if (!id || id.length > 160) return false;
+  return ((await deps.load()).whatsappOutboundMessageIds ?? []).includes(id);
+}
