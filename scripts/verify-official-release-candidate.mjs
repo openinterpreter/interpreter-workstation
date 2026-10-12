@@ -5,15 +5,13 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { macUnpackedDirectory } from './ci/mac-unpacked-directory.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const distRoot = path.join(root, 'dist');
 const archArg = process.argv.slice(2).find((arg) => arg.startsWith('--arch='));
 const arch = archArg?.slice('--arch='.length) ?? 'arm64';
-if (arch !== 'arm64' && arch !== 'x64') {
-  throw new Error(`Unsupported macOS release candidate architecture: ${arch}`);
-}
-const appBundle = path.join(distRoot, `mac-${arch}`, 'Interpreter.app');
+const appBundle = path.join(distRoot, macUnpackedDirectory(arch), 'Interpreter.app');
 const resources = path.join(appBundle, 'Contents', 'Resources');
 const appAsar = path.join(resources, 'app.asar');
 const infoPlist = path.join(appBundle, 'Contents', 'Info.plist');

@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { macUnpackedDirectory } from './mac-unpacked-directory.mjs';
 
 const workflow = await readFile('.github/workflows/release.yml', 'utf8');
 const signedTestWorkflow = await readFile('.github/workflows/signed-macos-test-build.yml', 'utf8');
@@ -52,8 +53,10 @@ test('signed macOS test builds reuse the protected signing boundary without publ
 test('macOS candidate verifier selects the matching architecture without changing the production default', async () => {
   const source = await readFile('scripts/verify-official-release-candidate.mjs', 'utf8');
   assert.match(source, /archArg\?\.slice\('--arch='\.length\) \?\? 'arm64'/);
-  assert.match(source, /arch !== 'arm64' && arch !== 'x64'/);
-  assert.match(source, /path\.join\(distRoot, `mac-\$\{arch\}`, 'Interpreter\.app'\)/);
+  assert.equal(macUnpackedDirectory('x64'), 'mac');
+  assert.equal(macUnpackedDirectory('arm64'), 'mac-arm64');
+  assert.throws(() => macUnpackedDirectory('ia32'), /Unsupported macOS release candidate architecture/);
+  assert.match(source, /path\.join\(distRoot, macUnpackedDirectory\(arch\), 'Interpreter\.app'\)/);
 });
 
 test('Apple keychain patch matches the locked builder source and edits only a test copy', async () => {
