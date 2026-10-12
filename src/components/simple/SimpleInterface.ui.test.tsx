@@ -53,7 +53,7 @@ beforeEach(() => {
 afterEach(() => vi.clearAllMocks());
 
 describe("Simple executable interface", () => {
-  test("loads the last compiled React application in a script-only sandbox", async () => {
+  test("loads the last compiled React application with working local form events", async () => {
     render(<SimpleInterface onMessage={() => {}} />);
     const frame = (await screen.findByTitle(
       "Interpreter interface",
@@ -61,7 +61,9 @@ describe("Simple executable interface", () => {
     expect(frame.src).toContain(
       "/api/simple-interface/app/index.html?revision=compiled-1",
     );
-    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame.getAttribute("sandbox")?.split(" ").sort()).toEqual(["allow-forms", "allow-scripts"]);
+    expect(frame.getAttribute("sandbox")).not.toContain("allow-same-origin");
+    expect(frame.getAttribute("sandbox")).not.toContain("allow-top-navigation");
   });
 
   test("routes generated React controls into the durable conversation", async () => {

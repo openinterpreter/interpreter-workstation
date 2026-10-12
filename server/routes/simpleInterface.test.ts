@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   simpleAppAssetQuery,
+  simpleAppFormActionSource,
   simpleAppReferrerSessionKey,
 } from './simpleInterface';
 
@@ -36,5 +37,22 @@ describe('Simple interface runtime asset URLs', () => {
       'http://127.0.0.1:5177/unrelated?windowSessionKey=window-2',
       '127.0.0.1:5177',
     )).toBeNull();
+  });
+});
+
+describe('Simple interface form boundary', () => {
+  test('restricts form navigation to the exact inert app document on the requested host', () => {
+    expect(simpleAppFormActionSource('127.0.0.1:5177'))
+      .toBe('127.0.0.1:5177/api/simple-interface/app/index.html');
+    expect(simpleAppFormActionSource('example.com'))
+      .toBe('example.com/api/simple-interface/app/index.html');
+    expect(simpleAppFormActionSource('[::1]:5177'))
+      .toBe('[::1]:5177/api/simple-interface/app/index.html');
+  });
+
+  test('fails closed on missing or directive-injecting host headers', () => {
+    for (const host of [undefined, '', 'example.com/path', 'example.com;form-action *', 'user@example.com', 'example.com\nscript-src *']) {
+      expect(() => simpleAppFormActionSource(host)).toThrow('Invalid interface host');
+    }
   });
 });

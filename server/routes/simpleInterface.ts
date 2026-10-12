@@ -56,6 +56,20 @@ export function simpleAppReferrerSessionKey(
   }
 }
 
+/** Permit local React submit events without permitting form posts to API routes. */
+export function simpleAppFormActionSource(hostHeader: string | undefined): string {
+  if (!hostHeader || /[^A-Za-z0-9.:[\]-]/.test(hostHeader)) {
+    throw new Error("Invalid interface host for form policy.");
+  }
+  const parsed = new URL(`http://${hostHeader}`);
+  if (!parsed.hostname || parsed.pathname !== "/" || parsed.search || parsed.hash) {
+    throw new Error("Invalid interface host for form policy.");
+  }
+  // Scheme-less CSP host sources inherit the document scheme, including HTTPS
+  // behind a private reverse proxy. The exact path is a GET-only app document.
+  return `${parsed.host}/api/simple-interface/app/index.html`;
+}
+
 async function refreshDesktopMenu(): Promise<void> {
   if (!process.versions.electron) return;
   const { buildApplicationMenu } = await import("../../electron/menu");
@@ -174,9 +188,10 @@ router.get("/app/index.html", async (req, res) => {
     });
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.setHeader("Cache-Control", "no-store");
+    const formActionSource = simpleAppFormActionSource(req.get("host"));
     res.setHeader(
       "Content-Security-Policy",
-      "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors file: http://localhost:* http://127.0.0.1:*",
+      `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action ${formActionSource}; frame-ancestors file: http://localhost:* http://127.0.0.1:*`,
     );
     res.send(
       `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="./app.css?${assetQuery}"></head><body><div id="root"></div><script src="./bridge.js?${assetQuery}"></script><script src="./app.js?${assetQuery}"></script></body></html>`,
