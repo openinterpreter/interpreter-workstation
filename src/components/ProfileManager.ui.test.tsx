@@ -291,17 +291,17 @@ describe('ProfileManager', () => {
     expect(screen.getByText('Use a supported Chat Completions or Responses API endpoint.')).toBeVisible();
   });
 
-  test('prefills Custom API with OpenAI GPT-5.6 Luna defaults', async () => {
+  test('prefills Custom API with the current OpenAI default', async () => {
     const user = userEvent.setup();
 
     render(<ProfileManager startInNewProfile />);
 
     await user.click((await screen.findByText('Custom API')).closest('button') as HTMLButtonElement);
 
-    expect(await screen.findByPlaceholderText(en['settings.profiles.detail.modelNamePlaceholder'])).toHaveValue('GPT-5.6 Luna');
+    expect(await screen.findByPlaceholderText(en['settings.profiles.detail.modelNamePlaceholder'])).toHaveValue('GPT-6 Sol');
     expect(screen.getByTestId(API_BASE_URL_PICKER_TRIGGER_ID)).toHaveTextContent('Custom endpoint');
     expect(screen.getByTestId(API_BASE_URL_PICKER_EDIT_INPUT_ID)).toHaveValue('https://api.openai.com/v1');
-    expect(screen.getByPlaceholderText(en['settings.profiles.provider.api.modelIdPlaceholder'])).toHaveValue('gpt-5.6-luna');
+    expect(screen.getByPlaceholderText(en['settings.profiles.provider.api.modelIdPlaceholder'])).toHaveValue('gpt-6-sol');
     expect(screen.getByRole('switch', { name: 'Use Chat Completions' })).toBeVisible();
   });
 

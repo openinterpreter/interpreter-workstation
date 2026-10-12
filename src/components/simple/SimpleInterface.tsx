@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { isWorkstationReadOnly } from "../../remote/workstationConnection";
 import { getPathForFile, showItemInFolder, simpleInterfaceAgents } from "../../ipc";
@@ -43,6 +43,22 @@ type HostView = {
 };
 
 const PROTOCOL = "interpreter-interface-v1";
+
+/** A moving/resizing generated viewer must not recreate its live file tree. */
+const SimpleFolderHostView = memo(function SimpleFolderHostView({
+  viewId,
+  rootPath,
+  postHostEvent,
+}: {
+  viewId: string;
+  rootPath: string;
+  postHostEvent: (name: string, detail: unknown) => void;
+}) {
+  const onFileOpen = useCallback((path: string) => {
+    postHostEvent(`file-open:${viewId}`, { path });
+  }, [postHostEvent, viewId]);
+  return <Explorer rootPath={rootPath} compactMode onFileOpen={onFileOpen} />;
+});
 
 function pathIsWithin(root: string, candidate: string): boolean {
   const normalize = (value: string) => {
@@ -474,11 +490,7 @@ export function SimpleInterface({ onMessage }: Props) {
           {view.path && view.kind === "file" ? (
             <EditorArea filePath={view.path} />
           ) : view.path && view.kind === "folder" ? (
-            <Explorer
-              rootPath={view.path}
-              compactMode
-              onFileOpen={(path) => postHostEvent(`file-open:${view.id}`, { path })}
-            />
+            <SimpleFolderHostView viewId={view.id} rootPath={view.path} postHostEvent={postHostEvent} />
           ) : (
             <div className="grid size-full place-items-center px-4 text-center text-xs text-muted-foreground">
               {view.error ?? "Opening…"}

@@ -11,11 +11,14 @@ export function SimpleBrowserSetupScreen({ onNext, discoveryReady }: { onNext: (
   const stepRef = useRef(currentStep);
   const mounted = useRef(false);
   const latestRequest = useRef(0);
+  const eventRefresh = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const disconnectConfirmation = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [connected, setConnected] = useState<boolean | null>(null);
   const [error, setError] = useState(false);
   const refresh = useCallback(async () => {
     const request = ++latestRequest.current;
-    setConnected(null);
+    // Status events are emitted for every relay state change, including tab
+    // attach/detach. Keep the last settled indication while a read is in flight.
     setError(false);
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -26,7 +29,20 @@ export function SimpleBrowserSetupScreen({ onNext, discoveryReady }: { onNext: (
         }),
       ]);
       if (!mounted.current || request !== latestRequest.current) return;
-      setConnected(status.connectedBrowsers > 0 || status.profiles.some((profile) => profile.connectionState === 'connected'));
+      const hasConnection = status.connectedBrowsers > 0 || status.profiles.some((profile) => profile.connectionState === 'connected');
+      if (disconnectConfirmation.current) {
+        clearTimeout(disconnectConfirmation.current);
+        disconnectConfirmation.current = null;
+      }
+      if (hasConnection) setConnected(true);
+      else {
+        // A detached tab is not an extension disconnect. Confirm a negative
+        // across the relay's attach/detach burst before changing the label.
+        disconnectConfirmation.current = setTimeout(() => {
+          disconnectConfirmation.current = null;
+          if (mounted.current && request === latestRequest.current) setConnected(false);
+        }, 350);
+      }
       setError(false);
     } catch {
       if (mounted.current && request === latestRequest.current) setError(true);
@@ -38,10 +54,18 @@ export function SimpleBrowserSetupScreen({ onNext, discoveryReady }: { onNext: (
   useEffect(() => {
     mounted.current = true;
     void refresh();
-    const unsubscribe = browserControl.onChanged?.(() => { void refresh(); });
+    const unsubscribe = browserControl.onChanged?.(() => {
+      if (eventRefresh.current) clearTimeout(eventRefresh.current);
+      eventRefresh.current = setTimeout(() => {
+        eventRefresh.current = null;
+        void refresh();
+      }, 120);
+    });
     return () => {
       mounted.current = false;
       latestRequest.current++;
+      if (eventRefresh.current) clearTimeout(eventRefresh.current);
+      if (disconnectConfirmation.current) clearTimeout(disconnectConfirmation.current);
       unsubscribe?.();
     };
   }, [refresh]);

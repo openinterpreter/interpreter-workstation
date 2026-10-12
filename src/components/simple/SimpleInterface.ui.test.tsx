@@ -15,11 +15,15 @@ const client = vi.hoisted(() => ({
 }));
 const agentIpc = vi.hoisted(() => ({ start: vi.fn(), onEvent: vi.fn(() => () => {}) }));
 const fileIpc = vi.hoisted(() => ({ getPathForFile: vi.fn(), showItemInFolder: vi.fn() }));
+const explorerRenders = vi.hoisted(() => ({ count: 0 }));
 
 vi.mock("./simpleInterfaceClient", () => ({ simpleInterfaceClient: client }));
 vi.mock("../../ipc", () => ({ ...fileIpc, simpleInterfaceAgents: agentIpc }));
 vi.mock("../EditorArea", () => ({ EditorArea: ({ filePath }: { filePath: string }) => <div data-testid="canonical-editor">Editor: {filePath}</div> }));
-vi.mock("../Explorer", () => ({ Explorer: ({ rootPath, onFileOpen }: { rootPath: string; onFileOpen: (path: string) => void }) => <button onClick={() => onFileOpen(`${rootPath}/opened.md`)}>Explorer: {rootPath}</button> }));
+vi.mock("../Explorer", () => ({ Explorer: ({ rootPath, onFileOpen }: { rootPath: string; onFileOpen: (path: string) => void }) => {
+  explorerRenders.count++;
+  return <button onClick={() => onFileOpen(`${rootPath}/opened.md`)}>Explorer: {rootPath}</button>;
+} }));
 vi.mock("../../remote/workstationConnection", () => ({
   isWorkstationReadOnly: () => false,
 }));
@@ -34,6 +38,7 @@ const status = {
 };
 
 beforeEach(() => {
+  explorerRenders.count = 0;
   client.refresh.mockResolvedValue(status);
   client.appUrl.mockResolvedValue(
     "http://127.0.0.1:5177/api/simple-interface/app/index.html?revision=compiled-1",
@@ -109,6 +114,14 @@ describe("Simple executable interface", () => {
     });
     expect(await screen.findByTestId("canonical-editor", {}, { timeout: 5000 })).toHaveTextContent("/project/note.md");
     const explorer = await screen.findByRole("button", { name: "Explorer: /project" });
+    const renderCount = explorerRenders.count;
+    await act(async () => {
+      window.dispatchEvent(new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: { protocol: "interpreter-interface-v1", type: "host-view-register", view: { id: "folder-1", kind: "folder", path: ".", rect: { x: 550, y: 30, width: 310, height: 300 } } },
+      }));
+    });
+    expect(explorerRenders.count).toBe(renderCount);
     const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
     await act(async () => explorer.click());
     expect(postMessage).toHaveBeenCalledWith({

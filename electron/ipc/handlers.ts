@@ -16,7 +16,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { IPC_CHANNELS } from './registry';
-import { assertTrustedFileIpcFrame } from './trustedRenderer';
+import { assertTrustedFileIpcFrame, isWhatsAppApiPath } from './trustedRenderer';
 import type {
   ApiRequestParams,
   ApiRequestResponse,
@@ -655,6 +655,16 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
   registerHandle(
     IPC_CHANNELS.API_REQUEST,
     async (event, params: ApiRequestParams): Promise<ApiRequestResponse> => {
+      // Express accepts query/trailing-slash variants of the same route. Guard
+      // the entire channel namespace, rather than only one spelling of PUT.
+      if (isWhatsAppApiPath(params.path)) {
+        // Never treat an opaque HTTP Origin as proof of the packaged renderer.
+        // Only the registered app window's main frame can proxy this mutation.
+        assertTrustedFileIpcSender(event);
+        if (!getWindowSessionKeyForWindowId(getEventWindowId(event))) {
+          throw new Error('Access denied: no registered application window.');
+        }
+      }
       return new Promise((resolve, reject) => {
         const url = `http://${APP_SERVER_HOST}:${serverPort}${params.path}`;
         const senderWindowId = getEventWindowId(event);

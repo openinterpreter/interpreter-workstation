@@ -61,6 +61,14 @@ describe('Simple workspace', () => {
     expect(await getSimpleWorkspacePath()).toBe(expected);
   });
 
+  test('concurrent first-run windows share the one persisted workspace', async () => {
+    const paths = await Promise.all(Array.from({ length: 8 }, () => getSimpleWorkspacePath(temp)));
+    expect(new Set(paths).size).toBe(1);
+    expect(paths[0]).toBe(join(temp, 'Documents', 'Interpreter'));
+    expect(await getSimpleWorkspaceSetting()).toBe(paths[0]);
+    expect(readFileSync(join(paths[0], 'AGENTS.md'), 'utf8')).toContain('Every interface is its own standalone folder');
+  });
+
   test('Settings changes persist, preserve user AGENTS, and keep Advanced selection separate', async () => {
     const first = await getSimpleWorkspacePath();
     const selected = join(temp, 'my projects');
@@ -72,6 +80,22 @@ describe('Simple workspace', () => {
     expect(readFileSync(join(selected, 'AGENTS.md'), 'utf8')).toBe('keep my guidance\n');
     expect(await getSimpleWorkspaceSetting()).toBe(selected);
     expect(first).not.toBe(selected);
+  });
+
+  test('first launch skips occupied names without modifying existing folders', async () => {
+    const documents = join(temp, 'Documents');
+    mkdirSync(documents);
+    mkdirSync(join(documents, 'Interpreter'));
+    writeFileSync(join(documents, 'Interpreter', 'AGENTS.md'), 'user-owned\n');
+    mkdirSync(join(documents, 'Interpreter-1'));
+    writeFileSync(join(documents, 'Interpreter-1', 'notes.txt'), 'keep this\n');
+
+    const selected = await getSimpleWorkspacePath(temp);
+    expect(selected).toBe(join(documents, 'Interpreter-2'));
+    expect(readFileSync(join(documents, 'Interpreter', 'AGENTS.md'), 'utf8')).toBe('user-owned\n');
+    expect(readFileSync(join(documents, 'Interpreter-1', 'notes.txt'), 'utf8')).toBe('keep this\n');
+    await reloadConfig();
+    expect(await getSimpleWorkspacePath(temp)).toBe(selected);
   });
 
   test('a deleted selected folder recovers to Documents/Interpreter on relaunch', async () => {

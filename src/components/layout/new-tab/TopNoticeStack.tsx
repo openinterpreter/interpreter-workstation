@@ -58,9 +58,9 @@ export function TopNoticeStack({
       try {
         const status = await topNoticesIpc.list();
         if (!cancelled) {
-          setTopNotices(marketingDemoMode
+          setTopNotices((marketingDemoMode
             ? status.notices.filter((notice: TopNotice) => dismissedNoticeVersionsRef.current[notice.id] !== notice.version)
-            : status.notices);
+            : status.notices).filter((notice: TopNotice) => notice.id !== 'simple-whats-new'));
         }
       } catch (error) {
         if (!cancelled) {

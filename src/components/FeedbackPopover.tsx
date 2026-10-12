@@ -25,11 +25,12 @@ import { SIDEBAR_FOOTER_SECONDARY_BUTTON_CLASSNAME } from './sidebarFooterButton
 
 interface FeedbackPopoverProps {
   className?: string;
+  onOpenChange?: (open: boolean) => void;
 }
 
 const DEFAULT_INCLUDE_LOGS = true;
 
-export function FeedbackPopover({ className }: FeedbackPopoverProps) {
+export function FeedbackPopover({ className, onOpenChange }: FeedbackPopoverProps) {
   const { session } = useAuth();
   const { dismissToast, showToast } = useToast();
   const { t } = useTranslation();
@@ -233,7 +234,7 @@ export function FeedbackPopover({ className }: FeedbackPopoverProps) {
 
   return (
 // we use the popover component here over dropdownmenu as it is makes we the form fields keyboard navigatable
-    <Popover open={isOpen} onOpenChange={setIsOpen}>
+    <Popover open={isOpen} onOpenChange={(open) => { setIsOpen(open); onOpenChange?.(open); }}>
       <Tooltip>
         <TooltipTrigger asChild>
           <span>
@@ -291,7 +292,7 @@ export function FeedbackPopover({ className }: FeedbackPopoverProps) {
               variant="ghost"
               size="icon-xs"
               className="mt-[-2px] text-muted-foreground hover:bg-black/[0.03] hover:text-foreground dark:hover:bg-white/[0.05]"
-              onClick={() => setIsOpen(false)}
+              onClick={() => { setIsOpen(false); onOpenChange?.(false); }}
             >
               <X className="h-3 w-3" />
             </Button>

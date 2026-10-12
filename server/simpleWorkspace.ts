@@ -133,7 +133,18 @@ function seedWorkspaceGuidance(workspacePath: string): void {
 }
 
 /** Resolve a persisted workspace or create the first-run Documents/Interpreter directory. */
+let pendingWorkspaceSelection: Promise<string> | null = null;
+
 export async function getSimpleWorkspacePath(defaultHomePath: string = homedir()): Promise<string> {
+  // Concurrent first-run windows must observe the same persisted reservation.
+  if (pendingWorkspaceSelection) return pendingWorkspaceSelection;
+  const selection = resolveSimpleWorkspacePath(defaultHomePath);
+  pendingWorkspaceSelection = selection;
+  try { return await selection; }
+  finally { if (pendingWorkspaceSelection === selection) pendingWorkspaceSelection = null; }
+}
+
+async function resolveSimpleWorkspacePath(defaultHomePath: string): Promise<string> {
   const saved = await getSimpleWorkspaceSetting();
   if (saved) {
     // A removable/deleted workspace must not trap the entire app behind its
@@ -149,8 +160,24 @@ export async function getSimpleWorkspacePath(defaultHomePath: string = homedir()
 
   const documents = join(defaultHomePath, 'Documents');
   mkdirSync(documents, { recursive: true });
-  const firstRunPath = join(documents, 'Interpreter');
-  mkdirSync(firstRunPath, { recursive: true });
+  if (lstatSync(documents).isSymbolicLink()) {
+    throw new Error('Documents must not be a symlink when creating the Simple workspace.');
+  }
+  // A fresh profile must never adopt an unrelated user's existing folder.
+  // Exclusive mkdir also makes concurrent first-run windows choose distinct
+  // names instead of both seeding the same directory.
+  let firstRunPath: string | null = null;
+  for (let suffix = 0; suffix < 10_000; suffix += 1) {
+    const candidate = join(documents, suffix === 0 ? 'Interpreter' : `Interpreter-${suffix}`);
+    try {
+      mkdirSync(candidate);
+      firstRunPath = candidate;
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+  }
+  if (!firstRunPath) throw new Error('Could not reserve a new Simple workspace folder.');
   const path = validateSimpleWorkspacePath(firstRunPath);
   seedWorkspaceGuidance(path);
   await setSimpleWorkspaceSetting(path);
@@ -159,6 +186,8 @@ export async function getSimpleWorkspacePath(defaultHomePath: string = homedir()
 
 /** Settings selection: an existing, dedicated folder; never silently create an arbitrary path. */
 export async function setSimpleWorkspacePath(inputPath: string): Promise<string> {
+  // A Settings selection takes precedence over any in-flight first-run allocation.
+  await pendingWorkspaceSelection?.catch(() => undefined);
   const path = validateSimpleWorkspacePath(inputPath);
   seedWorkspaceGuidance(path);
   await setSimpleWorkspaceSetting(path);

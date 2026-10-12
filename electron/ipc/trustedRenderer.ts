@@ -6,6 +6,15 @@ const TRUSTED_DEV_RENDERER_HOSTS = new Set([
 const TRUSTED_DEV_RENDERER_PORT_START = 5173;
 const TRUSTED_DEV_RENDERER_PORT_END = 5193;
 
+/** Express accepts trailing slashes, case variants and query strings here. */
+export function isWhatsAppApiPath(value: string): boolean {
+  try {
+    const pathname = decodeURIComponent(new URL(value, 'http://127.0.0.1').pathname)
+      .replace(/\\/g, '/').toLowerCase();
+    return pathname === '/api/servers/whatsapp' || pathname.startsWith('/api/servers/whatsapp/');
+  } catch { return false; }
+}
+
 export function isTrustedAppRendererUrl(value: string): boolean {
   let parsed: URL;
   try {

@@ -9,6 +9,7 @@ export type SettingsTabId =
   | 'sounds'
   | 'overlay'
   | 'inbox'
+  | 'durableThreads'
   | 'style';
 
 export type SettingsSectionId =
@@ -30,7 +31,8 @@ export type SettingsSectionId =
   | 'sounds'
   | 'overlay'
   | 'style'
-  | 'inbox';
+  | 'inbox'
+  | 'durableThreads';
 
 export interface SettingsTabCatalogEntry {
   id: SettingsTabId;
@@ -122,6 +124,12 @@ export const SETTINGS_TABS: readonly SettingsTabCatalogEntry[] = [
     descriptionKey: 'help.settings.inbox.description',
   },
   {
+    id: 'durableThreads',
+    titleKey: 'settings.tabs.durableThreads',
+    defaultLabel: 'Durable Threads',
+    descriptionKey: 'help.settings.durableThreads.description',
+  },
+  {
     id: 'style',
     titleKey: 'settings.tabs.style',
     defaultLabel: 'Style',
@@ -149,6 +157,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionCatalogEntry[] = [
   { id: 'overlay', tabId: 'overlay', defaultLabel: 'Overlay' },
   { id: 'style', tabId: 'style', defaultLabel: 'Style' },
   { id: 'inbox', tabId: 'inbox', defaultLabel: 'Inbox' },
+  { id: 'durableThreads', tabId: 'durableThreads', defaultLabel: 'Durable Threads' },
 ] as const;
 
 export const SETTINGS_SECTION_TO_TAB: Record<string, SettingsTabId> = Object.fromEntries(

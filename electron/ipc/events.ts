@@ -373,6 +373,10 @@ export function emitOpenSettings(window: BrowserWindow | null): void {
   broadcast('settings:open', {});
 }
 
+export function emitOpenFeedback(window: BrowserWindow | null): void {
+  emitToRenderer(window, IPC_CHANNELS.OPEN_FEEDBACK);
+}
+
 export type SimpleProjectMenuAction = {
   action: 'new' | 'open' | 'recent';
   path?: string;

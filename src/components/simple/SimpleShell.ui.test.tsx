@@ -41,6 +41,14 @@ vi.mock("../../../agent/components/AgentThread", () => ({
     </div>
   ),
 }));
+vi.mock('../Approvals', () => ({ Approvals: () => <div>Pending approval card</div> }));
+vi.mock('./SimpleWhatsNew', () => ({ SimpleWhatsNew: () => null }));
+vi.mock('./SimpleChannelsSettings', () => ({ SimpleChannelsSettings: () => null }));
+vi.mock('../../stores/approvalsStore', () => ({
+  getApprovalsSnapshot: () => [],
+  refreshApprovals: async () => {},
+  subscribeApprovals: () => () => {},
+}));
 vi.mock("../../../agent/components/ComposerArea", () => ({
   ComposerArea: ({
     onAgentSend,
@@ -100,6 +108,7 @@ vi.mock("../../remote/workstationConnection", () => ({
   isWorkstationReadOnly: () => false,
 }));
 vi.mock("@/ipc", () => ({
+  theme: { get: async () => ({ theme: 'system' }), set: async () => ({ success: true }), onChanged: () => () => {} },
   openFolderDialog: ipcMocks.openFolderDialog,
   profiles: { onChanged: () => () => {}, onDefaultChanged: () => () => {} },
   quickActions: { onSimpleProjectAction: () => () => {} },
@@ -359,22 +368,33 @@ describe("Simple shell", () => {
     ).not.toBeInTheDocument();
   });
 
-  test("keeps the GPT Live error state icon-only with an explanatory tooltip", async () => {
+  test("keeps the GPT Live control icon-only and focuses model setup when no Realtime key is available", async () => {
     const user = userEvent.setup();
     render(<SimpleShell {...props} />);
     const liveButton = await screen.findByRole("button", {
       name: "Start GPT Live",
     });
+    await waitFor(() => expect(liveButton).toBeEnabled());
     await user.click(liveButton);
-    const retryButton = await screen.findByRole("button", {
-      name: "Retry GPT Live",
-    });
-    expect(retryButton).toHaveClass("w-9");
-    expect(retryButton).toHaveAttribute(
-      "title",
-      "GPT Live needs an OpenAI API key. Add an OpenAI model in Settings first.",
-    );
+    expect(await screen.findByLabelText('Models')).toBeInTheDocument();
+    expect(screen.getByText(/GPT Live needs an OpenAI API key with Realtime access/)).toBeInTheDocument();
+    expect(liveButton).toHaveClass('w-9');
     expect(screen.queryByText("Live failed")).not.toBeInTheDocument();
+  });
+
+  test('expands the durable conversation and reveals quiet activity detail on demand', async () => {
+    const user = userEvent.setup();
+    render(<SimpleShell {...props} />);
+    const toggle = await screen.findByRole('button', { name: 'Show conversation' });
+    await user.click(toggle);
+    expect(screen.getByRole('button', { name: 'Collapse conversation' })).toHaveAttribute('aria-expanded', 'true');
+    const detail = screen.getByText('Activity details');
+    expect(detail.closest('details')).not.toHaveAttribute('open');
+    await user.click(detail);
+    expect(detail.closest('details')).toHaveAttribute('open');
+    expect(screen.getByText(/messages in this conversation/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Collapse conversation' }));
+    expect(screen.getByRole('button', { name: 'Show conversation' })).toHaveAttribute('aria-expanded', 'false');
   });
 
   test("persists an unfinished draft for the app and overlay to share", async () => {

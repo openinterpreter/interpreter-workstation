@@ -3,7 +3,7 @@
  * Handles QR code pairing, connection status, and disconnection.
  */
 
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import QRCode from 'qrcode';
 import { DisconnectReason } from '@whiskeysockets/baileys';
 import {
@@ -16,8 +16,68 @@ import {
   isConfigured,
 } from './whatsappSetupDependencies';
 import type { CloseReason } from '../tools/builtin-tools/whatsapp/types';
+import { bindWhatsAppThread, getHeldWhatsAppReplyCount, getWhatsAppThreadBinding, unbindWhatsAppThread } from '../handlers/whatsappThreadBinding';
+import { closeWhatsAppBridgeSession } from '../services/whatsappBridge';
 
 const router = Router();
+
+function localSameOrigin(req: Request): boolean {
+  if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '')) return false;
+  // A loopback socket alone does not authenticate the Host header: DNS
+  // rebinding can direct a browser to loopback under an attacker's hostname.
+  const host = req.get('host');
+  if (!host) return false;
+  let destination: URL;
+  try { destination = new URL(`http://${host}`); }
+  catch { return false; }
+  if (!['localhost', '127.0.0.1', '[::1]'].includes(destination.hostname) ||
+      destination.username || destination.password || destination.pathname !== '/' ||
+      destination.search || destination.hash || !destination.port || destination.host !== host.toLowerCase()) return false;
+  const actualPort = req.socket.localPort;
+  const forwardedDevPort = Number(destination.port) >= 5173 && Number(destination.port) <= 5193;
+  const origin = req.get('origin');
+  if (!origin) {
+    // Same-origin browser GETs omit Origin. Vite preserves its own loopback
+    // Host while proxying the read-only status route to Express.
+    return Number(destination.port) === actualPort || (req.method === 'GET' && forwardedDevPort);
+  }
+  // Opaque origins are not app identity: packaged Electron uses its trusted
+  // main-frame IPC proxy, which makes a loopback request without Origin.
+  try {
+    const source = new URL(origin);
+    return source.protocol === 'http:' && !source.username && !source.password &&
+      source.origin === destination.origin && (Number(destination.port) === actualPort || forwardedDevPort);
+  }
+  catch { return false; }
+}
+
+router.get('/thread-binding', async (req, res) => {
+  if (!localSameOrigin(req)) return res.status(403).json({ error: 'Local access required.' });
+  try {
+    const binding = await getWhatsAppThreadBinding();
+    const account = getPhoneNumber()?.replace(/\D/g, '') ?? null;
+    res.json({ threadId: binding?.threadId ?? null, configured: isConfigured(), connected: getConnectionState() === 'connected',
+      accountMatches: !!binding && account === binding.accountId,
+      heldReplies: binding ? await getHeldWhatsAppReplyCount(binding.threadId) : 0 });
+  } catch { res.status(503).json({ error: 'Channel status unavailable.' }); }
+});
+
+router.put('/thread-binding', async (req, res) => {
+  if (!localSameOrigin(req)) return res.status(403).json({ error: 'Local access required.' });
+  try {
+    const binding = await bindWhatsAppThread(req.body?.threadId);
+    closeWhatsAppBridgeSession();
+    res.json({ threadId: binding.threadId, connected: true });
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : 'Could not bind this conversation.' });
+  }
+});
+
+router.delete('/thread-binding', async (req, res) => {
+  if (!localSameOrigin(req)) return res.status(403).json({ error: 'Local access required.' });
+  try { await unbindWhatsAppThread(req.body?.threadId); res.json({ success: true }); }
+  catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : 'Could not unbind this conversation.' }); }
+});
 
 function isRestartRequiredDisconnect(reason: CloseReason): boolean {
   return reason.status === DisconnectReason.restartRequired;

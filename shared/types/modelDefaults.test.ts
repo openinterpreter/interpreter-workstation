@@ -2,10 +2,12 @@ import { describe, expect, test } from 'bun:test';
 import {
   API_PROVIDER_MODEL_DEFAULTS,
   buildOpenAIOAuthOnboardingPack,
+  chooseOpenAIModelRoles,
   getDefaultApiProviderModelId,
   getDefaultOpenAIOAuthModelId,
   getHostedOnboardingFastProfileId,
   getOpenAIOAuthInitialSelectedProfileIds,
+  getOpenAIOAuthFastProfileId,
   inferPreferredProfileIdFromOnboardingText,
   inferPreferredModelPackIdsFromOnboardingText,
   LOCAL_MODEL_DEFAULTS,
@@ -14,6 +16,16 @@ import {
 } from './modelDefaults';
 
 describe('ONBOARDING_MODEL_PACKS', () => {
+  test('selects the fast OAuth profile by its actual model ID, not its stored profile ID', () => {
+    const pack = buildOpenAIOAuthOnboardingPack([
+      { id: 'gpt-6-sol', name: 'Sol', isDefault: true },
+      { id: 'gpt-6-luna', name: 'Luna', isDefault: false },
+    ]);
+    expect(getOpenAIOAuthFastProfileId(pack)).toBe('onboarding:openai-gpt-6-luna');
+    expect(getOpenAIOAuthFastProfileId(buildOpenAIOAuthOnboardingPack([
+      { id: 'gpt-6-sol', name: 'Sol', isDefault: true },
+    ]))).toBeUndefined();
+  });
   test('builds the OpenAI OAuth onboarding pack from supported models in server order', () => {
     const pack = buildOpenAIOAuthOnboardingPack([
       { id: 'gpt-5.2', name: 'GPT 5.2', isDefault: false },
@@ -94,7 +106,7 @@ describe('ONBOARDING_MODEL_PACKS', () => {
       lmstudio: 'qwen/qwen3.5-4b',
     });
     expect(API_PROVIDER_MODEL_DEFAULTS).toMatchObject({
-      openai: 'gpt-5.6-luna',
+      openai: 'gpt-6-sol',
       groq: 'llama-3.3-70b-versatile',
       openrouter: 'anthropic/claude-opus-4.6',
       deepseek: 'deepseek-v4-flash',
@@ -104,8 +116,8 @@ describe('ONBOARDING_MODEL_PACKS', () => {
   test('selects a provider preferred model when available and first model otherwise', () => {
     expect(getDefaultApiProviderModelId('openai', [
       { id: 'gpt-5.4-nano' },
-      { id: 'gpt-5.6-luna' },
-    ])).toBe('gpt-5.6-luna');
+      { id: 'gpt-6-sol' },
+    ])).toBe('gpt-6-sol');
 
     expect(getDefaultApiProviderModelId('openai', [
       { id: 'gpt-5.6-terra' },
@@ -121,6 +133,22 @@ describe('ONBOARDING_MODEL_PACKS', () => {
     ])).toBe('deepseek-reasoner');
 
     expect(getDefaultApiProviderModelId('openai', [])).toBeNull();
+  });
+
+  test('chooses explicit OpenAI roles only from the account catalog', () => {
+    const available = [
+      { id: 'gpt-6-sol', isDefault: false },
+      { id: 'gpt-6-astra', isDefault: true },
+      { id: 'gpt-6-luna', isDefault: false },
+      { id: 'gpt-6.1-sol', isDefault: false },
+    ];
+    expect(chooseOpenAIModelRoles(available)).toEqual({ defaultModelId: 'gpt-6.1-sol', fastModelId: 'gpt-6-luna' });
+    expect(chooseOpenAIModelRoles(available.filter((model) => model.id !== 'gpt-6.1-sol')))
+      .toEqual({ defaultModelId: 'gpt-6-sol', fastModelId: 'gpt-6-luna' });
+    expect(chooseOpenAIModelRoles([{ id: 'account-specific', isDefault: true }]))
+      .toEqual({ defaultModelId: 'account-specific', fastModelId: null });
+    expect(getDefaultOpenAIOAuthModelId(available.map((model) => ({ ...model, name: model.id }))))
+      .toBe('gpt-6.1-sol');
   });
 
   test('maps onboarding AI setup answers to supported model setup packs in stable order', () => {

@@ -88,6 +88,11 @@ export default defineConfig(() => {
       },
       proxy: {
         // Proxy API requests to the Express server (browser dev mode only)
+        // Preserve the browser's loopback Host for channel-binding CSRF checks.
+        '/api/servers/whatsapp/thread-binding': {
+          target: `http://localhost:${process.env.EXPRESS_PORT || '5177'}`,
+          changeOrigin: false,
+        },
         '/api': {
           target: `http://localhost:${process.env.EXPRESS_PORT || '5177'}`,
           changeOrigin: true,
