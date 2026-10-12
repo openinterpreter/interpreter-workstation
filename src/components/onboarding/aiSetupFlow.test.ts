@@ -52,10 +52,12 @@ describe('AI setup onboarding flow', () => {
     expect(simpleSteps).not.toContain('STEP_SIMPLE_MCP');
     expect(overlaySource).toContain('shouldShowSimpleMcpStep(simpleMcpSummary)');
     expect(overlaySource).toContain('<SimpleBrowserSetupScreen onNext={goForward} discoveryReady={simpleDiscoveryReady} />');
-    expect(simpleSteps).toContain('STEP_STAY_CONNECTED');
-    expect(simpleSteps).toContain('STEP_WORKSPACE_CHOICE');
+    expect(simpleSteps).not.toContain('STEP_STAY_CONNECTED');
+    expect(simpleSteps).not.toContain('STEP_WORKSPACE_CHOICE');
+    expect(simpleSteps).toContain('STEP_SIMPLE_WHATSAPP');
     expect(simpleSteps).not.toContain('STEP_FEEDBACK');
-    expect(overlaySource).toContain('if (simpleMode) {\n      await handleOnboardingComplete();');
+    expect(overlaySource).toContain('if (simpleMode) await workspaceIpc.getSimple();');
+    expect(overlaySource).toContain('<SimpleWhatsAppSetupScreen onFinish={handleOnboardingComplete} />');
   });
 
   test('persists a redacted imported tool summary from onboarding detection', async () => {

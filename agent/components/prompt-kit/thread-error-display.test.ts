@@ -7,6 +7,7 @@ import {
   INTERPRETER_HOSTED_OVERLOADED_MESSAGE,
 } from "../../../src/lib/codex/errors";
 import i18n from "../../../src/i18n";
+import { DEFAULT_OPENAI_RESPONSES_CUSTOM_TOOL_MODEL_ID } from "../../../shared/utils/openAiResponsesTools";
 import {
   buildInterpreterCreditsExhaustedMessage,
   buildInterpreterCreditsExhaustedSuggestion,
@@ -559,7 +560,7 @@ describe("parseError / string patterns", () => {
     assert.equal(r.type, "responses_contract_incompatible");
     assert.equal(
       r.message,
-      "This OpenAI model does not support Interpreter's custom/freeform agent tools. Use gpt-5.6-luna, or another model that supports Responses custom tools.",
+      `This OpenAI model does not support Interpreter's custom/freeform agent tools. Use ${DEFAULT_OPENAI_RESPONSES_CUSTOM_TOOL_MODEL_ID}, or another model that supports Responses custom tools.`,
     );
   });
 

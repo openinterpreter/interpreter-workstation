@@ -1,4 +1,5 @@
 import { nanoid } from 'nanoid';
+import { createHash } from 'node:crypto';
 import { access, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, extname, join } from 'node:path';
@@ -13,6 +14,12 @@ import {
   sendWhatsAppMessageWithRetry,
   broadcastEvent,
   notifyAgent,
+  getWhatsAppThreadBinding,
+  readyWakeSources,
+  wakeSources,
+  subscribeCodexNotifications,
+  offerWhatsAppReply,
+  confirmWhatsAppReply,
 } from './whatsappBridgeDependencies';
 import {
   extractDownloadableMedia,
@@ -572,6 +579,17 @@ async function handleInboundMessage(message: CachedMessage, rawMessage?: WAMessa
 
   const inboundPayload = await buildInboundAgentMessagePayload(message, rawMessage);
   if (!inboundPayload) return;
+  const binding = await getWhatsAppThreadBinding();
+  if (binding) {
+    // Never deliver messages from a newly paired account to an old binding.
+    if (binding.accountId !== normalizeDigits(getPhoneNumber())) return;
+    const text = [inboundPayload.textPart, ...inboundPayload.attachmentMentions].filter(Boolean).join('\n').trim();
+    const eventId = createHash('sha256').update(JSON.stringify([canonicalizeChatId(message.chatId), message.id])).digest('hex');
+    await readyWakeSources();
+    await wakeSources.ingest(binding.threadId, 'whatsapp-self', eventId, text);
+    void wakeSources.tick().catch((error) => console.error('[WhatsAppBridge] Durable wake unavailable:', error));
+    return;
+  }
   queueInboundPayload(message.chatId, inboundPayload);
 }
 
@@ -594,6 +612,40 @@ export function initializeWhatsAppBridge(): void {
     activeSession = null;
     clearPendingInboundBatch();
   });
+  subscribeCodexNotifications((notification) => {
+    if (notification.method !== 'turn/completed' || notification.params.turn.status !== 'completed') return;
+    const { threadId, turn } = notification.params;
+    const admitted = wakeSources.list(threadId).events.some((event) =>
+      event.sourceId === 'whatsapp-self' && event.turnId === turn.id &&
+      (event.status === 'offered' || event.status === 'admitted'));
+    if (!admitted) return;
+    const replies = turn.items.flatMap((item) => item.type === 'agentMessage' && item.phase !== 'commentary' && item.text.trim() ? [item.text.trim()] : []);
+    const reply = replies[replies.length - 1];
+    if (!reply) return;
+    void sendDurableWhatsAppReply(threadId, turn.id, reply).catch((error) => {
+      console.error('[WhatsAppBridge] Could not send durable reply; check channel status:', error);
+    });
+  });
+}
+
+async function sendDurableWhatsAppReply(threadId: string, turnId: string, text: string): Promise<void> {
+  const binding = await getWhatsAppThreadBinding();
+  const account = normalizeDigits(getPhoneNumber());
+  const sock = getSocket();
+  if (!binding || binding.threadId !== threadId || binding.accountId !== account || !sock) return;
+  if (!await offerWhatsAppReply(threadId, turnId)) return;
+  const chatId = `${binding.accountId}@s.whatsapp.net`;
+  // The durable offered receipt is written before the outbound side effect.
+  // A failed/ambiguous send is not retried automatically and cannot duplicate.
+  const result = await sendWhatsAppMessageWithRetry({
+    sock, chatId, text,
+    options: {
+      onBeforeSend: (part) => { if (part.textForEcho) markOutboundEchoToIgnore(chatId, undefined, part.textForEcho); },
+      onSent: (part) => markOutboundEchoToIgnore(chatId, part.messageId ?? undefined, part.textForEcho ?? ''),
+    },
+  });
+  if (result.parts.length === 0) throw new Error('WhatsApp accepted no reply parts.');
+  await confirmWhatsAppReply(threadId, turnId);
 }
 
 export function onWhatsAppBridgeTabCreated(requestId: string, agentId: string): void {

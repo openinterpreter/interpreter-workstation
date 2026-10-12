@@ -12,6 +12,9 @@ usable without a hosted account.
   remote access without changing the local project format.
 - Further messaging channels should use the existing durable conversation and
   explicit per-channel authorization rather than creating separate agents.
+- Investigate a safe, supported macOS Messages self-text integration. The
+  intended behavior is that a message to yourself wakes the explicitly bound
+  durable thread; no Messages bridge or entitlement is shipped yet.
 
 ## Ongoing verification
 

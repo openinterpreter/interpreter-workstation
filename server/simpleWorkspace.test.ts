@@ -74,6 +74,22 @@ describe('Simple workspace', () => {
     expect(first).not.toBe(selected);
   });
 
+  test('first launch skips occupied names without modifying existing folders', async () => {
+    const documents = join(temp, 'Documents');
+    mkdirSync(documents);
+    mkdirSync(join(documents, 'Interpreter'));
+    writeFileSync(join(documents, 'Interpreter', 'AGENTS.md'), 'user-owned\n');
+    mkdirSync(join(documents, 'Interpreter-1'));
+    writeFileSync(join(documents, 'Interpreter-1', 'notes.txt'), 'keep this\n');
+
+    const selected = await getSimpleWorkspacePath(temp);
+    expect(selected).toBe(join(documents, 'Interpreter-2'));
+    expect(readFileSync(join(documents, 'Interpreter', 'AGENTS.md'), 'utf8')).toBe('user-owned\n');
+    expect(readFileSync(join(documents, 'Interpreter-1', 'notes.txt'), 'utf8')).toBe('keep this\n');
+    await reloadConfig();
+    expect(await getSimpleWorkspacePath(temp)).toBe(selected);
+  });
+
   test('a deleted selected folder recovers to Documents/Interpreter on relaunch', async () => {
     const selected = join(temp, 'removable');
     mkdirSync(selected);

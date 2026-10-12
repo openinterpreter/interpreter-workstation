@@ -28,6 +28,32 @@ export const API_PROVIDER_MODEL_DEFAULTS = {
   deepseek: 'deepseek-v4-flash',
 } as const;
 
+/** Maintained presentation roles, intersected with the account's actual catalog.
+ * A role never makes a model available when the provider has not offered it.
+ * Source: https://developers.openai.com/api/docs/models
+ */
+export const OPENAI_MODEL_ROLE_CATALOG = {
+  'gpt-6-luna': 'fast',
+  'gpt-6.1-sol': 'default',
+  'gpt-6-sol': 'default-fallback',
+  'gpt-6-astra': 'capability',
+} as const;
+
+export function chooseOpenAIModelRoles(models: Array<{ id: string; isDefault?: boolean }>): {
+  defaultModelId: string | null;
+  fastModelId: string | null;
+} {
+  const available = new Set(models.map((model) => model.id));
+  const candidates = Object.entries(OPENAI_MODEL_ROLE_CATALOG);
+  const defaultModelId = candidates.find(([id, role]) => role === 'default' && available.has(id))?.[0]
+    ?? candidates.find(([id, role]) => role === 'default-fallback' && available.has(id))?.[0]
+    ?? models.find((model) => model.isDefault)?.id ?? models[0]?.id ?? null;
+  return {
+    defaultModelId,
+    fastModelId: candidates.find(([id, role]) => role === 'fast' && available.has(id))?.[0] ?? null,
+  };
+}
+
 export type ApiProviderModelDefaultKey = keyof typeof API_PROVIDER_MODEL_DEFAULTS;
 export type OnboardingOptionalModelPackId = `api:${ApiPreset}` | 'local:ollama' | 'local:lmstudio';
 
@@ -46,6 +72,7 @@ export function getDefaultApiProviderModelId(
   models: Array<{ id: string }>,
 ): string | null {
   const preferredModelId = API_PROVIDER_MODEL_DEFAULTS[provider];
+  if (provider === 'openai') return chooseOpenAIModelRoles(models).defaultModelId;
   return models.some((model) => model.id === preferredModelId)
     ? preferredModelId
     : models[0]?.id ?? null;
@@ -226,8 +253,7 @@ export function getDefaultOpenAIOAuthModelId(
     throw new Error('OpenAI OAuth returned no supported models');
   }
 
-  return normalizedModels.find((model) => model.isDefault)?.id
-    ?? normalizedModels[0].id;
+  return chooseOpenAIModelRoles(normalizedModels).defaultModelId!;
 }
 
 export function buildOpenAIOAuthOnboardingPack(

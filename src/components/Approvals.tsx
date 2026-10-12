@@ -46,8 +46,10 @@ function useRelativeTime() {
 
 export function Approvals({
   ownerAgentId,
+  ownerThreadId,
 }: {
   ownerAgentId?: string;
+  ownerThreadId?: string | null;
 }) {
   const { state } = useLayout();
   const { showToast, dismissToast } = useToast();
@@ -249,8 +251,8 @@ export function Approvals({
     [approvals, state.tabs],
   );
   const visibleItems = useMemo(
-    () => filterApprovalQueueItems(approvalQueueItems, ownerAgentId),
-    [approvalQueueItems, ownerAgentId],
+    () => filterApprovalQueueItems(approvalQueueItems, ownerAgentId, ownerThreadId),
+    [approvalQueueItems, ownerAgentId, ownerThreadId],
   );
   const visibleApprovals = visibleItems.map((item) => item.approval);
   const isEmpty = visibleApprovals.length === 0;

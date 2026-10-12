@@ -29,6 +29,7 @@ export const ONBOARDING_STEPS = [
   { id: 'stay-connected', telemetryName: 'stay_connected', enabled: true, includeWhenBucketDetected: true },
   { id: 'workspace-choice', telemetryName: 'workspace_choice', enabled: true, includeWhenBucketDetected: true },
   { id: 'feedback', telemetryName: 'feedback', enabled: true, includeWhenBucketDetected: true },
+  { id: 'simple-whatsapp', telemetryName: 'simple_whatsapp', enabled: false, includeWhenBucketDetected: false },
 ] as const satisfies readonly OnboardingStepDefinition[];
 
 export type OnboardingStepId = typeof ONBOARDING_STEPS[number]['id'];

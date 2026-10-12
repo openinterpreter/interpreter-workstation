@@ -28,6 +28,7 @@ describe('settings snapshot helpers', () => {
       reviewMarkdownEdits: true,
       launchAtLogin: false,
       advancedMode: false,
+      showSimpleFeedback: true,
       autoApproveLowRiskMediaCards: false,
       telemetryEnabled: false,
       allowAgentAddTools: true,

@@ -40,6 +40,13 @@ const sendMessageMock = mock(async (params: any) => {
 });
 const broadcastSpy = mock(() => {});
 const notifySpy = mock(() => {});
+let durableBinding: { threadId: string; accountId: string } | null = null;
+const wakeIngest = mock(async (_threadId: string, _sourceId: string, _eventId: string, _message: string) => ({ status: 'pending' }));
+const wakeTick = mock(async () => {});
+const wakeList = mock((_threadId: string) => ({ events: [] as Array<{ sourceId: string; turnId: string; status: string }> }));
+const offerReply = mock(async () => true);
+const confirmReply = mock(async () => {});
+let onCompleted: (event: unknown) => void = () => {};
 
 mock.module('./whatsappBridgeDependencies', () => ({
   connectionEvents: fakeConnectionEvents,
@@ -48,6 +55,12 @@ mock.module('./whatsappBridgeDependencies', () => ({
   sendWhatsAppMessageWithRetry: sendMessageMock,
   broadcastEvent: broadcastSpy,
   notifyAgent: notifySpy,
+  getWhatsAppThreadBinding: async () => durableBinding,
+  readyWakeSources: async () => {},
+  wakeSources: { ingest: wakeIngest, tick: wakeTick, list: wakeList },
+  subscribeCodexNotifications: (callback: (event: unknown) => void) => { onCompleted = callback; return () => {}; },
+  offerWhatsAppReply: offerReply,
+  confirmWhatsAppReply: confirmReply,
 }));
 
 const {
@@ -98,7 +111,51 @@ describe('whatsappBridge', () => {
     notifySpy.mockClear();
     sendMessageMock.mockClear();
     fakePhoneNumber = '+15551234567';
+    durableBinding = null;
+    wakeIngest.mockClear();
+    wakeTick.mockClear();
+    wakeList.mockClear();
+    offerReply.mockClear();
+    confirmReply.mockClear();
     resetBridgeSession();
+  });
+
+  test('bound self-chat wakes the exact existing durable thread with stable replay ID, never another agent', async () => {
+    durableBinding = { threadId: 'thread-12345678', accountId: '15551234567' };
+    const incoming = makeSelfChatMessage({ id: 'stable-message-123', body: 'Make a useful interface' });
+    fakeConnectionEvents.emit('message', incoming);
+    fakeConnectionEvents.emit('message', incoming); // Baileys can replay on reconnect.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(wakeIngest).toHaveBeenCalledTimes(2);
+    expect(wakeIngest.mock.calls[0]?.slice(0, 2)).toEqual(['thread-12345678', 'whatsapp-self']);
+    expect(wakeIngest.mock.calls[0]?.[2]).toBe(wakeIngest.mock.calls[1]?.[2]);
+    expect(wakeIngest.mock.calls[0]?.[3]).toBe('Make a useful interface');
+    expect(broadcastSpy).not.toHaveBeenCalledWith('agent-tab:create-requested', expect.anything());
+  });
+
+  test('fails closed when the paired account no longer matches the bound thread', async () => {
+    durableBinding = { threadId: 'thread-12345678', accountId: '15559999999' };
+    fakeConnectionEvents.emit('message', makeSelfChatMessage());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(wakeIngest).not.toHaveBeenCalled();
+    expect(broadcastSpy).not.toHaveBeenCalledWith('agent-tab:create-requested', expect.anything());
+  });
+
+  test('sends one completed durable response to the matching paired self-chat, suppressing its echo', async () => {
+    durableBinding = { threadId: 'thread-12345678', accountId: '15551234567' };
+    wakeList.mockReturnValue({ events: [{ sourceId: 'whatsapp-self', turnId: 'turn-12345678', status: 'admitted' }] });
+    const completed = { method: 'turn/completed', params: { threadId: 'thread-12345678', turn: {
+      id: 'turn-12345678', status: 'completed', items: [{ type: 'agentMessage', text: 'Finished interface', phase: 'final_answer' }],
+    } } };
+    onCompleted(completed);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
+    expect(offerReply).toHaveBeenCalledWith('thread-12345678', 'turn-12345678');
+    expect(confirmReply).toHaveBeenCalledWith('thread-12345678', 'turn-12345678');
+    offerReply.mockResolvedValue(false);
+    onCompleted(completed);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(sendMessageMock).toHaveBeenCalledTimes(1);
   });
 
   // ===========================================================================

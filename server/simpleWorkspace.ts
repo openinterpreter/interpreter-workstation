@@ -149,8 +149,24 @@ export async function getSimpleWorkspacePath(defaultHomePath: string = homedir()
 
   const documents = join(defaultHomePath, 'Documents');
   mkdirSync(documents, { recursive: true });
-  const firstRunPath = join(documents, 'Interpreter');
-  mkdirSync(firstRunPath, { recursive: true });
+  if (lstatSync(documents).isSymbolicLink()) {
+    throw new Error('Documents must not be a symlink when creating the Simple workspace.');
+  }
+  // A fresh profile must never adopt an unrelated user's existing folder.
+  // Exclusive mkdir also makes concurrent first-run windows choose distinct
+  // names instead of both seeding the same directory.
+  let firstRunPath: string | null = null;
+  for (let suffix = 0; suffix < 10_000; suffix += 1) {
+    const candidate = join(documents, suffix === 0 ? 'Interpreter' : `Interpreter-${suffix}`);
+    try {
+      mkdirSync(candidate);
+      firstRunPath = candidate;
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
+  }
+  if (!firstRunPath) throw new Error('Could not reserve a new Simple workspace folder.');
   const path = validateSimpleWorkspacePath(firstRunPath);
   seedWorkspaceGuidance(path);
   await setSimpleWorkspaceSetting(path);

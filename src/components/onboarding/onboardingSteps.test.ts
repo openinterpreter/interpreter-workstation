@@ -13,7 +13,7 @@ import {
 
 describe('onboarding step registry', () => {
   test('keeps one ordered source of truth for step indices', () => {
-    expect(TOTAL_ONBOARDING_STEPS).toBe(23);
+    expect(TOTAL_ONBOARDING_STEPS).toBe(24);
     expect(ONBOARDING_STEP_INDEX.name).toBe(0);
     expect(ONBOARDING_STEP_INDEX.bucket).toBe(2);
     expect(ONBOARDING_STEP_INDEX['overlay-first-use']).toBe(11);

@@ -14,3 +14,6 @@ export {
 export {
   notifyAgent,
 } from '../handlers/agentNotifications';
+export { getWhatsAppThreadBinding, offerWhatsAppReply, confirmWhatsAppReply } from '../handlers/whatsappThreadBinding';
+export { readyWakeSources, wakeSources } from '../utils/wakeSourcesRuntime';
+export { subscribeCodexNotifications, getCodexService } from '../../src/lib/codex/service';

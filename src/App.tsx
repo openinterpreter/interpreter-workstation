@@ -23,6 +23,7 @@ import { BrowserSelect } from "./components/BrowserSelect";
 import { ResizeHandle } from "./components/ui/resize-handle";
 import { ExtensionDownloadBar } from "./components/onboarding/ExtensionDownloadBar";
 import { OnboardingFeedbackToast } from "./components/onboarding/OnboardingFeedbackToast";
+import { openFeedbackPopover } from "./utils/feedback";
 import { OnboardingOverlay } from "./components/onboarding/OnboardingOverlay";
 import { AppUpdateDialog } from "./components/AppUpdateDialog";
 import { ComputerUseSetupModalHost } from "./components/ComputerUseSetupModalHost";
@@ -82,6 +83,26 @@ function AppContent() {
   const [simpleThreadLoaded, setSimpleThreadLoaded] = useState(false);
   const [simpleError, setSimpleError] = useState<string | null>(null);
   const [simpleSettingsOpen, setSimpleSettingsOpen] = useState(false);
+  const [firstRunSession, setFirstRunSession] = useState(false);
+  const [showSimpleFeedback, setShowSimpleFeedback] = useState(true);
+  const [feedbackRequested, setFeedbackRequested] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    void uiSettings.getShowSimpleFeedback().then(({ enabled }: { enabled: boolean }) => {
+      if (mounted) setShowSimpleFeedback(enabled);
+    });
+    const unsubscribe = uiSettings.onShowSimpleFeedbackChanged(({ enabled }: { enabled: boolean }) => {
+      setShowSimpleFeedback(enabled);
+    });
+    return () => { mounted = false; unsubscribe(); };
+  }, []);
+
+  useEffect(() => quickActions.onOpenFeedback(() => {
+    setFeedbackRequested(true);
+    // Allow the popover trigger to mount even when the floating button is hidden.
+    window.setTimeout(openFeedbackPopover, 0);
+  }), []);
 
   useEffect(() => {
     let alive = true;
@@ -303,6 +324,7 @@ function AppContent() {
     getOnboardingState()
       .then(({ state }) => {
         const needsOnboarding = shouldShowOnboarding(state);
+        setFirstRunSession(needsOnboarding);
         setIsOnboarding(needsOnboarding);
         if (!needsOnboarding) {
           setShowOnboardingOverlay(false);
@@ -906,7 +928,11 @@ function AppContent() {
       {!isOnboarding && !marketingDemoMode && (
         <BrowserSplitOfferNotice />
       )}
-      <OnboardingFeedbackToast visible={isOnboarding === true} />
+      <OnboardingFeedbackToast
+        visible={isOnboarding === true || (advancedMode === false && (showSimpleFeedback || feedbackRequested))}
+        side={isMac ? 'right' : 'left'}
+        onClose={() => setFeedbackRequested(false)}
+      />
 
       <LowerLeftNoticeViewport
         leftSidebarOpen={state.leftSidebar.isOpen}
@@ -923,6 +949,7 @@ function AppContent() {
       >
         {shouldRenderMainSurfaces && advancedMode === false && simpleWorkspacePath && simpleThreadLoaded && simpleThreadWorkspacePath === simpleWorkspacePath && !simpleError ? (
           <SimpleShell key={simpleWorkspacePath} workspacePath={simpleWorkspacePath} initialThreadId={simpleThreadId}
+            firstRunSession={firstRunSession}
             onBindThread={async (threadId) => {
               const primaryThread = (workstationIpc as typeof workstationIpc & {
                 simplePrimaryThread?: { bind: (request: { threadId: string; expectedThreadId?: string | null }) => Promise<{ threadId: string }> };
