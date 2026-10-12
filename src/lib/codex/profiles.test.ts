@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import assert from "node:assert/strict";
 import { getLocalModelProviderRuntime } from "../../../shared/types/provider";
+import { DEFAULT_OPENAI_RESPONSES_CUSTOM_TOOL_MODEL_ID } from "../../../shared/utils/openAiResponsesTools";
 
 import {
   buildAppManagedModelProviderId,
@@ -118,10 +119,10 @@ describe("codex profiles", () => {
     }
   });
 
-  test("uses OpenAI's recommended speed and cost default for the OpenAI API preset", () => {
+  test("uses the maintained compatible Responses default for the OpenAI API preset", () => {
     const preset = getCustomPreset("openai-api");
     assert.ok(preset, "openai-api preset should exist");
-    assert.equal(preset.defaultModel, "gpt-5.6-luna");
+    assert.equal(preset.defaultModel, DEFAULT_OPENAI_RESPONSES_CUSTOM_TOOL_MODEL_ID);
   });
 
   test("preserves legacy NVIDIA runtime inference without advertising verified Responses support", () => {
