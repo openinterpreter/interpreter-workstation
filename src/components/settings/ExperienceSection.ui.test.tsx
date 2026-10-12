@@ -26,6 +26,15 @@ import { ExperienceSectionContent } from './ExperienceSection';
 describe('Simple experience settings', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  test('compact Simple settings stack labels above controls rather than squeezing folder guidance', async () => {
+    render(<ExperienceSectionContent compact />);
+    const folderLabel = screen.getByText('Simple control folder');
+    const row = folderLabel.parentElement?.parentElement;
+    expect(row).toHaveClass('!flex-col', '!items-stretch');
+    expect(row?.lastElementChild).toHaveClass('!w-full', '!min-w-0');
+    expect(await screen.findByTitle('/documents/Interpreter')).toBeInTheDocument();
+  });
+
   test('defaults to Simple, switches to Advanced and back through durable preference', async () => {
     const user = userEvent.setup();
     render(<ExperienceSectionContent />);

@@ -4,7 +4,7 @@ import { isWorkstationReadOnly } from '../../remote/workstationConnection';
 import { SettingsRow } from './SettingsSection';
 
 /** The same persisted experience preference is used in every app window. */
-export function ExperienceSectionContent() {
+export function ExperienceSectionContent({ compact = false }: { compact?: boolean } = {}) {
   const [advanced, setAdvanced] = useState<boolean | null>(null);
   const [workspacePath, setWorkspacePath] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -67,7 +67,9 @@ export function ExperienceSectionContent() {
   }
 
   return <>
-    <SettingsRow label="Experience" description="Simple opens your interface and one durable conversation. Advanced keeps the existing workspace, tabs, sidebars, and overlay controls.">
+    <SettingsRow label="Experience" description="Simple opens your interface and one durable conversation. Advanced keeps the existing workspace, tabs, sidebars, and overlay controls."
+      className={compact ? '!flex-col !items-stretch !gap-2' : undefined}
+      contentClassName={compact ? '!w-full !min-w-0' : undefined}>
       <div role="group" aria-label="Experience" className="flex gap-1 rounded-lg bg-muted p-1">
         <button type="button" aria-pressed={advanced === false} disabled={readOnly || pending || advanced === null}
           onClick={() => void selectMode(false)} className={`rounded-md px-3 py-1.5 text-ui-sm ${advanced === false ? 'bg-background shadow-sm' : ''}`}>Simple</button>
@@ -75,7 +77,9 @@ export function ExperienceSectionContent() {
           onClick={() => void selectMode(true)} className={`rounded-md px-3 py-1.5 text-ui-sm ${advanced === true ? 'bg-background shadow-sm' : ''}`}>Advanced</button>
       </div>
     </SettingsRow>
-    <SettingsRow label="Simple control folder" description="Durable guidance and shared context live here. Each interface remains a separate project folder beside it, never nested inside it.">
+    <SettingsRow label="Simple control folder" description="Durable guidance and shared context live here. Each interface remains a separate project folder beside it, never nested inside it."
+      className={compact ? '!flex-col !items-stretch !gap-2' : undefined}
+      contentClassName={compact ? '!w-full !min-w-0' : undefined}>
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <span className="max-w-[320px] truncate text-ui-sm" title={workspacePath ?? undefined}>{workspacePath ?? 'Loading…'}</span>
         <button type="button" disabled={readOnly || pending || !workspacePath} onClick={() => void chooseWorkspace()}
