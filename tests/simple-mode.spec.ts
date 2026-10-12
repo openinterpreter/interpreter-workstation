@@ -8,7 +8,7 @@ import { sel } from './selectors';
 import { createDefaultOnboardingState, type OnboardingState } from '../shared/types/onboardingState';
 
 let root: string | null = null;
-test.afterAll(async () => { if (root) await rm(root, { recursive: true, force: true }); });
+test.afterAll(async () => { if (root) await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
 
 async function onboardingState(page: Page): Promise<OnboardingState> {
   const response = await page.evaluate(async () => {
@@ -95,15 +95,14 @@ test('Simple React interface is default, preserves live state, exposes its setti
     }
   `;
   await writeFile(candidate, makeApp('A live React canvas'), 'utf8');
-  const promoted = await page.evaluate(async () => {
-    return await (window as any).electron.apiRequest({
-      method: 'POST',
-      path: '/api/simple-interface/promote',
-    });
-  });
-  expect(promoted.ok, String(promoted.data?.error ?? 'Interface promotion failed')).toBe(true);
-  expect(promoted.data.ready, String(promoted.data.diagnostic ?? 'Interface was not ready')).toBe(true);
-  expect(promoted.data.diagnostic).toBeNull();
+  // A previous test can leave an in-flight project watcher build on the shared
+  // Electron instance. Promote the complete file, not an older transient build.
+  await expect.poll(async () => {
+    const result = await page.evaluate(async () => (window as any).electron.apiRequest({
+      method: 'POST', path: '/api/simple-interface/promote',
+    }));
+    return result.ok && result.data?.ready && result.data?.diagnostic === null;
+  }, { timeout: 15_000 }).toBe(true);
   // Revisions cross-fade through two briefly overlapping frames; the last
   // frame is always the newly promoted interface.
   let canvas = await waitForInterfaceFrame(page, async (frame) =>
@@ -113,7 +112,8 @@ test('Simple React interface is default, preserves live state, exposes its setti
 
   await writeFile(candidate, 'export default function App( {', 'utf8');
   await expect(page.getByRole('status')).toContainText('latest interface edit needs fixing', { timeout: 15000 });
-  await expect(canvas.getByRole('heading', { name: 'A live React canvas' })).toBeVisible();
+  canvas = await waitForInterfaceFrame(page, async (frame) =>
+    await frame.getByRole('heading', { name: 'A live React canvas' }).isVisible());
   await expect(canvas.getByRole('textbox', { name: 'Persistent note' })).toHaveValue('survives hot reload');
   await expect.poll(async () => {
     const diagnostics = JSON.parse(await readFile(path.join(interfaceProject, '.interpreter', 'runtime', 'diagnostics.json'), 'utf8'));
@@ -200,6 +200,62 @@ test('Simple React interface is default, preserves live state, exposes its setti
   canvas = await waitForInterfaceFrame(page, async (frame) =>
     await frame.getByRole('heading', { name: 'Recovered canvas' }).isVisible());
   await expect(canvas.getByRole('heading', { name: 'Recovered canvas' })).toBeVisible();
+});
+
+test('generated React forms submit into durable project state without opening a network form route', async ({ page }) => {
+  test.setTimeout(60_000);
+  await waitForAppReady(page);
+  const sandboxRoot = await mkdtemp(path.join(tmpdir(), 'interpreter-simple-form-'));
+  try {
+    const control = path.join(sandboxRoot, 'control');
+    const project = path.join(sandboxRoot, 'tasks');
+    await mkdir(control);
+    await mkdir(project);
+    await page.evaluate(async (workspacePath) => (window as any).electron.workspace.setSimple({ workspacePath }), control);
+    const created = await page.evaluate(async (folder) => (window as any).electron.apiRequest({
+      method: 'POST', path: '/api/simple-interface/projects/new', body: { path: folder },
+    }), project);
+    expect(created.ok).toBe(true);
+    await page.evaluate(() => window.dispatchEvent(new Event('simple-project:changed')));
+    await writeFile(path.join(project, 'src', 'App.jsx'), `
+      import React from 'react';
+      import { Page, usePersistentState } from '@interpreter/interface';
+      export default function App() {
+        const [tasks, setTasks] = usePersistentState('acceptance-tasks', []);
+        const [draft, setDraft] = usePersistentState('acceptance-draft', '');
+        return <Page><form onSubmit={(event) => {
+          event.preventDefault();
+          setTasks((current) => [...current, draft]);
+          setDraft('');
+        }}><input aria-label="New task" required value={draft} onChange={(event) => setDraft(event.target.value)} />
+        <button type="submit">Save task</button></form>
+        <p>Saved tasks: {tasks.join(', ')}</p></Page>;
+      }
+    `, 'utf8');
+    const promoted = await page.evaluate(async () => (window as any).electron.apiRequest({
+      method: 'POST', path: '/api/simple-interface/promote',
+    }));
+    expect(promoted.ok).toBe(true);
+    expect(promoted.data.ready).toBe(true);
+    const canvas = await waitForInterfaceFrame(page, async (frame) =>
+      await frame.getByRole('button', { name: 'Save task' }).isVisible());
+    await expect(page.locator('iframe[data-simple-interface-frame]').last()).toHaveAttribute('sandbox', /allow-forms/);
+    const policy = (await page.request.get(canvas.url())).headers()['content-security-policy'];
+    expect(policy).toMatch(/form-action [^;]+\/api\/simple-interface\/app\/index\.html;/);
+    expect(policy).not.toContain("form-action 'self'");
+    await canvas.getByRole('textbox', { name: 'New task' }).fill('Plan the next sprint');
+    // Activate within the frame: another native project window can cover the
+    // fixture window even when Playwright sees this frame as pointer-actionable.
+    await canvas.getByRole('button', { name: 'Save task' }).evaluate((button) => (button as HTMLButtonElement).click());
+    await expect(canvas.getByText('Saved tasks: Plan the next sprint')).toBeVisible();
+    await expect(canvas.getByRole('textbox', { name: 'New task' })).toHaveValue('');
+    await expect.poll(async () => {
+      const state = JSON.parse(await readFile(path.join(project, '.interpreter', 'state.json'), 'utf8'));
+      return state['acceptance-tasks'];
+    }).toEqual(['Plan the next sprint']);
+  } finally {
+    await rm(sandboxRoot, { recursive: true, force: true });
+  }
 });
 
 test('Simple first run offers Chrome, optional GPT Live, and the control folder without Advanced setup', async ({ page }) => {
