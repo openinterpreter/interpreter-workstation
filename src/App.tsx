@@ -88,10 +88,13 @@ function AppContent() {
   const [feedbackRequested, setFeedbackRequested] = useState(false);
 
   const requestFeedback = useCallback(() => {
-    setFeedbackRequested(true);
-    // The trigger must mount before it can open while the floating button is hidden.
-    window.setTimeout(openFeedbackPopover, 0);
-  }, []);
+    if (advancedMode === true) {
+      // Advanced keeps its existing mounted feedback surface and event bridge.
+      openFeedbackPopover();
+    } else {
+      setFeedbackRequested(true);
+    }
+  }, [advancedMode]);
 
   const changeFeedbackVisibility = useCallback(async (visible: boolean) => {
     const result = await uiSettings.setShowSimpleFeedback(visible);
@@ -938,6 +941,7 @@ function AppContent() {
       )}
       <OnboardingFeedbackToast
         visible={isOnboarding === true || (advancedMode === false && (showSimpleFeedback || feedbackRequested))}
+        openRequested={feedbackRequested}
         side={isMac ? 'right' : 'left'}
         onClose={() => setFeedbackRequested(false)}
       />

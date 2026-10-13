@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 const notices = vi.hoisted(() => ({ entry: vi.fn() }));
 vi.mock('../../contexts/LowerLeftNoticesContext', () => ({ useLowerLeftNotice: notices.entry }));
-vi.mock('../FeedbackPopover', () => ({ FeedbackPopover: ({ className }: { className: string }) => <button className={className}>Feedback</button> }));
+vi.mock('../FeedbackPopover', () => ({ FeedbackPopover: ({ className, openRequested }: { className: string; openRequested?: boolean }) =>
+  <button className={className} aria-expanded={openRequested}>Feedback</button> }));
 import { OnboardingFeedbackToast } from './OnboardingFeedbackToast';
 
 describe('floating Simple Feedback', () => {
@@ -22,5 +23,13 @@ describe('floating Simple Feedback', () => {
     expect(notices.entry).toHaveBeenCalledWith('onboarding-feedback', expect.anything(), 'right');
     view.rerender(<OnboardingFeedbackToast visible={false} side="right" />);
     expect(notices.entry).toHaveBeenCalledWith('onboarding-feedback', null, 'right');
+  });
+
+  it('carries a request from Settings through the delayed notice mount', () => {
+    render(<OnboardingFeedbackToast visible openRequested side="left" />);
+    const entry = notices.entry.mock.lastCall?.[1];
+    const rendered = render(entry);
+    expect(screen.getByRole('button', { name: 'Feedback' })).toHaveAttribute('aria-expanded', 'true');
+    rendered.unmount();
   });
 });

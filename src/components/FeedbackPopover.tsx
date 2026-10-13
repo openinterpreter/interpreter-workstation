@@ -26,11 +26,12 @@ import { SIDEBAR_FOOTER_SECONDARY_BUTTON_CLASSNAME } from './sidebarFooterButton
 interface FeedbackPopoverProps {
   className?: string;
   onOpenChange?: (open: boolean) => void;
+  openRequested?: boolean;
 }
 
 const DEFAULT_INCLUDE_LOGS = true;
 
-export function FeedbackPopover({ className, onOpenChange }: FeedbackPopoverProps) {
+export function FeedbackPopover({ className, onOpenChange, openRequested = false }: FeedbackPopoverProps) {
   const { session } = useAuth();
   const { dismissToast, showToast } = useToast();
   const { t } = useTranslation();
@@ -68,6 +69,15 @@ export function FeedbackPopover({ className, onOpenChange }: FeedbackPopoverProp
       window.removeEventListener(FEEDBACK_POPOVER_OPEN_EVENT, handleOpen);
     };
   }, []);
+  // A hidden floating trigger mounts through the notice layer after Settings
+  // closes. Carry the request as state instead of racing a one-shot event
+  // against the new trigger's effect subscription.
+  useEffect(() => {
+    if (openRequested) {
+      setIsOpen(true);
+      trackFeedbackOpened();
+    }
+  }, [openRequested]);
   const [message, setMessage] = useState('');
 
   useEffect(() => {
