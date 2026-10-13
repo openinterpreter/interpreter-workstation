@@ -179,6 +179,9 @@ const props = {
   onOpenSettings: vi.fn(),
   settingsOpen: false,
   onCloseSettings: vi.fn(),
+  feedbackVisible: true,
+  onFeedbackVisibilityChange: vi.fn(async () => {}),
+  onLeaveFeedback: vi.fn(),
   canvas: <button type="button">Generated interface action</button>,
 };
 
@@ -332,6 +335,25 @@ describe("Simple shell", () => {
     expect(screen.getByRole("button", { name: "Send prompt" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Close settings" }));
     expect(onCloseSettings).toHaveBeenCalledOnce();
+  });
+
+  test('keeps Feedback reachable in Settings when the floating button is hidden', async () => {
+    const user = userEvent.setup();
+    const onLeaveFeedback = vi.fn();
+    const onCloseSettings = vi.fn();
+    const onFeedbackVisibilityChange = vi.fn(async () => {});
+    render(<SimpleShell {...props} settingsOpen feedbackVisible={false}
+      onLeaveFeedback={onLeaveFeedback} onCloseSettings={onCloseSettings}
+      onFeedbackVisibilityChange={onFeedbackVisibilityChange} />);
+    const button = await screen.findByRole('button', { name: 'Leave Feedback' });
+    await waitFor(() => expect(button).toBeVisible());
+    expect(screen.getByRole('switch', { name: 'Show Feedback button' })).toHaveAttribute('aria-checked', 'false');
+    await user.click(button);
+    expect(onLeaveFeedback).toHaveBeenCalledOnce();
+    expect(onCloseSettings).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole('switch', { name: 'Show Feedback button' }));
+    expect(onFeedbackVisibilityChange).toHaveBeenCalledOnce();
+    expect(onFeedbackVisibilityChange).toHaveBeenCalledWith(true);
   });
 
   test("collapses an open drawer when the generated interface is used", async () => {

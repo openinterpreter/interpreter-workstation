@@ -87,6 +87,18 @@ function AppContent() {
   const [showSimpleFeedback, setShowSimpleFeedback] = useState(true);
   const [feedbackRequested, setFeedbackRequested] = useState(false);
 
+  const requestFeedback = useCallback(() => {
+    setFeedbackRequested(true);
+    // The trigger must mount before it can open while the floating button is hidden.
+    window.setTimeout(openFeedbackPopover, 0);
+  }, []);
+
+  const changeFeedbackVisibility = useCallback(async (visible: boolean) => {
+    const result = await uiSettings.setShowSimpleFeedback(visible);
+    if (!result.success) throw new Error(result.error || 'Could not save Feedback visibility.');
+    setShowSimpleFeedback(visible);
+  }, []);
+
   useEffect(() => {
     let mounted = true;
     void uiSettings.getShowSimpleFeedback().then(({ enabled }: { enabled: boolean }) => {
@@ -98,11 +110,7 @@ function AppContent() {
     return () => { mounted = false; unsubscribe(); };
   }, []);
 
-  useEffect(() => quickActions.onOpenFeedback(() => {
-    setFeedbackRequested(true);
-    // Allow the popover trigger to mount even when the floating button is hidden.
-    window.setTimeout(openFeedbackPopover, 0);
-  }), []);
+  useEffect(() => quickActions.onOpenFeedback(requestFeedback), [requestFeedback]);
 
   useEffect(() => {
     let alive = true;
@@ -960,6 +968,9 @@ function AppContent() {
             }}
             settingsOpen={simpleSettingsOpen} onOpenSettings={() => setSimpleSettingsOpen(true)}
             onCloseSettings={() => setSimpleSettingsOpen(false)}
+            feedbackVisible={showSimpleFeedback}
+            onFeedbackVisibilityChange={changeFeedbackVisibility}
+            onLeaveFeedback={requestFeedback}
             canvas={<SimpleInterface onMessage={(text, source) => sendSimpleMessage(text, simpleWorkspacePath, source)} />} />
         ) : advancedMode === false || advancedMode === null ? (
           <div role={simpleError ? 'alert' : 'status'} className="flex h-full flex-col items-center justify-center gap-3 px-8 text-ui-sm text-muted-foreground">

@@ -63,6 +63,30 @@ test('the app main frame proxies channel mutations without granting opaque web o
   expect(response.status).toBe(400);
 });
 
+test('Simple Feedback remains reachable when hidden and its visibility survives a renderer reload', async ({ page }) => {
+  await waitForAppReady(page);
+  await expect(page.locator('[data-simple-shell]')).toBeVisible();
+  await page.getByRole('button', { name: 'Open Settings' }).click();
+  const toggle = page.getByRole('switch', { name: 'Show Feedback button' });
+  await expect(toggle).toBeVisible();
+  if (await toggle.getAttribute('aria-checked') === 'false') await toggle.click();
+  await expect(page.getByTestId('feedback-button')).toBeVisible();
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  await expect(page.getByTestId('feedback-button')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Leave Feedback' }).click();
+  await expect(page.getByTestId('feedback-popover')).toBeVisible();
+  await reloadAndWaitForPageLoadSignals(page);
+  await waitForAppReady(page);
+  await expect(page.getByTestId('feedback-button')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Open Settings' }).click();
+  const restoredToggle = page.getByRole('switch', { name: 'Show Feedback button' });
+  await expect(restoredToggle).toHaveAttribute('aria-checked', 'false');
+  await restoredToggle.click();
+  await expect(page.getByTestId('feedback-button')).toBeVisible();
+});
+
 test('Simple React interface is default, preserves live state, exposes its settings, and switches reversibly to Advanced', async ({ page }) => {
   test.setTimeout(90_000); // A real Electron renderer reload can take >15 seconds under CI.
   await waitForAppReady(page);
