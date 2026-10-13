@@ -40,6 +40,7 @@ import { useSimpleLive } from "./useSimpleLive";
 import { useSimpleStoredProfile } from "./useSimpleStoredProfile";
 import { SimpleConnectionsSettings } from "./SimpleConnectionsSettings";
 import { SimpleThemeSettings } from "./SimpleThemeSettings";
+import { SimpleFeedbackSettings } from "./SimpleFeedbackSettings";
 import { SimpleWhatsNew } from "./SimpleWhatsNew";
 import { SimpleChannelsSettings } from "./SimpleChannelsSettings";
 import {
@@ -110,6 +111,9 @@ interface SimpleShellProps {
   onOpenSettings: () => void;
   settingsOpen: boolean;
   onCloseSettings: () => void;
+  feedbackVisible: boolean;
+  onFeedbackVisibilityChange: (visible: boolean) => Promise<void>;
+  onLeaveFeedback: () => void;
   canvas: ReactNode;
 }
 
@@ -122,6 +126,9 @@ export function SimpleShell({
   onOpenSettings,
   settingsOpen,
   onCloseSettings,
+  feedbackVisible,
+  onFeedbackVisibilityChange,
+  onLeaveFeedback,
   canvas,
 }: SimpleShellProps) {
   const [surfaceMode, setSurfaceMode] = useState<SimpleSurfaceMode>(
@@ -1144,6 +1151,14 @@ export function SimpleShell({
                       </section>
                       <SimpleThemeSettings />
                       <ExperienceSectionContent compact />
+                      <SimpleFeedbackSettings
+                        visible={feedbackVisible}
+                        onVisibilityChange={onFeedbackVisibilityChange}
+                        onLeaveFeedback={() => {
+                          onCloseSettings();
+                          onLeaveFeedback();
+                        }}
+                      />
                       <SimpleChannelsSettings threadId={threadId} />
                       <div className="mt-7 border-t border-foreground/[0.08] pt-5">
                         <SimpleConnectionsSettings />
