@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { LowerLeftNoticeProvider, useLowerLeftNotices } from '../contexts/LowerLeftNoticesContext';
 import { ToastProvider } from '../contexts/ToastContext';
 import { FeedbackPopover } from './FeedbackPopover';
+import { useState } from 'react';
+import { openFeedbackPopover } from '../utils/feedback';
 
 vi.mock('motion/react', async () => {
   const React = await import('react');
@@ -172,5 +174,42 @@ describe('FeedbackPopover', () => {
     await user.tab();
 
     expect(messageInput).toHaveFocus();
+  });
+
+  test('opens after a hidden Feedback trigger mounts in response to Settings', async () => {
+    const user = userEvent.setup();
+    function HiddenFeedback() {
+      const [requested, setRequested] = useState(false);
+      return (
+        <LowerLeftNoticeProvider>
+          <ToastProvider>
+            <button onClick={() => setRequested(true)}>Leave Feedback</button>
+            {requested && <FeedbackPopover openRequested onOpenChange={(open) => {
+              if (!open) setRequested(false);
+            }} />}
+            <NoticeViewport />
+          </ToastProvider>
+        </LowerLeftNoticeProvider>
+      );
+    }
+
+    render(<HiddenFeedback />);
+    expect(screen.queryByRole('button', { name: 'Feedback' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Leave Feedback' }));
+    expect(await screen.findByLabelText('Message')).toBeVisible();
+    expect(telemetryMocks.trackFeedbackOpened).toHaveBeenCalledTimes(1);
+
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Feedback' })).not.toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'Leave Feedback' }));
+    expect(await screen.findByLabelText('Message')).toBeVisible();
+    expect(telemetryMocks.trackFeedbackOpened).toHaveBeenCalledTimes(2);
+  });
+
+  test('keeps the existing event-based Advanced feedback action', async () => {
+    renderFeedbackPopover();
+    act(() => openFeedbackPopover());
+    expect(await screen.findByLabelText('Message')).toBeVisible();
+    expect(telemetryMocks.trackFeedbackOpened).toHaveBeenCalledOnce();
   });
 });
