@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import express from 'express';
 import request from 'supertest';
-import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
@@ -176,5 +176,43 @@ describe('server-owned directory and local OIDC fixture', () => {
     expect(await store.verifySession(token)).toMatchObject({ organizationId: 'org-a', subject: 'alice' });
     expect(await store.getMember('org-a', 'huge')).toBeNull();
     expect((await stat(file)).size).toBeLessThan(8_000_000);
+  });
+
+  test('cross-tenant persisted membership and audit tampering fail closed without rewriting evidence', async () => {
+    for (const tamper of [(state: any) => { state.organizations['org-a'].members.alice.organizationId = 'org-b'; },
+      (state: any) => { state.audit[0].organizationId = 'unknown-org'; }]) {
+      const { directory: store, file } = await directory();
+      const state = JSON.parse(await readFile(file, 'utf8'));
+      tamper(state);
+      const evidence = JSON.stringify(state);
+      await writeFile(file, evidence);
+      await expect(store.listMembers('org-a')).rejects.toThrow();
+      await expect(store.bootstrap('org-c', 'Gamma', config.issuer,
+        { organizationId: 'org-c', subject: 'admin', displayName: 'Admin', role: 'admin', active: true })).rejects.toThrow();
+      expect(await readFile(file, 'utf8')).toBe(evidence);
+    }
+  });
+
+  test('unknown tenant admin read denies without inventing an invalid tenant audit event', async () => {
+    const { directory: store } = await directory();
+    const { identity } = await store.createSession(config.issuer, 'org-a', 'alice', Date.now() + 60_000);
+    const before = await store.auditSummary('org-a');
+    expect(await store.readAdmin({ ...identity, organizationId: 'unknown-org' }, 'overview')).toBeNull();
+    expect(await store.auditSummary('org-a')).toEqual(before);
+  });
+
+  test('transient compaction preserves audit and active session; revoked/expired sessions stay denied', async () => {
+    const { directory: store, file } = await directory();
+    const { token, identity } = await store.createSession(config.issuer, 'org-a', 'alice', Date.now() + 30_000);
+    await store.putAttempt('old-state', { organizationId: 'org-a', issuer: config.issuer, nonce: 'n', verifier: 'v',
+      bindingHash: 'a'.repeat(64), expiresAt: Date.now() - 1000 });
+    const before = await store.auditSummary('org-a');
+    expect(await store.compactExpired(Date.now())).toEqual({ attempts: 1, sessions: 0 });
+    expect(await store.verifySession(token)).toMatchObject({ subject: 'alice' });
+    expect(await store.auditSummary('org-a')).toEqual(before);
+    await store.revokeSession(identity);
+    expect(await store.verifySession(token)).toBeNull();
+    expect(await store.compactExpired(Date.now() + 35_000)).toEqual({ attempts: 0, sessions: 1 });
+    expect((await readFile(file, 'utf8'))).toContain('session.revoke');
   });
 });

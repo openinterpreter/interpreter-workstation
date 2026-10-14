@@ -29,7 +29,8 @@ export function createOidcHttpRouter({ config, integration, applicationOrigin, s
   const origin = new URL(applicationOrigin);
   const callback = new URL(config.redirectUri);
   const loopback = config.allowInsecureLoopbackForTests === true;
-  if (origin.origin !== callback.origin || origin.pathname !== '/' || origin.search || origin.hash ||
+  if (origin.origin !== callback.origin || origin.username || origin.password || callback.username || callback.password ||
+      origin.pathname !== '/' || origin.search || origin.hash ||
       !successPath.startsWith('/') || successPath.startsWith('//') || successPath.includes('\\') ||
       !callback.pathname.startsWith('/enterprise/') || callback.search || callback.hash ||
       (loopback ? !(origin.protocol === 'http:' && origin.hostname === '127.0.0.1') : origin.protocol !== 'https:')) {
@@ -65,6 +66,7 @@ export function createOidcHttpRouter({ config, integration, applicationOrigin, s
     const state = url.searchParams.getAll('state');
     const binding = cookie(req, bindingName);
     if (url.pathname !== callback.pathname || code.length !== 1 || state.length !== 1 ||
+        !/^[A-Za-z0-9_-]{43}$/.test(state[0] ?? '') ||
         url.searchParams.size !== 2 || !binding) return void res.status(400).end();
     res.clearCookie(bindingName, cookieOptions);
     try {
