@@ -8,11 +8,16 @@ import { evaluateTenantPolicy } from './tenantPolicy';
 type Audit = { organizationId: string; subject: string; action: string; outcome: 'allowed' | 'denied'; at: string };
 type Attempt = { organizationId: string; issuer: string; nonce: string; verifier: string; bindingHash: string; expiresAt: number };
 type Session = { organizationId: string; issuer: string; subject: string; expiresAt: number; revoked: boolean };
-type Data = { version: 1; organizations: Record<string, { name: string; issuer: string; members: Record<string, OrganizationMember> }>;
+export type DirectoryState = { version: 1; organizations: Record<string, { name: string; issuer: string; members: Record<string, OrganizationMember> }>;
   attempts: Record<string, Attempt>; sessions: Record<string, Session>; audit: Audit[] };
-const MAX_DIRECTORY_BYTES = 8_000_000;
+type Data = DirectoryState;
+export const MAX_DIRECTORY_BYTES = 8_000_000;
+export interface EnterpriseStateStore {
+  read(): Promise<DirectoryState>;
+  change<T>(fn: (data: DirectoryState) => T, create?: boolean): Promise<T>;
+}
 
-const blank = (): Data => ({ version: 1, organizations: Object.create(null), attempts: Object.create(null), sessions: Object.create(null), audit: [] });
+export const blankDirectoryState = (): DirectoryState => ({ version: 1, organizations: Object.create(null), attempts: Object.create(null), sessions: Object.create(null), audit: [] });
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 const eq = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const key = (value: string) => value.length > 0 && value.length <= 160 && /^[a-zA-Z0-9._@:-]+$/.test(value) &&
@@ -20,7 +25,7 @@ const key = (value: string) => value.length > 0 && value.length <= 160 && /^[a-z
 const dictionary = <T>(value: Record<string, T>): Record<string, T> => Object.assign(Object.create(null), value);
 const record = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value));
 
-function validate(data: Data): void {
+export function validateDirectoryState(data: Data): void {
   if (data.version !== 1 || !record(data.organizations) || !record(data.sessions) ||
       !record(data.attempts) || !Array.isArray(data.audit)) throw new Error('Directory state is invalid');
   for (const [id, org] of Object.entries(data.organizations)) {
@@ -57,13 +62,26 @@ function validate(data: Data): void {
   }
 }
 
+export function decodeDirectoryState(serialized: string): DirectoryState {
+  if (Buffer.byteLength(serialized, 'utf8') > MAX_DIRECTORY_BYTES) throw new Error('Directory state is unsafe');
+  const data = JSON.parse(serialized) as Data;
+  validateDirectoryState(data);
+  data.organizations = dictionary(data.organizations);
+  data.sessions = dictionary(data.sessions);
+  data.attempts = dictionary(data.attempts);
+  for (const org of Object.values(data.organizations)) org.members = dictionary(org.members);
+  return data;
+}
+
 /** Single-host, server-owned directory. No browser endpoint for provisioning. */
 export class ServerDirectory implements EnterpriseDirectory {
   private readonly file: string;
   private readonly lock: string;
+  private readonly store: EnterpriseStateStore | null;
 
-  constructor(file: string) {
-    this.file = resolve(file);
+  constructor(fileOrStore: string | EnterpriseStateStore) {
+    this.store = typeof fileOrStore === 'string' ? null : fileOrStore;
+    this.file = typeof fileOrStore === 'string' ? resolve(fileOrStore) : '';
     this.lock = this.file + '.lock';
   }
 
@@ -75,29 +93,25 @@ export class ServerDirectory implements EnterpriseDirectory {
     if (!create) return;
     try {
       const handle = await open(this.file, 'wx', 0o600);
-      try { await handle.writeFile(JSON.stringify(blank())); await handle.sync(); } finally { await handle.close(); }
+      try { await handle.writeFile(JSON.stringify(blankDirectoryState())); await handle.sync(); } finally { await handle.close(); }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     }
   }
 
   private async read(): Promise<Data> {
+    if (this.store) return this.store.read();
     await this.init();
     const handle = await open(this.file, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
       const s = await handle.stat();
       if (!s.isFile() || (s.mode & 0o077) !== 0 || s.size > MAX_DIRECTORY_BYTES) throw new Error('Directory state is unsafe');
-      const data = JSON.parse(await handle.readFile({ encoding: 'utf8' })) as Data;
-      validate(data);
-      data.organizations = dictionary(data.organizations);
-      data.sessions = dictionary(data.sessions);
-      data.attempts = dictionary(data.attempts);
-      for (const org of Object.values(data.organizations)) org.members = dictionary(org.members);
-      return data;
+      return decodeDirectoryState(await handle.readFile({ encoding: 'utf8' }));
     } finally { await handle.close(); }
   }
 
   private async change<T>(fn: (data: Data) => T, create = false): Promise<T> {
+    if (this.store) return this.store.change(fn, create);
     await this.init(create);
     // Cross-process exclusion: a leftover lock fails closed and requires an operator
     // to inspect it. Do not silently break a lock or lose an audit/membership write.
@@ -106,7 +120,7 @@ export class ServerDirectory implements EnterpriseDirectory {
     try {
       const data = await this.read();
       const result = fn(data);
-      validate(data);
+      validateDirectoryState(data);
       const serialized = JSON.stringify(data);
       // Reject before replacing the last readable state. Audit capacity still
       // needs an operational retention/export policy before any live mount.
