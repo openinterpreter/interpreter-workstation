@@ -192,6 +192,16 @@ async function main() {
   } finally {
     await rm(testHome, { recursive: true, force: true });
   }
+  if (!voiceOnly && exitCode === 0) {
+    // Bun 1.2 cannot resolve node:sqlite; exercise the optional backend under
+    // the pinned Node runtime rather than silently omitting its transaction tests.
+    const nodeSqlite = spawn(process.execPath, ['--import', 'tsx', '--test',
+      'server/enterprise/sqliteDirectoryStore.node-test.ts'], { stdio: 'inherit', env });
+    exitCode = await new Promise((resolveExitCode) => {
+      nodeSqlite.on('exit', (code) => resolveExitCode(code ?? 1));
+      nodeSqlite.on('error', () => resolveExitCode(1));
+    });
+  }
   process.exit(exitCode);
 }
 
