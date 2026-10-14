@@ -167,4 +167,14 @@ describe('server-owned directory and local OIDC fixture', () => {
     await expect(store.verifySession(token)).rejects.toThrow();
     expect(await stat(file).catch(() => null)).toBeNull();
   });
+
+  test('oversized write leaves the last directory state readable instead of committing a self-lockout', async () => {
+    const { directory: store, file } = await directory();
+    const { token, identity } = await store.createSession(config.issuer, 'org-a', 'alice', Date.now() + 60_000);
+    await expect(store.setMember(identity, { organizationId: 'org-a', subject: 'huge',
+      displayName: 'x'.repeat(8_100_000), role: 'member', active: true })).rejects.toThrow('Directory capacity reached');
+    expect(await store.verifySession(token)).toMatchObject({ organizationId: 'org-a', subject: 'alice' });
+    expect(await store.getMember('org-a', 'huge')).toBeNull();
+    expect((await stat(file)).size).toBeLessThan(8_000_000);
+  });
 });

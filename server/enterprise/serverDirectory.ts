@@ -9,6 +9,7 @@ type Attempt = { organizationId: string; issuer: string; nonce: string; verifier
 type Session = { organizationId: string; issuer: string; subject: string; expiresAt: number; revoked: boolean };
 type Data = { version: 1; organizations: Record<string, { name: string; issuer: string; members: Record<string, OrganizationMember> }>;
   attempts: Record<string, Attempt>; sessions: Record<string, Session>; audit: Audit[] };
+const MAX_DIRECTORY_BYTES = 8_000_000;
 
 const blank = (): Data => ({ version: 1, organizations: Object.create(null), attempts: Object.create(null), sessions: Object.create(null), audit: [] });
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -46,7 +47,7 @@ export class ServerDirectory implements EnterpriseDirectory {
     const handle = await open(this.file, constants.O_RDONLY | constants.O_NOFOLLOW);
     try {
       const s = await handle.stat();
-      if (!s.isFile() || (s.mode & 0o077) !== 0 || s.size > 8_000_000) throw new Error('Directory state is unsafe');
+      if (!s.isFile() || (s.mode & 0o077) !== 0 || s.size > MAX_DIRECTORY_BYTES) throw new Error('Directory state is unsafe');
       const data = JSON.parse(await handle.readFile({ encoding: 'utf8' })) as Data;
       if (data.version !== 1 || !data.organizations || !data.sessions || !data.attempts || !Array.isArray(data.audit)) throw new Error('Directory state is invalid');
       data.organizations = dictionary(data.organizations);
@@ -66,9 +67,13 @@ export class ServerDirectory implements EnterpriseDirectory {
     try {
       const data = await this.read();
       const result = fn(data);
+      const serialized = JSON.stringify(data);
+      // Reject before replacing the last readable state. Audit capacity still
+      // needs an operational retention/export policy before any live mount.
+      if (Buffer.byteLength(serialized, 'utf8') > MAX_DIRECTORY_BYTES) throw new Error('Directory capacity reached');
       temp = join(dirname(this.file), `.enterprise-${randomBytes(16).toString('hex')}`);
       const handle = await open(temp, 'wx', 0o600);
-      try { await handle.writeFile(JSON.stringify(data)); await handle.sync(); } finally { await handle.close(); }
+      try { await handle.writeFile(serialized); await handle.sync(); } finally { await handle.close(); }
       await rename(temp, this.file);
       temp = null;
       // Windows cannot portably open a directory handle for fsync here; do not
