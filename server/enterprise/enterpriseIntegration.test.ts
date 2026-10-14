@@ -193,6 +193,14 @@ describe('server-owned directory and local OIDC fixture', () => {
     }
   });
 
+  test('unknown tenant admin read denies without inventing an invalid tenant audit event', async () => {
+    const { directory: store } = await directory();
+    const { identity } = await store.createSession(config.issuer, 'org-a', 'alice', Date.now() + 60_000);
+    const before = await store.auditSummary('org-a');
+    expect(await store.readAdmin({ ...identity, organizationId: 'unknown-org' }, 'overview')).toBeNull();
+    expect(await store.auditSummary('org-a')).toEqual(before);
+  });
+
   test('transient compaction preserves audit and active session; revoked/expired sessions stay denied', async () => {
     const { directory: store, file } = await directory();
     const { token, identity } = await store.createSession(config.issuer, 'org-a', 'alice', Date.now() + 30_000);

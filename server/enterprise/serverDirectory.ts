@@ -166,6 +166,9 @@ export class ServerDirectory implements EnterpriseDirectory {
   async readAdmin(identity: VerifiedIdentity, view: 'members' | 'overview'): Promise<unknown | null> {
     return this.change((data) => {
       const org = data.organizations[identity.organizationId];
+      // No tenant ledger exists for an unknown identifier. Deny rather than
+      // creating an invalid cross-tenant audit record and turning 403 into 503.
+      if (!org) return null;
       const member = org?.members[identity.subject];
       const allowed = Boolean(org && evaluateTenantPolicy({ identity, organizationId: identity.organizationId,
         issuer: org.issuer, member, sessionActive: this.active(data, identity), action: 'organization.read' }));
