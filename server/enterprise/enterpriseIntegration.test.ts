@@ -129,6 +129,17 @@ describe('server-owned directory and local OIDC fixture', () => {
     expect(events).toContain('organization.member.update');
   });
 
+  test('audit listing checks current admin and session in the locked tenant snapshot', async () => {
+    const { directory: store } = await directory();
+    const { identity } = await store.createSession(config.issuer, 'org-a', 'alice', Date.now() + 60_000);
+    const events = await store.listAudit(identity);
+    expect(events.every((event) => event.organizationId === 'org-a')).toBe(true);
+    expect((await store.auditSummary('org-a')).eventCount).toBe(events.length + 1);
+    await expect(store.listAudit({ ...identity, organizationId: 'org-b' })).rejects.toThrow();
+    await store.revokeSession(identity);
+    await expect(store.listAudit(identity)).rejects.toThrow();
+  });
+
   test('unsafe HTTPS configuration is rejected outside local-only test setup', async () => {
     const { directory: store } = await directory();
     expect(() => new OidcIntegration({ ...config, allowInsecureLoopbackForTests: false }, store)).toThrow();

@@ -222,11 +222,16 @@ export class ServerDirectory implements EnterpriseDirectory {
   }
 
   async listAudit(actor: VerifiedIdentity): Promise<readonly Audit[]> {
-    const data = await this.read();
-    const member = data.organizations[actor.organizationId]?.members[actor.subject];
-    if (!this.active(data, actor) || !member?.active || member.role !== 'admin') throw new Error('Access denied');
-    // The read itself must be audited before returning a copy.
-    await this.recordAudit({ organizationId: actor.organizationId, subject: actor.subject, action: 'organization.audit.read', outcome: 'allowed' });
-    return data.audit.filter((event) => event.organizationId === actor.organizationId);
+    return this.change((data) => {
+      const org = data.organizations[actor.organizationId];
+      const member = org?.members[actor.subject];
+      if (!this.active(data, actor) || org?.issuer !== actor.issuer || member?.organizationId !== actor.organizationId ||
+          !member?.active || member.role !== 'admin') throw new Error('Access denied');
+      // Authorization, scoped snapshot and audit commit share one exclusive transaction.
+      const events = data.audit.filter((event) => event.organizationId === actor.organizationId);
+      data.audit.push({ organizationId: actor.organizationId, subject: actor.subject,
+        action: 'organization.audit.read', outcome: 'allowed', at: new Date().toISOString() });
+      return events;
+    });
   }
 }
