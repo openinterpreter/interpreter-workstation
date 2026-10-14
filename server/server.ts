@@ -51,6 +51,7 @@ import os from "node:os";
 import agentRouter from "./routes/agent";
 import { startWakeSources } from './utils/wakeSourcesRuntime';
 import authRouter from "./routes/auth";
+import { ENTERPRISE_READINESS } from './enterprise/controlPlane';
 import workspaceRouter from "./routes/workspace";
 import activityRouter from "./routes/activity";
 import nylasRouter from "./routes/nylas";
@@ -297,6 +298,12 @@ export const broadcastSSE = broadcast;
 
 // Mount route modules
 app.use('/api/auth', authRouter);
+// Only the truthful readiness endpoint is mounted. Do not mount a directory
+// until a verified IdP and server-owned tenant directory are configured.
+app.get('/api/enterprise/readiness', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(ENTERPRISE_READINESS);
+});
 app.use('/api/agent', agentRouter);
 app.use('/api/workspace', workspaceRouter);
 app.use('/api/activity', activityRouter);

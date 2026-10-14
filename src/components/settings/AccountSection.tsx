@@ -8,6 +8,7 @@ import { Check, PencilLine, X } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { SettingsActionButton, SettingsRow } from './SettingsSection';
+import { EnterpriseReadiness } from './EnterpriseReadiness';
 
 function DisplayNameControl() {
   const { t } = useTranslation();
@@ -128,6 +129,7 @@ export function AccountSectionContent() {
           <AuthSignIn />
         )}
       </div>
+      <EnterpriseReadiness />
     </>
   );
 }

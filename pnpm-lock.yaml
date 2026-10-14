@@ -255,6 +255,9 @@ importers:
       interpreter-window-pin:
         specifier: file:./apps/interpreter-overlay/native/window-pin
         version: file:apps/interpreter-overlay/native/window-pin
+      jose:
+        specifier: 6.2.5
+        version: 6.2.5
       json-rpc-2.0:
         specifier: 1.8.0
         version: 1.8.0
