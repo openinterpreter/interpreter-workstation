@@ -22,6 +22,8 @@ export type WakeSource = {
   nextAt?: string;
   error?: string;
   sequence: number;
+  /** Persisted admission gate. A running command drains naturally; no child is killed. */
+  paused?: boolean;
 };
 export type WakeEvent = {
   threadId: string;
@@ -147,7 +149,7 @@ export class WakeSources {
     for (const source of this.state.sources) {
       if (source.status === 'running') {
         source.status = 'waiting';
-        source.nextAt = new Date(Date.now() + COMMAND_REARM_MS).toISOString();
+        if (!source.paused) source.nextAt = new Date(Date.now() + COMMAND_REARM_MS).toISOString();
       }
       // Older command sources stopped permanently on a transient World or
       // scanner error. Keep the diagnostic visible, but recover on a bounded
@@ -246,6 +248,37 @@ export class WakeSources {
     });
   }
 
+  /** Stop new command launches and native offers without retracting any event.
+   * Already running commands may finish and persist their output while paused.
+   */
+  async pause(threadId: string, id: string): Promise<WakeSource> {
+    if (this.stopping) throw new Error('Wake admission is draining for restart');
+    if (![threadId, id].every(value => ID.test(value))) throw new Error('Invalid source ID');
+    const source = await this.exclusive(async () => {
+      const current = this.state.sources.find(item => item.threadId === threadId && item.id === id);
+      if (!current || current.status === 'cancelled') throw new Error('Source not found');
+      current.paused = true;
+      await this.save();
+      return current;
+    });
+    // A tick that started before pause may have begun a native RPC. Wait for
+    // that RPC to settle before returning; never infer a receipt from this gate.
+    await this.tickFinished;
+    return structuredClone(source);
+  }
+
+  async resume(threadId: string, id: string): Promise<WakeSource> {
+    if (this.stopping) throw new Error('Wake admission is draining for restart');
+    if (![threadId, id].every(value => ID.test(value))) throw new Error('Invalid source ID');
+    return this.exclusive(async () => {
+      const source = this.state.sources.find(item => item.threadId === threadId && item.id === id);
+      if (!source || source.status === 'cancelled') throw new Error('Source not found');
+      source.paused = false;
+      await this.save();
+      return structuredClone(source);
+    });
+  }
+
   /** The one private, atomically replaced state file backing all thread schedules. */
   configFilePath(): string { return this.file; }
 
@@ -268,7 +301,7 @@ export class WakeSources {
     try { return await fn(); } finally { release(); }
   }
 
-  async put(source: Omit<WakeSource, 'status' | 'sequence' | 'nextAt' | 'error'>): Promise<WakeSource> {
+  async put(source: Omit<WakeSource, 'status' | 'sequence' | 'nextAt' | 'error' | 'paused'>): Promise<WakeSource> {
     if (this.stopping) throw new Error('Wake admission is draining for restart');
     if (!ID.test(source.threadId) || !ID.test(source.id)) throw new Error('Invalid thread or source ID');
     if (source.kind !== 'schedule' && source.kind !== 'command') throw new Error('Unknown wake source kind');
@@ -295,6 +328,7 @@ export class WakeSources {
     }
     return this.exclusive(async () => {
       const old = this.state.sources.find(s => s.id === source.id && s.threadId === source.threadId);
+      if (old?.paused) throw new Error('Resume the paused source before editing it');
       if (old?.status === 'running') throw new Error('Wait for the running command before changing it');
       if (old && this.state.events.some(e => e.sourceId === old.id && e.threadId === old.threadId &&
         (e.status === 'pending' || e.status === 'offered'))) {
@@ -409,7 +443,7 @@ export class WakeSources {
     try {
     for (const source of this.state.sources) {
       if (this.stopping) break;
-      if (!(source.status === 'waiting' || (source.kind === 'command' && source.status === 'error')) ||
+      if (source.paused || !(source.status === 'waiting' || (source.kind === 'command' && source.status === 'error')) ||
           !source.nextAt || Date.parse(source.nextAt) > now ||
           // A held terminal offer is retained for audit, not an admission fence.
           // Re-arm of that same source must still be explicit through put().
@@ -478,6 +512,7 @@ export class WakeSources {
     if (event.nextAttemptAt && Date.parse(event.nextAttemptAt) > now) return;
     try {
       const source = this.state.sources.find(s => s.id === event.sourceId && s.threadId === event.threadId);
+      if (source?.paused) return;
       if (source?.status === 'cancelled' && event.status === 'pending') return;
       const state = await this.native.inspect(event.threadId);
       if (state.clientIds?.includes(wakeClientId(event)) ||
@@ -546,7 +581,13 @@ export class WakeSources {
     const key = `${source.threadId}:${source.id}`;
     this.inFlight.add(key);
     try {
-      await this.exclusive(async () => { source.status = 'running'; await this.save(); });
+      const shouldRun = await this.exclusive(async () => {
+        if (source.paused || source.status === 'cancelled') return false;
+        source.status = 'running';
+        await this.save();
+        return true;
+      });
+      if (!shouldRun) return;
       const stdout = await new Promise<string>((resolve, reject) => {
         const child = spawn(source.argv![0], source.argv!.slice(1), { shell: false, stdio: ['ignore', 'pipe', 'ignore'] });
         this.commands.set(key, child);

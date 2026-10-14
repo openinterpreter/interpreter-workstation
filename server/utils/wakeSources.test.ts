@@ -601,6 +601,94 @@ describe('durable thread wake sources', () => {
     } finally { await f.cleanup(); }
   });
 
+  test('pause drains a running command, retains its event through restart and resumes exactly once', async () => {
+    const f = await fixture();
+    try {
+      const wake = await f.make();
+      const marker = path.join(f.root, 'command-started');
+      const script = `require('fs').writeFileSync(${JSON.stringify(marker)}, 'started');
+setTimeout(() => process.stdout.write(JSON.stringify({id:'receipt-1',message:'provider input'})), 80);`;
+      await wake.put({ id: 'provider', threadId: 'thread-1', kind: 'command', argv: [process.execPath, '-e', script] });
+      await wake.tick();
+      for (let i = 0; i < 100; i++) {
+        try { await readFile(marker); break; } catch { await new Promise(resolve => setTimeout(resolve, 10)); }
+      }
+      expect(wake.list('thread-1').sources[0]?.status).toBe('running');
+      const before = wake.list('thread-1').sources[0]!;
+      await wake.pause('thread-1', 'provider');
+      await expect(wake.put({ id: 'provider', threadId: 'thread-1', kind: 'command', argv: ['/bin/echo', 'new'] }))
+        .rejects.toThrow('Resume the paused source');
+      for (let i = 0; i < 100 && !wake.list('thread-1').events.length; i++)
+        await new Promise(resolve => setTimeout(resolve, 10));
+      await wake.tick(Date.now() + 60_000);
+      const paused = wake.list('thread-1');
+      expect(paused.sources[0]?.paused).toBe(true);
+      expect(paused.sources[0]?.sequence).toBe(before.sequence);
+      expect(paused.events.map(e => [e.eventId, e.status])).toEqual([['receipt-1', 'pending']]);
+      expect(f.counts().starts).toBe(0);
+      await wake.stop();
+      const recovered = await f.make();
+      await recovered.tick(Date.now() + 60_000);
+      expect(recovered.list('thread-1').events[0]?.status).toBe('pending');
+      expect(f.counts().starts).toBe(0);
+      await recovered.resume('thread-1', 'provider');
+      await recovered.tick();
+      expect(f.counts().starts).toBe(1);
+      expect(recovered.list('thread-1').events).toHaveLength(1);
+      await recovered.tick();
+      expect(recovered.list('thread-1').events[0]?.status).toBe('admitted');
+      expect(recovered.list('thread-1').sources[0]?.nextAt).toBeDefined();
+    } finally { await f.cleanup(); }
+  });
+
+  test('pause before a waiting poll preserves nextAt and does not launch or acknowledge input', async () => {
+    const f = await fixture();
+    try {
+      const wake = await f.make();
+      const original = await wake.put({ id: 'poll', threadId: 'thread-1', kind: 'command',
+        argv: ['/bin/echo', '{"status":"waiting"}'] });
+      await wake.pause('thread-1', 'poll');
+      await wake.tick(Date.now() + 60_000);
+      expect(wake.list('thread-1').sources[0]?.nextAt).toBe(original.nextAt);
+      expect(wake.list('thread-1').events).toHaveLength(0);
+      await wake.stop();
+      const recovered = await f.make();
+      expect(recovered.list('thread-1').sources[0]?.nextAt).toBe(original.nextAt);
+      await recovered.tick(Date.now() + 60_000);
+      expect(recovered.list('thread-1').sources[0]?.status).toBe('waiting');
+      await recovered.resume('thread-1', 'poll');
+      await recovered.tick();
+      for (let i = 0; i < 100 && recovered.list('thread-1').sources[0]?.status !== 'waiting'; i++)
+        await new Promise(resolve => setTimeout(resolve, 10));
+      expect(recovered.list('thread-1').events).toHaveLength(0);
+    } finally { await f.cleanup(); }
+  });
+
+  test('pause during an empty in-flight poll lets it finish without spawning another poll', async () => {
+    const f = await fixture();
+    try {
+      const wake = await f.make();
+      const marker = path.join(f.root, 'poll-started');
+      const script = `require('fs').writeFileSync(${JSON.stringify(marker)}, 'started');
+setTimeout(() => process.stdout.write(JSON.stringify({status:'waiting'})), 80);`;
+      await wake.put({ id: 'poll', threadId: 'thread-1', kind: 'command', argv: [process.execPath, '-e', script] });
+      await wake.tick();
+      for (let i = 0; i < 100; i++) {
+        try { await readFile(marker); break; } catch { await new Promise(resolve => setTimeout(resolve, 10)); }
+      }
+      expect(wake.list('thread-1').sources[0]?.status).toBe('running');
+      await wake.pause('thread-1', 'poll');
+      for (let i = 0; i < 100 && wake.list('thread-1').sources[0]?.status === 'running'; i++)
+        await new Promise(resolve => setTimeout(resolve, 10));
+      expect(wake.list('thread-1').sources[0]?.status).toBe('waiting');
+      const due = Date.parse(wake.list('thread-1').sources[0]!.nextAt!);
+      await wake.tick(due + 1);
+      expect(wake.list('thread-1').sources[0]?.paused).toBe(true);
+      expect(wake.list('thread-1').events).toHaveLength(0);
+      expect(f.counts().starts).toBe(0);
+    } finally { await f.cleanup(); }
+  });
+
   test('command output preserves a UTF-8 code point split across pipe chunks', async () => {
     const f = await fixture();
     try {
