@@ -106,7 +106,7 @@ export class ServerDirectory implements EnterpriseDirectory {
 
   async auditSummary(organizationId: string): Promise<{ eventCount: number; latestAt: string | null }> {
     const events = (await this.read()).audit.filter((event) => event.organizationId === organizationId);
-    return { eventCount: events.length, latestAt: events.at(-1)?.at ?? null };
+    return { eventCount: events.length, latestAt: events[events.length - 1]?.at ?? null };
   }
 
   async readAdmin(identity: VerifiedIdentity, view: 'members' | 'overview'): Promise<unknown | null> {
@@ -126,7 +126,7 @@ export class ServerDirectory implements EnterpriseDirectory {
           payload = {
             organization: { id: identity.organizationId, name: org.name },
             users: { total: members.length, active: members.filter((m) => m.active).length, admins: members.filter((m) => m.active && m.role === 'admin').length },
-            audit: { eventCount: events.length, latestAt: events.at(-1)?.at ?? null },
+            audit: { eventCount: events.length, latestAt: events[events.length - 1]?.at ?? null },
             identity: { issuer: identity.issuer, status: 'verified session' },
             controls: { policy: 'not enforced', provisioning: 'not configured', modelRegistry: 'not configured' },
           };
