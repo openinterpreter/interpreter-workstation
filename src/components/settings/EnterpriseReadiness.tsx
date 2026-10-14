@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
+import { getApiUrl } from '../../ipc';
 
 export function EnterpriseReadiness() {
   const [detail, setDetail] = useState('Checking enterprise control-plane status…');
   useEffect(() => {
     let active = true;
-    fetch('/api/enterprise/readiness', { cache: 'no-store' })
+    getApiUrl('/api/enterprise/readiness')
+      .then((url) => fetch(url, { cache: 'no-store' }))
       .then((response) => response.ok ? response.json() : Promise.reject(new Error('Unavailable')))
       .then((value: { available?: boolean; detail?: string }) => {
         if (active) setDetail(value.available === false && typeof value.detail === 'string'
