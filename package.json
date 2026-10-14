@@ -234,6 +234,7 @@
     "@sentry/electron": "7.19.0",
     "@sentry/node": "10.75.0",
     "@supabase/supabase-js": "2.116.0",
+    "jose": "6.2.5",
     "@tailwindcss/vite": "4.3.3",
     "@tanstack/react-virtual": "3.14.13",
     "@tiptap/core": "3.31.3",

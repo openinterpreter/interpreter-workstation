@@ -11,11 +11,13 @@ function fixture(overrides: Partial<EnterpriseDependencies> = {}) {
   const deps: EnterpriseDependencies = {
     verifyBearer: async (token) => token === 'local-fixture-token' ? alice : null,
     directory: {
-      getMember: async (org, subject) => org === 'org-a' && subject === 'alice'
-        ? { organizationId: org, subject, displayName: 'Alice', role: 'admin', active: true } : null,
-      listMembers: async (org) => org === 'org-a'
-        ? [{ organizationId: org, subject: 'alice', displayName: 'Alice', role: 'admin', active: true }] : [],
-      sessionIsActive: async () => active,
+      readAdmin: async (identity, view) => {
+        const allowed = active && identity.organizationId === 'org-a' && identity.subject === 'alice';
+        audit.push({ organizationId: identity.organizationId, subject: identity.subject, action: `organization.${view}.read`, outcome: allowed ? 'allowed' : 'denied' });
+        return allowed ? view === 'members'
+          ? { organizationId: 'org-a', members: [{ subject: 'alice', displayName: 'Alice', role: 'admin', active: true }] }
+          : { organization: { id: 'org-a', name: 'Acme' } } : null;
+      },
       recordAudit: async (event) => { audit.push(event); },
     },
     ...overrides,
@@ -62,9 +64,7 @@ describe('enterprise control-plane boundary (mock IdP only)', () => {
     expect(fixtureA.audit[0]?.outcome).toBe('denied');
 
     const fixtureB = fixture({ directory: {
-      getMember: async () => ({ organizationId: 'org-a', subject: 'alice', displayName: 'Alice', role: 'member', active: true }),
-      listMembers: async () => { throw new Error('member must not list'); },
-      sessionIsActive: async () => true,
+      readAdmin: async () => null,
       recordAudit: async () => {},
     } });
     expect((await request(fixtureB.app).get('/organizations/org-a/members').set('Authorization', 'Bearer local-fixture-token')).status).toBe(403);
@@ -72,7 +72,7 @@ describe('enterprise control-plane boundary (mock IdP only)', () => {
 
   test('audit outage fails closed without disclosing members or secrets', async () => {
     const baseline = fixture();
-    const broken = fixture({ directory: { ...baselineDirectory(), recordAudit: async () => { throw new Error('secret fixture detail'); } } });
+    const broken = fixture({ directory: { ...baselineDirectory(), readAdmin: async () => { throw new Error('secret fixture detail'); } } });
     const response = await request(broken.app).get('/organizations/org-a/members').set('Authorization', 'Bearer local-fixture-token');
     expect(response.status).toBe(503);
     expect(JSON.stringify(response.body)).not.toContain('secret');
@@ -81,7 +81,7 @@ describe('enterprise control-plane boundary (mock IdP only)', () => {
   test('rejects faulty directory returning a member from another organization', async () => {
     const app = fixture({ directory: {
       ...baselineDirectory(),
-      listMembers: async () => [{ organizationId: 'org-b', subject: 'bob', displayName: 'Bob', role: 'admin', active: true }],
+      readAdmin: async () => { throw new Error('Cross-tenant directory records'); },
     } }).app;
     const response = await request(app).get('/organizations/org-a/members').set('Authorization', 'Bearer local-fixture-token');
     expect(response.status).toBe(503);
@@ -91,9 +91,7 @@ describe('enterprise control-plane boundary (mock IdP only)', () => {
 
 function baselineDirectory(): EnterpriseDependencies['directory'] {
   return {
-    getMember: async () => ({ organizationId: 'org-a', subject: 'alice', displayName: 'Alice', role: 'admin', active: true }),
-    listMembers: async () => [{ organizationId: 'org-a', subject: 'alice', displayName: 'Alice', role: 'admin', active: true }],
-    sessionIsActive: async () => true,
+    readAdmin: async () => ({ organizationId: 'org-a', members: [{ subject: 'alice', displayName: 'Alice', role: 'admin', active: true }] }),
     recordAudit: async () => {},
   };
 }

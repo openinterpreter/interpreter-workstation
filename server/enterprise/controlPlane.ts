@@ -17,9 +17,8 @@ export type OrganizationMember = Readonly<{
 }>;
 
 export interface EnterpriseDirectory {
-  getMember(organizationId: string, subject: string): Promise<OrganizationMember | null>;
-  listMembers(organizationId: string): Promise<readonly OrganizationMember[]>;
-  sessionIsActive(identity: VerifiedIdentity): Promise<boolean>;
+  /** Permission, session, tenant snapshot and audit commit form one durable operation. */
+  readAdmin(identity: VerifiedIdentity, view: 'members' | 'overview'): Promise<unknown | null>;
   recordAudit(event: Readonly<{ organizationId: string; subject: string; action: string; outcome: 'allowed' | 'denied' }>): Promise<void>;
 }
 
@@ -36,7 +35,7 @@ export type EnterpriseDependencies = Readonly<{
  */
 export function createEnterpriseControlPlane(deps: EnterpriseDependencies): Router {
   const router = Router();
-  router.get('/organizations/:organizationId/members', async (req: Request, res: Response) => {
+  async function authorized(req: Request, res: Response, view: 'members' | 'overview'): Promise<void> {
     const token = /^Bearer ([^\s]+)$/.exec(req.header('authorization') ?? '')?.[1];
     if (!token) return void res.status(401).json({ error: 'Authentication required' });
 
@@ -46,28 +45,17 @@ export function createEnterpriseControlPlane(deps: EnterpriseDependencies): Rout
           identity.organizationId !== req.params.organizationId) {
         return void res.status(403).json({ error: 'Access denied' });
       }
-      const member = await deps.directory.getMember(identity.organizationId, identity.subject);
-      const allowed = Boolean(member?.organizationId === identity.organizationId && member.active && member.role === 'admin' &&
-        await deps.directory.sessionIsActive(identity));
-      const members = allowed ? await deps.directory.listMembers(identity.organizationId) : [];
-      // A faulty backend must not make an adjacent tenant visible in this API.
-      if (members.some((entry) => entry.organizationId !== identity.organizationId)) {
-        throw new Error('Tenant directory returned cross-organization records');
-      }
-      await deps.directory.recordAudit({
-        organizationId: identity.organizationId,
-        subject: identity.subject,
-        action: 'organization.members.read',
-        outcome: allowed ? 'allowed' : 'denied',
-      });
-      if (!allowed) return void res.status(403).json({ error: 'Access denied' });
+      const payload = await deps.directory.readAdmin(identity, view);
+      if (payload === null) return void res.status(403).json({ error: 'Access denied' });
       res.setHeader('Cache-Control', 'no-store');
-      return void res.json({ organizationId: identity.organizationId, members: members.map(({ subject, displayName, role, active }) => ({ subject, displayName, role, active })) });
+      return void res.json(payload);
     } catch {
       // A verifier, revocation, audit, or directory outage is never permission.
       return void res.status(503).json({ error: 'Organization directory unavailable' });
     }
-  });
+  }
+  router.get('/organizations/:organizationId/members', (req, res) => authorized(req, res, 'members'));
+  router.get('/organizations/:organizationId/overview', (req, res) => authorized(req, res, 'overview'));
   return router;
 }
 
