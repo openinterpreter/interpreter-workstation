@@ -13,18 +13,19 @@ describe('admin dashboard shell', () => {
     const fetchMock = vi.fn(async (url: string) => ({ ok: true, json: async () => url.endsWith('/members')
       ? { organizationId: 'org-a', members: [{ subject: 'alice', displayName: 'Alice', role: 'admin', active: true }] } : overview }));
     vi.stubGlobal('fetch', fetchMock);
-    render(<EnterpriseAdminDashboard organizationId="org-a" sessionToken="opaque-local-fixture" />);
+    render(<EnterpriseAdminDashboard organizationId="org-a" />);
     expect(await screen.findByText('Acme')).toBeInTheDocument();
     expect(screen.getByText('Alice')).toBeInTheDocument();
     expect(screen.getByText('not enforced')).toBeInTheDocument();
     expect(screen.getByText(/Audit export and SCIM are not available/)).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/organizations/org-a/overview'), expect.objectContaining({ headers: { Authorization: 'Bearer opaque-local-fixture' }, cache: 'no-store' }));
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/organizations/org-a/overview'), expect.objectContaining({ credentials: 'same-origin', cache: 'no-store' }));
+    expect(JSON.stringify(fetchMock.mock.calls)).not.toContain('opaque-local-fixture');
   });
 
   test('cross-org payload and failed API clear data rather than show stale tenant', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => ({ ok: true, json: async () => url.endsWith('/members')
       ? { organizationId: 'org-b', members: [] } : overview })));
-    render(<EnterpriseAdminDashboard organizationId="org-a" sessionToken="fixture" />);
+    render(<EnterpriseAdminDashboard organizationId="org-a" />);
     expect(await screen.findByRole('alert')).toHaveTextContent('Access was not granted');
     expect(screen.queryByText('Acme')).not.toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText('Alice')).not.toBeInTheDocument());

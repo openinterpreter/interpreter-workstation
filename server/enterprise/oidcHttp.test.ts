@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import express from 'express';
 import request from 'supertest';
-import { createOidcHttpRouter } from './oidcHttp';
+import { createEnterpriseBrowserRouter, createOidcHttpRouter } from './oidcHttp';
 import type { OidcConfiguration, OidcIntegration } from './oidc';
 
 const config: OidcConfiguration = {
@@ -74,5 +74,36 @@ describe('unmounted HTTP boundary, deterministic local callback fixture', () => 
     }
     expect(() => createOidcHttpRouter({ config, integration, applicationOrigin: origin, successPath: '//untrusted.test' })).toThrow();
     expect(() => createOidcHttpRouter({ config: { ...config, allowInsecureLoopbackForTests: false }, integration, applicationOrigin: origin, successPath: '/settings' })).toThrow();
+  });
+
+  test('browser directory API verifies HttpOnly-cookie session server-side and denies cross-tenant, cross-origin, revoked and audit failures', async () => {
+    let active = true;
+    let auditWorks = true;
+    const app = express();
+    app.use('/api/enterprise', createEnterpriseBrowserRouter({
+      applicationOrigin: origin, allowInsecureLoopbackForTests: true,
+      verifySession: async (token) => active && token === session
+        ? { organizationId: 'org-a', issuer: config.issuer, subject: 'alice', sessionId: 'digest-only' } : null,
+      directory: { recordAudit: async () => {}, readAdmin: async (_identity, view) => {
+        if (!auditWorks) throw new Error('audit failure');
+        return view === 'members' ? { organizationId: 'org-a', members: [] } : { organization: { id: 'org-a', name: 'Acme' } };
+      } },
+    }));
+    const url = '/api/enterprise/organizations/org-a/overview';
+    const scoped = () => request(app).get(url).set('Host', host).set('Cookie', `interpreter-enterprise-session=${session}`);
+    expect((await request(app).get(url).set('Host', host)).status).toBe(401);
+    expect((await scoped().set('Origin', 'http://untrusted.test')).status).toBe(403);
+    expect((await scoped().set('Sec-Fetch-Site', 'cross-site')).status).toBe(403);
+    expect((await scoped().set('Authorization', `Bearer ${session}`)).status).toBe(403);
+    expect((await request(app).get('/api/enterprise/organizations/org-b/overview').set('Host', host).set('Cookie', `interpreter-enterprise-session=${session}`)).status).toBe(403);
+    const allowed = await scoped().set('Origin', origin).set('Sec-Fetch-Site', 'same-origin');
+    expect(allowed.status).toBe(200);
+    expect(allowed.body.organization.name).toBe('Acme');
+    expect(allowed.headers['cache-control']).toBe('no-store');
+    active = false;
+    expect((await scoped()).status).toBe(403);
+    active = true;
+    auditWorks = false;
+    expect((await scoped()).status).toBe(503);
   });
 });

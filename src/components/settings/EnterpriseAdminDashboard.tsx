@@ -9,23 +9,22 @@ type Overview = {
 };
 type Member = { subject: string; displayName: string; role: 'admin' | 'member'; active: boolean };
 
-/** Render only after a server-issued opaque session has been established. */
-export function EnterpriseAdminDashboard({ organizationId, sessionToken }: { organizationId: string; sessionToken: string }) {
+/** Read-only browser UI; session remains in an HttpOnly cookie and is never a prop. Unmounted. */
+export function EnterpriseAdminDashboard({ organizationId }: { organizationId: string }) {
   const [view, setView] = useState<{ overview: Overview; members: Member[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setView(null);
     setError(null);
-    if (!organizationId || !sessionToken) {
+    if (!organizationId) {
       setError('A verified organization session is required.');
       return;
     }
     const controller = new AbortController();
-    const headers = { Authorization: `Bearer ${sessionToken}` };
     const get = async (suffix: string) => {
       const response = await fetch(`/api/enterprise/organizations/${encodeURIComponent(organizationId)}/${suffix}`, {
-        headers, cache: 'no-store', signal: controller.signal,
+        credentials: 'same-origin', cache: 'no-store', signal: controller.signal,
       });
       if (!response.ok) throw new Error('Unavailable');
       return response.json();
@@ -40,7 +39,7 @@ export function EnterpriseAdminDashboard({ organizationId, sessionToken }: { org
       })
       .catch(() => { if (!controller.signal.aborted) setError('Organization data is unavailable. Access was not granted.'); });
     return () => controller.abort();
-  }, [organizationId, sessionToken]);
+  }, [organizationId]);
 
   return (
     <section className="space-y-5 rounded-2xl border border-border bg-background p-5 shadow-sm" aria-label="Organization dashboard">

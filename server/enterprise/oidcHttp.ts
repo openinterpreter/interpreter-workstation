@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { TLSSocket } from 'node:tls';
 import type { OidcConfiguration, OidcIntegration } from './oidc';
+import type { EnterpriseDirectory, VerifiedIdentity } from './controlPlane';
 
 type HttpOptions = Readonly<{
   config: OidcConfiguration;
@@ -76,5 +77,46 @@ export function createOidcHttpRouter({ config, integration, applicationOrigin, s
       return void res.status(401).end();
     }
   });
+  return router;
+}
+
+/** Read-only same-origin BFF seam. Never hands the cookie's bearer to renderer JS. Unmounted. */
+export function createEnterpriseBrowserRouter(options: Readonly<{
+  applicationOrigin: string;
+  allowInsecureLoopbackForTests?: boolean;
+  verifySession: (token: string) => Promise<VerifiedIdentity | null>;
+  directory: EnterpriseDirectory;
+}>): Router {
+  const origin = new URL(options.applicationOrigin);
+  const loopback = options.allowInsecureLoopbackForTests === true;
+  if (origin.origin !== options.applicationOrigin ||
+      (loopback ? !(origin.protocol === 'http:' && origin.hostname === '127.0.0.1') : origin.protocol !== 'https:')) {
+    throw new Error('Invalid browser API origin');
+  }
+  const sessionName = loopback ? 'interpreter-enterprise-session' : '__Host-interpreter-enterprise-session';
+  const router = Router();
+  async function read(req: Request, res: Response, view: 'members' | 'overview'): Promise<void> {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Vary', 'Origin, Sec-Fetch-Site');
+    if (!exactOrigin(req, origin, loopback) ||
+        (req.get('origin') && req.get('origin') !== origin.origin) ||
+        (req.get('sec-fetch-site') && !['same-origin', 'none'].includes(req.get('sec-fetch-site')!)) ||
+        req.get('authorization')) return void res.status(403).end();
+    const token = cookie(req, sessionName);
+    if (!token) return void res.status(401).end();
+    try {
+      const identity = await options.verifySession(token);
+      if (!identity || !identity.sessionId || !identity.issuer || !identity.subject || identity.organizationId !== req.params.organizationId) {
+        return void res.status(403).end();
+      }
+      const payload = await options.directory.readAdmin(identity, view);
+      if (payload === null) return void res.status(403).end();
+      return void res.json(payload);
+    } catch {
+      return void res.status(503).end();
+    }
+  }
+  router.get('/organizations/:organizationId/overview', (req, res) => read(req, res, 'overview'));
+  router.get('/organizations/:organizationId/members', (req, res) => read(req, res, 'members'));
   return router;
 }
