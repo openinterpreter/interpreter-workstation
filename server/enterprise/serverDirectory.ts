@@ -3,6 +3,7 @@ import { lstat, mkdir, open, rename, rm } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import type { EnterpriseDirectory, OrganizationMember, VerifiedIdentity } from './controlPlane';
+import { evaluateTenantPolicy } from './tenantPolicy';
 
 type Audit = { organizationId: string; subject: string; action: string; outcome: 'allowed' | 'denied'; at: string };
 type Attempt = { organizationId: string; issuer: string; nonce: string; verifier: string; bindingHash: string; expiresAt: number };
@@ -17,6 +18,44 @@ const eq = (a: string, b: string) => a.length === b.length && timingSafeEqual(Bu
 const key = (value: string) => value.length > 0 && value.length <= 160 && /^[a-zA-Z0-9._@:-]+$/.test(value) &&
   !['__proto__', 'constructor', 'prototype'].includes(value);
 const dictionary = <T>(value: Record<string, T>): Record<string, T> => Object.assign(Object.create(null), value);
+const record = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value));
+
+function validate(data: Data): void {
+  if (data.version !== 1 || !record(data.organizations) || !record(data.sessions) ||
+      !record(data.attempts) || !Array.isArray(data.audit)) throw new Error('Directory state is invalid');
+  for (const [id, org] of Object.entries(data.organizations)) {
+    if (!key(id) || !record(org) || typeof org.name !== 'string' || !org.name.trim() ||
+        typeof org.issuer !== 'string' || !org.issuer || !record(org.members)) throw new Error('Directory organization is invalid');
+    for (const [subject, member] of Object.entries(org.members)) {
+      if (!key(subject) || !record(member) || member.organizationId !== id || member.subject !== subject ||
+          typeof member.displayName !== 'string' || !member.displayName.trim() ||
+          !['admin', 'member'].includes(member.role as string) || typeof member.active !== 'boolean') {
+        throw new Error('Directory membership is invalid');
+      }
+    }
+  }
+  for (const [state, attempt] of Object.entries(data.attempts)) {
+    if (!key(state) || !record(attempt) || !key(attempt.organizationId as string) ||
+        data.organizations[attempt.organizationId as string]?.issuer !== attempt.issuer ||
+        typeof attempt.nonce !== 'string' || !attempt.nonce || typeof attempt.verifier !== 'string' || !attempt.verifier ||
+        typeof attempt.bindingHash !== 'string' || !/^[a-f0-9]{64}$/.test(attempt.bindingHash) ||
+        typeof attempt.expiresAt !== 'number' || !Number.isFinite(attempt.expiresAt)) throw new Error('Directory attempt is invalid');
+  }
+  for (const [hash, session] of Object.entries(data.sessions)) {
+    if (!/^[a-f0-9]{64}$/.test(hash) || !record(session) || !key(session.organizationId as string) ||
+        data.organizations[session.organizationId as string]?.issuer !== session.issuer ||
+        !key(session.subject as string) || !data.organizations[session.organizationId as string]?.members[session.subject as string] ||
+        typeof session.expiresAt !== 'number' || !Number.isFinite(session.expiresAt) || typeof session.revoked !== 'boolean') {
+      throw new Error('Directory session is invalid');
+    }
+  }
+  for (const event of data.audit) {
+    if (!record(event) || !key(event.organizationId as string) || !data.organizations[event.organizationId as string] ||
+        typeof event.subject !== 'string' || !event.subject || typeof event.action !== 'string' || !event.action ||
+        !['allowed', 'denied'].includes(event.outcome as string) ||
+        typeof event.at !== 'string' || !Number.isFinite(Date.parse(event.at))) throw new Error('Directory audit is invalid');
+  }
+}
 
 /** Single-host, server-owned directory. No browser endpoint for provisioning. */
 export class ServerDirectory implements EnterpriseDirectory {
@@ -49,7 +88,7 @@ export class ServerDirectory implements EnterpriseDirectory {
       const s = await handle.stat();
       if (!s.isFile() || (s.mode & 0o077) !== 0 || s.size > MAX_DIRECTORY_BYTES) throw new Error('Directory state is unsafe');
       const data = JSON.parse(await handle.readFile({ encoding: 'utf8' })) as Data;
-      if (data.version !== 1 || !data.organizations || !data.sessions || !data.attempts || !Array.isArray(data.audit)) throw new Error('Directory state is invalid');
+      validate(data);
       data.organizations = dictionary(data.organizations);
       data.sessions = dictionary(data.sessions);
       data.attempts = dictionary(data.attempts);
@@ -67,6 +106,7 @@ export class ServerDirectory implements EnterpriseDirectory {
     try {
       const data = await this.read();
       const result = fn(data);
+      validate(data);
       const serialized = JSON.stringify(data);
       // Reject before replacing the last readable state. Audit capacity still
       // needs an operational retention/export policy before any live mount.
@@ -113,8 +153,8 @@ export class ServerDirectory implements EnterpriseDirectory {
     return this.change((data) => {
       const org = data.organizations[identity.organizationId];
       const member = org?.members[identity.subject];
-      const allowed = Boolean(org && org.issuer === identity.issuer && member?.organizationId === identity.organizationId &&
-        member.active && member.role === 'admin' && this.active(data, identity));
+      const allowed = Boolean(org && evaluateTenantPolicy({ identity, organizationId: identity.organizationId,
+        issuer: org.issuer, member, sessionActive: this.active(data, identity), action: 'organization.read' }));
       let payload: unknown = null;
       if (allowed && org) {
         const members = Object.values(org.members);
@@ -153,7 +193,8 @@ export class ServerDirectory implements EnterpriseDirectory {
         typeof member.active !== 'boolean' || actor.organizationId !== member.organizationId) throw new Error('Invalid member or tenant mismatch');
     await this.change((data) => {
       const org = data.organizations[actor.organizationId];
-      if (!org || org.issuer !== actor.issuer || !org.members[actor.subject]?.active || org.members[actor.subject]?.role !== 'admin' || !this.active(data, actor)) throw new Error('Access denied');
+      if (!org || !evaluateTenantPolicy({ identity: actor, organizationId: actor.organizationId,
+        issuer: org.issuer, member: org.members[actor.subject], sessionActive: this.active(data, actor), action: 'member.manage' })) throw new Error('Access denied');
       // Keep a recoverable administrator. Revocation of an admin's sessions
       // occurs in the same durable write as the membership change.
       const next = { ...org.members, [member.subject]: member };
@@ -181,6 +222,22 @@ export class ServerDirectory implements EnterpriseDirectory {
       delete data.attempts[state]; // consume even when binding is wrong
       if (!attempt || attempt.expiresAt <= Date.now() || !eq(attempt.bindingHash, digest(binding))) return null;
       return attempt;
+    });
+  }
+
+  /** Only transient rows may be compacted; audit events never disappear here. */
+  async compactExpired(now = Date.now()): Promise<{ attempts: number; sessions: number }> {
+    if (!Number.isFinite(now) || now < 0) throw new Error('Invalid maintenance clock');
+    return this.change((data) => {
+      let attempts = 0;
+      let sessions = 0;
+      for (const [state, attempt] of Object.entries(data.attempts)) {
+        if (attempt.expiresAt <= now) { delete data.attempts[state]; attempts++; }
+      }
+      for (const [hash, session] of Object.entries(data.sessions)) {
+        if (session.expiresAt <= now) { delete data.sessions[hash]; sessions++; }
+      }
+      return { attempts, sessions };
     });
   }
 
@@ -230,8 +287,8 @@ export class ServerDirectory implements EnterpriseDirectory {
     return this.change((data) => {
       const org = data.organizations[actor.organizationId];
       const member = org?.members[actor.subject];
-      if (!this.active(data, actor) || org?.issuer !== actor.issuer || member?.organizationId !== actor.organizationId ||
-          !member?.active || member.role !== 'admin') throw new Error('Access denied');
+      if (!org || !evaluateTenantPolicy({ identity: actor, organizationId: actor.organizationId,
+        issuer: org.issuer, member, sessionActive: this.active(data, actor), action: 'audit.read' })) throw new Error('Access denied');
       // Authorization, scoped snapshot and audit commit share one exclusive transaction.
       const events = data.audit.filter((event) => event.organizationId === actor.organizationId);
       data.audit.push({ organizationId: actor.organizationId, subject: actor.subject,

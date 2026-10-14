@@ -16,14 +16,15 @@ const origin = 'http://127.0.0.1:39394';
 const host = '127.0.0.1:39394';
 const binding = 'a'.repeat(43);
 const session = 'b'.repeat(43);
+const state = 'c'.repeat(43);
 
 function fixture() {
   let completed = 0;
   const integration = {
-    begin: async () => ({ authorizationUrl: `${config.authorizationEndpoint}?state=fixture`, state: 'fixture', browserBinding: binding }),
+    begin: async () => ({ authorizationUrl: `${config.authorizationEndpoint}?state=${state}`, state, browserBinding: binding }),
     complete: async (value: { code: string; state: string; browserBinding: string }) => {
       completed++;
-      if (value.code !== 'fixture-code' || value.state !== 'fixture' || value.browserBinding !== binding) throw new Error('Rejected');
+      if (value.code !== 'fixture-code' || value.state !== state || value.browserBinding !== binding) throw new Error('Rejected');
       return { token: session, expiresAt: Date.now() + 60_000 };
     },
   } as OidcIntegration;
@@ -39,7 +40,7 @@ describe('unmounted HTTP boundary, deterministic local callback fixture', () => 
     expect((await request(app).get('/organizations/org-a/login').set('Host', 'untrusted.test').set('X-Forwarded-Host', host)).status).toBe(403);
     const started = await request(app).get('/organizations/org-a/login').set('Host', host);
     expect(started.status).toBe(302);
-    expect(started.headers.location).toBe(`${config.authorizationEndpoint}?state=fixture`);
+    expect(started.headers.location).toBe(`${config.authorizationEndpoint}?state=${state}`);
     expect(started.headers['set-cookie'][0]).toContain('interpreter-oidc-binding=');
     expect(started.headers['set-cookie'][0]).toContain('HttpOnly');
     expect(started.headers['set-cookie'][0]).toContain('SameSite=Lax');
@@ -48,8 +49,8 @@ describe('unmounted HTTP boundary, deterministic local callback fixture', () => 
 
   test('callback requires one state/code and exact bound cookie; session is cookie-only', async () => {
     const { app, completed } = fixture();
-    const path = '/enterprise/callback?code=fixture-code&state=fixture';
-    for (const url of [path + '&state=fixture', path + '&extra=1', '/enterprise/callback?code=fixture-code']) {
+    const path = `/enterprise/callback?code=fixture-code&state=${state}`;
+    for (const url of [path + `&state=${state}`, path + '&extra=1', '/enterprise/callback?code=fixture-code', '/enterprise/callback?code=fixture-code&state=short']) {
       expect((await request(app).get(url).set('Host', host).set('Cookie', `interpreter-oidc-binding=${binding}`)).status).toBe(400);
     }
     expect((await request(app).get(path).set('Host', host)).status).toBe(400);
@@ -69,11 +70,28 @@ describe('unmounted HTTP boundary, deterministic local callback fixture', () => 
 
   test('rejects unsafe callback origins and success destinations at construction', () => {
     const integration = {} as OidcIntegration;
-    for (const applicationOrigin of ['https://untrusted.test', 'http://untrusted.test', 'http://127.0.0.1:39394/path']) {
+    for (const applicationOrigin of ['https://untrusted.test', 'http://untrusted.test', 'http://127.0.0.1:39394/path', 'http://user:secret@127.0.0.1:39394']) {
       expect(() => createOidcHttpRouter({ config, integration, applicationOrigin, successPath: '/settings' })).toThrow();
     }
     expect(() => createOidcHttpRouter({ config, integration, applicationOrigin: origin, successPath: '//untrusted.test' })).toThrow();
     expect(() => createOidcHttpRouter({ config: { ...config, allowInsecureLoopbackForTests: false }, integration, applicationOrigin: origin, successPath: '/settings' })).toThrow();
+    expect(() => createOidcHttpRouter({ config: { ...config, redirectUri: 'http://user:secret@127.0.0.1:39394/enterprise/callback' },
+      integration, applicationOrigin: origin, successPath: '/settings' })).toThrow();
+  });
+
+  test('forwarded HTTPS headers do not authorize a plain HTTP production callback', async () => {
+    let started = 0;
+    const productionConfig = { ...config, redirectUri: 'https://enterprise.example/enterprise/callback', allowInsecureLoopbackForTests: false };
+    const app = express();
+    app.use(createOidcHttpRouter({ config: productionConfig, integration: {
+      begin: async () => { started++; throw new Error('must not run'); },
+    } as OidcIntegration, applicationOrigin: 'https://enterprise.example', successPath: '/settings' }));
+    const response = await request(app).get('/organizations/org-a/login').set('Host', 'enterprise.example')
+      .set('X-Forwarded-Proto', 'https').set('X-Forwarded-Host', 'enterprise.example');
+    expect(response.status).toBe(403);
+    expect(started).toBe(0);
+    expect((await request(app).get(`/enterprise/callback?code=x&state=${state}`).set('Host', 'enterprise.example')
+      .set('X-Forwarded-Proto', 'https').set('Cookie', `__Host-interpreter-oidc-binding=${binding}`)).status).toBe(403);
   });
 
   test('browser directory API verifies HttpOnly-cookie session server-side and denies cross-tenant, cross-origin, revoked and audit failures', async () => {
