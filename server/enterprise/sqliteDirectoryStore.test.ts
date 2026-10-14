@@ -4,6 +4,8 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { ServerDirectory } from './serverDirectory';
 import { SqliteDirectoryStore } from './sqliteDirectoryStore';
 
@@ -55,4 +57,18 @@ test('SQLite transaction rollback preserves evidence and corrupted tenant state 
   } finally { db.close(); }
   await assert.rejects(directory.listMembers('org-a'));
   await assert.rejects(directory.compactExpired());
+});
+
+test('separate processes serialize audit writes without losing a tenant event', async () => {
+  const { file, directory } = await fixture();
+  const worker = `import { SqliteDirectoryStore } from './server/enterprise/sqliteDirectoryStore.ts';
+    const store = new SqliteDirectoryStore(process.argv[1]);
+    for (let i = 0; i < 10; i++) await store.change((data) => {
+      data.audit.push({ organizationId: 'org-a', subject: 'alice', action: 'fixture.write',
+        outcome: 'allowed', at: new Date().toISOString() });
+    });`;
+  const run = promisify(execFile);
+  await Promise.all([0, 1].map(() => run(process.execPath, ['--import', 'tsx', '--input-type=module', '--eval', worker, file],
+    { cwd: process.cwd(), timeout: 15_000, maxBuffer: 4096 })));
+  assert.equal((await directory.auditSummary('org-a')).eventCount, 21); // bootstrap + two writers
 });
