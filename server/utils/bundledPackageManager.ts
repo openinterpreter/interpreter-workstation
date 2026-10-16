@@ -39,7 +39,13 @@ export function getBundledPnpmCommand(
 ): BundledPnpmCommand {
   const command = options.runtimeBinary ?? resolveElectronRunAsNodeBinary();
   const pnpmCli = options.pnpmCli ?? resolveBundledPnpmCli();
-  const env = { ...process.env, ...options.env };
+  // The product's build-time packageManager may differ from the patched
+  // project CLI. Never let pnpm replace the bundled binary with that version.
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...options.env,
+    npm_config_manage_package_manager_versions: 'false',
+  };
   if (usesElectronRunAsNode(command)) env.ELECTRON_RUN_AS_NODE = '1';
   return { command, args: [pnpmCli, ...args], env, shell: false };
 }

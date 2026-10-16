@@ -238,7 +238,7 @@ const manifest = require(manifestPath);
 const cliPath = path.resolve(path.dirname(manifestPath), manifest.bin.pnpm);
 const result = spawnSync(process.execPath, [cliPath, '--version'], {
   encoding: 'utf8',
-  env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+  env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', npm_config_manage_package_manager_versions: 'false' },
 });
 if (result.status !== 0) {
   throw new Error(result.stderr || result.stdout || 'bundled pnpm failed');

@@ -21,5 +21,6 @@ describe('bundled project package manager', () => {
       shell: false,
     });
     expect(command.env.TEST_RUNTIME).toBe('1');
+    expect(command.env.npm_config_manage_package_manager_versions).toBe('false');
   });
 });
