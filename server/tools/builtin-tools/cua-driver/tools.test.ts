@@ -16,6 +16,8 @@ import {
   macCuaDriverActivityExecOptionsForTest,
   macComputerUseScreenshotPathForTest,
   macComputerUseTreeHasWindowContentForTest,
+  macFocusWindowDriverToolForTest,
+  macWindowScopedInputArgsForTest,
   macToolMayRequireForegroundFocusForTest,
   nativeLaunchAppArgsForTest,
   parseComputerUseUiElementsForTest,
@@ -27,6 +29,7 @@ import {
   setCuaAccessPolicyProviderForCuaDriverTest,
   setWindowsCuaDriverToolProviderForTest,
   shutdownCuaDriverProcesses,
+  sortMacComputerUseWindowIdsForTest,
   withMacCuaDriverProcessLockForTest,
   withMacCuaDriverApprovalAndProcessLock,
 } from './tools';
@@ -1282,6 +1285,37 @@ describe('macOS Computer Use wrapper behavior', () => {
       '\tmenu bar',
       '\t\t15 menu bar item Role: status menu',
     ].join('\n'))).toBe(false);
+
+    expect(macComputerUseTreeHasWindowContentForTest([
+      '- [0] AXWindow "Docs - Google Chrome" bounds={x=10, y=20, width=1200, height=800}',
+      '    - [1] AXButton "Back"',
+      '    - [2] AXTextField "Address and search bar"',
+    ].join('\n'))).toBe(true);
+  });
+
+  test('prefers the most recently ordered titled main window over background and untitled helper windows', () => {
+    expect(sortMacComputerUseWindowIdsForTest([
+      { window_id: 1, title: '', on_current_space: true, layer: 0, z_index: 1, bounds: { width: 1600, height: 1000 } },
+      { window_id: 2, title: 'Background', on_current_space: true, layer: 0, z_index: 9, bounds: { width: 1800, height: 1100 } },
+      { window_id: 3, title: 'Front', on_current_space: true, layer: 0, z_index: 3, bounds: { width: 1200, height: 800 } },
+      { window_id: 4, title: 'Other Space', on_current_space: false, layer: 0, z_index: 0, bounds: { width: 2000, height: 1200 } },
+    ])).toEqual([2, 3, 4, 1]);
+  });
+
+  test('maps public macOS focus_window to the reviewed native operation', () => {
+    expect(macFocusWindowDriverToolForTest()).toBe('bring_to_front');
+  });
+
+  test('keeps every macOS keyboard action scoped to the selected window', () => {
+    expect(macWindowScopedInputArgsForTest({ pid: 951, windowId: 365 })).toEqual({
+      pid: 951,
+      window_id: 365,
+    });
+    expect(macWindowScopedInputArgsForTest({ pid: 951, windowId: 365 }, true)).toEqual({
+      pid: 951,
+      window_id: 365,
+      delivery_mode: 'foreground',
+    });
   });
 });
 

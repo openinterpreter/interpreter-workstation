@@ -99,13 +99,17 @@ function ensureDraft(
   state: ChatState,
   updater: (draft: ChatMessage) => ChatMessage,
   generateId: () => string,
+  preferredId?: string,
 ): ChatState {
   const current: ChatMessage = state.draft ?? {
-    id: generateId(),
+    id: preferredId ?? generateId(),
     role: "assistant",
     parts: [],
   };
-  return { ...state, draft: updater(current) };
+  const identified = preferredId && current.parts.length === 0
+    ? { ...current, id: preferredId }
+    : current;
+  return { ...state, draft: updater(identified) };
 }
 
 function endDraftToolCallSpans(message: ChatMessage, completedAt: number): ChatMessage {
@@ -408,6 +412,7 @@ export function applyChatEvent(
             return { ...d, parts: [...d.parts, { kind: 'text', content: c.payload.text }] };
           },
           generateId,
+          c.payload.itemId,
         );
       }
 
@@ -454,6 +459,7 @@ export function applyChatEvent(
           return { ...d, parts: [...d.parts, { kind: 'text' as const, content: c.payload.text }] };
         },
         generateId,
+        c.payload.itemId,
       );
     })
 
@@ -560,6 +566,7 @@ export function applyChatEvent(
           ],
         }),
         generateId,
+        item.id,
       );
     })
 

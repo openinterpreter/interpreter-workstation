@@ -659,6 +659,11 @@ export function SimpleShell({
       data-simple-thread-id={threadId ?? undefined}
       data-primary-thread-error={persistenceError ? "true" : undefined}
     >
+      <div
+        data-simple-titlebar-drag-region="true"
+        aria-hidden="true"
+        className="absolute inset-x-0 top-0 z-20 h-8 [-webkit-app-region:drag]"
+      />
       <main
         aria-label="Interface"
         className="absolute inset-0 overflow-y-auto"
@@ -1199,8 +1204,8 @@ export function SimpleShell({
                     </motion.div>
                   )}
                   {approvalCount > 0 && threadId && (
-                    <section aria-label="Approvals" className="max-h-[45vh] min-h-0 overflow-y-auto border-t border-foreground/[0.08] px-4 py-3">
-                      <h2 className="mb-2 text-ui-sm font-medium text-foreground">Approval needed · {approvalCount}</h2>
+                    <section aria-label="Approvals" className="max-h-[45vh] min-h-0 overflow-y-auto border-t border-foreground/[0.06] px-4 pb-4 pt-3">
+                      <h2 className="mb-2.5 px-1 text-[11px] font-medium text-muted-foreground">Approval needed · {approvalCount}</h2>
                       <Approvals ownerThreadId={threadId} />
                     </section>
                   )}

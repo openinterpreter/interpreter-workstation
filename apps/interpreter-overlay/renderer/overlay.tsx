@@ -47,6 +47,7 @@ type OverlayContextSourceHighlightStyle = CSSProperties & {
 
 const PILL_VIEWPORT_MARGIN = 12;
 const PILL_BOTTOM_OFFSET = 24;
+const PILL_TARGET_GAP = 12;
 const SCOPE_TOOLTIP_OFFSET_X = 10;
 const SCOPE_TOOLTIP_OFFSET_Y = 12;
 const SCOPE_TOOLTIP_SIZE: Size = { width: 270, height: 34 };
@@ -771,6 +772,34 @@ function getBottomPillAnchor(
   return {
     left: clamp(area.x + (area.width - pillSize.width) / 2, minLeft, maxLeft),
     top: clamp(area.y + area.height - pillSize.height - PILL_BOTTOM_OFFSET, minTop, maxTop),
+  };
+}
+
+// When the user has granted a target, keep the composer visually attached to
+// that target instead of making them look away to the bottom of the display.
+// Fall back above the target when there is no room below, and always clamp to
+// the usable work area.
+function getInputPillAnchor(
+  pillSize: Size,
+  viewportSize: Size,
+  workArea: Bounds | null,
+  scopeBounds: Bounds | null,
+): Point {
+  if (!scopeBounds) {
+    return getBottomPillAnchor(pillSize, viewportSize, workArea);
+  }
+
+  const area = workArea ?? { x: 0, y: 0, width: viewportSize.width, height: viewportSize.height };
+  const minLeft = area.x + PILL_VIEWPORT_MARGIN;
+  const maxLeft = Math.max(minLeft, area.x + area.width - pillSize.width - PILL_VIEWPORT_MARGIN);
+  const minTop = area.y + PILL_VIEWPORT_MARGIN;
+  const maxTop = Math.max(minTop, area.y + area.height - pillSize.height - PILL_VIEWPORT_MARGIN);
+  const belowTop = scopeBounds.y + scopeBounds.height + PILL_TARGET_GAP;
+  const aboveTop = scopeBounds.y - pillSize.height - PILL_TARGET_GAP;
+
+  return {
+    left: clamp(scopeBounds.x + (scopeBounds.width - pillSize.width) / 2, minLeft, maxLeft),
+    top: belowTop <= maxTop ? belowTop : clamp(aboveTop, minTop, maxTop),
   };
 }
 
@@ -2518,8 +2547,10 @@ export function Overlay() {
   }, [showPillInput]);
 
   const pillAnchor = useMemo(
-    () => getBottomPillAnchor(pillSize, viewportSize, state.displayWorkArea),
-    [pillSize, state.displayWorkArea, viewportSize],
+    () => showPillInput
+      ? getInputPillAnchor(pillSize, viewportSize, state.displayWorkArea, effectiveScopeBounds)
+      : getBottomPillAnchor(pillSize, viewportSize, state.displayWorkArea),
+    [effectiveScopeBounds, pillSize, showPillInput, state.displayWorkArea, viewportSize],
   );
 
   const pillEntryAnchor = pillAnchor;
@@ -3337,5 +3368,6 @@ export function Overlay() {
 export const __test__ = {
   resolvePreferredProfileId,
   getBottomPillAnchor,
+  getInputPillAnchor,
   getExecutionPillProgress,
 };

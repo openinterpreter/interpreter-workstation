@@ -1,10 +1,11 @@
-import { apiRequest, getApiUrl } from '@/ipc';
+import { apiRequest, appendWindowSessionKey, getApiUrl } from '@/ipc';
 import { isWorkstationReadOnly } from '../../remote/workstationConnection';
 export type SimpleAppStatus = {
   revision: string;
   sourceRevision: string;
   diagnostic: string | null;
   ready: boolean;
+  runtimeUrl?: string | null;
 };
 export type SimpleProject = {
   path: string;
@@ -49,6 +50,6 @@ export const simpleInterfaceClient = {
   openProject: (path: string, options?: { activate?: boolean }) => request<SimpleProject>('POST', '/projects/open', { path, ...options }),
   presentation: () => request<SimplePresentation | null>('GET', '/presentation'),
   clearPresentation: () => request<{ success: true }>('POST', '/presentation/clear'),
-  appUrl: (revision: string) => getApiUrl(`/api/simple-interface/app/index.html?revision=${encodeURIComponent(revision)}`),
+  appUrl: async (runtimeUrl: string) => appendWindowSessionKey(runtimeUrl),
   assetUrl: (asset: string) => getApiUrl(`/api/simple-interface/assets/${encodeURIComponent(asset)}`),
 };

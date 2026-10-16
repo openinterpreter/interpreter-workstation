@@ -146,7 +146,7 @@ function workspaceWriteSandboxPolicy(
 ): v2.SandboxPolicy {
   return {
     type: "workspaceWrite",
-    writableRoots: [],
+    writableRoots: getInterpreterCliSandboxWritableRoots(),
     networkAccess,
     excludeTmpdirEnvVar: !allowTempAccess,
     excludeSlashTmp: !allowTempAccess,
@@ -726,6 +726,54 @@ describe("CodexAppServerClient", () => {
     transport.respond(turnReq, makeTurnStartResponse("turn_override"));
     const turn = await turnPromise;
     assert.equal(turn.id, "turn_override");
+  });
+
+  test("keeps the Interpreter capability bridge writable with full-system reads", async () => {
+    setConfigOverride({
+      agents: {},
+      globalDisabledTools: [],
+      codexApprovalPolicy: "never",
+      codexSandboxMode: "workspace-write",
+      codexReadAccessMode: "full-system",
+      codexNetworkAccess: true,
+      codexMacosTempAccess: true,
+    });
+
+    const transport = new FakeTransport();
+    const client = new CodexAppServerClient(transport, null);
+    const threadPromise = client.startThread("gpt-5.4-mini", null, null, "/workspace/current");
+
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await waitFor(() => transport.sent.length >= 3);
+
+    const threadReq = assertSentRequest(transport, 2, CLIENT_METHOD.threadStart);
+    transport.respond(threadReq, makeThreadStartResponse("thr_full_system_bridge"));
+    const threadId = await threadPromise;
+
+    const turnPromise = client.startTurn({
+      threadId,
+      message: "control the browser",
+      cwd: "/workspace/current",
+      additionalWritableRoots: ["/workspace/control"],
+    });
+
+    await waitFor(() => transport.sent.length >= 4);
+    const turnReq = assertSentRequest(transport, 3, CLIENT_METHOD.turnStart);
+    assert.deepEqual(turnReq.params.sandboxPolicy, {
+      type: "workspaceWrite",
+      writableRoots: [
+        getInterpreterCliSandboxWritableRoots()[0]!,
+        "/workspace/control",
+      ],
+      networkAccess: true,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+
+    transport.respond(turnReq, makeTurnStartResponse("turn_full_system_bridge"));
+    const turn = await turnPromise;
+    assert.equal(turn.id, "turn_full_system_bridge");
   });
 
   test("reloads runtime access snapshot for later turns", async () => {

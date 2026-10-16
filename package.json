@@ -2,7 +2,7 @@
   "name": "interpreter",
   "version": "0.1.24",
   "internalVersion": "0.2.171",
-  "publicVersion": "0.2.197",
+  "publicVersion": "0.2.198",
   "private": true,
   "license": "Apache-2.0",
   "repository": {
@@ -18,7 +18,7 @@
   "packageManager": "pnpm@9.15.9",
   "engines": {
     "node": ">=22 <23",
-    "pnpm": ">=9 <10"
+    "pnpm": ">=9 <11"
   },
   "main": "dist-electron/electron/main.cjs",
   "exports": {
@@ -304,6 +304,7 @@
     "pdfjs-dist": "5.4.394",
     "pino": "9.14.0",
     "pngjs": "7.0.0",
+    "pnpm": "10.34.5",
     "qrcode": "1.5.4",
     "radix-ui": "1.6.7",
     "react": "19.3.0",

@@ -88,44 +88,40 @@ export function ApprovalQueueCard(props: ApprovalQueueCardProps) {
 
   return (
     <div
-      className="space-y-3 rounded-[16px] px-3 py-3"
-      style={{
-        border: 'var(--border-width) solid color-mix(in srgb, var(--oa-border, var(--border)) 28%, transparent)',
-        background: 'color-mix(in srgb, var(--oa-bg-app, var(--background)) 90%, var(--oa-bg-subtle, var(--muted)) 10%)',
-        boxShadow: `inset 3px 0 0 ${owner.color}`,
-      }}
+      className="overflow-hidden rounded-[20px] border border-foreground/[0.09] bg-[color-mix(in_srgb,var(--oa-bg-input,var(--background))_72%,transparent)] shadow-[0_12px_34px_rgba(0,0,0,0.12)]"
       data-testid={APPROVAL_ITEM_ID(approval.id)}
       data-help-title={t('help.approvals.item.title')}
       data-help-description={t('help.approvals.item.description')}
     >
-      <div className="flex items-start justify-between gap-3">
+      <div className="space-y-3 px-4 pb-3.5 pt-3.5">
+        <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2 text-ui-xs text-[var(--oa-text-muted)]">
+          <div className="flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-[var(--oa-text-muted)]">
             <span
               aria-hidden="true"
-              className="size-2 shrink-0 rounded-full"
+              className="size-1.5 shrink-0 rounded-full"
               style={{ background: owner.color }}
             />
-            <span className="truncate">{owner.displayName}</span>
-            <span className="text-[var(--oa-text-faint)]">/</span>
+            <span className="truncate font-medium text-[var(--oa-text)]">{owner.displayName}</span>
+            <span aria-hidden="true" className="text-[var(--oa-text-faint)]">·</span>
             <span className="truncate">{getDisplayServerId(approval)}</span>
           </div>
-          <div className="mt-1 text-ui-base font-medium text-[var(--oa-text-strong)]">
+          <div className="mt-1.5 text-balance text-ui-base font-medium leading-5 text-[var(--oa-text-strong)]">
             {getApprovalSummary(approval)}
           </div>
           {(approval.context?.message || approval.context?.description) && (
-            <div className="mt-1 text-ui-sm text-[var(--oa-text-muted)]">
+            <div className="mt-1 text-ui-xs text-[var(--oa-text-muted)]">
               {getDisplayToolName(approval)}
             </div>
           )}
         </div>
-        <div className="flex items-center gap-2 self-start">
+        <div className="flex shrink-0 items-center gap-1 self-start">
           {ownerAgentId && props.onRevealAgent && (
             <Button
               type="button"
               variant="utility"
               size="xs"
-              className="gap-1"
+              className="gap-1 rounded-full px-2.5"
               data-help-title={t('help.approvals.show.title')}
               data-help-description={t('help.approvals.show.description')}
               onClick={() => props.onRevealAgent?.(ownerAgentId, approval)}
@@ -134,7 +130,7 @@ export function ApprovalQueueCard(props: ApprovalQueueCardProps) {
               <span>Show</span>
             </Button>
           )}
-          <div className="whitespace-nowrap text-ui-xs text-[var(--oa-text-faint)]">
+          <div className="whitespace-nowrap px-1 text-[10px] leading-6 text-[var(--oa-text-faint)]">
             {formatTimestamp(approval.timestamp)}
           </div>
         </div>
@@ -149,12 +145,28 @@ export function ApprovalQueueCard(props: ApprovalQueueCardProps) {
             onChange={setPermissionCardDraft}
           />
 
-          <div className="flex flex-wrap gap-2">
+          </>
+        ) : (
+          <QuestionPrompt
+            key={approval.id}
+            request={approval}
+            onRespond={async (result) => {
+              await props.onQuestionRespond(approval.id, result);
+            }}
+            settings={props.questionSettings}
+            pendingCount={props.pendingCount}
+            busy={false}
+          />
+        )}
+      </div>
+
+      {approval.isSimpleApproval && (
+          <div className="flex flex-wrap items-center justify-end gap-1.5 border-t border-foreground/[0.07] px-3 py-2.5">
             <Button
               onClick={() => props.onDeny(approval.id)}
               variant="utility"
               size="sm"
-              className="h-auto max-w-full min-h-[var(--oa-control-h-sm)] justify-start whitespace-normal rounded-[14px] px-4 py-2.5 text-left leading-5 [overflow-wrap:anywhere]"
+              className="max-w-full rounded-full px-3.5 text-[var(--oa-text-muted)]"
               data-testid={DENY_BUTTON_ID}
               data-help-title={t('help.approvals.deny.title')}
               data-help-description={t('help.approvals.deny.description')}
@@ -165,7 +177,7 @@ export function ApprovalQueueCard(props: ApprovalQueueCardProps) {
               onClick={() => approve('once')}
               variant="secondary"
               size="sm"
-              className="h-auto max-w-full min-h-[var(--oa-control-h-sm)] justify-start whitespace-normal rounded-[14px] px-4 py-2.5 text-left leading-5 [overflow-wrap:anywhere]"
+              className="max-w-full rounded-full px-3.5"
               data-testid={APPROVE_BUTTON_ID}
               data-help-title={t('help.approvals.allowOnce.title')}
               data-help-description={t('help.approvals.allowOnce.description')}
@@ -177,7 +189,7 @@ export function ApprovalQueueCard(props: ApprovalQueueCardProps) {
                 onClick={() => approve('session')}
                 variant="default"
                 size="sm"
-                className="h-auto max-w-full min-h-[var(--oa-control-h-sm)] justify-start whitespace-normal rounded-[14px] px-4 py-2.5 text-left leading-5 [overflow-wrap:anywhere]"
+                className="max-w-full rounded-full px-3.5"
                 data-help-title={t('help.approvals.allowSession.title')}
                 data-help-description={t('help.approvals.allowSession.description')}
               >
@@ -185,18 +197,6 @@ export function ApprovalQueueCard(props: ApprovalQueueCardProps) {
               </Button>
             )}
           </div>
-        </>
-      ) : (
-        <QuestionPrompt
-          key={approval.id}
-          request={approval}
-          onRespond={async (result) => {
-            await props.onQuestionRespond(approval.id, result);
-          }}
-          settings={props.questionSettings}
-          pendingCount={props.pendingCount}
-          busy={false}
-        />
       )}
     </div>
   );

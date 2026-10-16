@@ -273,7 +273,7 @@ export function Approvals({
               Tool approvals appear here when a command needs confirmation.
             </div>
           ) : (
-            <div className="space-y-3 px-1 py-1">
+            <div className="space-y-2.5 py-1">
               {visibleItems.map((item) => (
                 <ApprovalQueueCard
                   key={item.approval.id}

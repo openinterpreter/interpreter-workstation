@@ -93,7 +93,8 @@ describe('ApprovalQueueCard', () => {
     renderCard(item);
 
     const card = screen.getByTestId(APPROVAL_ITEM_ID(item.approval.id));
-    expect(card).toHaveStyle({ boxShadow: `inset 3px 0 0 ${item.owner.color}` });
+    expect(card).toHaveClass('rounded-[20px]', 'border-foreground/[0.09]');
+    expect(card.querySelector('span[aria-hidden="true"]')).toHaveStyle({ background: item.owner.color });
     expect(screen.getByText('Research agent')).toBeInTheDocument();
     expect(screen.getByText('builtin-shell')).toBeInTheDocument();
     expect(screen.getByText('Interpreter wants to run a command.')).toBeInTheDocument();

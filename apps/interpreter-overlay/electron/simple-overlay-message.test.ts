@@ -31,12 +31,11 @@ describe('Simple overlay message envelope', () => {
 });
 
 describe('Simple overlay runtime policy', () => {
-  test('keeps the overlay available in Simple mode and follows live experience changes', () => {
+  test('keeps Simple overlay availability controlled by the user setting', () => {
     const source = fs.readFileSync(path.join(import.meta.dir, 'service.ts'), 'utf8');
 
     expect(source).toContain("onBooleanUISettingChanged('advancedMode'");
-    expect(source).toContain('if (simpleMode && this.accessState.allowed)');
-    expect(source).toContain('enabled: true');
+    expect(source).not.toContain('if (simpleMode && this.accessState.allowed)');
     expect(source).toContain("if (this.effectiveSettings.enabled && !this.baseUrl && !simpleMode)");
     expect(source).toContain("simpleMode: !getBooleanUISettingSync('advancedMode')");
   });

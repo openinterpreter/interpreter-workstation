@@ -95,7 +95,7 @@ describe('overlay interaction pill anchoring', () => {
     expect(anchor.top).toBeGreaterThanOrEqual(workArea.y);
   });
 
-  test('the single pill is always bottom-anchored: no separate review anchor path', () => {
+  test('keeps run/review states bottom-anchored while input may attach to a target', () => {
     const source = readOverlayRenderer();
     expect(source).not.toContain('getReviewPillAnchor');
     const anchorAssignments = source.match(/const pillAnchor = /g) ?? [];
@@ -103,6 +103,34 @@ describe('overlay interaction pill anchoring', () => {
     const anchorStart = source.indexOf('const pillAnchor = ');
     const anchorSource = source.slice(anchorStart, source.indexOf(';', anchorStart));
     expect(anchorSource).toContain('getBottomPillAnchor(pillSize, viewportSize, state.displayWorkArea)');
+    expect(anchorSource).toContain('getInputPillAnchor');
+  });
+
+  test('centers input below the granted target when space is available', () => {
+    const { getInputPillAnchor } = __test__;
+    const anchor = getInputPillAnchor(
+      pillSize,
+      viewport,
+      null,
+      { x: 400, y: 200, width: 500, height: 300 },
+    );
+
+    expect(anchor.left).toBe(400 + (500 - pillSize.width) / 2);
+    expect(anchor.top).toBe(512);
+  });
+
+  test('moves input above the target when below would leave the work area', () => {
+    const { getInputPillAnchor } = __test__;
+    const workArea = { x: 0, y: 38, width: 1512, height: 850 };
+    const anchor = getInputPillAnchor(
+      pillSize,
+      viewport,
+      workArea,
+      { x: 400, y: 700, width: 500, height: 180 },
+    );
+
+    expect(anchor.left).toBe(400 + (500 - pillSize.width) / 2);
+    expect(anchor.top).toBe(700 - pillSize.height - 12);
   });
 });
 

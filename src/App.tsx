@@ -947,7 +947,7 @@ function AppContent() {
       />
 
       <LowerLeftNoticeViewport
-        leftSidebarOpen={state.leftSidebar.isOpen}
+        leftSidebarOpen={advancedMode === true && state.leftSidebar.isOpen}
         leftSidebarWidth={state.leftSidebar.width || 300}
       />
 

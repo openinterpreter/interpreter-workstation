@@ -21,9 +21,9 @@ asarUnpack:
   - "node_modules/@parcel/**"
   - "node_modules/@vscode/ripgrep/**"
   - "node_modules/@openinterpreter/**"
-  # Generated Simple interfaces compile after installation. esbuild's JS
-  # launcher must be able to spawn its platform binary from a real filesystem
-  # path rather than from inside app.asar.
+  # Runtime media/build helpers still use esbuild. Its JS launcher must be able
+  # to spawn the platform binary from a real filesystem path rather than from
+  # inside app.asar.
   - "node_modules/esbuild/**"
   - "node_modules/@esbuild/**"
   - "node_modules/@resvg/**"

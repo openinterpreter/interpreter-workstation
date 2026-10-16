@@ -3,7 +3,8 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { clearConfigCache, setInterpreterHomeDir } from './configStore';
-import { createSimpleProject, getActiveSimpleProject, openSimpleProject } from './simpleProjects';
+import { createSimpleProject, getActiveSimpleProject, openSimpleProject, syncSimpleProjectManagedFiles } from './simpleProjects';
+import { SIMPLE_INTERFACE_MANAGED_AGENTS_MARKER } from './simpleInterfaceSkill';
 import { registerWindowSession, runWithWindowSessionOverride, unregisterWindowSession } from './utils/windowSessions';
 import { setSimpleWorkspacePath } from './simpleWorkspace';
 
@@ -26,7 +27,7 @@ describe('standalone Simple interface projects', () => {
     rmSync(temp, { recursive: true, force: true });
   });
 
-  test('creates a standalone React project with durable metadata and agent guidance', async () => {
+  test('creates a standalone Next.js project with durable metadata and agent guidance', async () => {
     const projectPath = join(temp, 'My Interface');
     mkdirSync(projectPath);
     const project = await createSimpleProject(projectPath);
@@ -36,14 +37,25 @@ describe('standalone Simple interface projects', () => {
     expect(existsSync(join(projectPath, '.interpreter', 'project.json'))).toBe(true);
     const packageManifest = JSON.parse(readFileSync(join(projectPath, 'package.json'), 'utf8')) as {
       scripts?: Record<string, string>;
+      dependencies?: Record<string, string>;
       interpreter?: { runtime?: string; version?: number };
     };
-    expect(packageManifest.scripts).toBeUndefined();
-    expect(packageManifest.interpreter).toEqual({ runtime: 'workstation', version: 1 });
-    expect(readFileSync(join(projectPath, 'AGENTS.md'), 'utf8')).toContain('Simple-mode React interface project');
+    expect(packageManifest.scripts).toEqual({
+      dev: 'next dev --hostname 127.0.0.1',
+      start: 'next dev --hostname 127.0.0.1',
+    });
+    expect(packageManifest.interpreter).toEqual({ runtime: 'next', version: 2 });
+    expect(packageManifest.dependencies).toMatchObject({
+      '@interpreter/interface': 'file:.interpreter/packages/interface',
+      '@interpreter/motion': 'file:.interpreter/packages/motion',
+      next: '16.4.0',
+    });
+    expect(readFileSync(join(projectPath, 'AGENTS.md'), 'utf8')).toContain('full-stack Next.js interface project');
     const skill = readFileSync(join(projectPath, '.interpreter', 'skills', 'interface-design', 'SKILL.md'), 'utf8');
     const projectGuidance = readFileSync(join(projectPath, 'AGENTS.md'), 'utf8');
     expect(projectGuidance).toContain('respond in voice when the request came from GPT Live');
+    expect(projectGuidance).toContain(SIMPLE_INTERFACE_MANAGED_AGENTS_MARKER);
+    expect(projectGuidance).toContain('Do not search Interpreter app\ntools');
     expect(projectGuidance).not.toContain('WhatsApp');
     expect(skill).not.toContain('WhatsApp');
     expect(skill).toContain('Motion Primitives by Julian');
@@ -53,7 +65,39 @@ describe('standalone Simple interface projects', () => {
     expect(skill).toContain('the same editable Markdown surface');
     expect(skill).toContain('Keep critical controls');
     expect(skill).toContain('visible without scrolling');
+    expect(skill).toContain('app/api/');
+    expect(skill).toContain('any ordinary npm dependency');
+    expect(skill).toContain('copy an external image into `public/`');
     expect((await openSimpleProject(projectPath)).metadata.id).toBe(project.metadata.id);
+  });
+
+  test('refreshes managed and legacy guidance while preserving Next rules', async () => {
+    const projectPath = join(temp, 'Legacy Interface');
+    mkdirSync(projectPath);
+    await createSimpleProject(projectPath);
+    const agentsPath = join(projectPath, 'AGENTS.md');
+    const nextRules = `<!-- BEGIN:nextjs-agent-rules -->\n\n## Current Next guidance\n\n<!-- END:nextjs-agent-rules -->`;
+    writeFileSync(agentsPath, `# Interpreter interface project\n\nThis folder is one standalone Simple-mode React interface project. It is not a\nroute inside another interface. Work under \`src/\`; keep static assets under\n\`public/\`. Interpreter owns hidden \`.interpreter/\` metadata and runtime files.\n\n${nextRules}\n`);
+
+    syncSimpleProjectManagedFiles(projectPath);
+
+    const refreshed = readFileSync(agentsPath, 'utf8');
+    expect(refreshed).toContain(SIMPLE_INTERFACE_MANAGED_AGENTS_MARKER);
+    expect(refreshed).toContain('full-stack Next.js interface project');
+    expect(refreshed).not.toContain('Simple-mode React interface project');
+    expect(refreshed).toContain(nextRules);
+  });
+
+  test('never overwrites user-authored project guidance', async () => {
+    const projectPath = join(temp, 'Custom Interface');
+    mkdirSync(projectPath);
+    await createSimpleProject(projectPath);
+    const agentsPath = join(projectPath, 'AGENTS.md');
+    writeFileSync(agentsPath, '# My project rules\n\nKeep this exact custom guidance.\n');
+
+    syncSimpleProjectManagedFiles(projectPath);
+
+    expect(readFileSync(agentsPath, 'utf8')).toBe('# My project rules\n\nKeep this exact custom guidance.\n');
   });
 
   test('first launch creates a standalone sibling project, never a nested legacy interface', async () => {

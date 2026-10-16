@@ -25,13 +25,14 @@ import { SIDEBAR_FOOTER_SECONDARY_BUTTON_CLASSNAME } from './sidebarFooterButton
 
 interface FeedbackPopoverProps {
   className?: string;
+  iconOnly?: boolean;
   onOpenChange?: (open: boolean) => void;
   openRequested?: boolean;
 }
 
 const DEFAULT_INCLUDE_LOGS = true;
 
-export function FeedbackPopover({ className, onOpenChange, openRequested = false }: FeedbackPopoverProps) {
+export function FeedbackPopover({ className, iconOnly = false, onOpenChange, openRequested = false }: FeedbackPopoverProps) {
   const { session } = useAuth();
   const { dismissToast, showToast } = useToast();
   const { t } = useTranslation();
@@ -260,6 +261,7 @@ export function FeedbackPopover({ className, onOpenChange, openRequested = false
                   showPulse && 'feedback-button-onboarding-pulse',
                 )}
                 onAnimationEnd={() => setShowPulse(false)}
+                aria-label={iconOnly ? t('feedback.button') : undefined}
                 data-help-title={t('feedback.helpTitle')}
                 data-help-description={t('feedback.helpDescription')}
               >
@@ -267,8 +269,8 @@ export function FeedbackPopover({ className, onOpenChange, openRequested = false
                   whileTap={reducedMotion ? undefined : { scale: 0.982 }}
                   transition={reducedMotion ? { duration: 0.12 } : { duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
                 >
-                  <Bug />
-                  {t('feedback.button')}
+                  <Bug aria-hidden="true" />
+                  {!iconOnly && t('feedback.button')}
                 </motion.button>
               </Button>
             </PopoverTrigger>

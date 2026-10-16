@@ -8,7 +8,12 @@ import {
   updateWindowSessionSimpleProject,
 } from './utils/windowSessions';
 import { getSimpleWorkspacePath, validateSimpleWorkspacePath } from './simpleWorkspace';
-import { SIMPLE_INTERFACE_DESIGN_SKILL, SIMPLE_INTERFACE_MANAGED_AGENTS } from './simpleInterfaceSkill';
+import {
+  SIMPLE_INTERFACE_DESIGN_SKILL,
+  SIMPLE_INTERFACE_LEGACY_AGENTS_PREFIX,
+  SIMPLE_INTERFACE_MANAGED_AGENTS,
+  SIMPLE_INTERFACE_MANAGED_AGENTS_MARKER,
+} from './simpleInterfaceSkill';
 
 export const SIMPLE_PROJECT_METADATA = join('.interpreter', 'project.json');
 
@@ -103,8 +108,21 @@ function seedProject(projectPath: string, metadata: SimpleProjectMetadata): void
     name: metadata.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'interpreter-interface',
     private: true,
     version: '0.0.0',
-    interpreter: { runtime: 'workstation', version: 1 },
-    dependencies: { react: '^19.0.0', 'react-dom': '^19.0.0' },
+    scripts: {
+      dev: 'next dev --hostname 127.0.0.1',
+      start: 'next dev --hostname 127.0.0.1',
+    },
+    interpreter: { runtime: 'next', version: 2 },
+    dependencies: {
+      '@interpreter/interface': 'file:.interpreter/packages/interface',
+      '@interpreter/motion': 'file:.interpreter/packages/motion',
+      motion: '12.23.26',
+      next: '16.4.0',
+      react: '19.3.0',
+      'react-dom': '19.3.0',
+      'react-markdown': '10.1.0',
+      'remark-gfm': '4.0.1',
+    },
   }, null, 2)}\n`, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
   writeFileSync(join(projectPath, '.interpreter', 'state.json'), '{}\n', { encoding: 'utf8', flag: 'wx', mode: 0o600 });
   syncSimpleProjectManagedFiles(projectPath, { createAgents: true });
@@ -119,6 +137,22 @@ export function syncSimpleProjectManagedFiles(projectPath: string, options?: { c
   const agentsPath = join(projectPath, 'AGENTS.md');
   if (options?.createAgents && !existsSync(agentsPath)) {
     writeFileSync(agentsPath, SIMPLE_INTERFACE_MANAGED_AGENTS, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    return;
+  }
+  if (!existsSync(agentsPath)) return;
+
+  const existingAgents = readFileSync(agentsPath, 'utf8');
+  const isManaged = existingAgents.includes(SIMPLE_INTERFACE_MANAGED_AGENTS_MARKER)
+    || existingAgents.startsWith(SIMPLE_INTERFACE_LEGACY_AGENTS_PREFIX);
+  if (!isManaged) return;
+
+  const nextRulesStart = existingAgents.indexOf('<!-- BEGIN:nextjs-agent-rules -->');
+  const nextRules = nextRulesStart >= 0 ? existingAgents.slice(nextRulesStart).trim() : '';
+  const refreshedAgents = nextRules
+    ? `${SIMPLE_INTERFACE_MANAGED_AGENTS.trimEnd()}\n\n${nextRules}\n`
+    : SIMPLE_INTERFACE_MANAGED_AGENTS;
+  if (existingAgents !== refreshedAgents) {
+    writeFileSync(agentsPath, refreshedAgents, { encoding: 'utf8', mode: 0o600 });
   }
 }
 
