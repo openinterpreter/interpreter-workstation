@@ -297,6 +297,11 @@ function getDeployArgs() {
     deployArgs.push('--legacy');
   }
 
+  // The root and nested workspace may resolve different pnpm executables.
+  // pnpm 9 ignores this config, while pnpm 10 uses it for the same legacy
+  // deploy path even when the version probe resolved the root's pnpm 9.
+  deployArgs.push('--config.force-legacy-deploy=true');
+
   deployArgs.push(
     '--prod',
     '--config.node-linker=hoisted',
