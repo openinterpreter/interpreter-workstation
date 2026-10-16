@@ -257,12 +257,12 @@ test('Simple React interface is default, preserves live state, exposes its setti
 });
 
 test('generated React forms submit into durable project state without opening a network form route', async ({ page }) => {
-  test.setTimeout(60_000);
+  test.setTimeout(120_000);
   await waitForAppReady(page);
   const sandboxRoot = await mkdtemp(path.join(tmpdir(), 'interpreter-simple-form-'));
+  const project = path.join(sandboxRoot, 'tasks');
   try {
     const control = path.join(sandboxRoot, 'control');
-    const project = path.join(sandboxRoot, 'tasks');
     await mkdir(control);
     await mkdir(project);
     await page.evaluate(async (workspacePath) => (window as any).electron.workspace.setSimple({ workspacePath }), control);
@@ -298,7 +298,15 @@ test('generated React forms submit into durable project state without opening a 
     page.on('request', (request) => {
       if (request.isNavigationRequest() && request.method() === 'POST') formNavigations.push(request.url());
     });
-    await canvas.getByRole('textbox', { name: 'New task' }).fill('Plan the next sprint');
+    const taskInput = canvas.getByRole('textbox', { name: 'New task' });
+    // A visible Next page can still be hydrating. Wait for its controlled
+    // onChange handler to persist the draft before submitting the form.
+    await expect.poll(async () => {
+      await taskInput.fill('');
+      await taskInput.fill('Plan the next sprint');
+      const state = JSON.parse(await readFile(path.join(project, '.interpreter', 'state.json'), 'utf8').catch(() => '{}'));
+      return state['acceptance-draft'];
+    }, { timeout: 60_000 }).toBe('Plan the next sprint');
     // Activate within the frame: another native project window can cover the
     // fixture window even when Playwright sees this frame as pointer-actionable.
     await canvas.getByRole('button', { name: 'Save task' }).evaluate((button) => (button as HTMLButtonElement).click());
@@ -310,6 +318,10 @@ test('generated React forms submit into durable project state without opening a 
     }).toEqual(['Plan the next sprint']);
     expect(formNavigations).toEqual([]);
   } finally {
+    (page as any).__testErrorControl?.pauseErrorChecking();
+    const stopped = await page.evaluate(async (folder) =>
+      await (window as any).electron.projectRunner.stop(folder), project);
+    expect(stopped.success).toBe(true);
     // Next's dev watcher may still be writing its build directory as the
     // fixture is removed. fs.rm retries transient ENOTEMPTY races here.
     await rm(sandboxRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
