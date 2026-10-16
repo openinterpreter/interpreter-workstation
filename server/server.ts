@@ -61,8 +61,6 @@ import inboxRouter from "./routes/inbox";
 import pdfRouter from "./routes/pdf";
 import ipcRouter from "./routes/ipc";
 import simpleInterfaceRouter from './routes/simpleInterface';
-import { readSimpleInterfaceAsset } from './handlers/simpleAssets';
-import { simpleAppReferrerSessionKey } from './routes/simpleInterface';
 import mcpRouter from "./routes/mcp";
 import interpreterCliRouter from "./routes/interpreterCli";
 import publicThreadRouter from "./routes/publicThread";
@@ -83,7 +81,6 @@ import {
   enterWindowSessionOverride,
   listWindowSessions,
   resolveSessionWorkspaceOverride,
-  runWithWindowSessionOverride,
 } from "./utils/windowSessions";
 import {
   bindWindowSessionWorkspace,
@@ -148,33 +145,6 @@ app.use((req, _res, next) => {
     enterWorkspaceOverride(workspaceOverride);
   }
   next();
-});
-
-// A Simple interface is authored as an ordinary React app. Preserve normal
-// Vite public asset semantics (`/image.png`, including nested paths) even while
-// the transitional shared preview host is in use. The iframe referrer binds
-// the request to the correct independent project/window session.
-app.get(/^\/(.+\.(?:png|jpe?g|webp|gif|avif))$/i, async (req, res, next) => {
-  const querySessionKey = typeof req.query.windowSessionKey === 'string'
-    ? req.query.windowSessionKey
-    : null;
-  const windowSessionKey = querySessionKey
-    || simpleAppReferrerSessionKey(req.get('referer'), req.get('host'));
-  if (!windowSessionKey) return next();
-  try {
-    const assetPath = decodeURIComponent(req.params[0] ?? '');
-    const { bytes, mime } = await runWithWindowSessionOverride(windowSessionKey, () =>
-      readSimpleInterfaceAsset(assetPath),
-    );
-    res.setHeader('Content-Type', mime);
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Cache-Control', 'no-store');
-    res.send(bytes);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException)?.code;
-    if (code === 'ENOENT') return next();
-    res.status(400).json({ error: error instanceof Error ? error.message : String(error) });
-  }
 });
 
 // ============================================================================

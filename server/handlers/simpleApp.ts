@@ -1,105 +1,18 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { constants, existsSync } from 'node:fs';
-import { lstat, mkdir, open, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
-import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { basename, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import type { Plugin } from 'esbuild';
 import { assertSimpleProjectChildPath, getActiveSimpleProject } from '../simpleProjects';
-import {
-  SIMPLE_INTERFACE_COMPONENT_CSS,
-  SIMPLE_INTERFACE_RUNTIME_MODULE,
-} from '../simpleInterfaceRuntime';
-import { SIMPLE_INTERFACE_MOTION_MODULE } from '../simpleInterfaceMotionRuntime';
-import { broadcastEvent } from './broadcast';
 
-const MAX_SOURCE_FILES = 200;
-const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
 const MAX_STATE_BYTES = 512 * 1024;
 const MAX_UI_STATE_BYTES = 256 * 1024;
-const SOURCE_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx', '.css', '.json', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.gif']);
-const RUNTIME_MODULE = '@interpreter/interface';
-const MOTION_RUNTIME_MODULE = '@interpreter/motion';
-const ASAR_MODULE_NAMESPACE = 'interpreter-asar-module';
-
-type SimpleRuntimePackage =
-  | 'react'
-  | 'react-dom'
-  | 'react-dom/client'
-  | 'react/jsx-runtime'
-  | 'react-markdown'
-  | 'remark-gfm'
-  | 'motion/react';
-
-let simpleRuntimePackagePaths: Record<SimpleRuntimePackage, string> | null = null;
-
-/** esbuild's platform package owns the native executable; esbuild/bin/esbuild
- * is a JavaScript launcher on Windows and must never be used as its binary.
- */
-export function packagedEsbuildBinaryPath(
-  resourcesRoot: string,
-  platform: NodeJS.Platform = process.platform,
-  arch: string = process.arch,
-): string | null {
-  if ((platform !== 'win32' && platform !== 'linux' && platform !== 'darwin') ||
-      (arch !== 'x64' && arch !== 'arm64')) return null;
-  return join(resourcesRoot, 'app.asar.unpacked', 'node_modules', '@esbuild', `${platform}-${arch}`,
-    ...(platform === 'win32' ? ['esbuild.exe'] : ['bin', 'esbuild']));
-}
-
-/** The esbuild JavaScript module snapshots ESBUILD_BINARY_PATH when loaded.
- * Select the physical binary before loading that module, not just before its
- * first build: a late assignment leaves packaged Windows trying to spawn the
- * nonexistent executable inside app.asar.
- */
-function configurePackagedEsbuildBinary(resourcesRoot: string | undefined): void {
-  if (process.env.ESBUILD_BINARY_PATH || !resourcesRoot) return;
-  const unpacked = packagedEsbuildBinaryPath(resourcesRoot);
-  if (unpacked && existsSync(unpacked)) process.env.ESBUILD_BINARY_PATH = unpacked;
-}
-
-export function loadSimpleAppCompiler(
-  loadModule: (id: string) => typeof import('esbuild') = (id) =>
-    createRequire(join(__dirname, '..', '..', 'package.json'))(id) as typeof import('esbuild'),
-  resourcesRoot: string | undefined = process.resourcesPath,
-): typeof import('esbuild') {
-  configurePackagedEsbuildBinary(resourcesRoot);
-  // Keep this require lazy and outside the main bundle. Static imports cause
-  // esbuild's module to evaluate before the packaged binary can be selected.
-  return loadModule('esbuild');
-}
-
-/**
- * Resolve app-shipped packages from the Workstation module graph, not cwd.
- * A packaged macOS application can launch with the user's home directory as
- * cwd, while these dependencies live under app.asar/node_modules.
- */
-function getSimpleRuntimePackagePaths(): Record<SimpleRuntimePackage, string> {
-  if (!simpleRuntimePackagePaths) {
-    const packagedRuntimeManifest = typeof process.resourcesPath === 'string'
-      ? join(process.resourcesPath, 'simple-interface-runtime', 'package.json')
-      : null;
-    const runtimeRequire = packagedRuntimeManifest && existsSync(packagedRuntimeManifest)
-      ? createRequire(packagedRuntimeManifest)
-      : require;
-    simpleRuntimePackagePaths = {
-      react: runtimeRequire.resolve('react'),
-      'react-dom': runtimeRequire.resolve('react-dom'),
-      'react-dom/client': runtimeRequire.resolve('react-dom/client'),
-      'react/jsx-runtime': runtimeRequire.resolve('react/jsx-runtime'),
-      'react-markdown': runtimeRequire.resolve('react-markdown'),
-      'remark-gfm': runtimeRequire.resolve('remark-gfm'),
-      'motion/react': runtimeRequire.resolve('motion/react'),
-    };
-  }
-  return simpleRuntimePackagePaths;
-}
 
 export type SimpleAppStatus = {
   revision: string;
   sourceRevision: string;
   diagnostic: string | null;
   ready: boolean;
+  runtimeUrl?: string | null;
 };
 
 const DEFAULT_MAIN = `import React from 'react';
@@ -164,11 +77,6 @@ const DEFAULT_CSS = `.starter-page { display: grid; min-height: 100dvh; place-it
 .file-switcher button.selected { background: var(--io-inset); color: var(--io-ink-secondary); }
 `;
 
-function isChild(root: string, candidate: string): boolean {
-  const child = relative(root, candidate);
-  return child !== '' && child !== '..' && !child.startsWith(`..${sep}`) && !child.startsWith('/') && !child.startsWith('\\');
-}
-
 async function appPaths() {
   const project = await getActiveSimpleProject();
   const projectPath = project.path;
@@ -193,38 +101,6 @@ export async function seedSimpleApp(): Promise<void> {
   await writeIfMissing(assertSimpleProjectChildPath(projectPath, join(sourcePath, 'styles.css')), DEFAULT_CSS);
   await writeIfMissing(statePath, '{}\n');
   await writeIfMissing(uiStatePath, '{}\n');
-}
-
-async function collectSourceFiles(root: string, current = root, result: string[] = []): Promise<string[]> {
-  const entries = await readdir(current, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
-    const path = resolve(current, entry.name);
-    if (!isChild(root, path)) throw new Error('Interface source escapes its workspace.');
-    const info = await lstat(path);
-    if (info.isSymbolicLink()) throw new Error('Symlinks are not allowed in interface source.');
-    if (info.isDirectory()) await collectSourceFiles(root, path, result);
-    else if (info.isFile() && SOURCE_EXTENSIONS.has(extname(path).toLowerCase())) result.push(path);
-    if (result.length > MAX_SOURCE_FILES) throw new Error(`Interface source may contain at most ${MAX_SOURCE_FILES} files.`);
-  }
-  return result.sort();
-}
-
-async function sourceRevision(sourcePath: string): Promise<{ revision: string; files: string[] }> {
-  const files = await collectSourceFiles(sourcePath);
-  const hash = createHash('sha256');
-  hash.update(SIMPLE_INTERFACE_RUNTIME_MODULE);
-  hash.update(SIMPLE_INTERFACE_MOTION_MODULE);
-  hash.update(SIMPLE_INTERFACE_COMPONENT_CSS);
-  let bytes = 0;
-  for (const file of files) {
-    const contents = await readFile(file);
-    bytes += contents.byteLength;
-    if (bytes > MAX_SOURCE_BYTES) throw new Error('Interface source exceeds 2 MB.');
-    hash.update(relative(sourcePath, file));
-    hash.update(contents);
-  }
-  return { revision: hash.digest('hex'), files };
 }
 
 /** Windows scanners and briefly open asset handles can deny replacement of a
@@ -257,155 +133,6 @@ async function atomicWrite(path: string, contents: string | Uint8Array): Promise
     await writeFile(temp, contents, { flag: 'wx', mode: 0o600 });
     await renameSimpleAppTempWithRetry(temp, path);
   } finally { await rm(temp, { force: true }); }
-}
-
-async function readStatus(runtimePath: string): Promise<SimpleAppStatus> {
-  try {
-    const parsed = JSON.parse(await readFile(join(runtimePath, 'status.json'), 'utf8')) as SimpleAppStatus;
-    return {
-      revision: typeof parsed.revision === 'string' ? parsed.revision : '',
-      sourceRevision: typeof parsed.sourceRevision === 'string' ? parsed.sourceRevision : '',
-      diagnostic: typeof parsed.diagnostic === 'string' ? parsed.diagnostic : null,
-      ready: parsed.ready === true,
-    };
-  } catch { return { revision: '', sourceRevision: '', diagnostic: null, ready: false }; }
-}
-
-function sourceBoundaryPlugin(sourcePath: string): Plugin {
-  const runtimePackagePaths = getSimpleRuntimePackagePaths();
-  return {
-    name: 'interpreter-simple-interface-boundary',
-    setup(buildApi) {
-      buildApi.onResolve({ filter: /.*/, namespace: ASAR_MODULE_NAMESPACE }, (args) => {
-        try {
-          return {
-            path: createRequire(args.importer).resolve(args.path),
-            namespace: ASAR_MODULE_NAMESPACE,
-          };
-        } catch (error) {
-          return { errors: [{ text: error instanceof Error ? error.message : String(error) }] };
-        }
-      });
-      buildApi.onLoad({ filter: /.*/, namespace: ASAR_MODULE_NAMESPACE }, async (args) => {
-        const extension = extname(args.path).toLowerCase();
-        const loader = extension === '.json'
-          ? 'json'
-          : extension === '.css'
-            ? 'css'
-            : extension === '.tsx'
-              ? 'tsx'
-              : extension === '.ts'
-                ? 'ts'
-                : extension === '.jsx'
-                  ? 'jsx'
-                  : 'js';
-        return {
-          contents: await readFile(args.path),
-          loader,
-          resolveDir: dirname(args.path),
-        };
-      });
-      buildApi.onResolve({ filter: /^@interpreter\/interface$/ }, () => ({ path: RUNTIME_MODULE, namespace: 'interpreter-runtime' }));
-      buildApi.onLoad({ filter: /.*/, namespace: 'interpreter-runtime' }, () => ({ contents: SIMPLE_INTERFACE_RUNTIME_MODULE, loader: 'jsx', resolveDir: process.cwd() }));
-      buildApi.onResolve({ filter: /^@interpreter\/motion$/ }, () => ({ path: MOTION_RUNTIME_MODULE, namespace: 'interpreter-motion-runtime' }));
-      buildApi.onLoad({ filter: /.*/, namespace: 'interpreter-motion-runtime' }, () => ({ contents: SIMPLE_INTERFACE_MOTION_MODULE, loader: 'jsx', resolveDir: process.cwd() }));
-      buildApi.onResolve({ filter: /.*/ }, (args) => {
-        if (args.path === RUNTIME_MODULE || args.path === MOTION_RUNTIME_MODULE) return undefined;
-        const appPackagePath = runtimePackagePaths[args.path as SimpleRuntimePackage];
-        if (appPackagePath) {
-          return appPackagePath.includes(`${sep}app.asar${sep}`)
-            ? { path: appPackagePath, namespace: ASAR_MODULE_NAMESPACE }
-            : { path: appPackagePath };
-        }
-        // Once an explicitly provided dependency is entered, allow its own
-        // internal files and transitive runtime dependencies to resolve.
-        if (args.importer.includes(`${sep}node_modules${sep}`)) return undefined;
-        if (/^(https?:|node:|data:)/i.test(args.path)) return { errors: [{ text: `External or Node import is not allowed: ${args.path}` }] };
-        // esbuild passes the entry point as an absolute filename. On Windows
-        // that begins with a drive or UNC root, not a slash; keep it inside
-        // the same source boundary instead of mistaking it for a package.
-        if (args.path.startsWith('.') || isAbsolute(args.path)) {
-          const candidate = resolve(args.resolveDir || sourcePath, args.path);
-          if (candidate !== sourcePath && !isChild(sourcePath, candidate)) return { errors: [{ text: `Import leaves interface/src: ${args.path}` }] };
-          return undefined;
-        }
-        return { errors: [{ text: `Package is not provided by Interpreter: ${args.path}` }] };
-      });
-    },
-  };
-}
-
-function formatBuildError(error: unknown): string {
-  const value = error as { errors?: Array<{ text?: string; location?: { file?: string; line?: number; column?: number } }> };
-  if (Array.isArray(value.errors) && value.errors.length) {
-    return value.errors.slice(0, 8).map((item) => {
-      const location = item.location?.file ? `${item.location.file}:${item.location.line ?? 0}:${item.location.column ?? 0}: ` : '';
-      return `${location}${item.text ?? 'Build error'}`;
-    }).join('\n');
-  }
-  return error instanceof Error ? error.message : String(error);
-}
-
-export async function promoteSimpleApp(): Promise<SimpleAppStatus> {
-  await seedSimpleApp();
-  const { sourcePath, runtimePath } = await appPaths();
-  const source = await sourceRevision(sourcePath);
-  const previous = await readStatus(runtimePath);
-  if (previous.ready && previous.sourceRevision === source.revision && !previous.diagnostic) return previous;
-
-  try {
-    const result = await loadSimpleAppCompiler().build({
-      entryPoints: [join(sourcePath, 'main.jsx')],
-      absWorkingDir: sourcePath,
-      bundle: true,
-      write: false,
-      outdir: 'out',
-      entryNames: 'app',
-      assetNames: 'asset-[hash]',
-      platform: 'browser',
-      format: 'iife',
-      target: ['chrome120'],
-      jsx: 'automatic',
-      sourcemap: 'inline',
-      legalComments: 'none',
-      loader: { '.png': 'dataurl', '.jpg': 'dataurl', '.jpeg': 'dataurl', '.webp': 'dataurl', '.gif': 'dataurl', '.svg': 'dataurl' },
-      plugins: [sourceBoundaryPlugin(sourcePath)],
-    });
-    const js = result.outputFiles.find((file) => file.path.endsWith('.js'))?.contents;
-    const generatedCss = result.outputFiles.find((file) => file.path.endsWith('.css'))?.text ?? '';
-    const css = new TextEncoder().encode(`${SIMPLE_INTERFACE_COMPONENT_CSS}\n${generatedCss}`);
-    if (!js) throw new Error('The interface build did not produce JavaScript.');
-    const revision = createHash('sha256').update(js).update(css).digest('hex');
-    await atomicWrite(join(runtimePath, 'app.js'), js);
-    await atomicWrite(join(runtimePath, 'app.css'), css);
-    const status: SimpleAppStatus = { revision, sourceRevision: source.revision, diagnostic: null, ready: true };
-    await atomicWrite(join(runtimePath, 'status.json'), `${JSON.stringify(status, null, 2)}\n`);
-    await atomicWrite(join(runtimePath, 'diagnostics.json'), `${JSON.stringify({ error: null, checkedAt: new Date().toISOString() }, null, 2)}\n`);
-    if (revision !== previous.revision) broadcastEvent('simple-interface:changed', { revision });
-    return status;
-  } catch (error) {
-    const diagnostic = formatBuildError(error);
-    const status: SimpleAppStatus = { ...previous, sourceRevision: source.revision, diagnostic, ready: previous.ready };
-    await atomicWrite(join(runtimePath, 'status.json'), `${JSON.stringify(status, null, 2)}\n`);
-    await atomicWrite(join(runtimePath, 'diagnostics.json'), `${JSON.stringify({ error: diagnostic, checkedAt: new Date().toISOString() }, null, 2)}\n`);
-    return status;
-  }
-}
-
-export async function readSimpleAppStatus(): Promise<SimpleAppStatus> {
-  const { runtimePath } = await appPaths();
-  return readStatus(runtimePath);
-}
-
-export async function readSimpleAppRuntime(name: 'app.js' | 'app.css'): Promise<Buffer> {
-  const { projectPath, runtimePath } = await appPaths();
-  const path = assertSimpleProjectChildPath(projectPath, join(runtimePath, name));
-  const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-  try {
-    const info = await file.stat();
-    if (info.size > 8 * 1024 * 1024) throw new Error('Compiled interface exceeds 8 MB.');
-    return await file.readFile();
-  } finally { await file.close(); }
 }
 
 function validateState(value: unknown): Record<string, unknown> {

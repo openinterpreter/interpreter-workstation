@@ -131,17 +131,15 @@ async function isServerReachable(url: string): Promise<boolean> {
 }
 
 describe('projectRunner', () => {
-  test('starts projects from cwd and uses the shell only on Windows', () => {
-    expect(getPnpmSpawnOptionsForTest('dev', 'win32')).toEqual({
-      command: 'pnpm',
-      args: ['run', 'dev'],
-      shell: true,
-    });
-    expect(getPnpmSpawnOptionsForTest('start', 'linux')).toEqual({
-      command: 'pnpm',
-      args: ['run', 'start'],
-      shell: false,
-    });
+  test('starts projects with Workstation bundled Node and pnpm on every OS', () => {
+    for (const platform of ['win32', 'linux', 'darwin'] as const) {
+      const command = getPnpmSpawnOptionsForTest('dev', platform);
+      expect(path.basename(command.command)).toMatch(/^(node|node\.exe|Interpreter)$/i);
+      expect(command.args.at(-3)).toMatch(/pnpm\.cjs$/);
+      expect(command.args.at(-1)).toBe('dev');
+      expect(command.args).toContain('run');
+      expect(command.shell).toBe(false);
+    }
   });
 
   test('formats pnpm launcher spawn failures', () => {
@@ -149,7 +147,7 @@ describe('projectRunner', () => {
       Object.assign(new Error('spawn EINVAL'), { code: 'EINVAL' }),
     );
 
-    expect(message).toBe('Could not start the project because pnpm could not be launched.');
+    expect(message).toBe("Could not start the project because Workstation's bundled project runtime could not be launched.");
   });
 
   // Startup and shutdown each have their own 5 s readiness check; Bun's

@@ -5585,11 +5585,6 @@ ${promptBody}
         ...this.effectiveSettings,
         enabled: false,
       };
-    } else if (simpleMode && this.accessState.allowed) {
-      this.effectiveSettings = {
-        ...this.effectiveSettings,
-        enabled: true,
-      };
     }
     if (this.effectiveSettings.enabled && !this.baseUrl && !simpleMode) {
       console.warn(

@@ -1,20 +1,18 @@
 import { Router } from "express";
+import { readSimpleInterfaceAsset } from "../handlers/simpleAssets";
 import {
-  importRandomDesktopImage,
-  readSimpleInterfaceAsset,
-} from "../handlers/simpleAssets";
-import {
-  promoteSimpleApp,
   readSimpleAppUiState,
-  readSimpleAppRuntime,
   readSimpleAppState,
-  readSimpleAppStatus,
   recordSimpleAppRuntimeError,
   resolveSimpleAppFile,
   updateSimpleAppState,
   writeSimpleAppState,
   writeSimpleAppUiState,
 } from "../handlers/simpleApp";
+import {
+  promoteSimpleProjectApp,
+  readSimpleProjectAppStatus,
+} from "../handlers/simpleProjectRuntime";
 import {
   createSimpleProject,
   listSimpleProjects,
@@ -24,51 +22,8 @@ import {
   clearSimplePresentation,
   readSimplePresentation,
 } from "../simplePresentation";
-import { runWithWindowSessionOverride } from "../utils/windowSessions";
 
 const router = Router();
-
-export function simpleAppAssetQuery(input: {
-  revision: unknown;
-  windowSessionKey?: unknown;
-}): string {
-  const params = new URLSearchParams({
-    revision: String(input.revision ?? ""),
-  });
-  if (typeof input.windowSessionKey === "string" && input.windowSessionKey) {
-    params.set("windowSessionKey", input.windowSessionKey);
-  }
-  return params.toString();
-}
-
-export function simpleAppReferrerSessionKey(
-  referrer: string | undefined,
-  expectedHost: string | undefined,
-): string | null {
-  if (!referrer || !expectedHost) return null;
-  try {
-    const url = new URL(referrer);
-    if (url.host !== expectedHost) return null;
-    if (!url.pathname.startsWith("/api/simple-interface/app/")) return null;
-    return url.searchParams.get("windowSessionKey") || null;
-  } catch {
-    return null;
-  }
-}
-
-/** Permit local React submit events without permitting form posts to API routes. */
-export function simpleAppFormActionSource(hostHeader: string | undefined): string {
-  if (!hostHeader || /[^A-Za-z0-9.:[\]-]/.test(hostHeader)) {
-    throw new Error("Invalid interface host for form policy.");
-  }
-  const parsed = new URL(`http://${hostHeader}`);
-  if (!parsed.hostname || parsed.pathname !== "/" || parsed.search || parsed.hash) {
-    throw new Error("Invalid interface host for form policy.");
-  }
-  // Scheme-less CSP host sources inherit the document scheme, including HTTPS
-  // behind a private reverse proxy. The exact path is a GET-only app document.
-  return `${parsed.host}/api/simple-interface/app/index.html`;
-}
 
 async function refreshDesktopMenu(): Promise<void> {
   if (!process.versions.electron) return;
@@ -92,17 +47,19 @@ function errorResponse(error: unknown): { status: number; message: string } {
 router.get("/", async (_req, res) => {
   try {
     res.setHeader("Cache-Control", "no-store");
-    res.json(await readSimpleAppStatus());
+    res.json(await readSimpleProjectAppStatus());
   } catch (error) {
     const { status, message } = errorResponse(error);
     res.status(status).json({ error: message });
   }
 });
 
-router.post("/promote", async (_req, res) => {
+router.post("/promote", async (req, res) => {
   try {
     res.setHeader("Cache-Control", "no-store");
-    res.json(await promoteSimpleApp());
+    const host = req.get("host");
+    if (!host) throw new Error("The Workstation host is unavailable.");
+    res.json(await promoteSimpleProjectApp(`${req.protocol}://${host}`));
   } catch (error) {
     const { status, message } = errorResponse(error);
     res.status(status).json({ error: message });
@@ -157,51 +114,6 @@ router.post("/presentation/clear", (_req, res) => {
   res.json({ success: true });
 });
 
-router.post("/import-desktop-image", async (req, res) => {
-  if (req.header("X-Interpreter-Simple-Workspace") !== "1") {
-    res
-      .status(403)
-      .json({ error: "Simple workspace import header is required" });
-    return;
-  }
-  try {
-    const result = await importRandomDesktopImage();
-    res.setHeader("Cache-Control", "no-store");
-    res.json({
-      ...result,
-      url: `/api/simple-interface/assets/${encodeURIComponent(result.asset)}`,
-    });
-  } catch (error) {
-    const { status, message } = errorResponse(error);
-    res.status(status).json({ error: message });
-  }
-});
-
-router.get("/app/index.html", async (req, res) => {
-  try {
-    const status = await readSimpleAppStatus();
-    if (!status.ready || !status.revision)
-      throw new Error("The interface has not compiled yet.");
-    const assetQuery = simpleAppAssetQuery({
-      revision: req.query.revision ?? status.revision,
-      windowSessionKey: req.query.windowSessionKey,
-    });
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.setHeader("Cache-Control", "no-store");
-    const formActionSource = simpleAppFormActionSource(req.get("host"));
-    res.setHeader(
-      "Content-Security-Policy",
-      `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'none'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action ${formActionSource}; frame-ancestors file: http://localhost:* http://127.0.0.1:*`,
-    );
-    res.send(
-      `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="./app.css?${assetQuery}"></head><body><div id="root"></div><script src="./bridge.js?${assetQuery}"></script><script src="./app.js?${assetQuery}"></script></body></html>`,
-    );
-  } catch (error) {
-    const { status, message } = errorResponse(error);
-    res.status(status).send(message);
-  }
-});
-
 router.get("/app/bridge.js", (_req, res) => {
   res.setHeader("Content-Type", "application/javascript; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
@@ -220,6 +132,7 @@ router.get("/app/bridge.js", (_req, res) => {
         try {
           const url = new URL(raw, window.location.href);
           if (url.origin !== window.location.origin || url.searchParams.has('windowSessionKey')) continue;
+          if (!url.pathname.startsWith('/api/simple-interface/assets/')) continue;
           url.searchParams.set('windowSessionKey', windowSessionKey);
           candidate.setAttribute(attribute, url.pathname + url.search + url.hash);
         } catch {}
@@ -231,6 +144,7 @@ router.get("/app/bridge.js", (_req, res) => {
         for (const node of record.addedNodes) bindProjectAsset(node);
       }
     }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'poster'] });
+    bindProjectAsset(document.documentElement);
     const pending = new Map();
     let sequence = 0;
     const request = (type, payload = {}) => new Promise((resolve, reject) => {
@@ -351,35 +265,13 @@ router.get("/app/bridge.js", (_req, res) => {
       requestAnimationFrame(() => requestAnimationFrame(() => {
         const root = document.getElementById('root');
         if (!root || root.childNodes.length === 0) {
-          report('The compiled interface did not mount. Its runtime assets may be unavailable.');
+          report('The interface did not mount. Its project dev server may be unavailable.');
           return;
         }
         window.parent.postMessage({ protocol, type: 'ready' }, '*');
       }));
     });
   })();`);
-});
-
-router.get("/app/app.js", async (_req, res) => {
-  try {
-    res.setHeader("Content-Type", "application/javascript; charset=utf-8");
-    res.setHeader("Cache-Control", "no-store");
-    res.send(await readSimpleAppRuntime("app.js"));
-  } catch (error) {
-    const { status, message } = errorResponse(error);
-    res.status(status).send(message);
-  }
-});
-
-router.get("/app/app.css", async (_req, res) => {
-  try {
-    res.setHeader("Content-Type", "text/css; charset=utf-8");
-    res.setHeader("Cache-Control", "no-store");
-    res.send(await readSimpleAppRuntime("app.css"));
-  } catch (error) {
-    const { status, message } = errorResponse(error);
-    res.status(status).send(message);
-  }
 });
 
 router.get("/app/state", async (_req, res) => {
@@ -450,18 +342,7 @@ router.post("/app/runtime-error", async (req, res) => {
 
 router.get("/assets/:name", async (req, res) => {
   try {
-    // Interface-authored media URLs remain ordinary project-relative React
-    // URLs. Browsers do not copy the document query onto those requests, so
-    // recover the owning window session only from our same-host app referrer.
-    const referrerSessionKey = simpleAppReferrerSessionKey(
-      req.get("referer"),
-      req.get("host"),
-    );
-    const { bytes, mime } = referrerSessionKey
-      ? await runWithWindowSessionOverride(referrerSessionKey, () =>
-          readSimpleInterfaceAsset(req.params.name),
-        )
-      : await readSimpleInterfaceAsset(req.params.name);
+    const { bytes, mime } = await readSimpleInterfaceAsset(req.params.name);
     res.setHeader("Content-Type", mime);
     res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
     res.setHeader("X-Content-Type-Options", "nosniff");

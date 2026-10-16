@@ -1,6 +1,6 @@
 export const SIMPLE_INTERFACE_DESIGN_SKILL = `---
 name: simple-interface-design
-description: Design and maintain the active Interpreter Simple-mode React interface.
+description: Design and maintain the active Interpreter Simple-mode full-stack interface.
 ---
 
 # Simple interface design
@@ -10,12 +10,22 @@ Interpreter and may be refreshed when the application updates.
 
 ## Mental model
 
-The project is a normal React application, edited live by the same durable
+The project is a normal full-stack Next.js application, edited live by the same durable
 agent the user is speaking with. It is not a JSON renderer and it is not a
 collection of native declarative screens. Use React state, events, composition,
-and normal application logic. Keep the experience direct: the interface is the
+normal application logic, server components, route handlers, and backend code.
+Add any ordinary npm dependency the application needs to \`package.json\`;
+Workstation installs declared dependencies with its bundled runtime. Keep the experience direct: the interface is the
 work, while Interpreter supplies the single composer, conversation drawer,
 settings, model controls, voice, and channel routing around it.
+
+Treat ordinary project work exactly like ordinary coding work. Use the native
+shell, filesystem commands, source editing, and package manager to inspect and
+change files. For example, copy an external image into \`public/\` with a normal
+shell command and then import or reference it from the app. Do not search
+Interpreter app tools for file copying, source editing, dependency installation,
+builds, or asset management. App tools are only for host capabilities such as
+computer use, browser control, settings, and Workstation-owned surfaces.
 
 ## Design posture: a live answer, not a web page
 
@@ -55,6 +65,11 @@ Ibelik. Prefer \`AnimatedGroup\`, \`TextEffect\`, \`TextShimmer\`, \`InView\`,
 and \`TransitionPanel\` over improvised entrance animation. Motion should
 explain change, preserve spatial continuity, and never animate every element
 by default.
+
+These two packages are Workstation's app-shipped project SDK. They are normal
+imports inside this ordinary Next.js project, not a restriction on other
+packages. Use any suitable npm package and create files under \`app/api/\` or
+other server modules when the requested interface needs a backend.
 
 ## Files and selection
 
@@ -142,11 +157,42 @@ visual change to the interface is an audible voice reply.
   not declare a design complete from source alone.
 `;
 
-export const SIMPLE_INTERFACE_MANAGED_AGENTS = `# Interpreter interface project
+export const SIMPLE_INTERFACE_MANAGED_AGENTS_MARKER = '<!-- interpreter-managed-interface-project:v2 -->';
+
+export const SIMPLE_INTERFACE_LEGACY_AGENTS_PREFIX = `# Interpreter interface project
 
 This folder is one standalone Simple-mode React interface project. It is not a
 route inside another interface. Work under \`src/\`; keep static assets under
-\`public/\`. Interpreter owns hidden \`.interpreter/\` metadata and runtime files.
+\`public/\`. Interpreter owns hidden \`.interpreter/\` metadata and runtime files.`;
+
+export const SIMPLE_INTERFACE_MANAGED_AGENTS = `${SIMPLE_INTERFACE_MANAGED_AGENTS_MARKER}
+# Interpreter interface project
+
+This folder is one standalone full-stack Next.js interface project. It is not a
+route inside another interface. Work in \`app/\` and \`src/\`; keep static assets
+under \`public/\`. Add ordinary npm packages to \`package.json\` whenever useful;
+Workstation's bundled package manager installs them automatically. Backend
+route handlers and server modules are supported. Interpreter owns hidden
+\`.interpreter/\` metadata, SDK packages, and runtime files.
+
+Use normal coding tools for normal project work: native shell and filesystem
+commands, source edits, and the package manager. Do not search Interpreter app
+tools to copy files, edit source, install dependencies, build, or manage project
+assets. App tools are for host capabilities, not a substitute for developing
+this Next.js application.
+
+When the user asks to control Chrome, first inspect the normal browser inventory.
+Use the \`browser-control\` skill for DOM work when the requested tab is shared.
+If no tab is shared, that does not mean Chrome is uncontrollable: use the
+\`computer-use\` skill for Chrome's address bar, browser chrome, and ordinary
+visual interaction. If the inspected native window is hidden or behind another
+app, use \`focus_window\` with the returned target identity before sending keys;
+do not click an arbitrary coordinate merely to bring it forward. Never report a
+bridge, permission, or capability failure without first running the exact
+relevant app tool and observing that error.
+Run native Computer Use calls strictly one at a time. Wait for each call to
+finish before starting the next one; do not background calls or schedule a
+sleep-and-next-call sequence while another native action is still running.
 
 Before designing or editing the visible interface, read the app-maintained
 skill at \`.interpreter/skills/interface-design/SKILL.md\` completely. It defines

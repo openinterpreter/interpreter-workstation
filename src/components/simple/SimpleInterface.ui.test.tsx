@@ -35,13 +35,14 @@ const status = {
   sourceRevision: "source-1",
   diagnostic: null,
   ready: true,
+  runtimeUrl: "http://127.0.0.1:43800",
 };
 
 beforeEach(() => {
   explorerRenders.count = 0;
   client.refresh.mockResolvedValue(status);
   client.appUrl.mockResolvedValue(
-    "http://127.0.0.1:5177/api/simple-interface/app/index.html?revision=compiled-1",
+    "http://127.0.0.1:43800/?windowSessionKey=test-window",
   );
   client.appState.mockResolvedValue({});
   client.setAppState.mockResolvedValue({ success: true });
@@ -64,10 +65,9 @@ describe("Simple executable interface", () => {
       "Interpreter interface",
     )) as HTMLIFrameElement;
     expect(frame.src).toContain(
-      "/api/simple-interface/app/index.html?revision=compiled-1",
+      "127.0.0.1:43800",
     );
-    expect(frame.getAttribute("sandbox")?.split(" ").sort()).toEqual(["allow-forms", "allow-scripts"]);
-    expect(frame.getAttribute("sandbox")).not.toContain("allow-same-origin");
+    expect(frame.getAttribute("sandbox")?.split(" ").sort()).toEqual(["allow-downloads", "allow-forms", "allow-modals", "allow-same-origin", "allow-scripts"]);
     expect(frame.getAttribute("sandbox")).not.toContain("allow-top-navigation");
   });
 
@@ -232,7 +232,7 @@ describe("Simple executable interface", () => {
     window.removeEventListener("simple-interface:interaction", onInteraction);
   });
 
-  test("keeps the compiled application visible while a source edit has a diagnostic", async () => {
+  test("reports a Next.js project diagnostic without replacing the iframe", async () => {
     client.refresh.mockResolvedValue({
       ...status,
       sourceRevision: "broken-source",
@@ -241,53 +241,31 @@ describe("Simple executable interface", () => {
     render(<SimpleInterface onMessage={() => {}} />);
     expect(await screen.findByTitle("Interpreter interface")).toBeTruthy();
     expect(screen.getByRole("status")).toHaveTextContent(
-      "last working version is still running",
+      "Next.js will refresh it automatically",
     );
   });
 
-  test("hot-swaps only when a new compiled revision is promoted", async () => {
+  test("keeps one stable iframe while Next Fast Refresh updates source", async () => {
     vi.useFakeTimers();
     client.refresh
       .mockResolvedValueOnce(status)
       .mockResolvedValue({
         ...status,
-        revision: "compiled-2",
         sourceRevision: "source-2",
       });
-    client.appUrl.mockImplementation(
-      async (revision: string) =>
-        `http://127.0.0.1:5177/api/simple-interface/app/index.html?revision=${revision}`,
-    );
     render(<SimpleInterface onMessage={() => {}} />);
     await act(async () => {
       await Promise.resolve();
     });
     const initialFrame = screen.getByTitle("Interpreter interface") as HTMLIFrameElement;
-    expect(initialFrame.src).toContain("compiled-1");
-    vi.spyOn(initialFrame.contentWindow!, "postMessage").mockImplementation((message) => {
-      const payload = message as { name?: string; detail?: { token?: string } };
-      if (payload.name !== "capture-ui-state" || !payload.detail?.token) return;
-      window.dispatchEvent(new MessageEvent("message", {
-        source: initialFrame.contentWindow,
-        data: {
-          protocol: "interpreter-interface-v1",
-          type: "ui-state-snapshot",
-          token: payload.detail.token,
-          value: { controls: { notes: { value: "draft", selectionStart: 5, selectionEnd: 5 } } },
-        },
-      }));
-    });
+    expect(initialFrame.src).toContain("127.0.0.1:43800");
     await act(async () => {
       await vi.advanceTimersByTimeAsync(900);
     });
-    expect(client.setAppUiState).toHaveBeenCalledWith({
-      controls: { notes: { value: "draft", selectionStart: 5, selectionEnd: 5 } },
-    });
-    expect(
-      screen.getAllByTitle("Interpreter interface").some((element) =>
-        (element as HTMLIFrameElement).src.includes("compiled-2"),
-      ),
-    ).toBe(true);
+    const promotedFrames = screen.getAllByTitle("Interpreter interface");
+    expect(promotedFrames).toHaveLength(1);
+    expect(promotedFrames[0]).toBe(initialFrame);
+    expect((promotedFrames[0] as HTMLIFrameElement).src).toContain("127.0.0.1:43800");
     vi.useRealTimers();
   });
 });

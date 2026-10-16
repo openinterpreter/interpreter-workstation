@@ -236,6 +236,13 @@ describe("Simple shell", () => {
     ).toBeVisible();
   });
 
+  test("reserves the top edge as a native window drag region", () => {
+    const { container } = render(<SimpleShell {...props} />);
+    const dragRegion = container.querySelector('[data-simple-titlebar-drag-region="true"]');
+
+    expect(dragRegion).toHaveClass("top-0", "h-8", "[-webkit-app-region:drag]");
+  });
+
   test("opens only the inset drawer while the composer capsule stays mounted", async () => {
     const user = userEvent.setup();
     const { container } = render(<SimpleShell {...props} />);

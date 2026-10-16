@@ -2494,6 +2494,15 @@ export class CodexAppServerClient {
       : params.sandboxPolicy ?? buildCodexSandboxPolicy({
           sandboxMode: runtimeAccess.sandboxMode,
           networkAccess: runtimeAccess.networkAccess,
+          // Full-system read mode uses the upstream sandbox policy instead of
+          // Workstation's named permission profile. Keep the same narrowly
+          // scoped write grants in both paths so the shell-visible
+          // `interpreter-app` capability bridge remains usable without
+          // granting write access to the rest of Interpreter's data home.
+          writableRoots: [
+            ...getInterpreterCliSandboxWritableRoots(),
+            ...(params.additionalWritableRoots ?? []),
+          ],
           allowTempAccess: process.platform === "darwin" ? runtimeAccess.macosTempAccess : true,
         });
     if (workspacePermission && !this.workspaceScopedThreads.has(params.threadId)) {

@@ -854,11 +854,14 @@ export function mergeChatHistory(
 ): ChatMessage[] {
   const incomingById = new Map(incoming.map((message) => [message.id, message]));
   const consumedIncomingIds = new Set<string>();
-  const updatedCurrent = current.map((message) => {
+  const updatedCurrent = current.flatMap((message) => {
     const matchingId = incomingById.get(message.id);
     if (matchingId) {
+      if (consumedIncomingIds.has(matchingId.id)) {
+        return [];
+      }
       consumedIncomingIds.add(matchingId.id);
-      return matchingId;
+      return [matchingId];
     }
 
     if (
@@ -880,14 +883,39 @@ export function mergeChatHistory(
       });
       if (matchingEcho) {
         consumedIncomingIds.add(matchingEcho.id);
-        return {
+        return [{
           ...matchingEcho,
           ...(message.attachments ? { attachments: message.attachments } : {}),
-        };
+        }];
       }
     }
 
-    return message;
+    if (direction === 'newer') {
+      const matchingContent = incoming.find((candidate) => (
+        !consumedIncomingIds.has(candidate.id)
+        && candidate.role === message.role
+        && textContent(candidate) === textContent(message)
+        && msgToolCalls(candidate).map((toolCall) => toolCall.id).join('\n')
+          === msgToolCalls(message).map((toolCall) => toolCall.id).join('\n')
+      ));
+      if (matchingContent) {
+        consumedIncomingIds.add(matchingContent.id);
+        return [matchingContent];
+      }
+
+      const duplicatesConsumedHistory = incoming.some((candidate) => (
+        consumedIncomingIds.has(candidate.id)
+        && candidate.role === message.role
+        && textContent(candidate) === textContent(message)
+        && msgToolCalls(candidate).map((toolCall) => toolCall.id).join('\n')
+          === msgToolCalls(message).map((toolCall) => toolCall.id).join('\n')
+      ));
+      if (duplicatesConsumedHistory) {
+        return [];
+      }
+    }
+
+    return [message];
   });
   const currentIds = new Set(current.map((message) => message.id));
   const additions = incoming.filter(

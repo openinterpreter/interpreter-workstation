@@ -75,6 +75,7 @@ type ComputerUseTarget = {
   };
 };
 const computerUseAppStateCache = new Map<string, ComputerUseTarget>();
+const macExplicitlyFocusedTargets = new Set<string>();
 
 function automationBackendName(): string {
   return process.platform === 'win32' ? 'Windows UI Automation' : 'native desktop driver';
@@ -765,6 +766,31 @@ function isContentWindowRecord(window: MacCuaWindowRecord): boolean {
   return width > 300 && height > 160;
 }
 
+function sortMacComputerUseWindows(windows: MacCuaWindowRecord[]): MacCuaWindowRecord[] {
+  return [...windows].sort((left, right) => {
+    const contentDelta = Number(isContentWindowRecord(right)) - Number(isContentWindowRecord(left));
+    if (contentDelta !== 0) return contentDelta;
+    const titledDelta = Number(Boolean(windowRecordTitle(right).trim())) - Number(Boolean(windowRecordTitle(left).trim()));
+    if (titledDelta !== 0) return titledDelta;
+    const currentSpaceDelta = Number(right.on_current_space === true) - Number(left.on_current_space === true);
+    if (currentSpaceDelta !== 0) return currentSpaceDelta;
+    const onScreenDelta = Number(right.is_on_screen === true) - Number(left.is_on_screen === true);
+    if (onScreenDelta !== 0) return onScreenDelta;
+    const normalLayerDelta = Number((right.layer ?? 0) === 0) - Number((left.layer ?? 0) === 0);
+    if (normalLayerDelta !== 0) return normalLayerDelta;
+    // Larger z-index values are closer to the front in the driver's macOS
+    // window inventory. Prefer the most recently active main window before
+    // using size as a final tiebreaker.
+    const zIndexDelta = (right.z_index ?? -1) - (left.z_index ?? -1);
+    if (zIndexDelta !== 0) return zIndexDelta;
+    return windowRecordArea(right) - windowRecordArea(left);
+  });
+}
+
+export function sortMacComputerUseWindowIdsForTest(windows: MacCuaWindowRecord[]): Array<number | string | null> {
+  return sortMacComputerUseWindows(windows).map(windowRecordId);
+}
+
 function extractWindowRecords(parsed: unknown): MacCuaWindowRecord[] {
   if (Array.isArray(parsed)) return parsed as MacCuaWindowRecord[];
   if (parsed && typeof parsed === 'object') {
@@ -794,21 +820,7 @@ async function resolveMacComputerUseTarget(
     throw new Error(`No windows found for "${app}".`);
   }
 
-  return [...windows].sort((left, right) => {
-    const contentDelta = Number(isContentWindowRecord(right)) - Number(isContentWindowRecord(left));
-    if (contentDelta !== 0) return contentDelta;
-    const currentSpaceDelta = Number(right.on_current_space === true) - Number(left.on_current_space === true);
-    if (currentSpaceDelta !== 0) return currentSpaceDelta;
-    const onScreenDelta = Number(right.is_on_screen === true) - Number(left.is_on_screen === true);
-    if (onScreenDelta !== 0) return onScreenDelta;
-    const layerDelta = Number((left.layer ?? 0) === 0) - Number((right.layer ?? 0) === 0);
-    if (layerDelta !== 0) return layerDelta;
-    const areaDelta = windowRecordArea(right) - windowRecordArea(left);
-    if (areaDelta !== 0) return areaDelta;
-    const zIndexDelta = (right.z_index ?? 0) - (left.z_index ?? 0);
-    if (zIndexDelta !== 0) return zIndexDelta;
-    return 0;
-  }).map((chosen) => {
+  return sortMacComputerUseWindows(windows).map((chosen) => {
     const bounds = chosen.bounds
       && typeof chosen.bounds.x === 'number'
       && typeof chosen.bounds.y === 'number'
@@ -837,12 +849,44 @@ async function resolveMacComputerUseTarget(
 
 function macComputerUseTreeHasWindowContent(markdown: string | undefined): boolean {
   if (!markdown) return false;
-  return /\n\t\d+ standard window\b/.test(markdown)
+  const normalizedTreeHasContent = /\n\t\d+ standard window\b/.test(markdown)
     && /\n\t\t+\d+ HTML content\b/.test(markdown);
+  const nativeDriverTreeHasContent = /(?:^|\n)\s*- \[\d+\] AXWindow\b/.test(markdown)
+    && /\n\s+- (?:\[\d+\]\s+)?AX(?:Button|CheckBox|ComboBox|Group|Link|MenuButton|PopUpButton|RadioButton|ScrollArea|StaticText|TabGroup|TextArea|TextField|Toolbar|WebArea)\b/.test(markdown);
+  return normalizedTreeHasContent || nativeDriverTreeHasContent;
 }
 
 export function macComputerUseTreeHasWindowContentForTest(markdown: string | undefined): boolean {
   return macComputerUseTreeHasWindowContent(markdown);
+}
+
+export function macFocusWindowDriverToolForTest(): 'bring_to_front' {
+  return 'bring_to_front';
+}
+
+export function macWindowScopedInputArgsForTest(
+  target: Pick<ComputerUseTarget, 'pid' | 'windowId'>,
+  explicitlyFocused = false,
+): { pid: number; window_id: number | string; delivery_mode?: 'foreground' } {
+  return {
+    pid: target.pid,
+    window_id: target.windowId,
+    ...(explicitlyFocused ? { delivery_mode: 'foreground' as const } : {}),
+  };
+}
+
+function macFocusedTargetKey(
+  target: Pick<ComputerUseTarget, 'pid' | 'windowId'>,
+  context?: BuiltinToolContext,
+): string {
+  return `${approvalAgentId(context) ?? 'default'}:${target.pid}:${String(target.windowId)}`;
+}
+
+function wasExplicitlyFocusedByAgent(
+  target: Pick<ComputerUseTarget, 'pid' | 'windowId'>,
+  context?: BuiltinToolContext,
+): boolean {
+  return macExplicitlyFocusedTargets.has(macFocusedTargetKey(target, context));
 }
 
 const INTERACTIVE_TREE_LINE_LIMIT = 120;
@@ -1637,10 +1681,17 @@ async function callMacComputerUseTool(
       throw new Error('target_identity.window.native_window_id must be an integer for macOS window focus.');
     }
     assertNotProtectedDesktopPid(pid);
-    return callCuaDriverCli('focus_window', {
+    // The native driver exposes the reviewed macOS operation as
+    // `bring_to_front`. Its older `focus_window` alias is intentionally
+    // unclassified and therefore fails closed before platform dispatch.
+    const response = await callCuaDriverCli(macFocusWindowDriverToolForTest(), {
       pid,
       window_id: windowId,
     }, context);
+    if (!response.isError) {
+      macExplicitlyFocusedTargets.add(macFocusedTargetKey({ pid, windowId }, context));
+    }
+    return response;
   }
 
   if (toolName === 'close_window') {
@@ -1821,17 +1872,16 @@ async function callMacComputerUseTool(
     const key = keyAndModifiers(args.key.trim());
     if (key.modifiers?.length) {
       return callCuaDriverCli('hotkey', {
-        pid: target.pid,
+        ...macWindowScopedInputArgsForTest(target, wasExplicitlyFocusedByAgent(target, context)),
         keys: [...key.modifiers, key.key],
       }, context, undefined, appApprovalArgs);
     }
     const pressArgs: Record<string, unknown> = {
-      pid: target.pid,
+      ...macWindowScopedInputArgsForTest(target, wasExplicitlyFocusedByAgent(target, context)),
       ...key,
       ...(args.skip_change_detection === true ? { skip_change_detection: true } : {}),
     };
     if (target.focusedElementIndex !== null) {
-      pressArgs.window_id = target.windowId;
       pressArgs.element_index = target.focusedElementIndex;
     }
     return callCuaDriverCli('press_key', pressArgs, context, undefined, appApprovalArgs);
@@ -1841,15 +1891,13 @@ async function callMacComputerUseTool(
     if (typeof args.text !== 'string') throw new Error('Missing required string field text.');
     const elementIndex = optionalElementIndex(args);
     const typeArgs: Record<string, unknown> = {
-      pid: target.pid,
+      ...macWindowScopedInputArgsForTest(target, wasExplicitlyFocusedByAgent(target, context)),
       text: args.text,
       ...(args.skip_change_detection === true ? { skip_change_detection: true } : {}),
     };
     if (elementIndex !== null) {
-      typeArgs.window_id = target.windowId;
       typeArgs.element_index = elementIndex;
     } else if (target.focusedElementIndex !== null) {
-      typeArgs.window_id = target.windowId;
       typeArgs.element_index = target.focusedElementIndex;
     }
     return callCuaDriverCli('type_text', typeArgs, context, undefined, appApprovalArgs);
@@ -3864,6 +3912,7 @@ export function setWindowsCuaDriverToolProviderForTest(
 
 export function clearComputerUseTargetCacheForTest(): void {
   computerUseAppStateCache.clear();
+  macExplicitlyFocusedTargets.clear();
 }
 
 export const callComputerUseToolForTest = callComputerUseTool;

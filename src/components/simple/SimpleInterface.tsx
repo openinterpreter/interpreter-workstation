@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion } from "motion/react";
+import { motion } from "motion/react";
 import { isWorkstationReadOnly } from "../../remote/workstationConnection";
 import { getPathForFile, showItemInFolder, simpleInterfaceAgents } from "../../ipc";
 import { EditorArea } from "../EditorArea";
@@ -138,8 +138,8 @@ export function SimpleInterface({ onMessage }: Props) {
     try {
       const next = await simpleInterfaceClient.refresh();
       const nextRuntimeUrl =
-        next.ready && next.revision
-          ? await simpleInterfaceClient.appUrl(next.revision)
+        next.ready && next.runtimeUrl
+          ? await simpleInterfaceClient.appUrl(next.runtimeUrl)
           : null;
       if (revisionRef.current && next.revision && revisionRef.current !== next.revision) {
         await captureUiState();
@@ -154,7 +154,9 @@ export function SimpleInterface({ onMessage }: Props) {
       setStatus((previous) =>
         previous?.revision === next.revision &&
         previous?.diagnostic === next.diagnostic &&
-        previous?.sourceRevision === next.sourceRevision
+        previous?.sourceRevision === next.sourceRevision &&
+        previous?.ready === next.ready &&
+        previous?.runtimeUrl === next.runtimeUrl
           ? previous
           : next,
       );
@@ -164,7 +166,7 @@ export function SimpleInterface({ onMessage }: Props) {
       setError(
         failure instanceof Error
           ? failure.message
-          : "Unable to compile the interface.",
+          : "Unable to start the interface project.",
       );
     } finally {
       inFlightRef.current = false;
@@ -450,33 +452,30 @@ export function SimpleInterface({ onMessage }: Props) {
       className="absolute inset-0 overflow-hidden bg-background text-foreground"
     >
       {status?.ready && status.revision && runtimeUrl ? (
-        <AnimatePresence initial={false} mode="popLayout">
-          <motion.div
-            key={status.revision}
-            className="absolute inset-0"
-            initial={{ opacity: 0, scale: 0.998, filter: "blur(3px)" }}
-            animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
-            exit={{ opacity: 0, scale: 1.002, filter: "blur(2px)" }}
-            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
-          >
-            <iframe
-              ref={rememberIframe}
-              data-simple-interface-frame
-              title="Interpreter interface"
-              src={runtimeUrl}
-              // React onSubmit requires allow-forms. The runtime document CSP
-              // confines native form navigation to its GET-only app document.
-              sandbox="allow-scripts allow-forms"
-              onFocus={() => window.dispatchEvent(new CustomEvent("simple-interface:interaction"))}
-              className="absolute inset-0 size-full border-0 bg-transparent"
-            />
-          </motion.div>
-        </AnimatePresence>
+        <motion.div
+          key={runtimeUrl}
+          className="absolute inset-0"
+          initial={{ opacity: 0, scale: 0.998, filter: "blur(3px)" }}
+          animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
+          transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+        >
+          <iframe
+            ref={rememberIframe}
+            data-simple-interface-frame
+            title="Interpreter interface"
+            src={runtimeUrl}
+            // React onSubmit requires allow-forms. The runtime document CSP
+            // confines native form navigation to its GET-only app document.
+            sandbox="allow-scripts allow-forms allow-same-origin allow-downloads allow-modals"
+            onFocus={() => window.dispatchEvent(new CustomEvent("simple-interface:interaction"))}
+            className="absolute inset-0 size-full border-0 bg-transparent"
+          />
+        </motion.div>
       ) : (
         <div className="grid size-full place-items-center px-6 pb-32 text-ui-sm text-muted-foreground">
           {status?.diagnostic
-            ? "The interface needs a code fix. See interface/.runtime/diagnostics.json."
-            : "Compiling your interface…"}
+            ? "The interface project needs a code fix."
+            : "Starting your interface project…"}
         </div>
       )}
       {Object.values(hostViews).map((view) => (
@@ -503,8 +502,8 @@ export function SimpleInterface({ onMessage }: Props) {
           role="status"
           className="pointer-events-none absolute left-1/2 top-5 z-20 max-w-[min(760px,calc(100%-2rem))] -translate-x-1/2 rounded-full border border-foreground/10 bg-background/90 px-4 py-2 text-xs text-muted-foreground shadow-sm backdrop-blur-xl"
         >
-          The latest interface edit needs fixing. The last working version is
-          still running.
+          The interface project reported an error. Fix the latest edit and
+          Next.js will refresh it automatically.
         </div>
       )}
     </main>

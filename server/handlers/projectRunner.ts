@@ -8,6 +8,7 @@ import { broadcastEvent } from './broadcast';
 import { resolvePathWithWorkspace } from '../utils/permissions';
 import { detectRunnableProject } from '../utils/runnableProjects';
 import { getCurrentWorkspace } from '../utils/workspace';
+import { getBundledPnpmCommand } from '../utils/bundledPackageManager';
 import type {
   ProjectRunnerState,
   RunnableProjectRunScript,
@@ -76,18 +77,14 @@ function getRuntimeError(runtime: ProjectRuntime): string {
 
 function getPnpmSpawnOptions(
   runScript: RunnableProjectRunScript,
-  platform: NodeJS.Platform = process.platform,
-): { command: string; args: string[]; shell: boolean } {
-  return {
-    command: 'pnpm',
-    args: ['run', runScript],
-    shell: platform === 'win32',
-  };
+  _platform: NodeJS.Platform = process.platform,
+): { command: string; args: string[]; shell: false; env: NodeJS.ProcessEnv } {
+  return getBundledPnpmCommand(['run', runScript]);
 }
 
 function formatSpawnError(error: NodeJS.ErrnoException): string {
   if (error.code === 'ENOENT' || error.code === 'EINVAL') {
-    return 'Could not start the project because pnpm could not be launched.';
+    return 'Could not start the project because Workstation\'s bundled project runtime could not be launched.';
   }
 
   return error.message || String(error);
@@ -315,6 +312,12 @@ export async function getProjectStatus(
 ): Promise<{ success: boolean; state: ProjectRunnerState }> {
   const workspace = getCurrentWorkspace();
   const resolvedPath = normalizeProjectKey(resolvePathWithWorkspace(projectPath, workspace));
+  return getProjectStatusAtResolvedPath(resolvedPath);
+}
+
+async function getProjectStatusAtResolvedPath(
+  resolvedPath: string,
+): Promise<{ success: boolean; state: ProjectRunnerState }> {
   const runtime = runtimes.get(resolvedPath);
 
   if (!runtime || runtime.finalized) {
@@ -333,11 +336,16 @@ export async function getProjectStatus(
 export async function startProject(
   projectPath: string,
 ): Promise<{ success: boolean; state: ProjectRunnerState; error?: string }> {
-  registerCleanup();
-
   const workspace = getCurrentWorkspace();
   const resolvedPath = resolvePathWithWorkspace(projectPath, workspace);
-  const normalizedPath = normalizeProjectKey(resolvedPath);
+  return startProjectAtResolvedPath(normalizeProjectKey(resolvedPath));
+}
+
+async function startProjectAtResolvedPath(
+  normalizedPath: string,
+  envOverrides: NodeJS.ProcessEnv = {},
+): Promise<{ success: boolean; state: ProjectRunnerState; error?: string }> {
+  registerCleanup();
 
   const existingRuntime = runtimes.get(normalizedPath);
   if (existingRuntime && !existingRuntime.finalized) {
@@ -376,10 +384,11 @@ export async function startProject(
   const child = spawn(pnpmSpawn.command, pnpmSpawn.args, {
     cwd: runnableProject.projectPath,
     env: {
-      ...process.env,
+      ...pnpmSpawn.env,
       PORT: String(port),
       HOST: '127.0.0.1',
       BROWSER: 'none',
+      ...envOverrides,
     },
     stdio: 'pipe',
     detached: process.platform !== 'win32',
@@ -476,6 +485,12 @@ export async function stopProject(
 ): Promise<{ success: boolean; state: ProjectRunnerState; error?: string }> {
   const workspace = getCurrentWorkspace();
   const resolvedPath = normalizeProjectKey(resolvePathWithWorkspace(projectPath, workspace));
+  return stopProjectAtResolvedPath(resolvedPath);
+}
+
+async function stopProjectAtResolvedPath(
+  resolvedPath: string,
+): Promise<{ success: boolean; state: ProjectRunnerState; error?: string }> {
   const runtime = runtimes.get(resolvedPath);
 
   if (!runtime || runtime.finalized) {
@@ -506,3 +521,12 @@ export async function stopProject(
     state: stoppedState,
   };
 }
+
+/** Internal-only entry points for a Simple project already validated by
+ * simpleProjects.ts. Public IPC callers still pass through workspace checks.
+ */
+export const trustedProjectRunner = {
+  status: (projectPath: string) => getProjectStatusAtResolvedPath(normalizeProjectKey(projectPath)),
+  start: (projectPath: string, env?: NodeJS.ProcessEnv) => startProjectAtResolvedPath(normalizeProjectKey(projectPath), env),
+  stop: (projectPath: string) => stopProjectAtResolvedPath(normalizeProjectKey(projectPath)),
+};

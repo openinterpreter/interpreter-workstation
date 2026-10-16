@@ -28,7 +28,7 @@ export function LowerLeftNoticeViewport({
 
   const viewport = (side: 'left' | 'right') => <div
       key={side}
-      className="pointer-events-none fixed z-[2147483000] flex flex-col items-start gap-2"
+      className={`pointer-events-none fixed z-[2147483000] flex flex-col gap-2 ${side === 'right' ? 'items-end' : 'items-start'}`}
       style={side === 'right'
         ? { right: '16px', width: 'min(calc(100vw - 32px), 320px)', bottom: '16px' }
         : leftSidebarOpen
