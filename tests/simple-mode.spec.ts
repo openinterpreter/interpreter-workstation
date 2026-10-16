@@ -91,7 +91,7 @@ test('Simple Feedback remains reachable when hidden and its visibility survives 
 });
 
 test('Simple React interface is default, preserves live state, exposes its settings, and switches reversibly to Advanced', async ({ page }) => {
-  test.setTimeout(240_000); // The first Next project install/start can take over a minute.
+  test.setTimeout(300_000); // The first Next install and later development recompilation can be slow.
   await waitForAppReady(page);
   await expect(page.locator('[data-simple-shell]')).toBeVisible();
   await expect(page.getByRole('region', { name: 'Primary conversation' })).toBeVisible();
@@ -158,6 +158,12 @@ test('Simple React interface is default, preserves live state, exposes its setti
   // Next owns compilation diagnostics; exercise a valid hot edit without
   // depending on the deleted custom compiler's diagnostics.json contract.
   await writeFile(candidate, makeApp('Recovered canvas'), 'utf8');
+  // Wait for Next's server-rendered output to reflect the edit before
+  // reloading; a reload while compilation is pending can serve the old page.
+  await expect.poll(async () => {
+    const response = await page.request.get(canvas.url());
+    return response.ok() && (await response.text()).includes('Recovered canvas');
+  }, { timeout: 90_000 }).toBe(true);
   // A reload is a supported Next refresh outcome and exercises bridge state
   // restoration even when this headless Electron host does not receive HMR.
   await canvas.goto(canvas.url());
