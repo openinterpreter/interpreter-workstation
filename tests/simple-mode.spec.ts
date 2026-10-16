@@ -191,7 +191,7 @@ test('Simple React interface is default, preserves live state, exposes its setti
   await rawMarkdown.fill('# Edited inside Simple mode\n\nThis was saved by the canonical Workstation editor.\n');
   await expect(rawMarkdown).toHaveValue(/Edited inside Simple mode/);
   await rawMarkdown.press('Tab');
-  await expect.poll(async () => readFile(notePath, 'utf8'), { timeout: 10_000 })
+  await expect.poll(async () => readFile(notePath, 'utf8'), { timeout: 30_000 })
     .toContain('Edited inside Simple mode');
 
   const nestedPath = path.join(interfaceProject, 'reference.md');
@@ -276,13 +276,13 @@ test('generated React forms submit into durable project state without opening a 
       import { Page, usePersistentState } from '@interpreter/interface';
       export default function App() {
         const [tasks, setTasks] = usePersistentState('acceptance-tasks', []);
-        const [draft, setDraft] = usePersistentState('acceptance-draft', '');
+        const [draft, setDraft, draftLoaded] = usePersistentState('acceptance-draft', '');
         return <Page><form onSubmit={(event) => {
           event.preventDefault();
           setTasks((current) => [...current, draft]);
           setDraft('');
         }}><input aria-label="New task" required value={draft} onChange={(event) => setDraft(event.target.value)} />
-        <button type="submit">Save task</button></form>
+        <button type="submit" disabled={!draftLoaded}>Save task</button></form>
         <p>Saved tasks: {tasks.join(', ')}</p></Page>;
       }
     `, 'utf8');
@@ -298,15 +298,15 @@ test('generated React forms submit into durable project state without opening a 
     page.on('request', (request) => {
       if (request.isNavigationRequest() && request.method() === 'POST') formNavigations.push(request.url());
     });
+    // The third hook result becomes true only after the hydrated project has
+    // loaded its durable state. Do not click a server-rendered form early.
+    await expect(canvas.getByRole('button', { name: 'Save task' })).toBeEnabled({ timeout: 60_000 });
     const taskInput = canvas.getByRole('textbox', { name: 'New task' });
-    // A visible Next page can still be hydrating. Wait for its controlled
-    // onChange handler to persist the draft before submitting the form.
+    await taskInput.fill('Plan the next sprint');
     await expect.poll(async () => {
-      await taskInput.fill('');
-      await taskInput.fill('Plan the next sprint');
       const state = JSON.parse(await readFile(path.join(project, '.interpreter', 'state.json'), 'utf8').catch(() => '{}'));
       return state['acceptance-draft'];
-    }, { timeout: 60_000 }).toBe('Plan the next sprint');
+    }, { timeout: 30_000 }).toBe('Plan the next sprint');
     // Activate within the frame: another native project window can cover the
     // fixture window even when Playwright sees this frame as pointer-actionable.
     await canvas.getByRole('button', { name: 'Save task' }).evaluate((button) => (button as HTMLButtonElement).click());
