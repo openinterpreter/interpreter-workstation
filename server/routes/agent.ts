@@ -206,6 +206,18 @@ router.put('/threads/:threadId/wake-sources/:sourceId', async (req: Request, res
   } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid source.' }); }
 });
 
+for (const action of ['pause', 'resume'] as const) {
+  router.post(`/threads/:threadId/wake-sources/:sourceId/${action}`, async (req: Request, res: Response) => {
+    if (!wakeMutationAllowed(req)) return res.status(403).json({ error: 'Local same-origin request required.' });
+    try {
+      await readyWakeSources();
+      await getCodexService().readThread(req.params.threadId);
+      const source = await wakeSources[action](req.params.threadId, req.params.sourceId);
+      res.json({ source });
+    } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid source.' }); }
+  });
+}
+
 router.delete('/threads/:threadId/wake-sources/:sourceId', async (req: Request, res: Response) => {
   if (!wakeMutationAllowed(req)) return res.status(403).json({ error: 'Local same-origin request required.' });
   try { await readyWakeSources(); await wakeSources.cancel(req.params.threadId, req.params.sourceId); res.json({ ok: true }); }
