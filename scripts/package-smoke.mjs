@@ -243,8 +243,8 @@ const result = spawnSync(process.execPath, [cliPath, '--version'], {
 if (result.status !== 0) {
   throw new Error(result.stderr || result.stdout || 'bundled pnpm failed');
 }
-if (result.stdout.trim() !== '9.15.9') {
-  throw new Error('expected bundled pnpm 9.15.9, received ' + result.stdout.trim());
+if (result.stdout.trim() !== '10.34.5') {
+  throw new Error('expected bundled pnpm 10.34.5, received ' + result.stdout.trim());
 }
 process.stdout.write(${JSON.stringify(`${PACKAGE_SMOKE_PROJECT_RUNTIME_SENTINEL}\n`)});
 `, 'utf8');
