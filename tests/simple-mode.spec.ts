@@ -308,7 +308,9 @@ test('generated React forms submit into durable project state without opening a 
       return state['acceptance-tasks'];
     }).toEqual(['Plan the next sprint']);
   } finally {
-    await rm(sandboxRoot, { recursive: true, force: true });
+    // Next's dev watcher may still be writing its build directory as the
+    // fixture is removed. fs.rm retries transient ENOTEMPTY races here.
+    await rm(sandboxRoot, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
 });
 
