@@ -294,9 +294,10 @@ test('generated React forms submit into durable project state without opening a 
     const canvas = await waitForInterfaceFrame(page, async (frame) =>
       await frame.getByRole('button', { name: 'Save task' }).isVisible());
     await expect(page.locator('iframe[data-simple-interface-frame]').last()).toHaveAttribute('sandbox', /allow-forms/);
-    const policy = (await page.request.get(canvas.url())).headers()['content-security-policy'];
-    expect(policy).toMatch(/form-action [^;]+\/api\/simple-interface\/app\/index\.html;/);
-    expect(policy).not.toContain("form-action 'self'");
+    const formNavigations: string[] = [];
+    page.on('request', (request) => {
+      if (request.isNavigationRequest() && request.method() === 'POST') formNavigations.push(request.url());
+    });
     await canvas.getByRole('textbox', { name: 'New task' }).fill('Plan the next sprint');
     // Activate within the frame: another native project window can cover the
     // fixture window even when Playwright sees this frame as pointer-actionable.
@@ -307,6 +308,7 @@ test('generated React forms submit into durable project state without opening a 
       const state = JSON.parse(await readFile(path.join(project, '.interpreter', 'state.json'), 'utf8'));
       return state['acceptance-tasks'];
     }).toEqual(['Plan the next sprint']);
+    expect(formNavigations).toEqual([]);
   } finally {
     // Next's dev watcher may still be writing its build directory as the
     // fixture is removed. fs.rm retries transient ENOTEMPTY races here.
