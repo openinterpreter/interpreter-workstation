@@ -1,5 +1,5 @@
 import React, { forwardRef, useImperativeHandle } from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { MarkdownViewer } from './MarkdownViewer';
@@ -180,6 +180,68 @@ describe('MarkdownViewer', () => {
     });
 
     expect((screen.getByPlaceholderText('markdown.placeholder') as HTMLTextAreaElement).value).toBe(editedMarkdown);
+  });
+
+  test('saves a pending raw edit as soon as the editor loses focus', async () => {
+    apiMocks.readFile.mockResolvedValue({ content: LARGE_MARKDOWN });
+    apiMocks.writeFile.mockResolvedValue(undefined);
+    render(<MarkdownViewer filePath="/workspace/Full-Markdown.md" />);
+
+    const rawEditor = await screen.findByPlaceholderText('markdown.placeholder');
+    const editedMarkdown = `${LARGE_MARKDOWN}\nSaved on blur`;
+    fireEvent.change(rawEditor, { target: { value: editedMarkdown } });
+    fireEvent.blur(rawEditor);
+
+    expect(apiMocks.writeFile).toHaveBeenCalledWith('/workspace/Full-Markdown.md', editedMarkdown);
+  });
+
+  test('does not discard a pending raw edit when a live interface remounts the viewer', async () => {
+    apiMocks.readFile.mockResolvedValue({ content: LARGE_MARKDOWN });
+    apiMocks.writeFile.mockResolvedValue(undefined);
+    const { unmount } = render(<MarkdownViewer filePath="/workspace/Full-Markdown.md" />);
+
+    const rawEditor = await screen.findByPlaceholderText('markdown.placeholder');
+    const editedMarkdown = `${LARGE_MARKDOWN}\nSaved on unmount`;
+    fireEvent.change(rawEditor, { target: { value: editedMarkdown } });
+    unmount();
+
+    await waitFor(() => expect(apiMocks.writeFile).toHaveBeenCalledWith('/workspace/Full-Markdown.md', editedMarkdown));
+  });
+
+  test('finishes a newer raw edit after an in-flight save and a viewer remount', async () => {
+    apiMocks.readFile.mockResolvedValue({ content: LARGE_MARKDOWN });
+    let finishFirstSave!: () => void;
+    apiMocks.writeFile
+      .mockImplementationOnce(() => new Promise<void>((resolve) => { finishFirstSave = resolve; }))
+      .mockResolvedValue(undefined);
+    const { unmount } = render(<MarkdownViewer filePath="/workspace/Full-Markdown.md" />);
+
+    const rawEditor = await screen.findByPlaceholderText('markdown.placeholder');
+    fireEvent.change(rawEditor, { target: { value: `${LARGE_MARKDOWN}\nfirst edit` } });
+    fireEvent.blur(rawEditor);
+    expect(apiMocks.writeFile).toHaveBeenCalledTimes(1);
+
+    const latestContent = `${LARGE_MARKDOWN}\nlast edit`;
+    fireEvent.change(rawEditor, { target: { value: latestContent } });
+    unmount();
+    await act(async () => { finishFirstSave(); });
+
+    await waitFor(() => expect(apiMocks.writeFile).toHaveBeenLastCalledWith('/workspace/Full-Markdown.md', latestContent));
+    expect(apiMocks.writeFile).toHaveBeenCalledTimes(2);
+  });
+
+  test('saves the previous file, not the next file, when an editor changes paths', async () => {
+    apiMocks.readFile.mockResolvedValue({ content: LARGE_MARKDOWN });
+    apiMocks.writeFile.mockResolvedValue(undefined);
+    const { rerender } = render(<MarkdownViewer filePath="/workspace/first.md" />);
+
+    const rawEditor = await screen.findByPlaceholderText('markdown.placeholder');
+    const editedMarkdown = `${LARGE_MARKDOWN}\nold file edit`;
+    fireEvent.change(rawEditor, { target: { value: editedMarkdown } });
+    rerender(<MarkdownViewer filePath="/workspace/second.md" />);
+
+    await waitFor(() => expect(apiMocks.writeFile).toHaveBeenCalledWith('/workspace/first.md', editedMarkdown));
+    expect(apiMocks.writeFile).not.toHaveBeenCalledWith('/workspace/second.md', editedMarkdown);
   });
 
   test('renders markdown and frontmatter without editing controls in read-only mode', async () => {

@@ -69,7 +69,7 @@ test('Simple Feedback remains reachable when hidden and its visibility survives 
   test.setTimeout(90_000); // Renderer reload can exceed the suite default on a constrained host.
   await waitForAppReady(page);
   await expect(page.locator('[data-simple-shell]')).toBeVisible();
-  await page.getByRole('button', { name: 'Open Settings' }).click();
+  await page.getByRole('button', { name: 'Open Settings', exact: true }).click();
   const toggle = page.getByRole('switch', { name: 'Show Feedback button' });
   await expect(toggle).toBeVisible();
   if (await toggle.getAttribute('aria-checked') === 'false') await toggle.click();
@@ -83,7 +83,7 @@ test('Simple Feedback remains reachable when hidden and its visibility survives 
   await reloadAndWaitForPageLoadSignals(page);
   await waitForAppReady(page);
   await expect(page.getByTestId('feedback-button')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Open Settings' }).click();
+  await page.getByRole('button', { name: 'Open Settings', exact: true }).click();
   const restoredToggle = page.getByRole('switch', { name: 'Show Feedback button' });
   await expect(restoredToggle).toHaveAttribute('aria-checked', 'false');
   await restoredToggle.click();
@@ -170,13 +170,16 @@ test('Simple React interface is default, preserves live state, exposes its setti
   canvas = await waitForInterfaceFrame(page, async (frame) =>
     await frame.getByRole('heading', { name: 'Recovered canvas' }).isVisible());
   await expect(canvas.getByRole('heading', { name: 'Recovered canvas' })).toBeVisible({ timeout: 15000 });
-  await expect(canvas.getByRole('textbox', { name: 'Persistent note' })).toHaveValue('survives hot reload');
+  // The new Next document hydrates its project state through the host bridge.
+  // Assert the restored value, rather than assuming it arrives within the
+  // default five-second locator deadline on a shared Electron CI worker.
+  await expect(canvas.getByRole('textbox', { name: 'Persistent note' })).toHaveValue('survives hot reload', { timeout: 30_000 });
   await page.reload();
   await waitForAppReady(page);
   canvas = await waitForInterfaceFrame(page, async (frame) =>
     await frame.getByRole('heading', { name: 'Recovered canvas' }).isVisible());
   await expect(canvas.getByRole('heading', { name: 'Recovered canvas' })).toBeVisible({ timeout: 15000 });
-  await expect(canvas.getByRole('textbox', { name: 'Persistent note' })).toHaveValue('survives hot reload');
+  await expect(canvas.getByRole('textbox', { name: 'Persistent note' })).toHaveValue('survives hot reload', { timeout: 30_000 });
 
   const notePath = path.join(interfaceProject, 'note.md');
   await writeFile(notePath, '# Canonical Markdown\n\nEditable in Workstation.\n', 'utf8');
@@ -197,6 +200,7 @@ test('Simple React interface is default, preserves live state, exposes its setti
   await rawMarkdown.fill('# Edited inside Simple mode\n\nThis was saved by the canonical Workstation editor.\n');
   await expect(rawMarkdown).toHaveValue(/Edited inside Simple mode/);
   await rawMarkdown.press('Tab');
+  await expect(rawMarkdown).not.toBeFocused();
   await expect.poll(async () => readFile(notePath, 'utf8'), { timeout: 30_000 })
     .toContain('Edited inside Simple mode');
 
@@ -237,9 +241,9 @@ test('Simple React interface is default, preserves live state, exposes its setti
   canvas = await waitForInterfaceFrame(page, async (frame) =>
     await frame.getByRole('heading', { name: 'Recovered canvas' }).isVisible());
   await expect(canvas.getByRole('heading', { name: 'Recovered canvas' })).toBeVisible({ timeout: 15_000 });
-  await expect(canvas.getByRole('textbox', { name: 'Persistent note' })).toHaveValue('survives hot reload');
+  await expect(canvas.getByRole('textbox', { name: 'Persistent note' })).toHaveValue('survives hot reload', { timeout: 30_000 });
 
-  await page.getByRole('button', { name: 'Open Settings' }).click();
+  await page.getByRole('button', { name: 'Open Settings', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'GPT Live' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'WhatsApp' })).toBeVisible();
   await expect(page.getByRole('radiogroup', { name: 'Appearance' })).toBeVisible();
