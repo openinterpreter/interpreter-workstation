@@ -25,7 +25,7 @@ usable without a hosted account.
 
 ## Agent and generated-app runtime backends
 
-**Current protected-main source, not an installed-fleet claim.** Desktop Simple
+**Current protected-main source, not an installed-package claim.** Desktop Simple
 mode displays a generated, filesystem-backed application beside one persistent
 conversation. Its **first-class desktop target is a full-stack Next.js
 project**, not a restricted esbuild-only React preview. Workstation supplies
