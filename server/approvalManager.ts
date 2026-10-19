@@ -700,6 +700,48 @@ class ApprovalManager {
     return Array.from(this.requests.keys()).sort();
   }
 
+  /** Exact-ID metadata only; never return arguments, questions, or request context. */
+  getPendingApprovalCustody(
+    id: string,
+    scope: { threadId: string } | { cliUnbound: true },
+  ): {
+    id: string;
+    status: 'pending';
+    toolName: string;
+    owner: {
+      kind: ApprovalOwnerKind;
+      threadId: string | null;
+      windowSessionKey: string | null;
+      workspacePath: string | null;
+    };
+  } | null {
+    const request = this.requests.get(id);
+    const owner = request?.owner;
+    if (!request || !owner) return null;
+    const ownerThreadId = owner.identity.threadId ?? null;
+    if (ownerThreadId) {
+      if (!('threadId' in scope) || ownerThreadId !== scope.threadId) return null;
+    } else if (!('cliUnbound' in scope) || owner.approvalOwnerKind !== 'cli') {
+      return null;
+    }
+    // Tool names are registered identifiers, not provider prose. Fail closed
+    // if an unexpected caller put freeform content in this field.
+    if (!/^[A-Za-z0-9_.:-]{1,120}$/.test(request.toolName)) {
+      throw new Error('Invalid approval tool identifier');
+    }
+    return {
+      id: request.id,
+      status: 'pending',
+      toolName: request.toolName,
+      owner: {
+        kind: owner.approvalOwnerKind,
+        threadId: ownerThreadId,
+        windowSessionKey: owner.identity.windowSessionKey,
+        workspacePath: owner.identity.workspacePath,
+      },
+    };
+  }
+
   /**
    * Backwards compatibility - alias for getRequests
    */
