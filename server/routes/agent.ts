@@ -153,6 +153,33 @@ router.get('/custody/global', (req: Request, res: Response) => {
   }
 });
 
+// An exact opaque ID is required. The thread must match its captured owner;
+// a CLI request with no thread binding needs an explicit unbound query instead.
+router.get('/custody/approvals/:approvalId', (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  const { approvalId } = req.params;
+  const threadId = req.query.threadId;
+  const cliUnbound = req.query.cliUnbound;
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(approvalId) ||
+      (threadId === undefined && cliUnbound !== '1') ||
+      (threadId !== undefined && cliUnbound !== undefined) ||
+      (threadId !== undefined && (typeof threadId !== 'string' ||
+        !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId)))) {
+    return res.status(400).json({ error: 'Exact approval and owner scope required.' });
+  }
+  try {
+    const scope = threadId === undefined ? { cliUnbound: true as const } : { threadId: threadId as string };
+    const metadata = approvalManager.getPendingApprovalCustody(approvalId, scope);
+    if (!metadata) return res.status(404).json({ error: 'Pending approval not found in scope.' });
+    return res.json(metadata);
+  } catch {
+    return res.status(503).json({ error: 'Approval custody inspection unavailable.' });
+  }
+});
+
 function wakeMutationAllowed(req: Request): boolean {
   const address = req.socket.remoteAddress;
   if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address ?? '')) return false;
