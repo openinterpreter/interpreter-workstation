@@ -105,6 +105,7 @@ import {
   getMainAgentDeveloperPrompt,
 } from '../utils/mainAgentPrompt';
 import { agentTabManager } from '../agentTabManager';
+import { approvalManager } from '../approvalManager';
 import {
   buildInterpreterCliShellEnvironmentPolicy,
   ensureInterpreterCliLauncher,
@@ -126,6 +127,31 @@ import {
 } from '../utils/threadHistoryPagination';
 
 const router = Router();
+
+// This is intentionally separate from renderer-scoped lists: an empty result
+// here means every in-process queue was checked, not merely the current tab.
+router.get('/custody/global', (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  try {
+    const appQueues = messageQueueStore.getCustodyInventory();
+    const tabs = agentTabManager.getGlobalCustodyInventory();
+    const approvalIds = approvalManager.getGlobalPendingRequestIds();
+    return res.json({
+      scope: 'all-in-process',
+      appQueues,
+      pendingTabRequests: { count: tabs.pendingRequestIds.length, requestIds: tabs.pendingRequestIds },
+      pendingTabStartups: { count: tabs.pendingStartupIds.length, requestIds: tabs.pendingStartupIds },
+      createdTabRequests: { count: tabs.createdRequestIds.length, requestIds: tabs.createdRequestIds },
+      pendingApprovals: { count: approvalIds.length, requestIds: approvalIds },
+      nativeQueueScope: 'thread-only',
+    });
+  } catch {
+    return res.status(503).json({ error: 'Global custody inspection unavailable.' });
+  }
+});
 
 function wakeMutationAllowed(req: Request): boolean {
   const address = req.socket.remoteAddress;

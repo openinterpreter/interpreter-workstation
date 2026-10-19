@@ -746,6 +746,19 @@ class AgentTabManager {
     }));
   }
 
+  /** Does not apply renderer window/workspace filtering or expose request content. */
+  getGlobalCustodyInventory(): {
+    pendingRequestIds: string[];
+    pendingStartupIds: string[];
+    createdRequestIds: string[];
+  } {
+    return {
+      pendingRequestIds: Array.from(this.pendingRequests.keys()).sort(),
+      pendingStartupIds: Array.from(this.pendingStartups.keys()).sort(),
+      createdRequestIds: Array.from(this.createdRequests.keys()).sort(),
+    };
+  }
+
   /**
    * Check if a request exists
    * @param requestId The request ID

@@ -695,6 +695,11 @@ class ApprovalManager {
     return this.getRequestsForContext(context, toolCallId);
   }
 
+  /** Unscoped metadata for the authenticated local custody diagnostic only. */
+  getGlobalPendingRequestIds(): string[] {
+    return Array.from(this.requests.keys()).sort();
+  }
+
   /**
    * Backwards compatibility - alias for getRequests
    */
