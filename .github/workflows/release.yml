@@ -140,7 +140,13 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev \
             libopenblas-dev
+      - run: ./scripts/ci/install-windows-deps.ps1
+        if: matrix.os == 'windows'
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - run: pnpm install --frozen-lockfile
+        if: matrix.os != 'windows'
         env:
           # @vscode/ripgrep downloads through the GitHub API. Scope this
           # read-only token to dependency installation instead of the job.

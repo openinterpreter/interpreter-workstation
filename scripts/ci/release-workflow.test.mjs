@@ -131,7 +131,11 @@ test('the GitHub read token is scoped to dependency installation', () => {
   assert.doesNotMatch(verify.slice(0, verify.indexOf('    steps:')), /GITHUB_TOKEN:/);
   assert.doesNotMatch(build.slice(0, build.indexOf('    steps:')), /GITHUB_TOKEN:/);
   assert.equal((verify.match(/GITHUB_TOKEN:/g) ?? []).length, 1);
-  assert.equal((build.match(/GITHUB_TOKEN:/g) ?? []).length, 1);
+  // Windows and non-Windows installs are mutually exclusive. Each receives
+  // only the read token needed during dependency installation.
+  assert.equal((build.match(/GITHUB_TOKEN:/g) ?? []).length, 2);
+  assert.match(build, /install-windows-deps\.ps1\n\s+if: matrix\.os == 'windows'\n\s+shell: pwsh\n\s+env:\n\s+GITHUB_TOKEN:/);
+  assert.match(build, /pnpm install --frozen-lockfile\n\s+if: matrix\.os != 'windows'\n\s+env:[\s\S]*?GITHUB_TOKEN:/);
 });
 
 test('installed clients discover a release only after GitHub publication', () => {

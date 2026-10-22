@@ -114,7 +114,8 @@ jobs:
         run: |
           npm install --global node-gyp@12.3.0
           "npm_config_node_gyp=$(npm root --global)\node-gyp\bin\node-gyp.js" >> $env:GITHUB_ENV
-      - run: pnpm install --frozen-lockfile
+      - run: ./scripts/ci/install-windows-deps.ps1
+        shell: pwsh
       - run: pnpm run download:oix -- --current-platform
       - run: pnpm run test:e2e:voice:ci
       - name: Upload voice test diagnostics
@@ -164,7 +165,11 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libx11-dev libxi-dev libxtst-dev libxext-dev libwayland-dev \
             libopenblas-dev
+      - run: ./scripts/ci/install-windows-deps.ps1
+        if: runner.os == 'Windows'
+        shell: pwsh
       - run: pnpm install --frozen-lockfile
+        if: runner.os != 'Windows'
       - run: pnpm run download:oix -- --current-platform
       - run: pnpm run download:pdfcpu -- --current-platform
       - run: pnpm run download:qwen-asr -- --current-platform
