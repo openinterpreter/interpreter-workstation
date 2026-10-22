@@ -6,13 +6,15 @@ const script = readFileSync(new URL('./install-windows-deps.ps1', import.meta.ur
 const ci = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8');
 const release = readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8');
 
-test('Windows native install uses a short spelling of the same checkout and default virtual store', () => {
+test('Windows native install uses a short, job-local virtual store', () => {
   assert.match(script, /Test-Path -LiteralPath \$env:GITHUB_WORKSPACE -PathType Container/);
-  assert.match(script, /Test-Path -LiteralPath 'W:\\'/);
-  assert.match(script, /subst W: \$env:GITHUB_WORKSPACE/);
-  assert.match(script, /Push-Location 'W:\\'/);
-  assert.match(script, /pnpm install --frozen-lockfile/);
-  assert.doesNotMatch(script, /--virtual-store-dir/);
+  assert.match(script, /GetPathRoot\(\$env:GITHUB_WORKSPACE\)/);
+  assert.match(script, /pnpm install --frozen-lockfile --virtual-store-dir \$virtualStore/);
+});
+
+test('the dynamic import used by the native package has a declared dependency', () => {
+  const manifest = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
+  assert.equal(manifest.pnpm.packageExtensions['@oxidezap/baileyrs@0.0.32'].dependencies['music-metadata'], manifest.dependencies['music-metadata']);
 });
 
 test('CI and official release select the Windows path without moving non-Windows installs', () => {

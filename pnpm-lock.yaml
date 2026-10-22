@@ -38,6 +38,8 @@ overrides:
   ws: 8.21.3
   underscore@<1.13.8: 1.13.8
 
+packageExtensionsChecksum: 2b3265d3d456d0397467fe1ce3aac9b2
+
 patchedDependencies:
   '@jimp/core@0.22.12':
     hash: zqjtxrubbw43dgsuhwiy3xn5ta
@@ -10001,11 +10003,14 @@ snapshots:
     dependencies:
       '@hapi/boom': 9.1.4
       long: 5.3.2
+      music-metadata: 11.15.0
       pino: 10.3.1
       protobufjs: 7.6.5
       whatsapp-rust-bridge: 0.6.0-alpha.42(patch_hash=yh4pqya7t45lhhrwczokoiso5u)
     optionalDependencies:
       sharp: 0.35.5(@types/node@24.9.1)
+    transitivePeerDependencies:
+      - supports-color
 
   '@paralleldrive/cuid2@2.3.1':
     dependencies:

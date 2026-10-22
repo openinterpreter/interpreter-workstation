@@ -1,19 +1,16 @@
 $ErrorActionPreference = 'Stop'
 
 # Native node-gyp builds exceed CL.exe's path limit under the hosted runner's
-# nested checkout. Keep pnpm's default virtual store INSIDE node_modules so
-# peer resolution is unchanged; access the same checkout through a short
-# runner-local drive spelling while native install scripts compile.
+# nested checkout. Keep a job-local virtual store on the workspace drive root.
+# Package extensions declare dependencies imported by third-party packages so
+# module resolution does not depend on hoisting from the project node_modules.
 if (-not $env:GITHUB_WORKSPACE -or -not (Test-Path -LiteralPath $env:GITHUB_WORKSPACE -PathType Container)) {
   throw 'A verified runner workspace is required'
 }
-if (Test-Path -LiteralPath 'W:\') { throw 'Short CI drive W: is already in use' }
-& subst W: $env:GITHUB_WORKSPACE
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-Push-Location 'W:\'
-try {
-  pnpm install --frozen-lockfile
-  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-} finally {
-  Pop-Location
+$driveRoot = [System.IO.Path]::GetPathRoot($env:GITHUB_WORKSPACE)
+if (-not $driveRoot -or -not (Test-Path -LiteralPath $driveRoot)) {
+  throw 'A verified runner workspace drive is required'
 }
+$virtualStore = Join-Path $driveRoot 'workstation-pnpm-ci'
+pnpm install --frozen-lockfile --virtual-store-dir $virtualStore
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

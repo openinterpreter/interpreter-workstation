@@ -335,6 +335,13 @@
     "zod": "4.6.5"
   },
   "pnpm": {
+    "packageExtensions": {
+      "@oxidezap/baileyrs@0.0.32": {
+        "dependencies": {
+          "music-metadata": "11.15.0"
+        }
+      }
+    },
     "overrides": {
       "http-cache-semantics": "4.3.0",
       "@moonshine-ai/moonshine-js>@ricky0123/vad-web": "0.0.30",
