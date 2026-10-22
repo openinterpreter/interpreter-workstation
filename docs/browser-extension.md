@@ -39,6 +39,12 @@ pnpm run ensure:browser-extension-relay-assets
 
 The staged directory is gitignored on purpose and should be treated like build output.
 
+`pnpm run build:electron` also prepares this runtime. A deployment that invokes
+`build:renderer` and `build:electron` separately must still contain the generated
+`resources/browser-extension-relay` payload; a renderer/Electron bundle alone
+does not start the browser bridge. Verify the runtime manifest, relay entry,
+and extension manifest in the staged release before switching a running host.
+
 ## Why This Is Separate From The Overlay Benchmarks
 
 The private benchmark suite exercises the overlay runtime against realistic GUI tasks.

@@ -69,7 +69,7 @@
     "build:dev-prep": "pnpm run ensure:js-repl-runtime-assets && pnpm run ensure:browser-extension-relay-assets && pnpm run build:electron",
     "build:locked": "node scripts/build-with-lock.cjs",
     "build:renderer": "cross-env NODE_ENV=production vite build",
-    "build:electron": "cross-env NODE_ENV=production node build-electron.mjs",
+    "build:electron": "pnpm run ensure:browser-extension-relay-assets && cross-env NODE_ENV=production node build-electron.mjs",
     "ensure:codex-generated-types": "node scripts/ensure-codex-generated-types.mjs",
     "download:oix": "node scripts/download-oix.mjs",
     "download:pdfcpu": "node scripts/download-pdfcpu.mjs",
