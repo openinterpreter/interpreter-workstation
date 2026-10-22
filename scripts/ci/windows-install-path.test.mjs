@@ -26,10 +26,11 @@ test('CI and official release select the Windows path without moving non-Windows
   assert.match(release, /if: matrix\.os == 'windows'/);
 });
 
-test('Electron fixtures use the installed executable, not Playwright implicit lookup', () => {
+test('Electron fixtures resolve the installed executable only on Windows', () => {
   for (const relativePath of ['../../tests/electron-instance.ts', '../../tests/global-setup.ts']) {
     const source = readFileSync(new URL(relativePath, import.meta.url), 'utf8');
     assert.match(source, /createRequire\(path\.resolve\(process\.cwd\(\), ['"]package\.json['"]\)\)\(['"]electron['"]\)/);
-    assert.match(source, /electron\.launch\(\{\s*executablePath,/);
+    assert.match(source, /process\.platform === ['"]win32['"]/);
+    assert.match(source, /electron\.launch\(\{\s*\.\.\.\(executablePath \? \{ executablePath \} : \{\}\),/);
   }
 });

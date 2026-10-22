@@ -366,17 +366,19 @@ class ElectronInstanceManager {
       launchEnv.SHOW_WINDOW = "1";
     }
 
-    // Resolve the installed Electron binary through this project's package.
-    // Playwright's implicit lookup can miss pnpm's isolated virtual store.
-    const executablePath = createRequire(path.resolve(process.cwd(), "package.json"))("electron") as string;
-    if (!fs.existsSync(executablePath)) {
+    // Windows CI uses a short external pnpm virtual store, which Playwright's
+    // implicit lookup can miss. Keep Playwright's proven default on other OSes.
+    const executablePath = process.platform === "win32"
+      ? createRequire(path.resolve(process.cwd(), "package.json"))("electron") as string
+      : undefined;
+    if (executablePath && !fs.existsSync(executablePath)) {
       throw new Error("Installed Electron test executable is unavailable");
     }
     const app = await electron.launch({
-      executablePath,
+      ...(executablePath ? { executablePath } : {}),
       args,
       env: launchEnv,
-      timeout: 600000,
+      timeout: 90000,
     });
 
     // Track when app exits so we know to re-launch

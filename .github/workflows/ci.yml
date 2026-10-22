@@ -119,6 +119,9 @@ jobs:
         shell: pwsh
       - run: pnpm run download:oix -- --current-platform
       - run: pnpm run test:e2e:voice:ci
+        env:
+          # Runner-only browser launch diagnostics; no account or provider calls.
+          DEBUG: pw:browser*
       - name: Upload voice test diagnostics
         if: failure()
         uses: actions/upload-artifact@v7
