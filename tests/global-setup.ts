@@ -1,6 +1,7 @@
 import { _electron as electron } from '@playwright/test';
 import path from 'path';
 import fs from 'fs';
+import { createRequire } from 'node:module';
 import { getTestRunDir } from './test-recorder';
 import { getTestConfig } from './test-config';
 
@@ -16,7 +17,12 @@ async function globalSetup() {
 
   console.log(`📝 Session log: ${sessionLogPath}`);
 
+  const executablePath = createRequire(path.resolve(process.cwd(), 'package.json'))('electron') as string;
+  if (!fs.existsSync(executablePath)) {
+    throw new Error('Installed Electron test executable is unavailable');
+  }
   const electronApp = await electron.launch({
+    executablePath,
     args: [
       getTestConfig().electronMainPath,
       '--no-sandbox',

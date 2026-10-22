@@ -5,6 +5,7 @@ import { execFileSync, execSync } from "child_process";
 import { getTestRunDir } from "./test-recorder";
 import { getTestConfig } from "./test-config";
 import fs from "fs";
+import { createRequire } from "node:module";
 import {
   buildTestElectronLaunchArgs,
   PLAYWRIGHT_ELECTRON_DESKTOP_CAPTURABLE_ENV,
@@ -365,7 +366,14 @@ class ElectronInstanceManager {
       launchEnv.SHOW_WINDOW = "1";
     }
 
+    // Resolve the installed Electron binary through this project's package.
+    // Playwright's implicit lookup can miss pnpm's isolated virtual store.
+    const executablePath = createRequire(path.resolve(process.cwd(), "package.json"))("electron") as string;
+    if (!fs.existsSync(executablePath)) {
+      throw new Error("Installed Electron test executable is unavailable");
+    }
     const app = await electron.launch({
+      executablePath,
       args,
       env: launchEnv,
       timeout: 600000,
