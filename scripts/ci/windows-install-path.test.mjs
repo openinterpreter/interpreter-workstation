@@ -24,6 +24,7 @@ test('CI and official release select the Windows path without moving non-Windows
   }
   assert.match(ci, /if: runner\.os == 'Windows'/);
   assert.match(release, /if: matrix\.os == 'windows'/);
+  assert.match(ci, /test:e2e:voice:ci\n\s+env:[\s\S]*?PLAYWRIGHT_ELECTRON_DESKTOP_CAPTURABLE: '1'/);
 });
 
 test('Electron fixtures resolve the installed executable only on Windows', () => {

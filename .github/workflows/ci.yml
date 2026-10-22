@@ -122,6 +122,9 @@ jobs:
         env:
           # Runner-only browser launch diagnostics; no account or provider calls.
           DEBUG: pw:browser*
+          # Use the existing Windows Playwright compositing policy so CDP can
+          # observe the launched BrowserWindow, not the production GPU policy.
+          PLAYWRIGHT_ELECTRON_DESKTOP_CAPTURABLE: '1'
       - name: Upload voice test diagnostics
         if: failure()
         uses: actions/upload-artifact@v7
