@@ -6,13 +6,10 @@ const script = readFileSync(new URL('./install-windows-deps.ps1', import.meta.ur
 const ci = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8');
 const release = readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8');
 
-test('Windows native install uses a short alias of the exact job workspace', () => {
+test('Windows native install uses local hoisted dependencies without a long virtual-store path', () => {
   assert.match(script, /Test-Path -LiteralPath \$env:GITHUB_WORKSPACE -PathType Container/);
-  assert.match(script, /if \(Test-Path -LiteralPath \$shortWorkspace\)/);
-  assert.match(script, /subst \$shortDrive \$env:GITHUB_WORKSPACE/);
-  assert.match(script, /Join-Path \$shortWorkspace 'pnpm-lock.yaml'/);
-  assert.match(script, /Push-Location \$shortWorkspace/);
-  assert.match(script, /pnpm install --frozen-lockfile/);
+  assert.match(script, /pnpm install --frozen-lockfile --config\.node-linker=hoisted/);
+  assert.match(script, /node_modules\\\$name\\package\.json/);
   assert.doesNotMatch(script, /--virtual-store-dir/);
 });
 
