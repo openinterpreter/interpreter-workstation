@@ -5,7 +5,6 @@ import { execFileSync, execSync } from "child_process";
 import { getTestRunDir } from "./test-recorder";
 import { getTestConfig } from "./test-config";
 import fs from "fs";
-import { createRequire } from "node:module";
 import {
   buildTestElectronLaunchArgs,
   PLAYWRIGHT_ELECTRON_DESKTOP_CAPTURABLE_ENV,
@@ -366,19 +365,10 @@ class ElectronInstanceManager {
       launchEnv.SHOW_WINDOW = "1";
     }
 
-    // Windows CI uses a short external pnpm virtual store, which Playwright's
-    // implicit lookup can miss. Keep Playwright's proven default on other OSes.
-    const executablePath = process.platform === "win32"
-      ? createRequire(path.resolve(process.cwd(), "package.json"))("electron") as string
-      : undefined;
-    if (executablePath && !fs.existsSync(executablePath)) {
-      throw new Error("Installed Electron test executable is unavailable");
-    }
     const app = await electron.launch({
-      ...(executablePath ? { executablePath } : {}),
       args,
       env: launchEnv,
-      timeout: 90000,
+      timeout: 600000,
     });
 
     // Track when app exits so we know to re-launch

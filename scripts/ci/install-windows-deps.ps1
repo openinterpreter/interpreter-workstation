@@ -1,16 +1,29 @@
 $ErrorActionPreference = 'Stop'
 
 # Native node-gyp builds exceed CL.exe's path limit under the hosted runner's
-# nested checkout. Keep a job-local virtual store on the workspace drive root.
-# Package extensions declare dependencies imported by third-party packages so
-# module resolution does not depend on hoisting from the project node_modules.
+# nested checkout. Alias this exact job-local checkout at a short drive root,
+# retaining pnpm's normal project-local virtual store and module resolution.
 if (-not $env:GITHUB_WORKSPACE -or -not (Test-Path -LiteralPath $env:GITHUB_WORKSPACE -PathType Container)) {
   throw 'A verified runner workspace is required'
 }
-$driveRoot = [System.IO.Path]::GetPathRoot($env:GITHUB_WORKSPACE)
-if (-not $driveRoot -or -not (Test-Path -LiteralPath $driveRoot)) {
-  throw 'A verified runner workspace drive is required'
+$shortDrive = 'W:'
+$shortWorkspace = 'W:\'
+if (Test-Path -LiteralPath $shortWorkspace) {
+  throw 'Short Windows workspace drive is already assigned'
 }
-$virtualStore = Join-Path $driveRoot 'workstation-pnpm-ci'
-pnpm install --frozen-lockfile --virtual-store-dir $virtualStore
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& subst $shortDrive $env:GITHUB_WORKSPACE
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $shortWorkspace 'pnpm-lock.yaml'))) {
+  throw 'Verified short Windows workspace alias could not be established'
+}
+Push-Location $shortWorkspace
+$installExit = 1
+try {
+  pnpm install --frozen-lockfile
+  $installExit = $LASTEXITCODE
+} finally {
+  Pop-Location
+}
+if ($installExit -ne 0) { exit $installExit }
+if (-not (Test-Path -LiteralPath (Join-Path $shortWorkspace 'node_modules\.pnpm') -PathType Container)) {
+  throw 'Project-local pnpm virtual store is absent from the verified workspace'
+}
