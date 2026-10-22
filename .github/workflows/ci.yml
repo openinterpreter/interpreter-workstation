@@ -42,6 +42,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: node --test scripts/ci/release-workflow.test.mjs
+      - run: node --test scripts/ci/windows-install-path.test.mjs
       - run: pnpm run test:unit
       - run: pnpm run test:vitest
       - run: pnpm run test:qwen-download-contract
