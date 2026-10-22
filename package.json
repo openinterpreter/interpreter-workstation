@@ -221,7 +221,7 @@
     "@file-viewer/renderer-pptx": "3.1.1",
     "@file-viewer/renderer-spreadsheet": "3.1.1",
     "@file-viewer/renderer-word": "3.1.1",
-    "@modelcontextprotocol/sdk": "1.31.0",
+    "@modelcontextprotocol/sdk": "1.32.0",
     "@napi-rs/canvas": "0.1.84",
     "@nut-tree-fork/nut-js": "4.2.6",
     "@openai/agents": "0.18.0",
