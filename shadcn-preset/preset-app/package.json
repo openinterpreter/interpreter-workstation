@@ -14,7 +14,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.28.0",
-    "next": "16.3.8",
+    "next": "16.4.1",
     "radix-ui": "^1.6.7",
     "react": "19.2.8",
     "react-dom": "19.2.8",
@@ -27,7 +27,7 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "eslint": "^9.39.5",
-    "eslint-config-next": "16.3.3",
+    "eslint-config-next": "16.4.1",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3"
   },
@@ -46,7 +46,7 @@
       "@next/eslint-plugin-next>fast-glob": "npm:tinyglobby@0.2.17"
     },
     "patchedDependencies": {
-      "@next/eslint-plugin-next@16.3.3": "patches/@next__eslint-plugin-next@16.3.3.patch"
+      "@next/eslint-plugin-next@16.4.1": "patches/@next__eslint-plugin-next@16.4.1.patch"
     }
   }
 }
