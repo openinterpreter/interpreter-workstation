@@ -2362,6 +2362,10 @@ export class CodexAppServerClient {
     return this.rpcRequest(CLIENT_METHOD.threadQueueList, params);
   }
 
+  async threadLoadedList(params: v2.ThreadLoadedListParams = {}): Promise<v2.ThreadLoadedListResponse> {
+    return this.rpcRequest(CLIENT_METHOD.threadLoadedList, params);
+  }
+
   async threadSetName(params: v2.ThreadSetNameParams): Promise<v2.ThreadSetNameResponse> {
     return this.rpcRequest(CLIENT_METHOD.threadSetName, params);
   }

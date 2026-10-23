@@ -8,6 +8,7 @@ import { getCustomInstructions } from '../configStore';
 import { getServerJWT } from '../lib/jwtStore';
 import { AgentModelConfig } from '../../shared/types/model';
 import { messageQueueStore } from '../utils/messageQueueStore';
+import { readCuaProcessLockCustody } from '../utils/cuaProcessLockMetadata';
 import { cleanupACPProvider } from '../utils/acpProvider';
 import { getCurrentWorkspace, requireExistingWorkspacePath } from '../utils/workspace';
 import { setCurrentTurnMessageId } from '../utils/turnMessageIdRegistry';
@@ -150,6 +151,18 @@ router.get('/custody/global', (req: Request, res: Response) => {
     });
   } catch {
     return res.status(503).json({ error: 'Global custody inspection unavailable.' });
+  }
+});
+
+router.get('/custody/native-global', async (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  try {
+    return res.json({ native: await getCodexService().readGlobalNativeCustody(), cua: readCuaProcessLockCustody() });
+  } catch {
+    return res.status(503).json({ error: 'Native or Computer Use custody inspection unavailable.' });
   }
 });
 

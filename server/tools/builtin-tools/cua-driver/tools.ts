@@ -18,6 +18,7 @@ import type { BuiltinToolContext, BuiltinToolDefinition } from '../../builtinToo
 import type { ToolCallResponse } from '../../toolTypes';
 import { callWindowsCuaDriverTool } from './windowsUia';
 import type { BrowserControlStatus } from '../../../../shared/types/browserControl';
+import { CUA_PROCESS_LOCK_DIR, cuaLockOwnerForNewCall } from '../../../utils/cuaProcessLockMetadata';
 import {
   resolveCuaAccessPolicyMode,
   type CuaAccessPermissionKind,
@@ -51,7 +52,7 @@ const MAC_CUA_DRIVER_DAEMON_STARTUP_TIMEOUT_MS = 20_000;
 const MAC_CUA_DRIVER_TOOL_TIMEOUT_MS = 60_000;
 const MAC_CUA_DRIVER_ACTIVITY_TIMEOUT_MS = 5_000;
 const MAC_CUA_DRIVER_ACTIVITY_MAX_BUFFER = 10 * 1024 * 1024;
-const MAC_CUA_DRIVER_CALL_LOCK_DIR = path.join(os.tmpdir(), 'interpreter-desktop-driver-call.lock');
+const MAC_CUA_DRIVER_CALL_LOCK_DIR = CUA_PROCESS_LOCK_DIR;
 const MAC_CUA_DRIVER_CALL_LOCK_STALE_MS = 3 * MAC_CUA_DRIVER_TOOL_TIMEOUT_MS;
 const MAC_SELECT_OPTION_MENU_WAIT_MS = 3_000;
 const MAC_SELECT_OPTION_MENU_POLL_MS = 120;
@@ -3032,15 +3033,12 @@ async function withMacCuaDriverSerialized<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-async function acquireMacCuaDriverProcessLock(lockDir = MAC_CUA_DRIVER_CALL_LOCK_DIR): Promise<() => void> {
+async function acquireMacCuaDriverProcessLock(lockDir = MAC_CUA_DRIVER_CALL_LOCK_DIR, action = 'unknown', threadId?: string): Promise<() => void> {
   while (true) {
     try {
       fs.mkdirSync(lockDir);
       try {
-        fs.writeFileSync(path.join(lockDir, 'owner'), JSON.stringify({
-          pid: process.pid,
-          acquiredAt: Date.now(),
-        }));
+        fs.writeFileSync(path.join(lockDir, 'owner'), JSON.stringify(cuaLockOwnerForNewCall(action, threadId)));
       } catch {
         // The directory itself is the atomic lock; owner metadata is best-effort.
       }
@@ -3114,9 +3112,11 @@ export async function withMacCuaDriverApprovalAndProcessLock<T>(
   approve: () => Promise<void>,
   invoke: () => Promise<T>,
   lockDir = MAC_CUA_DRIVER_CALL_LOCK_DIR,
+  action = 'unknown',
+  threadId?: string,
 ): Promise<T> {
   await approve();
-  const release = await acquireMacCuaDriverProcessLock(lockDir);
+  const release = await acquireMacCuaDriverProcessLock(lockDir, action, threadId);
   try {
     return await withMacCuaDriverSerialized(invoke);
   } finally {
@@ -3425,6 +3425,9 @@ async function callCuaDriverCli(
     return withMacCuaDriverApprovalAndProcessLock(
       () => requestApproval(toolName, approvalArgs ?? args, context),
       () => callMacCuaDriverCli(toolName, args, context, imageOutputPath),
+      MAC_CUA_DRIVER_CALL_LOCK_DIR,
+      toolName,
+      context?.threadId,
     );
   }
   await requestApproval(toolName, approvalArgs ?? args, context);

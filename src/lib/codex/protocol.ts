@@ -48,6 +48,7 @@ export const CLIENT_METHOD = {
   threadList: "thread/list",
   threadRead: "thread/read",
   threadQueueList: "thread/queue/list",
+  threadLoadedList: "thread/loaded/list",
   modelList: "model/list",
   interpreterProviderList: "interpreter/provider/list",
   interpreterProviderSet: "interpreter/provider/set",
@@ -249,6 +250,10 @@ export type RequestMap = {
   [CLIENT_METHOD.threadQueueList]: {
     params: { threadId: string; cursor?: string | null; limit?: number | null };
     result: { data: Array<{ id: string; clientUserMessageId: string; input: unknown[] }>; nextCursor: string | null };
+  };
+  [CLIENT_METHOD.threadLoadedList]: {
+    params: v2.ThreadLoadedListParams;
+    result: v2.ThreadLoadedListResponse;
   };
   [CLIENT_METHOD.modelList]: {
     params: v2.ModelListParams;

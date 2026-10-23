@@ -333,6 +333,7 @@ export type CodexClient = {
     params: v2.WindowsSandboxSetupStartParams,
   ): Promise<v2.WindowsSandboxSetupStartResponse>;
   threadList(params?: v2.ThreadListParams): Promise<v2.ThreadListResponse>;
+  threadLoadedList(params?: v2.ThreadLoadedListParams): Promise<v2.ThreadLoadedListResponse>;
   threadRead(params: v2.ThreadReadParams): Promise<v2.ThreadReadResponse>;
   threadQueueList(params: { threadId: string; cursor?: string | null; limit?: number | null }): Promise<{
     data: Array<{ id: string; clientUserMessageId: string; input: unknown[] }>;
@@ -929,6 +930,60 @@ export class CodexService {
     return this.client.threadList(params ?? {});
   }
 
+  /** Read-only, bounded inventory from the existing app-server client. No thread resumes. */
+  async readGlobalNativeCustody() {
+    const sourceKinds: v2.ThreadSourceKind[] = [
+      'cli', 'vscode', 'exec', 'appServer', 'subAgent', 'subAgentReview',
+      'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther', 'unknown',
+    ];
+    const collect = async (loaded: boolean): Promise<string[]> => {
+      const ids: string[] = [];
+      const seenCursors = new Set<string>();
+      let cursor: string | null = null;
+      do {
+        const page: { data: Array<string | v2.Thread>; nextCursor: string | null } = loaded
+          ? await this.client.threadLoadedList({ cursor, limit: 100 })
+          : await this.client.threadList({ sourceKinds, modelProviders: [], archived: false, cursor, limit: 100 });
+        if (!Array.isArray(page.data) || page.data.length > 100) throw new Error('Invalid native inventory page');
+        ids.push(...page.data.map((item) => loaded ? item as string : (item as v2.Thread).id));
+        if (ids.length > 500 || new Set(ids).size !== ids.length ||
+            ids.some((id) => !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id))) {
+          throw new Error('Native inventory bound or identifiers invalid');
+        }
+        cursor = page.nextCursor;
+        if (cursor !== null && (typeof cursor !== 'string' || seenCursors.has(cursor))) {
+          throw new Error('Invalid native inventory cursor');
+        }
+        if (cursor) seenCursors.add(cursor);
+      } while (cursor);
+      return ids.sort();
+    };
+    const loadedBefore = await collect(true);
+    const threadIds = await collect(false);
+    if (loadedBefore.some((id) => !threadIds.includes(id))) throw new Error('Loaded native thread missing from inventory');
+    const rows = [];
+    for (const threadId of threadIds) {
+      const queuedSubmissions = await this.readNativeQueuedSubmissions(threadId);
+      rows.push({ threadId, queuedSubmissionCount: queuedSubmissions.length, queuedSubmissions });
+    }
+    const [loadedAfter, threadIdsAfter] = await Promise.all([collect(true), collect(false)]);
+    if (JSON.stringify(loadedBefore) !== JSON.stringify(loadedAfter) ||
+        JSON.stringify(threadIds) !== JSON.stringify(threadIdsAfter)) {
+      throw new Error('Native inventory changed during inspection');
+    }
+    for (const row of rows) {
+      if (JSON.stringify(row.queuedSubmissions) !==
+          JSON.stringify(await this.readNativeQueuedSubmissions(row.threadId))) {
+        throw new Error('Native queue changed during inspection');
+      }
+    }
+    // This is an enumerated snapshot, not an atomic freeze: the operator must
+    // repeat it at a quiescent boundary immediately before the service stop.
+    return { scope: 'all-enumerated-unarchived-native-threads', atomic: false,
+      threadCount: rows.length, loadedThreadIds: loadedAfter,
+      queuedSubmissionCount: rows.reduce((sum, row) => sum + row.queuedSubmissionCount, 0), threads: rows };
+  }
+
   async readThread(threadId: string): Promise<v2.Thread> {
     const result = await this.client.threadRead({ threadId, includeTurns: true });
     return result.thread;
@@ -937,6 +992,21 @@ export class CodexService {
   async readNativeCustody(threadId: string) {
     const thread = await this.readThread(threadId);
     if (thread.id !== threadId) throw new Error('Native thread ID mismatch');
+    const submissions = await this.readNativeQueuedSubmissions(threadId);
+    const lastTurn = thread.turns[thread.turns.length - 1];
+    const status = thread.status;
+    return {
+      threadId,
+      status: status.type,
+      activeFlags: status.type === 'active' ? status.activeFlags : [],
+      lastTurnId: lastTurn?.id ?? null,
+      lastTurnStatus: lastTurn?.status ?? null,
+      queuedSubmissionCount: submissions.length,
+      queuedSubmissions: submissions,
+    };
+  }
+
+  private async readNativeQueuedSubmissions(threadId: string) {
     const submissions: Array<{ id: string; clientUserMessageId: string }> = [];
     let cursor: string | null = null;
     const seen = new Set<string>();
@@ -963,17 +1033,7 @@ export class CodexService {
       if (cursor) seen.add(cursor);
       if (submissions.length > 2000) throw new Error('Native queue exceeds inspection bound');
     } while (cursor);
-    const lastTurn = thread.turns[thread.turns.length - 1];
-    const status = thread.status;
-    return {
-      threadId,
-      status: status.type,
-      activeFlags: status.type === 'active' ? status.activeFlags : [],
-      lastTurnId: lastTurn?.id ?? null,
-      lastTurnStatus: lastTurn?.status ?? null,
-      queuedSubmissionCount: submissions.length,
-      queuedSubmissions: submissions,
-    };
+    return submissions;
   }
 
   /** Admit an input only to an existing idle thread, retaining its native model/config. */
