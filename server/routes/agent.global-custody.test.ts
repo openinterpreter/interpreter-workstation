@@ -9,6 +9,7 @@ import { approvalManager } from '../approvalManager';
 const app = express();
 app.use('/api/agent', agentRouter);
 const url = '/api/agent/custody/global';
+const nativeUrl = '/api/agent/custody/native-global';
 const previousToken = process.env.WORKSTATION_WAKE_TOKEN;
 afterEach(() => {
   if (previousToken === undefined) delete process.env.WORKSTATION_WAKE_TOKEN;
@@ -17,6 +18,15 @@ afterEach(() => {
 });
 
 describe('global custody inventory', () => {
+  test('native and CUA inventory requires the same local bearer and rejects foreign origins', async () => {
+    process.env.WORKSTATION_WAKE_TOKEN = 'private-test-token';
+    expect((await request(app).get(nativeUrl)).status).toBe(401);
+    expect((await request(app).get(nativeUrl).set('Authorization', 'Bearer wrong')).status).toBe(401);
+    expect((await request(app).get(nativeUrl).set('Authorization', 'Bearer private-test-token')
+      .set('Origin', 'https://elsewhere.example')).status).toBe(401);
+    delete process.env.WORKSTATION_WAKE_TOKEN;
+    expect((await request(app).get(nativeUrl).set('Authorization', 'Bearer private-test-token')).status).toBe(401);
+  });
   test('fails closed without the configured bearer or from a foreign origin', async () => {
     process.env.WORKSTATION_WAKE_TOKEN = 'private-test-token';
     expect((await request(app).get(url)).status).toBe(401);

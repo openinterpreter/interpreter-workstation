@@ -29,6 +29,47 @@ function createTurn(id: string, status: v2.TurnStatus = "inProgress"): v2.Turn {
 }
 
 describe('native custody metadata', () => {
+  test('enumerates loaded and persisted native queues without input, then verifies stable IDs', async () => {
+    const id = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    const client = createFakeClient({}).client;
+    client.threadLoadedList = async () => ({ data: [id], nextCursor: null });
+    client.threadList = async () => ({ data: [{ id } as v2.Thread], nextCursor: null, backwardsCursor: null });
+    let calls = 0;
+    client.threadQueueList = async () => {
+      calls++;
+      return { data: [{ id: 'queue_1', clientUserMessageId: 'opaque_1', input: [{ text: 'PRIVATE' }] }], nextCursor: null };
+    };
+    const result = await new CodexService(client).readGlobalNativeCustody();
+    assert.equal(result.scope, 'all-enumerated-unarchived-native-threads');
+    assert.equal(result.atomic, false);
+    assert.equal(result.queuedSubmissionCount, 1);
+    assert.deepEqual(result.loadedThreadIds, [id]);
+    assert.equal(calls, 2);
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE/);
+  });
+
+  test('rejects a changing native queue rather than claiming safe custody', async () => {
+    const id = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    const client = createFakeClient({}).client;
+    client.threadLoadedList = async () => ({ data: [id], nextCursor: null });
+    client.threadList = async () => ({ data: [{ id } as v2.Thread], nextCursor: null, backwardsCursor: null });
+    let calls = 0;
+    client.threadQueueList = async () => ({ data: calls++ === 0
+      ? [] : [{ id: 'queue_2', clientUserMessageId: 'opaque_2', input: [] }], nextCursor: null });
+    await assert.rejects(new CodexService(client).readGlobalNativeCustody(), /changed/);
+  });
+
+  test('rejects a loaded native thread omitted by persisted inventory', async () => {
+    const client = createFakeClient({}).client;
+    client.threadLoadedList = async () => ({ data: ['01a0d435-bb2b-7047-afe7-0a639be8e5d4'], nextCursor: null });
+    await assert.rejects(new CodexService(client).readGlobalNativeCustody(), /missing/);
+  });
+
+  test('does not report an empty global queue when native listing is unsupported', async () => {
+    const client = createFakeClient({}).client;
+    client.threadLoadedList = async () => { throw new Error('native method unavailable'); };
+    await assert.rejects(new CodexService(client).readGlobalNativeCustody(), /unavailable/);
+  });
   test('pages native queue through the existing client without returning input', async () => {
     const fake = createFakeClient({});
     const client = fake.client;
@@ -284,6 +325,9 @@ function createFakeClient(overrides: {
     },
     async threadList(params) {
       calls.threadListParams.push(params ?? {});
+      return { data: [], nextCursor: null };
+    },
+    async threadLoadedList() {
       return { data: [], nextCursor: null };
     },
     async threadRead(params) {
