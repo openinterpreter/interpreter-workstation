@@ -359,6 +359,7 @@ export const settingsSetTool: BuiltinToolDefinition = {
       }
 
       if (path === 'headlessToolApprovalMode' || path.startsWith('headlessToolApprovalMode.') ||
+          path.startsWith('headlessToolApprovalMode[') ||
           path === 'nativeMcpReadGrants' || path.startsWith('nativeMcpReadGrants.') ||
           path.startsWith('nativeMcpReadGrants[')) {
         return {
