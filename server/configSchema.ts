@@ -247,6 +247,12 @@ export const AppConfigSchema = z.object({
   defaultAgent: z.string().optional(),
   agents: z.record(z.string(), AgentConfigSchema),
   mcpServers: z.record(z.string(), McpServerConfigSchema).optional(),
+  nativeMcpReadGrants: z.array(z.object({
+    threadId: z.string().uuid(),
+    serverName: z.literal('codex_apps'),
+    toolName: z.enum(['sites.get_site', 'sites.list_sites']),
+  }).strict()).max(32).optional(),
+  headlessToolApprovalMode: z.literal('fail-closed').optional(),
   builtinToolsEnabled: z.record(z.string(), z.boolean()).optional(),
   profiles: z.array(ProfileSchema).optional(),
   defaultProfileId: z.string().nullable().optional(),

@@ -13,6 +13,8 @@ import type { Question, QuestionResult } from '../../shared/types/approval';
 import {
   getCodexMacosScreenshotAccessSync,
   getCodexMacosTempAccessSync,
+  hasNativeMcpReadGrant,
+  failClosedOnHeadlessToolApprovalSync,
 } from '../configStore';
 import { isPathInCodexMacosTrustedReadZone } from './codexTrustedPaths';
 import { shouldPromptForWorkspaceWriteSync } from './agentFilePermissions';
@@ -1586,6 +1588,26 @@ async function handleMcpServerElicitationRequest(
       'MCP tool';
     const toolName = resolveMcpToolApprovalToolName(request.params, meta, toolTitle);
     const approvalToolName = prefixToolName(serverName, toolName);
+
+    // A configured, exact-thread read grant can answer only the two reviewed
+    // metadata reads. Never trust a display title/message, infer grants from
+    // OIX --approval-policy never, or grant a session/provider/create action.
+    if (agentId && meta.tool_name === toolName &&
+        hasNativeMcpReadGrant(request.params.threadId, serverName, toolName)) {
+      console.info('[NATIVE_MCP_READ_GRANT] decision=accept_once',
+        `thread=${request.params.threadId}`, `tool=${approvalToolName}`);
+      respond(mcpApprovalResponseFromDecision('accept'));
+      return;
+    }
+
+    if (failClosedOnHeadlessToolApprovalSync()) {
+      // The native approval is still mandatory; without an interactive owner
+      // deny this call, rather than leaving a permanent invisible question.
+      console.info('[NATIVE_MCP_APPROVAL] decision=decline_unattended',
+        `thread=${request.params.threadId}`, `tool=${approvalToolName}`);
+      respond(mcpApprovalResponseFromDecision('decline'));
+      return;
+    }
 
     const result = await deps.createSessionAwareApproval(
       approvalToolName,

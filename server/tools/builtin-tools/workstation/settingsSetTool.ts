@@ -358,6 +358,16 @@ export const settingsSetTool: BuiltinToolDefinition = {
         };
       }
 
+      if (path === 'headlessToolApprovalMode' || path.startsWith('headlessToolApprovalMode.') ||
+          path.startsWith('headlessToolApprovalMode[') ||
+          path === 'nativeMcpReadGrants' || path.startsWith('nativeMcpReadGrants.') ||
+          path.startsWith('nativeMcpReadGrants[')) {
+        return {
+          content: [{ type: 'text', text: 'Headless tool policy and native MCP read grants are operator-owned and cannot be edited by an agent.' }],
+          isError: true,
+        };
+      }
+
       const approvalRequirement = getApprovalRequirement(path);
       const effect = getSettingEffect(path);
 
