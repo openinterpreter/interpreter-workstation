@@ -252,6 +252,7 @@ export const AppConfigSchema = z.object({
     serverName: z.literal('codex_apps'),
     toolName: z.enum(['sites.get_site', 'sites.list_sites']),
   }).strict()).max(32).optional(),
+  headlessToolApprovalMode: z.literal('fail-closed').optional(),
   builtinToolsEnabled: z.record(z.string(), z.boolean()).optional(),
   profiles: z.array(ProfileSchema).optional(),
   defaultProfileId: z.string().nullable().optional(),

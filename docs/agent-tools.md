@@ -157,6 +157,15 @@ operator has reviewed the particular tool's data exposure and the host's
 single-custodian boundary. Unattended hosts should not start calls that still
 require an interactive approval owner.
 
+An operator can explicitly set `headlessToolApprovalMode: "fail-closed"` on a
+dedicated unattended host. Ungranted native MCP tool calls and Computer Use
+permissions that would otherwise prompt return a denial immediately; they are
+not silently approved. Exact read grants above and independently configured
+Computer Use inspect/control `all` still apply. Agents cannot change this
+setting. It does not derive from OIX `--approval-policy never` or dispose an
+existing pending request; the owner must use the ordinary approval UI before
+supervised migration.
+
 Computer Use app discovery is independently governed by the operator's
 `cuaAccessPolicy.permissions.inspect.mode`: `all` allows inspected discovery,
 `ask` continues to request approval, and `deny` rejects it. None of these

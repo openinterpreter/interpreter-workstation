@@ -358,10 +358,11 @@ export const settingsSetTool: BuiltinToolDefinition = {
         };
       }
 
-      if (path === 'nativeMcpReadGrants' || path.startsWith('nativeMcpReadGrants.') ||
+      if (path === 'headlessToolApprovalMode' || path.startsWith('headlessToolApprovalMode.') ||
+          path === 'nativeMcpReadGrants' || path.startsWith('nativeMcpReadGrants.') ||
           path.startsWith('nativeMcpReadGrants[')) {
         return {
-          content: [{ type: 'text', text: 'Native MCP read grants are operator-owned and cannot be edited by an agent.' }],
+          content: [{ type: 'text', text: 'Headless tool policy and native MCP read grants are operator-owned and cannot be edited by an agent.' }],
           isError: true,
         };
       }
