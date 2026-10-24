@@ -142,6 +142,28 @@ change a different machine's policy, use an external MCP tool, or bypass
 protected desktop targets. Unconfigured installations continue to ask.
 External MCP tools retain their own per-tool approval mode.
 
+Native app-server MCP elicitation is a **separate** approval channel from OIX
+`--approval-policy never`, Workstation's MCP tool-manager settings, and Computer
+Use permissions. A headless operator can explicitly provision
+`nativeMcpReadGrants` in the host's private configuration for an exact native
+thread UUID and one of `codex_apps` `sites.get_site` / `sites.list_sites`.
+There are no grants by default. Only a bound thread and a matching native tool
+identity receive a one-call read decision; display titles cannot supply that
+identity. The agent cannot change these grants with `interpreter_settings_set`.
+Creation, mutation, provider, filesystem, and every other elicitation retain
+the existing approval flow. An existing pending request is **not** retroactively
+resolved when configuration changes. Do not configure a read grant until the
+operator has reviewed the particular tool's data exposure and the host's
+single-custodian boundary. Unattended hosts should not start calls that still
+require an interactive approval owner.
+
+Computer Use app discovery is independently governed by the operator's
+`cuaAccessPolicy.permissions.inspect.mode`: `all` allows inspected discovery,
+`ask` continues to request approval, and `deny` rejects it. None of these
+settings relax browser profile permissions or external MCP approval. Desktop
+driver process locking occurs **after** the permission decision; a pending
+approval must not hold the cross-process lock.
+
 The driver requests any required approval **before** taking the cross-process
 desktop lock. An unresolved permission request must not block already-permitted
 desktop actions. Do not resolve old requests merely because the policy changes;

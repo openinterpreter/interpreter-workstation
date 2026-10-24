@@ -178,6 +178,8 @@ export interface AppConfig {
   browserAccessPolicy?: BrowserAccessPolicy;
   // Native Computer Use app access policy
   cuaAccessPolicy?: CuaAccessPolicy;
+  /** Operator-owned exact-thread read grants for native app-server MCP elicitation. Never inferred from OIX approval policy. */
+  nativeMcpReadGrants?: Array<{ threadId: string; serverName: 'codex_apps'; toolName: 'sites.get_site' | 'sites.list_sites' }>;
 
   // UI settings
   showHelpPanelPreview?: boolean; // Show file preview in help panel (default: false)
@@ -1425,6 +1427,17 @@ export function getCuaAccessPolicySync(): CuaAccessPolicy {
   return normalizeCuaAccessPolicy(
     readStoreValue('cuaAccessPolicy') ?? DEFAULT_CUA_ACCESS_POLICY,
   );
+}
+
+export function hasNativeMcpReadGrant(threadId: string, serverName: string, toolName: string): boolean {
+  // An operator must provision each exact thread/tool in the host config. A
+  // model's native --approval-policy never is not app-tool authorization.
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId) ||
+      serverName !== 'codex_apps' ||
+      (toolName !== 'sites.get_site' && toolName !== 'sites.list_sites')) return false;
+  const grants = overrideConfig ? overrideConfig.nativeMcpReadGrants : readStoreValue('nativeMcpReadGrants');
+  return Array.isArray(grants) && grants.some((grant) =>
+    grant?.threadId === threadId && grant.serverName === serverName && grant.toolName === toolName);
 }
 
 export async function setCuaAccessPolicy(policy: CuaAccessPolicy): Promise<CuaAccessPolicy> {
