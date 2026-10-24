@@ -553,6 +553,41 @@ describe('codexServerRequestApprovals', () => {
     assert.deepEqual(response, { action: 'accept', content: null, _meta: null });
   });
 
+  test('exact operator-owned native read grants are thread-bound and never broaden to creation or providers', async () => {
+    const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    agentTabManager.bindThread({ agentId: 'agent-sandra', threadId, callerToken: 'agtok_sandra' });
+    setConfigOverride({
+      agents: {}, codexApprovalPolicy: 'never',
+      nativeMcpReadGrants: [{ threadId, serverName: 'codex_apps', toolName: 'sites.list_sites' }],
+    } as any);
+    const { deps, sessionApprovalCalls } = createDeps(true);
+    const request = (requestedThread: string, serverName: string, toolName: string,
+      metadataName: string = toolName): ServerRequest => ({
+      id: 1202, method: SERVER_REQUEST_METHOD.mcpServerElicitationRequest,
+      params: {
+        threadId: requestedThread, turnId: 'turn_read', serverName, mode: 'form',
+        _meta: { codex_approval_kind: 'mcp_tool_call', tool_name: metadataName, tool_params: {} },
+        message: 'Approval required', requestedSchema: { type: 'object', properties: {} },
+      },
+    });
+    const call = async (input: ServerRequest) => {
+      let response: unknown;
+      await handleCodexServerRequest(input, (value) => { response = value; }, deps);
+      return response;
+    };
+
+    assert.deepEqual(await call(request(threadId, 'codex_apps', 'sites.list_sites')),
+      { action: 'accept', content: null, _meta: null });
+    assert.equal(sessionApprovalCalls.length, 0);
+    for (const input of [
+      request('01a0d50a-0038-73d0-8f71-0f1815786fdf', 'codex_apps', 'sites.list_sites'),
+      request(threadId, 'codex_apps', 'sites.create_site'),
+      request(threadId, 'world', 'sites.list_sites'),
+      request(threadId, 'codex_apps', 'sites.list_sites', 'sites.create_site'),
+    ]) await call(input);
+    assert.equal(sessionApprovalCalls.length, 4);
+  });
+
   test('maps boolean MCP form answers back into structured content', async () => {
     agentTabManager.bindThread({
       agentId: 'agent-mcp-form',
