@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { approvalManager } from '../../../approvalManager';
 import { waitForComputerUseSetupReady } from '../../../computerUseSetupGate';
 import { thumbnailService } from '../../../thumbnailService';
-import { getBrowserAccessPolicy, getCuaAccessPolicy } from '../../../configStore';
+import { failClosedOnHeadlessToolApprovalSync, getBrowserAccessPolicy, getCuaAccessPolicy } from '../../../configStore';
 import { getBrowserControlStatus } from '../../../utils/browserExtensionRelay';
 import {
   checkFileAccessPermission,
@@ -3323,6 +3323,9 @@ async function requestApproval(
     if (discoveryMode === 'deny') {
       throw new Error('Computer Use inspect access to the desktop is denied by Settings > Permissions.');
     }
+    if (failClosedOnHeadlessToolApprovalSync()) {
+      throw new Error('Computer Use discovery requires an operator inspect grant; unattended approval was denied before acquiring the desktop lock.');
+    }
     const copy = process.platform === 'win32'
       ? windowsDiscoveryApprovalCopy(toolName)
       : {
@@ -3376,6 +3379,9 @@ async function requestApproval(
   }
   if (kind === 'control' && context?.overlayReviewedAction === true) {
     return;
+  }
+  if (failClosedOnHeadlessToolApprovalSync()) {
+    throw new Error(`Computer Use ${kind} access to "${displayTarget}" requires an operator grant; unattended approval was denied before acquiring the desktop lock.`);
   }
 
   const copy = process.platform === 'win32'

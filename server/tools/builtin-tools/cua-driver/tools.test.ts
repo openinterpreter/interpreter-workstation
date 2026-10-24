@@ -36,6 +36,7 @@ import {
 import type { BrowserControlStatus } from '../../../../shared/types/browserControl';
 import type { BrowserAccessPolicy, BrowserAccessPolicyMode, BrowserAccessProfilePolicy } from '../../../../shared/browserAccessPolicy';
 import { approvalManager } from '../../../approvalManager';
+import { setConfigOverride } from '../../../configStore';
 import { isCuaDriverSupportedPlatform } from './index';
 
 function windowsToolResponse(data: unknown): { content: [{ type: 'text'; text: string }] } {
@@ -728,6 +729,29 @@ describe('macOS Computer Use wrapper behavior', () => {
         } finally {
           setCuaAccessPolicyProviderForCuaDriverTest(null);
         }
+      }
+    });
+  });
+
+  test('headless ask denies discovery and control before creating an invisible approval', async () => {
+    await withPlatform('linux', async () => {
+      setConfigOverride({ agents: {}, headlessToolApprovalMode: 'fail-closed' } as any);
+      setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+        permissions: { inspect: { mode: 'ask' }, control: { mode: 'ask' } },
+        appPolicies: [],
+      }));
+      try {
+        await expect(requestApprovalForTest('list_apps', {})).rejects.toThrow('unattended approval was denied before acquiring the desktop lock');
+        await expect(requestApprovalForTest('click', { app: 'LocalApp' })).rejects.toThrow('unattended approval was denied before acquiring the desktop lock');
+        setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+          permissions: { inspect: { mode: 'all' }, control: { mode: 'all' } },
+          appPolicies: [],
+        }));
+        await expect(requestApprovalForTest('list_apps', {})).resolves.toBeUndefined();
+        await expect(requestApprovalForTest('get_app_state', { app: 'LocalApp' })).resolves.toBeUndefined();
+      } finally {
+        setCuaAccessPolicyProviderForCuaDriverTest(null);
+        setConfigOverride(null);
       }
     });
   });

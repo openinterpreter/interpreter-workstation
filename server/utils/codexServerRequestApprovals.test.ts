@@ -588,6 +588,30 @@ describe('codexServerRequestApprovals', () => {
     assert.equal(sessionApprovalCalls.length, 4);
   });
 
+  test('unattended policy declines ungranted native calls without queuing', async () => {
+    const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    agentTabManager.bindThread({ agentId: 'agent-sandra', threadId, callerToken: 'agtok_sandra' });
+    setConfigOverride({ agents: {}, headlessToolApprovalMode: 'fail-closed',
+      nativeMcpReadGrants: [{ threadId, serverName: 'codex_apps', toolName: 'sites.get_site' }],
+    } as any);
+    const { deps, sessionApprovalCalls } = createDeps(true);
+    for (const [serverName, toolName, action] of [
+      ['codex_apps', 'sites.get_site', 'accept'],
+      ['codex_apps', 'sites.create_site', 'decline'],
+      ['world', 'linq.send', 'decline'],
+    ]) {
+      let response: any;
+      await handleCodexServerRequest({ id: 1202, method: SERVER_REQUEST_METHOD.mcpServerElicitationRequest,
+        params: { threadId, turnId: 'turn_headless', serverName, mode: 'form',
+          _meta: { codex_approval_kind: 'mcp_tool_call', tool_name: toolName, tool_params: {} },
+          message: 'Approval required', requestedSchema: { type: 'object', properties: {} },
+        },
+      } as ServerRequest, (result) => { response = result; }, deps);
+      assert.equal(response.action, action);
+    }
+    assert.equal(sessionApprovalCalls.length, 0);
+  });
+
   test('maps boolean MCP form answers back into structured content', async () => {
     agentTabManager.bindThread({
       agentId: 'agent-mcp-form',

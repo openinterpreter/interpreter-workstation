@@ -17,7 +17,7 @@ describe('settingsSetTool', () => {
 
   test('does not let agents grant native MCP read approval', async () => {
     for (const path of ['nativeMcpReadGrants', 'nativeMcpReadGrants.0.toolName',
-      'nativeMcpReadGrants[0].toolName']) {
+      'nativeMcpReadGrants[0].toolName', 'headlessToolApprovalMode']) {
       const result = await settingsSetTool.handler({ path, value: 'sites.list_sites' });
       expect(result.isError).toBe(true);
     }
