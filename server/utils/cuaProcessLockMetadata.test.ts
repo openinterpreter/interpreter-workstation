@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { cuaLockOwnerForNewCall, readCuaProcessLockCustody } from './cuaProcessLockMetadata';
+import { cuaLockOwnerDefinitelyGone, cuaLockOwnerForNewCall, readCuaProcessLockCustody } from './cuaProcessLockMetadata';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cua-custody-test-'));
 afterEach(() => { for (const file of fs.readdirSync(root)) fs.rmSync(path.join(root, file), { recursive: true, force: true }); });
@@ -25,6 +25,20 @@ test('records action and thread but never arguments or process command line', ()
   expect(result).toMatchObject({ held: true, action: 'get_app_state', threadId: owner.threadId });
   expect(JSON.stringify(result)).not.toContain('args');
   if (process.platform === 'linux') expect(result.processIdentityVerified).toBe(true);
+});
+
+test.skipIf(process.platform !== 'linux')('only reaps a provably reused PID, never a legacy live owner', () => {
+  const lock = path.join(root, 'reused-lock');
+  fs.mkdirSync(lock);
+  const ownerPath = path.join(lock, 'owner');
+  fs.writeFileSync(ownerPath, JSON.stringify({ pid: process.pid, acquiredAt: 123 }));
+  expect(cuaLockOwnerDefinitelyGone(lock)).toBe(false);
+  fs.writeFileSync(ownerPath, JSON.stringify({ pid: process.pid, processStartTicks: '0' }));
+  expect(cuaLockOwnerDefinitelyGone(lock)).toBe(true);
+  fs.writeFileSync(ownerPath, JSON.stringify(cuaLockOwnerForNewCall('list_apps')));
+  expect(cuaLockOwnerDefinitelyGone(lock)).toBe(false);
+  fs.writeFileSync(ownerPath, '{broken');
+  expect(cuaLockOwnerDefinitelyGone(lock)).toBe(false);
 });
 
 test('never follows a symlinked owner or lock directory', () => {

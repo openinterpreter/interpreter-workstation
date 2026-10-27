@@ -502,6 +502,62 @@ describe('macOS Computer Use wrapper behavior', () => {
     fs.rmSync(lockRoot, { recursive: true, force: true });
   });
 
+  test.skipIf(process.platform !== 'linux')('reclaims PID reuse without evicting a live legacy owner', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cua-driver-reuse-test-'));
+    const lock = path.join(root, 'driver.lock');
+    fs.mkdirSync(lock);
+    fs.writeFileSync(path.join(lock, 'owner'), JSON.stringify({ pid: process.pid, acquiredAt: 123 }));
+    await expect(withMacCuaDriverProcessLockForTest(lock, async () => 'unsafe'))
+      .rejects.toThrow('Another Computer Use action is already in progress.');
+    fs.writeFileSync(path.join(lock, 'owner'), JSON.stringify({
+      pid: process.pid, acquiredAt: 123, processStartTicks: '0', action: 'get_app_state',
+    }));
+    await expect(withMacCuaDriverProcessLockForTest(lock, async () => 'reclaimed'))
+      .resolves.toBe('reclaimed');
+    expect(fs.existsSync(lock)).toBe(false);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  test('denied foreground or discovery approval never acquires the desktop lock', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cua-denied-lock-test-'));
+    const lock = path.join(root, 'driver.lock');
+    await expect(withMacCuaDriverApprovalAndProcessLock(
+      async () => { throw new Error('permission denied'); },
+      async () => 'must-not-run', lock,
+    )).rejects.toThrow('permission denied');
+    expect(fs.existsSync(lock)).toBe(false);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  test('serializes approved calls in-process without locking the queued call', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cua-fifo-lock-test-'));
+    const lock = path.join(root, 'driver.lock');
+    const steps: string[] = [];
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => { enter = resolve; });
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    const first = withMacCuaDriverApprovalAndProcessLock(async () => {}, async () => {
+      steps.push('first'); enter(); await hold; steps.push('first-done');
+    }, lock, 'list_apps');
+    await entered;
+    const second = withMacCuaDriverApprovalAndProcessLock(async () => {}, async () => {
+      steps.push('second');
+    }, lock, 'get_app_state');
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(steps).toEqual(['first']);
+      release();
+      await Promise.all([first, second]);
+      expect(steps).toEqual(['first', 'first-done', 'second']);
+      expect(fs.existsSync(lock)).toBe(false);
+    } finally {
+      release();
+      await Promise.allSettled([first, second]);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('pending discovery approval never holds the desktop process lock', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cua-driver-approval-lock-test-'));
     const lockDir = path.join(root, 'driver.lock');

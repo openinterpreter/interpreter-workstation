@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 export const CUA_PROCESS_LOCK_DIR = path.join(os.tmpdir(), 'interpreter-desktop-driver-call.lock');
 
@@ -19,9 +20,32 @@ export function cuaLockOwnerForNewCall(action: string, threadId?: string) {
     pid: process.pid,
     acquiredAt: Date.now(),
     processStartTicks: linuxStartTicks(process.pid),
+    nonce: randomUUID(),
     action: /^[a-z_]{1,80}$/.test(action) ? action : null,
     threadId: threadId && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId) ? threadId : null,
   };
+}
+
+/** Only a dead process or a verified reused Linux PID is safe to reap.
+ * Legacy live-PID records and malformed/foreign locks remain held.
+ */
+export function cuaLockOwnerDefinitelyGone(lockDir: string): boolean {
+  try {
+    const directory = fs.lstatSync(lockDir);
+    if (!directory.isDirectory() || directory.isSymbolicLink()
+      || (process.getuid && directory.uid !== process.getuid())) return false;
+    if (fs.readdirSync(lockDir).join(',') !== 'owner') return false;
+    const file = fs.lstatSync(path.join(lockDir, 'owner'));
+    if (!file.isFile() || file.isSymbolicLink() || file.size > 1024) return false;
+    const owner = JSON.parse(fs.readFileSync(path.join(lockDir, 'owner'), 'utf8')) as Record<string, unknown>;
+    if (!Number.isSafeInteger(owner.pid) || (owner.pid as number) < 1) return false;
+    const pid = owner.pid as number;
+    try { process.kill(pid, 0); }
+    catch (error) { return (error as NodeJS.ErrnoException).code === 'ESRCH'; }
+    const ticks = linuxStartTicks(pid);
+    return typeof owner.processStartTicks === 'string'
+      && ticks !== null && ticks !== owner.processStartTicks;
+  } catch { return false; }
 }
 
 /** Metadata only. Unknown identity is never interpreted as a clear lock. */
