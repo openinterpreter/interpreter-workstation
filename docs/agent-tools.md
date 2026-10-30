@@ -173,6 +173,18 @@ settings relax browser profile permissions or external MCP approval. Desktop
 driver process locking occurs **after** the permission decision; a pending
 approval must not hold the cross-process lock.
 
+For a dedicated unattended host using `headlessToolApprovalMode: "fail-closed"`,
+an operator may instead provision a narrower private host-config entry:
+`nativeCuaDiscoveryGrants: [{ "threadId": "<exact native thread UUID>", "toolName": "list_apps" }]`.
+This permits **only** the no-argument app-list call by that bound thread when
+the inspect mode is `ask`; `deny` still wins. It does not grant other discovery,
+app inspection/control, browser access, or external MCP tools. Missing thread
+binding, extra arguments, malformed grants, and different threads fail closed.
+Agents cannot edit the grant. Configuration changes do not resolve existing
+pending approvals: the owner must review and dispose each exact old card by
+the normal route, then verify its original tool-call outcome. Do not set the
+host-wide inspect mode to `all` merely to enable one thread's app list.
+
 The driver requests any required approval **before** taking the cross-process
 desktop lock. An unresolved permission request must not block already-permitted
 desktop actions. Do not resolve old requests merely because the policy changes;
