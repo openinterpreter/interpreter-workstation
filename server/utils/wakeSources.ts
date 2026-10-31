@@ -118,8 +118,13 @@ export class WakeSources {
   private readonly file: string;
   private readonly lock: string;
   private readonly owner = randomUUID();
+  private readonly nativeInspections = new Map<string, ReturnType<WakeNative['inspect']>>();
 
-  constructor(private readonly native: WakeNative, root = getInterpreterAppDataDir()) {
+  constructor(private readonly native: WakeNative, root = getInterpreterAppDataDir(),
+    private readonly inspectTimeoutMs = 30_000) {
+    if (!Number.isInteger(inspectTimeoutMs) || inspectTimeoutMs < 1 || inspectTimeoutMs > 120_000) {
+      throw new Error('Invalid native inspection timeout');
+    }
     this.file = path.join(root, 'wake-sources.json');
     this.lock = `${this.file}.owner`;
   }
@@ -436,6 +441,47 @@ export class WakeSources {
     }); } finally { this.inFlight.delete(key); }
   }
 
+  /** Explicit operator no-replay decision for an old unbound offer after later
+   * native turns made the original failed-turn binding unavailable. This never
+   * asserts rejection or admission; the original event is retained as held.
+   */
+  async holdHistoricalOffered(threadId: string, sourceId: string, eventId: string,
+    expectedClientId: string, expectedLatestTurnId: string, decisionRef: string): Promise<WakeEvent> {
+    if (this.stopping) throw new Error('Wake admission is draining for restart');
+    if (![threadId, sourceId, eventId, expectedLatestTurnId, decisionRef].every(x => ID.test(x)))
+      throw new Error('Invalid wake custody ID');
+    const key = `${threadId}:${eventId}`;
+    if (this.ticking || this.inFlight.has(key)) throw new Error('Wake inspection in progress');
+    this.inFlight.add(key);
+    try { return await this.exclusive(async () => {
+      const event = this.state.events.find(e => e.threadId === threadId && e.sourceId === sourceId && e.eventId === eventId);
+      if (!event || event.status !== 'offered' || event.turnId || !event.offeredAt ||
+          !Number.isFinite(Date.parse(event.offeredAt)) || Date.now() - Date.parse(event.offeredAt) < 60_000 ||
+          wakeClientId(event) !== expectedClientId || !this.native.custody)
+        throw new Error('Historical offer custody mismatch');
+      const [state, custody] = await Promise.all([this.inspectWithDeadline(threadId),
+        this.native.custody(threadId, expectedLatestTurnId)]);
+      if (state.activeTurnId || custody.queuedSubmissionCount !== 0 ||
+          custody.lastTurnId !== expectedLatestTurnId ||
+          !['completed', 'failed', 'interrupted'].includes(custody.turnStatus ?? '') ||
+          !['idle', 'systemError', 'notLoaded'].includes(custody.threadStatus ?? ''))
+        throw new Error('Historical offer requires terminal queue-empty native custody');
+      if (state.clientIds?.includes(expectedClientId) ||
+          state.messages.some(message => message === wakeInput(event) || message.startsWith(`${wakeInput(event)}\n`)))
+        throw new Error('Native receipt exists; reconcile admission instead');
+      event.status = 'held';
+      event.error = `Operator-held historical ambiguous native offer; decision ${decisionRef}; latest terminal turn ${expectedLatestTurnId}; not admitted or replayed`;
+      delete event.nextAttemptAt;
+      const source = this.state.sources.find(s => s.threadId === threadId && s.id === sourceId);
+      if (source && source.status !== 'cancelled') {
+        source.status = 'error'; source.nextAt = undefined;
+        source.error = 'Operator-held historical ambiguous native offer; review source before rearming';
+      }
+      await this.save();
+      return structuredClone(event);
+    }); } finally { this.inFlight.delete(key); }
+  }
+
   async tick(now = Date.now()): Promise<void> {
     if (this.ticking || this.stopping) return;
     this.ticking = true;
@@ -514,7 +560,11 @@ export class WakeSources {
       const source = this.state.sources.find(s => s.id === event.sourceId && s.threadId === event.threadId);
       if (source?.paused) return;
       if (source?.status === 'cancelled' && event.status === 'pending') return;
-      const state = await this.native.inspect(event.threadId);
+      // A nonterminating native history read must not pin the only durable
+      // scheduler tick forever. This is read-only; on expiry keep the pending
+      // event (and source fence) and persist a bounded retry. Never infer an
+      // admission receipt or resubmit an ambiguous offered RPC from timeout.
+      const state = await this.inspectWithDeadline(event.threadId);
       if (state.clientIds?.includes(wakeClientId(event)) ||
         state.messages.some(message => message === wakeInput(event) || message.startsWith(`${wakeInput(event)}\n`))) {
         await this.exclusive(async () => {
@@ -574,6 +624,30 @@ export class WakeSources {
       await this.exclusive(async () => { await this.save(); });
       // Do not hammer auth, allowance, or transport errors. Explicit intervention
       // or restart can reconcile the retained event.
+    }
+  }
+
+  private async inspectWithDeadline(threadId: string): ReturnType<WakeNative['inspect']> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Keep at most one outstanding native history read per thread. A timed-out
+    // read may still complete later; do not spawn another unbounded read each tick.
+    let inspection = this.nativeInspections.get(threadId);
+    if (!inspection) {
+      inspection = this.native.inspect(threadId);
+      this.nativeInspections.set(threadId, inspection);
+      void inspection.finally(() => {
+        if (this.nativeInspections.get(threadId) === inspection) this.nativeInspections.delete(threadId);
+      }).catch(() => undefined);
+    }
+    try {
+      return await Promise.race([
+        inspection,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('Native inspect timeout')), this.inspectTimeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
