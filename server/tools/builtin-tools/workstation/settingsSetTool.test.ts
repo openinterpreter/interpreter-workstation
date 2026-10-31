@@ -18,7 +18,8 @@ describe('settingsSetTool', () => {
   test('does not let agents grant native MCP read approval', async () => {
     for (const path of ['nativeMcpReadGrants', 'nativeMcpReadGrants.0.toolName',
       'nativeMcpReadGrants[0].toolName', 'nativeCuaDiscoveryGrants',
-      'nativeCuaDiscoveryGrants.0.threadId', 'nativeCuaDiscoveryGrants[0].toolName', 'headlessToolApprovalMode',
+      'nativeCuaDiscoveryGrants.0.threadId', 'nativeCuaDiscoveryGrants[0].toolName',
+      'nativeCuaInspectGrants', 'nativeCuaInspectGrants.0.app', 'nativeCuaInspectGrants[0].threadId', 'headlessToolApprovalMode',
       'headlessToolApprovalMode[0]']) {
       const result = await settingsSetTool.handler({ path, value: 'sites.list_sites' });
       expect(result.isError).toBe(true);

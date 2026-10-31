@@ -182,6 +182,8 @@ export interface AppConfig {
   nativeMcpReadGrants?: Array<{ threadId: string; serverName: 'codex_apps'; toolName: 'sites.get_site' | 'sites.list_sites' }>;
   /** Operator-owned, exact-thread grant for the no-argument Computer Use app list only. */
   nativeCuaDiscoveryGrants?: Array<{ threadId: string; toolName: 'list_apps' }>;
+  /** Operator-owned, exact-thread read of Google Chrome's app state; no navigation or control. */
+  nativeCuaInspectGrants?: Array<{ threadId: string; toolName: 'get_app_state'; app: 'Google Chrome' }>;
   /** Explicit operator choice: ungranted headless tool calls return a denial, never an invisible pending question. */
   headlessToolApprovalMode?: 'fail-closed';
 
@@ -1450,6 +1452,14 @@ export function hasNativeCuaDiscoveryGrant(threadId: string | undefined, toolNam
   const grants = overrideConfig ? overrideConfig.nativeCuaDiscoveryGrants : readStoreValue('nativeCuaDiscoveryGrants');
   return Array.isArray(grants) && grants.some((grant) =>
     grant?.threadId === threadId && grant.toolName === toolName);
+}
+
+export function hasNativeCuaInspectGrant(threadId: string | undefined, toolName: string, app: string): boolean {
+  if (!threadId || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId) ||
+      toolName !== 'get_app_state' || app !== 'Google Chrome') return false;
+  const grants = overrideConfig ? overrideConfig.nativeCuaInspectGrants : readStoreValue('nativeCuaInspectGrants');
+  return Array.isArray(grants) && grants.some((grant) =>
+    grant?.threadId === threadId && grant.toolName === toolName && grant.app === app);
 }
 
 export function failClosedOnHeadlessToolApprovalSync(): boolean {

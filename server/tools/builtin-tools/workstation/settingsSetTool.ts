@@ -363,7 +363,9 @@ export const settingsSetTool: BuiltinToolDefinition = {
           path === 'nativeMcpReadGrants' || path.startsWith('nativeMcpReadGrants.') ||
           path.startsWith('nativeMcpReadGrants[') ||
           path === 'nativeCuaDiscoveryGrants' || path.startsWith('nativeCuaDiscoveryGrants.') ||
-          path.startsWith('nativeCuaDiscoveryGrants[')) {
+          path.startsWith('nativeCuaDiscoveryGrants[') ||
+          path === 'nativeCuaInspectGrants' || path.startsWith('nativeCuaInspectGrants.') ||
+          path.startsWith('nativeCuaInspectGrants[')) {
         return {
           content: [{ type: 'text', text: 'Headless tool policy and native MCP read grants are operator-owned and cannot be edited by an agent.' }],
           isError: true,
@@ -454,6 +456,12 @@ export const settingsSetTool: BuiltinToolDefinition = {
       if (!isEqual(get(modifiedConfig, 'nativeCuaDiscoveryGrants'), get(config, 'nativeCuaDiscoveryGrants'))) {
         return {
           content: [{ type: 'text', text: 'Native Computer Use discovery grants are operator-owned and cannot be edited by an agent.' }],
+          isError: true,
+        };
+      }
+      if (!isEqual(get(modifiedConfig, 'nativeCuaInspectGrants'), get(config, 'nativeCuaInspectGrants'))) {
+        return {
+          content: [{ type: 'text', text: 'Native Computer Use inspect grants are operator-owned and cannot be edited by an agent.' }],
           isError: true,
         };
       }

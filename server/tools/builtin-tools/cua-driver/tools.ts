@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { approvalManager } from '../../../approvalManager';
 import { waitForComputerUseSetupReady } from '../../../computerUseSetupGate';
 import { thumbnailService } from '../../../thumbnailService';
-import { failClosedOnHeadlessToolApprovalSync, getBrowserAccessPolicy, getCuaAccessPolicy, hasNativeCuaDiscoveryGrant } from '../../../configStore';
+import { failClosedOnHeadlessToolApprovalSync, getBrowserAccessPolicy, getCuaAccessPolicy, hasNativeCuaDiscoveryGrant, hasNativeCuaInspectGrant } from '../../../configStore';
 import { getBrowserControlStatus } from '../../../utils/browserExtensionRelay';
 import {
   checkFileAccessPermission,
@@ -3380,6 +3380,13 @@ async function requestApproval(
   if (kind === 'control' && context?.overlayReviewedAction === true) {
     return;
   }
+  // The app-specific inspect policy has already returned above for all/deny.
+  // This operator grant applies only to the exact native thread, Chrome app
+  // state and sole {app} argument; it cannot authorize any action or URL.
+  if (kind === 'inspect' && failClosedOnHeadlessToolApprovalSync() &&
+      toolName === 'get_app_state' && Object.keys(args).length === 1 &&
+      args.app === 'Google Chrome' &&
+      hasNativeCuaInspectGrant(context?.threadId, toolName, args.app)) return;
   if (failClosedOnHeadlessToolApprovalSync()) {
     throw new Error(`Computer Use ${kind} access to "${displayTarget}" requires an operator grant; unattended approval was denied before acquiring the desktop lock.`);
   }
