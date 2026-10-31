@@ -183,7 +183,7 @@ export interface AppConfig {
   /** Operator-owned, exact-thread grant for the no-argument Computer Use app list only. */
   nativeCuaDiscoveryGrants?: Array<{ threadId: string; toolName: 'list_apps' }>;
   /** Explicit operator choice: ungranted headless tool calls return a denial, never an invisible pending question. */
-  headlessToolApprovalMode?: 'fail-closed';
+  headlessToolApprovalMode?: 'fail-closed' | 'ordinary-auto';
 
   // UI settings
   showHelpPanelPreview?: boolean; // Show file preview in help panel (default: false)
@@ -1454,7 +1454,20 @@ export function hasNativeCuaDiscoveryGrant(threadId: string | undefined, toolNam
 
 export function failClosedOnHeadlessToolApprovalSync(): boolean {
   const mode = overrideConfig ? overrideConfig.headlessToolApprovalMode : readStoreValue('headlessToolApprovalMode');
-  return mode === 'fail-closed';
+  return mode === 'fail-closed' || mode === 'ordinary-auto';
+}
+
+/** Explicit operator mode, valid only with the native runtime's never policy.
+ * Deny modes in each subsystem still take precedence over this ordinary-tool choice. */
+export function autoApproveOrdinaryHeadlessToolsSync(): boolean {
+  const mode = overrideConfig ? overrideConfig.headlessToolApprovalMode : readStoreValue('headlessToolApprovalMode');
+  return mode === 'ordinary-auto' && getCodexApprovalPolicySync() === 'never';
+}
+
+/** Static, audited read classification; never classify arbitrary MCP servers,
+ * provider gateways, Site creation, uploads, or writes as ordinary. */
+export function isOrdinaryHeadlessMcpRead(serverName: string, toolName: string): boolean {
+  return serverName === 'codex_apps' && (toolName === 'sites.get_site' || toolName === 'sites.list_sites');
 }
 
 export async function setCuaAccessPolicy(policy: CuaAccessPolicy): Promise<CuaAccessPolicy> {

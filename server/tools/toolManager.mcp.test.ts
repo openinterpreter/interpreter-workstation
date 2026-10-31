@@ -997,6 +997,24 @@ describe('ToolManager MCP integration', () => {
     expect(mockCallTool).toHaveBeenCalledTimes(1);
   });
 
+  test('ordinary-auto direct MCP accepts bound metadata reads but never creation or an unbound caller', async () => {
+    const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    const agentId = 'agent-ordinary-read';
+    agentTabManager.bindThread({ agentId, callerToken: 'private-test-caller', threadId });
+    setConfigOverride({ agents: {}, mcpServers: {}, codexApprovalPolicy: 'never',
+      headlessToolApprovalMode: 'ordinary-auto' } as any);
+    const manager = new ToolManager();
+    const read = await manager.callTool('codex_apps', 'sites.list_sites', {}, undefined, agentId, { threadId });
+    expect(read.isError).toBe(false);
+    expect(mockCallTool).toHaveBeenCalledTimes(1);
+    const create = await manager.callTool('codex_apps', 'sites.create_site', {}, undefined, agentId, { threadId });
+    expect(create.isError).toBe(true);
+    const unbound = await manager.callTool('codex_apps', 'sites.list_sites', {}, undefined, 'stranger', { threadId });
+    expect(unbound.isError).toBe(true);
+    expect(mockCallTool).toHaveBeenCalledTimes(1);
+    expect(approvalManager.getApprovals()).toEqual([]);
+  });
+
   test('direct headless grant fails closed for missing binding, another thread, another tool, or mismatched native item', async () => {
     const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
     const otherThreadId = '01a0d50a-0038-73d0-8f71-0f1815786fdf';

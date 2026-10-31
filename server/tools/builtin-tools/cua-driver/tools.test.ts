@@ -812,6 +812,34 @@ describe('macOS Computer Use wrapper behavior', () => {
     });
   });
 
+  test('one operator headless mode permits ordinary CUA discovery, inspect and control but not Settings deny', async () => {
+    await withPlatform('linux', async () => {
+      setConfigOverride({ agents: {}, codexApprovalPolicy: 'never', headlessToolApprovalMode: 'ordinary-auto' } as any);
+      setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+        permissions: { inspect: { mode: 'ask' }, control: { mode: 'ask' } }, appPolicies: [],
+      }));
+      try {
+        for (const [tool, args] of [
+          ['list_apps', {}], ['get_app_state', { app: 'Google Chrome' }],
+          ['click', { app: 'Google Chrome', element_index: 3 }],
+        ] as const) await expect(requestApprovalForTest(tool, args)).resolves.toBeUndefined();
+        setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+          permissions: { inspect: { mode: 'deny' }, control: { mode: 'deny' } }, appPolicies: [],
+        }));
+        await expect(requestApprovalForTest('list_apps', {})).rejects.toThrow('denied by Settings');
+        await expect(requestApprovalForTest('click', { app: 'Google Chrome' })).rejects.toThrow('denied by Settings');
+        setConfigOverride({ agents: {}, codexApprovalPolicy: 'on-request', headlessToolApprovalMode: 'ordinary-auto' } as any);
+        setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+          permissions: { inspect: { mode: 'ask' }, control: { mode: 'ask' } }, appPolicies: [],
+        }));
+        await expect(requestApprovalForTest('list_apps', {})).rejects.toThrow('unattended approval was denied');
+      } finally {
+        setCuaAccessPolicyProviderForCuaDriverTest(null);
+        setConfigOverride(null);
+      }
+    });
+  });
+
   test('operator exact-thread app-list grant never broadens inspect, control or other threads', async () => {
     await withPlatform('linux', async () => {
       const owner = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';

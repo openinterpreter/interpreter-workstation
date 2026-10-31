@@ -15,6 +15,8 @@ import {
   getCodexMacosTempAccessSync,
   hasNativeMcpReadGrant,
   failClosedOnHeadlessToolApprovalSync,
+  autoApproveOrdinaryHeadlessToolsSync,
+  isOrdinaryHeadlessMcpRead,
 } from '../configStore';
 import { isPathInCodexMacosTrustedReadZone } from './codexTrustedPaths';
 import { shouldPromptForWorkspaceWriteSync } from './agentFilePermissions';
@@ -1518,6 +1520,10 @@ async function handleFileChangeApproval(
     grantRoot: request.params.grantRoot ?? null,
   };
   const questionConfig = buildFileChangeDecisionQuestion(request.params);
+  if (failClosedOnHeadlessToolApprovalSync()) {
+    respond({ decision: 'denied' });
+    return;
+  }
   const result = await deps.createQuestion(
     'Apply patch',
     'codex',
@@ -1535,6 +1541,10 @@ async function handleLegacyApplyPatchApproval(
   respond: ServerRequestResponder,
   deps: CodexServerRequestApprovalDeps,
 ): Promise<void> {
+  if (failClosedOnHeadlessToolApprovalSync()) {
+    respond({ decision: 'denied' });
+    return;
+  }
   const agentId = getBoundAgentId(request.params.conversationId);
   const questionConfig = buildFileChangeDecisionQuestion({
     threadId: request.params.conversationId,
@@ -1600,6 +1610,14 @@ async function handleMcpServerElicitationRequest(
       return;
     }
 
+    if (agentId && meta.tool_name === toolName &&
+        autoApproveOrdinaryHeadlessToolsSync() && isOrdinaryHeadlessMcpRead(serverName, toolName)) {
+      console.info('[NATIVE_HEADLESS_ORDINARY] decision=accept_once',
+        `thread=${request.params.threadId}`, `tool=${approvalToolName}`);
+      respond(mcpApprovalResponseFromDecision('accept'));
+      return;
+    }
+
     if (failClosedOnHeadlessToolApprovalSync()) {
       // The native approval is still mandatory; without an interactive owner
       // deny this call, rather than leaving a permanent invisible question.
@@ -1641,6 +1659,13 @@ async function handleMcpServerElicitationRequest(
     return;
   }
 
+  // Unknown provider elicitation is never an ordinary tool authorization. An
+  // unattended runtime must receive a terminal cancellation, not wait forever.
+  if (failClosedOnHeadlessToolApprovalSync()) {
+    respond({ action: 'cancel', content: null, _meta: null });
+    return;
+  }
+
   const result = await deps.createQuestion(
     questionFlow.toolName,
     request.params.serverName,
@@ -1669,6 +1694,11 @@ export async function handleCodexServerRequest(
 
         if (path && await deps.shouldAutoApproveViewImagePath?.(path)) {
           respond({ decision: 'accept' });
+          return;
+        }
+
+        if (failClosedOnHeadlessToolApprovalSync()) {
+          respond({ decision: 'decline' });
           return;
         }
 
@@ -1704,6 +1734,11 @@ export async function handleCodexServerRequest(
         return;
       }
       if (accessDecision === 'decline') {
+        respond({ decision: 'decline' });
+        return;
+      }
+
+      if (failClosedOnHeadlessToolApprovalSync()) {
         respond({ decision: 'decline' });
         return;
       }
@@ -1755,6 +1790,10 @@ export async function handleCodexServerRequest(
     }
 
     if (isLegacyExecCommandApproval(request)) {
+      if (failClosedOnHeadlessToolApprovalSync()) {
+        respond({ decision: 'denied' });
+        return;
+      }
       const agentId = getBoundAgentId(request.params.conversationId);
       const approved = await deps.createApproval(
         'Shell command',
