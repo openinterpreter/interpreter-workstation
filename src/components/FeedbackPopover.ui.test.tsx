@@ -236,4 +236,23 @@ describe('FeedbackPopover', () => {
       expect.objectContaining({ reportPasscode: 'operator-report-passcode' }),
     );
   });
+
+  test('dedicated transport errors never echo a report passcode in toast or logs', async () => {
+    distributionProductConfig.feedbackUrl = 'https://feedback.example.test/v0/feedback';
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      (window as any).electron.feedback.submit.mockRejectedValue(new Error('operator-report-passcode leaked in transport'));
+      const user = userEvent.setup();
+      renderFeedbackPopover();
+      await user.click(screen.getByRole('button', { name: 'Feedback' }));
+      await user.type(await screen.findByLabelText('Message'), 'A complete report for support to inspect.');
+      await user.type(screen.getByLabelText('Report passcode'), 'operator-report-passcode');
+      await user.click(screen.getByRole('button', { name: 'Send Feedback' }));
+      await waitFor(() => expect(errorLog).toHaveBeenCalled());
+      expect(screen.queryByText(/operator-report-passcode/u)).not.toBeInTheDocument();
+      expect(JSON.stringify(errorLog.mock.calls)).not.toContain('operator-report-passcode');
+    } finally {
+      errorLog.mockRestore();
+    }
+  });
 });
