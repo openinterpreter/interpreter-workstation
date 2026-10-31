@@ -130,6 +130,7 @@ import { refreshMcpToolsTool } from './builtin-tools/mcp-management/refreshMcpTo
 import { toggleMcpServerTool } from './builtin-tools/mcp-management/toggleMcpServerTool';
 import { updateMcpServerTool } from './builtin-tools/mcp-management/updateMcpServerTool';
 import { approvalManager } from '../approvalManager';
+import { agentTabManager } from '../agentTabManager';
 import { clearConfigCache, getMcpServer, setConfigOverride } from '../configStore';
 import { rememberToolCallMetadata } from '../utils/codexMcpBridge';
 import { getLatestToolServersChangedEvent } from '../utils/ipcBridge';
@@ -142,6 +143,7 @@ describe('ToolManager MCP integration', () => {
   beforeEach(() => {
     approvalManager.setAutoApprove(false);
     approvalManager.clearAll();
+    agentTabManager.clearAll();
     clearConfigCache();
     setConfigOverride({ agents: {}, mcpServers: {} } as any);
     setToolManager(new ToolManager());
@@ -168,6 +170,7 @@ describe('ToolManager MCP integration', () => {
 
   afterEach(() => {
     approvalManager.clearAll();
+    agentTabManager.clearAll();
     setConfigOverride(null);
     clearConfigCache();
   });
@@ -953,6 +956,104 @@ describe('ToolManager MCP integration', () => {
 
     await expect(manager.callTool('test-mcp', 'do_thing', {}))
       .rejects.toThrow('MCP tool calls require a Codex thread context');
+  });
+
+  test('direct Sites read uses only the operator grant for an authenticated caller bound to the exact thread', async () => {
+    const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    const agentId = 'agent-sites-read';
+    agentTabManager.bindThread({ agentId, callerToken: 'private-test-caller', threadId });
+    setConfigOverride({
+      agents: {}, mcpServers: {}, headlessToolApprovalMode: 'fail-closed',
+      nativeMcpReadGrants: [{ threadId, serverName: 'codex_apps', toolName: 'sites.list_sites' }],
+    } as any);
+
+    const result = await new ToolManager().callTool(
+      'codex_apps', 'sites.list_sites', {}, undefined, agentId, { threadId },
+    );
+    expect(result.isError).toBe(false);
+    expect(approvalManager.getApprovals()).toEqual([]);
+    expect(mockCallTool).toHaveBeenCalledTimes(1);
+    expect(mockCallTool.mock.calls[0]?.slice(0, 4)).toEqual([
+      threadId, 'codex_apps', 'sites.list_sites', {},
+    ]);
+  });
+
+  test('direct Sites read accepts a token-authenticated native caller recovered after host restart', async () => {
+    const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    const agentId = 'agent-sites-recovered';
+    // Native caller token validation happens in interpreterCli before it passes
+    // this binding. The in-memory agent map need not survive the host restart.
+    setConfigOverride({
+      agents: {}, mcpServers: {}, headlessToolApprovalMode: 'fail-closed',
+      nativeMcpReadGrants: [{ threadId, serverName: 'codex_apps', toolName: 'sites.list_sites' }],
+    } as any);
+
+    const result = await new ToolManager().callTool(
+      'codex_apps', 'sites.list_sites', {}, undefined, agentId,
+      { threadId, authenticatedCallerBinding: { agentId, threadId } },
+    );
+    expect(result.isError).toBe(false);
+    expect(approvalManager.getApprovals()).toEqual([]);
+    expect(mockCallTool).toHaveBeenCalledTimes(1);
+  });
+
+  test('direct headless grant fails closed for missing binding, another thread, another tool, or mismatched native item', async () => {
+    const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    const otherThreadId = '01a0d50a-0038-73d0-8f71-0f1815786fdf';
+    const agentId = 'agent-sites-scoped';
+    agentTabManager.bindThread({ agentId, callerToken: 'private-test-caller', threadId });
+    setConfigOverride({
+      agents: {}, mcpServers: {}, headlessToolApprovalMode: 'fail-closed',
+      nativeMcpReadGrants: [{ threadId, serverName: 'codex_apps', toolName: 'sites.list_sites' }],
+    } as any);
+    const manager = new ToolManager();
+    rememberToolCallMetadata('item-sites-other-thread', { threadId: otherThreadId });
+
+    for (const [name, tool, args, caller, claimedThread, item] of [
+      ['unbound', 'sites.list_sites', {}, 'unbound-agent', threadId, undefined],
+      ['other thread', 'sites.list_sites', {}, agentId, otherThreadId, undefined],
+      ['different read', 'sites.get_site', { project_id: 'other' }, agentId, threadId, undefined],
+      ['mutation', 'sites.create_site', {}, agentId, threadId, undefined],
+      ['mismatched item', 'sites.list_sites', {}, agentId, threadId, 'item-sites-other-thread'],
+    ] as const) {
+      const result = await manager.callTool(
+        'codex_apps', tool, args, undefined, caller, { threadId: claimedThread }, item,
+      );
+      expect(result.isError, name).toBe(true);
+      expect(approvalManager.getApprovals(), name).toEqual([]);
+    }
+    expect(mockCallTool).not.toHaveBeenCalled();
+
+    const wrongAttestation = await manager.callTool(
+      'codex_apps', 'sites.list_sites', {}, undefined, 'unbound-agent',
+      { threadId, authenticatedCallerBinding: { agentId: 'other-agent', threadId } },
+    );
+    expect(wrongAttestation.isError).toBe(true);
+    expect(mockCallTool).not.toHaveBeenCalled();
+  });
+
+  test('direct read grant does not override an explicit per-tool approval mode', async () => {
+    const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    const agentId = 'agent-sites-explicit-approval';
+    agentTabManager.bindThread({ agentId, callerToken: 'private-test-caller', threadId });
+    setConfigOverride({
+      agents: {}, headlessToolApprovalMode: 'fail-closed',
+      nativeMcpReadGrants: [{ threadId, serverName: 'codex_apps', toolName: 'sites.list_sites' }],
+      mcpServers: {
+        codex_apps: {
+          id: 'codex_apps', name: 'Sites', transport: 'http', url: 'https://mcp.example.com',
+          enabled: true, createdAt: 1,
+          tools: { 'sites.list_sites': { approvalMode: 'approve' } },
+        },
+      },
+    } as any);
+
+    const result = await new ToolManager().callTool(
+      'codex_apps', 'sites.list_sites', {}, undefined, agentId, { threadId },
+    );
+    expect(result.isError).toBe(true);
+    expect(approvalManager.getApprovals()).toEqual([]);
+    expect(mockCallTool).not.toHaveBeenCalled();
   });
 
   test('callTool gates MCP runtime calls through approval manager at the shared CLI and chat convergence point', async () => {

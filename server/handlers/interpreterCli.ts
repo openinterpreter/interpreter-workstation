@@ -1217,6 +1217,10 @@ export async function callInterpreterCliTool(params: {
             profileId: binding.toolProfileId,
             modelConfig: binding.modelConfig,
             threadId: binding.threadId,
+            ...(binding.threadId ? { authenticatedCallerBinding: {
+              agentId: binding.agentId,
+              threadId: binding.threadId,
+            } } : {}),
             workspace: binding.workspacePath,
             progressReporter: params.onProgress,
             saveToDiskPath: params.saveToDiskPath,
