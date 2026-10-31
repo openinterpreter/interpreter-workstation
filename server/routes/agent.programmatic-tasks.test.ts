@@ -5,6 +5,7 @@ import {
   createAgentStreamErrorPayload,
   getAgentServiceTierConfig,
   getProgrammaticTaskHttpError,
+  getUnacknowledgedTaskError,
   parseProgrammaticTaskBody,
   resolveTestModelRuntime,
   toProgrammaticTaskProgressSseEvents,
@@ -81,6 +82,26 @@ describe('programmatic task HTTP transport', () => {
 });
 
 describe('programmatic task SSE progress mapping', () => {
+  test('reports a terminal pre-ack failure instead of an unexplained no-ack', () => {
+    const failed = {
+      mode: 'headless' as const,
+      completed: false,
+      timestamp: '2026-10-31T00:00:00Z',
+      messageCount: 0,
+      messages: [],
+      error: 'Existing thread could not resume',
+    };
+    expect(getUnacknowledgedTaskError(failed, false)).toEqual({
+      code: 'turn_not_acknowledged',
+      message: 'Existing thread could not resume',
+    });
+    expect(getUnacknowledgedTaskError(failed, true)).toBeNull();
+    expect(getUnacknowledgedTaskError({ ...failed, error: undefined }, false)).toEqual({
+      code: 'turn_not_acknowledged',
+      message: 'Agent task ended without a native turn acknowledgement.',
+    });
+  });
+
   test('maps thread and turn progress to stable SSE events', () => {
     expect(
       toProgrammaticTaskProgressSseEvents({

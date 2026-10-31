@@ -1497,11 +1497,6 @@ describe("CodexService", () => {
           env_key: "CUSTOM_API_KEY",
         },
       },
-      shell_environment_policy: {
-        set: {
-          ELECTRON_RUN_AS_NODE: "1",
-        },
-      },
     });
   });
 
@@ -1556,6 +1551,12 @@ describe("CodexService", () => {
 
   test("passes modelProvider through to resumeThread", async () => {
     const fake = createFakeClient({
+      async resumeThread(threadId, _provider, _model, _cwd, config) {
+        if (config?.shell_environment_policy) {
+          throw new Error('loaded thread may only rotate existing shell environment values');
+        }
+        return threadId;
+      },
       async threadRead() {
         return {
           thread: {
@@ -1585,12 +1586,18 @@ describe("CodexService", () => {
       message: "hello",
       model: "test-model",
       modelProvider: "custom",
+      config: {
+        shell_environment_policy: { set: { INTERPRETER_CALLER_TOKEN: 'agtok_new' } },
+        model_reasoning_effort: 'high',
+      },
       onEvent: () => {},
     });
 
     await waitFor(() => fake.calls.startTurn === 1);
     assert.equal(fake.calls.resumeThreadModelProvider[0], "custom");
     assert.equal(fake.calls.resumeThread, 1);
+    assert.deepEqual(fake.calls.resumeThreadConfig[0], { model_reasoning_effort: 'high' });
+    assert.equal(fake.calls.startThread, 0);
 
     fake.emit({
       method: SERVER_METHOD.turnCompleted,
@@ -1714,7 +1721,7 @@ describe("CodexService", () => {
     await run;
   });
 
-  test("passes config through to resumeThread", async () => {
+  test("preserves loaded thread shell environment instead of adding a new caller token", async () => {
     const fake = createFakeClient();
     const service = new CodexService(fake.client);
 
@@ -1734,15 +1741,7 @@ describe("CodexService", () => {
     });
 
     await waitFor(() => fake.calls.startTurn === 1);
-    assert.deepEqual(fake.calls.resumeThreadConfig[0], {
-      shell_environment_policy: {
-        inherit: "core",
-        set: {
-          ELECTRON_RUN_AS_NODE: "1",
-          INTERPRETER_CALLER_TOKEN: "agtok_test",
-        },
-      },
-    });
+    assert.deepEqual(fake.calls.resumeThreadConfig[0], {});
 
     fake.emit({
       method: SERVER_METHOD.turnCompleted,
@@ -1789,11 +1788,6 @@ describe("CodexService", () => {
           wire_api: "responses",
           experimental_bearer_token: "sk-test",
           http_headers: { Authorization: "Bearer sk-test" },
-        },
-      },
-      shell_environment_policy: {
-        set: {
-          ELECTRON_RUN_AS_NODE: "1",
         },
       },
     });
