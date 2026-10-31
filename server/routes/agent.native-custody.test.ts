@@ -41,4 +41,15 @@ describe('native custody diagnostic authentication', () => {
     expect((await request(app).post(route).set('Authorization', 'Bearer test-private-token')
       .send({ confirmedNoReplay: true })).status).toBe(400);
   });
+  test('historical hold requires private bearer, exact native snapshot, and explicit no-replay decision', async () => {
+    process.env.WORKSTATION_WAKE_TOKEN = 'test-private-token';
+    const route = `/api/agent/threads/${id}/wake-events/source/event/hold-historical`;
+    const body = { expectedClientId: 'wake_123', expectedLatestTurnId: 'latest',
+      decisionRef: 'operator-ticket-1', confirmedNoReplay: true };
+    expect((await request(app).post(route).send(body)).status).toBe(401);
+    expect((await request(app).post(route).set('Authorization', 'Bearer test-private-token')
+      .send({ ...body, confirmedNoReplay: false })).status).toBe(400);
+    expect((await request(app).post(route).set('Authorization', 'Bearer test-private-token')
+      .send({ expectedLatestTurnId: 'latest', confirmedNoReplay: true })).status).toBe(400);
+  });
 });

@@ -27,6 +27,84 @@ async function fixture() {
 }
 
 describe('durable thread wake sources', () => {
+  test('a stalled native history inspection preserves pending custody and does not pin other threads', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-inspect-deadline-'));
+    const messages: string[] = [];
+    let stalledInspections = 0;
+    const wake = new WakeSources({
+      inspect: async (threadId) => threadId === 'thread-stalled'
+        ? (stalledInspections++, await new Promise<never>(() => {})) : { messages },
+      start: async (_thread, message) => { messages.push(message); return 'turn-other'; },
+      steer: async () => { throw new Error('unexpected steer'); },
+    }, root, 10);
+    try {
+      await wake.initialize();
+      await wake.ingest('thread-stalled', 'provider', 'old-id', 'old input');
+      await wake.ingest('thread-healthy', 'provider', 'other-id', 'other input');
+      await wake.tick();
+      expect(wake.list('thread-stalled').events[0]?.status).toBe('pending');
+      expect(wake.list('thread-stalled').events[0]?.error).toBe('Runtime temporarily unavailable');
+      expect(wake.list('thread-healthy').events[0]?.status).toBe('offered');
+      expect(messages).toHaveLength(1);
+      expect(wake.list('thread-stalled').events[0]?.nextAttemptAt).toBeTruthy();
+      await wake.tick(Date.parse(wake.list('thread-stalled').events[0]!.nextAttemptAt!) + 1);
+      expect(stalledInspections).toBe(1);
+    } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+  test('historical unbound offer requires an exact negative receipt and terminal latest-turn snapshot', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-historical-hold-'));
+    let clientIds: string[] = [];
+    let queued = 0;
+    let latest = 'later-turn';
+    const wake = new WakeSources({
+      inspect: async () => ({ messages: [], clientIds }),
+      custody: async () => ({ queuedSubmissionCount: queued, lastTurnId: latest,
+        turnStatus: 'completed', threadStatus: 'idle' }),
+      start: async () => { throw new Error('server overloaded'); },
+      steer: async () => { throw new Error('unexpected steer'); },
+    }, root);
+    try {
+      await wake.initialize();
+      await wake.put({ id: 'old-schedule', threadId: 'thread-1', kind: 'schedule',
+        message: 'Original instruction', at: new Date(Date.now() - 120_000).toISOString(), everyMs: 1_200_000 });
+      await wake.tick();
+      const first = wake.list('thread-1').events[0]!;
+      expect(first.status).toBe('offered');
+      const clientId = wakeClientId(first);
+      await wake.stop();
+      const file = path.join(root, 'wake-sources.json');
+      const saved = JSON.parse(await readFile(file, 'utf8'));
+      saved.events[0].offeredAt = new Date(Date.now() - 61_000).toISOString();
+      await writeFile(file, JSON.stringify(saved));
+      const resumed = new WakeSources({
+        inspect: async () => ({ messages: [], clientIds }),
+        custody: async () => ({ queuedSubmissionCount: queued, lastTurnId: latest,
+          turnStatus: 'completed', threadStatus: 'idle' }),
+        start: async () => { throw new Error('unexpected start'); },
+        steer: async () => { throw new Error('unexpected steer'); },
+      }, root);
+      await resumed.initialize();
+      await expect(resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
+        'wrong-client', latest, 'decision-1')).rejects.toThrow('mismatch');
+      clientIds = [clientId];
+      await expect(resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
+        clientId, latest, 'decision-1')).rejects.toThrow('receipt exists');
+      clientIds = []; queued = 1;
+      await expect(resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
+        clientId, latest, 'decision-1')).rejects.toThrow('queue-empty');
+      queued = 0; latest = 'changed-turn';
+      await expect(resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
+        clientId, 'later-turn', 'decision-1')).rejects.toThrow('queue-empty');
+      const held = await resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
+        clientId, latest, 'decision-1');
+      expect(held.status).toBe('held');
+      expect(held.error).toContain('decision-1');
+      expect(held.turnId).toBeUndefined();
+      expect(resumed.list('thread-1').sources[0]?.status).toBe('error');
+      expect((await resumed.ingest('thread-1', 'provider', 'later-id', 'later input')).status).toBe('pending');
+      await resumed.stop();
+    } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
+  });
   test.skipIf(process.platform !== 'linux')('reclaims a legacy lock after PID reuse, without evicting a live owner', async () => {
     const f = await fixture();
     try {

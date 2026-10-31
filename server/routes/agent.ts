@@ -257,6 +257,28 @@ router.post('/threads/:threadId/wake-events/:sourceId/:eventId/hold', async (req
   }
 });
 
+// An old unbound offer may predate later native turns. The operator must make
+// an explicit no-replay decision against a fresh exact client ID and latest
+// terminal native turn; no time-based automatic skipping or admission claim.
+router.post('/threads/:threadId/wake-events/:sourceId/:eventId/hold-historical', async (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  if (req.body?.confirmedNoReplay !== true || typeof req.body?.expectedClientId !== 'string' ||
+      typeof req.body?.expectedLatestTurnId !== 'string' || typeof req.body?.decisionRef !== 'string') {
+    return res.status(400).json({ error: 'Exact native custody and audited no-replay decision required.' });
+  }
+  try {
+    await readyWakeSources();
+    const event = await wakeSources.holdHistoricalOffered(req.params.threadId, req.params.sourceId,
+      req.params.eventId, req.body.expectedClientId, req.body.expectedLatestTurnId, req.body.decisionRef);
+    return res.json({ eventId: event.eventId, status: event.status, turnId: event.turnId });
+  } catch {
+    return res.status(409).json({ error: 'Historical native custody cannot support a no-replay hold.' });
+  }
+});
+
 router.get('/threads/:threadId/wake-sources', async (req: Request, res: Response) => {
   try { await readyWakeSources(); res.json(wakeSources.list(req.params.threadId)); }
   catch { res.status(503).json({ error: 'Wake sources unavailable.' }); }
