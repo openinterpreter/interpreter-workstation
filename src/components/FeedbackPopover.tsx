@@ -245,10 +245,13 @@ export function FeedbackPopover({ className, iconOnly = false, onOpenChange, ope
       }
     } catch (err: any) {
       let errorMsg = t('feedback.errorSendFailed');
-      if (err?.message) {
+      if (!requiresReportPasscode && err?.message) {
         errorMsg = err.message;
       }
-      console.error('[FEEDBACK] Submit error:', errorMsg, err);
+      // Dedicated transport errors may contain a signed URL or secret in their
+      // exception text. Neither diagnostics nor toasts may echo those bytes.
+      if (requiresReportPasscode) console.error('[FEEDBACK] Submission failed');
+      else console.error('[FEEDBACK] Submit error:', errorMsg, err);
       dismissToast(sendingToastId);
       showToast(errorMsg, 'error', 8000);
     }
