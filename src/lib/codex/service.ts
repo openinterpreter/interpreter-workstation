@@ -374,6 +374,16 @@ function withElectronRunAsNodeConfig(
   return nextConfig;
 }
 
+/** A loaded OIX thread retains its original shell scope. Replacing that policy
+ * on resume can add keys and is rejected before a native turn is admitted.
+ * Rotate the existing caller through the dedicated native wake path instead;
+ * ordinary continuations keep the persisted caller/shell policy unchanged.
+ */
+function configForExistingThread(config?: Record<string, JsonValue> | null): Record<string, JsonValue> {
+  const { shell_environment_policy: _retainedShellPolicy, ...rest } = config ?? {};
+  return rest;
+}
+
 export function extractNotificationThreadId(notification: AppServerNotification) {
   return match(notification)
     .with({ method: SERVER_METHOD.threadStarted }, (n) => n.params.thread.id)
@@ -635,7 +645,7 @@ export class CodexService {
       options.modelProvider,
       options.model,
       options.cwd,
-      withElectronRunAsNodeConfig(runConfig),
+      configForExistingThread(runConfig),
     );
   }
 
@@ -1192,7 +1202,9 @@ export class CodexService {
     dynamicTools?: v2.DynamicToolSpec[] | null,
     additionalWritableRoots?: string[],
   ) {
-    const nextConfig = withElectronRunAsNodeConfig(config);
+    const nextConfig = threadId
+      ? configForExistingThread(config)
+      : withElectronRunAsNodeConfig(config);
 
     if (!threadId) {
       return this.client.startThreadWithConfig(

@@ -39,6 +39,7 @@ import {
   resolveAgentModelConfig,
   type AgentTaskMode,
   type AgentTaskProgressEvent,
+  type AgentTaskResult,
 } from '../agentTaskService';
 import {
   applyProgrammaticTaskRuntimeConfig,
@@ -566,6 +567,7 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
   res.flushHeaders();
 
   let streamClosed = false;
+  let observedTurn = false;
   res.on('close', () => {
     streamClosed = true;
   });
@@ -596,6 +598,7 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
       threadId,
       notifyStarted: true,
       onProgress: (progress) => {
+        if (progress.kind === 'turn') observedTurn = true;
         for (const event of toProgrammaticTaskProgressSseEvents(progress)) {
           emit(event.event, event.payload);
         }
@@ -603,6 +606,8 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
     });
 
     emit('result', result);
+    const unacknowledged = getUnacknowledgedTaskError(result, observedTurn);
+    if (unacknowledged) emit('error', unacknowledged);
     res.end();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -610,6 +615,18 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
     res.end();
   }
 });
+
+/** A terminal result is not an admission receipt unless a native turn was observed. */
+export function getUnacknowledgedTaskError(
+  result: AgentTaskResult,
+  observedTurn: boolean,
+): { code: 'turn_not_acknowledged'; message: string } | null {
+  if (observedTurn) return null;
+  return {
+    code: 'turn_not_acknowledged',
+    message: result.error?.trim() || 'Agent task ended without a native turn acknowledgement.',
+  };
+}
 
 // Get queue status (for UI display)
 router.get("/queue/:agentId", (req: Request, res: Response) => {
