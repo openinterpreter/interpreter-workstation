@@ -23,6 +23,7 @@ import type { McpServerConfig } from './mcpTypes';
 import { isToolServerAgentAccessible } from '../../shared/toolServerAvailability';
 import { prefixToolName } from '../../shared/utils/mcpToolName';
 import { approvalManager } from '../approvalManager';
+import { agentTabManager } from '../agentTabManager';
 
 let toolManagerBroadcastRequestId = 0;
 let toolManagerListStatusesRequestId = 0;
@@ -988,6 +989,8 @@ export class ToolManager {
       workspace?: string;
       progressReporter?: import('./builtinTools').BuiltinToolContext['reportProgress'];
       threadId?: string;
+      /** Derived only after the CLI authenticates its caller token; survives native-thread host reload. */
+      authenticatedCallerBinding?: { agentId: string; threadId: string };
       saveToDiskPath?: string;
       overlayReviewedAction?: boolean;
     },
@@ -1085,6 +1088,20 @@ export class ToolManager {
     const approvalToolName = prefixToolName(serverId, toolName);
     const approvalMode = await this.resolveMcpToolApprovalMode(serverId, toolName);
     const needsApproval = approvalMode !== 'auto';
+    const authenticatedCaller = toolContext?.authenticatedCallerBinding;
+    const boundThreadId = authenticatedCaller?.agentId === callerTabId
+      ? authenticatedCaller?.threadId
+      : (callerTabId ? agentTabManager.getBindingForAgentId(callerTabId)?.threadId : undefined);
+    const itemThreadId = externalToolCallId
+      ? getToolCallMetadata(externalToolCallId)?.threadId
+      : undefined;
+    // Direct interpreter-app tools do not enter native MCP elicitation. Reuse
+    // its operator-owned read grant only for a verified caller/thread binding;
+    // a supplied threadId alone cannot confer this authorization.
+    const exactThreadReadGrant = needsApproval && approvalMode === 'prompt'
+      && boundThreadId === threadId
+      && (!externalToolCallId || itemThreadId === threadId)
+      && configStore.hasNativeMcpReadGrant(threadId, serverId, toolName);
 
     /**
      * NOTE(interpreter-cli-mcp): This is the approval gate for app-managed MCP tools.
@@ -1106,7 +1123,7 @@ export class ToolManager {
      * so app MCP tools cannot bypass this gate.
      */
     if (
-      needsApproval
+      needsApproval && !exactThreadReadGrant
       && !approvalManager.isApprovedForSession(callerTabId, approvalToolName, serverId)
       && !approvalManager.isAutoApproveEnabled()
     ) {
@@ -1115,7 +1132,17 @@ export class ToolManager {
       );
     }
 
-    if (needsApproval) {
+    if (exactThreadReadGrant) {
+      console.info('[DIRECT_MCP_READ_GRANT] decision=accept_once',
+        `thread=${threadId}`, `tool=${approvalToolName}`);
+    } else if (needsApproval && configStore.failClosedOnHeadlessToolApprovalSync()) {
+      console.info('[DIRECT_MCP_APPROVAL] decision=decline_unattended',
+        `thread=${threadId}`, `tool=${approvalToolName}`);
+      return {
+        content: [{ type: 'text', text: `MCP tool call requires an interactive approval: ${approvalToolName}` }],
+        isError: true,
+      };
+    } else if (needsApproval) {
       const mcpApproval = await approvalManager.createSessionAwareApproval(
         approvalToolName,
         serverId,

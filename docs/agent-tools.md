@@ -150,6 +150,15 @@ thread UUID and one of `codex_apps` `sites.get_site` / `sites.list_sites`.
 There are no grants by default. Only a bound thread and a matching native tool
 identity receive a one-call read decision; display titles cannot supply that
 identity. The agent cannot change these grants with `interpreter_settings_set`.
+The same exact-thread read grant applies to a direct `interpreter-app tools`
+call only when its authenticated caller is bound to that native thread. A
+claimed thread ID without that caller binding cannot use the grant. The grant
+bypasses only the default prompt for the named read tool, not an explicit
+per-tool `approve` mode, server enablement, or provider access. With
+`headlessToolApprovalMode: "fail-closed"`, other direct MCP calls that would
+prompt are denied rather than leaving an invisible pending card. This grant
+is **tool-scoped, not project-ID-scoped**: review the provider's authenticated
+principal and data scope before allowing `sites.get_site`.
 Creation, mutation, provider, filesystem, and every other elicitation retain
 the existing approval flow. An existing pending request is **not** retroactively
 resolved when configuration changes. Do not configure a read grant until the
