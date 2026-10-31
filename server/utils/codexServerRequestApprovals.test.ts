@@ -612,6 +612,29 @@ describe('codexServerRequestApprovals', () => {
     assert.equal(sessionApprovalCalls.length, 0);
   });
 
+  test('ordinary-auto native MCP accepts only bound first-party reads, never create or provider', async () => {
+    const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    agentTabManager.bindThread({ agentId: 'agent-ordinary', threadId, callerToken: 'agtok_ordinary' });
+    setConfigOverride({ agents: {}, codexApprovalPolicy: 'never', headlessToolApprovalMode: 'ordinary-auto' } as any);
+    const { deps, sessionApprovalCalls } = createDeps(true);
+    const call = async (serverName: string, toolName: string, requestedThread = threadId) => {
+      let response: any;
+      await handleCodexServerRequest({ id: 1203, method: SERVER_REQUEST_METHOD.mcpServerElicitationRequest,
+        params: { threadId: requestedThread, turnId: 'turn_ordinary', serverName, mode: 'form',
+          _meta: { codex_approval_kind: 'mcp_tool_call', tool_name: toolName, tool_params: {} },
+          message: 'Approval required', requestedSchema: { type: 'object', properties: {} },
+        },
+      } as ServerRequest, (result) => { response = result; }, deps);
+      return response?.action;
+    };
+    assert.equal(await call('codex_apps', 'sites.list_sites'), 'accept');
+    assert.equal(await call('codex_apps', 'sites.get_site'), 'accept');
+    assert.equal(await call('codex_apps', 'sites.create_site'), 'decline');
+    assert.equal(await call('world', 'linq.send'), 'decline');
+    assert.equal(await call('codex_apps', 'sites.list_sites', '01a0d50a-0038-73d0-8f71-0f1815786fdf'), 'decline');
+    assert.equal(sessionApprovalCalls.length, 0);
+  });
+
   test('maps boolean MCP form answers back into structured content', async () => {
     agentTabManager.bindThread({
       agentId: 'agent-mcp-form',

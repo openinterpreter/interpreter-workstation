@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { approvalManager } from '../../../approvalManager';
 import { waitForComputerUseSetupReady } from '../../../computerUseSetupGate';
 import { thumbnailService } from '../../../thumbnailService';
-import { failClosedOnHeadlessToolApprovalSync, getBrowserAccessPolicy, getCuaAccessPolicy, hasNativeCuaDiscoveryGrant } from '../../../configStore';
+import { autoApproveOrdinaryHeadlessToolsSync, failClosedOnHeadlessToolApprovalSync, getBrowserAccessPolicy, getCuaAccessPolicy, hasNativeCuaDiscoveryGrant } from '../../../configStore';
 import { getBrowserControlStatus } from '../../../utils/browserExtensionRelay';
 import {
   checkFileAccessPermission,
@@ -3319,6 +3319,7 @@ async function requestApproval(
     if (discoveryMode === 'deny') {
       throw new Error('Computer Use inspect access to the desktop is denied by Settings > Permissions.');
     }
+    if (autoApproveOrdinaryHeadlessToolsSync()) return;
     // Operator-owned, exact-thread read grant. No global inspect permission,
     // target control, other discovery tool, or argument-bearing call is implied.
     if (failClosedOnHeadlessToolApprovalSync() && Object.keys(args).length === 0 &&
@@ -3377,6 +3378,7 @@ async function requestApproval(
       `Computer Use ${kind} access to "${displayTarget}" is denied by Settings > Permissions.`,
     );
   }
+  if (autoApproveOrdinaryHeadlessToolsSync()) return;
   if (kind === 'control' && context?.overlayReviewedAction === true) {
     return;
   }

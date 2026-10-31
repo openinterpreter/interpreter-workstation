@@ -1122,8 +1122,13 @@ export class ToolManager {
      * global `mcp_servers` table stays empty in [codexRuntime.ts](../utils/codexRuntime.ts)
      * so app MCP tools cannot bypass this gate.
      */
+    const unattendedOrdinaryRead = needsApproval && approvalMode === 'prompt'
+      && boundThreadId === threadId
+      && (!externalToolCallId || itemThreadId === threadId)
+      && configStore.autoApproveOrdinaryHeadlessToolsSync()
+      && configStore.isOrdinaryHeadlessMcpRead(serverId, toolName);
     if (
-      needsApproval && !exactThreadReadGrant
+      needsApproval && !exactThreadReadGrant && !unattendedOrdinaryRead
       && !approvalManager.isApprovedForSession(callerTabId, approvalToolName, serverId)
       && !approvalManager.isAutoApproveEnabled()
     ) {
@@ -1132,7 +1137,7 @@ export class ToolManager {
       );
     }
 
-    if (exactThreadReadGrant) {
+    if (exactThreadReadGrant || unattendedOrdinaryRead) {
       console.info('[DIRECT_MCP_READ_GRANT] decision=accept_once',
         `thread=${threadId}`, `tool=${approvalToolName}`);
     } else if (needsApproval && configStore.failClosedOnHeadlessToolApprovalSync()) {
