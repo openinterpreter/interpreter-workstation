@@ -180,6 +180,8 @@ export interface AppConfig {
   cuaAccessPolicy?: CuaAccessPolicy;
   /** Operator-owned exact-thread read grants for native app-server MCP elicitation. Never inferred from OIX approval policy. */
   nativeMcpReadGrants?: Array<{ threadId: string; serverName: 'codex_apps'; toolName: 'sites.get_site' | 'sites.list_sites' }>;
+  /** Operator-owned, exact-thread grant for the no-argument Computer Use app list only. */
+  nativeCuaDiscoveryGrants?: Array<{ threadId: string; toolName: 'list_apps' }>;
   /** Explicit operator choice: ungranted headless tool calls return a denial, never an invisible pending question. */
   headlessToolApprovalMode?: 'fail-closed';
 
@@ -1440,6 +1442,14 @@ export function hasNativeMcpReadGrant(threadId: string, serverName: string, tool
   const grants = overrideConfig ? overrideConfig.nativeMcpReadGrants : readStoreValue('nativeMcpReadGrants');
   return Array.isArray(grants) && grants.some((grant) =>
     grant?.threadId === threadId && grant.serverName === serverName && grant.toolName === toolName);
+}
+
+export function hasNativeCuaDiscoveryGrant(threadId: string | undefined, toolName: string): boolean {
+  if (!threadId || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId) ||
+      toolName !== 'list_apps') return false;
+  const grants = overrideConfig ? overrideConfig.nativeCuaDiscoveryGrants : readStoreValue('nativeCuaDiscoveryGrants');
+  return Array.isArray(grants) && grants.some((grant) =>
+    grant?.threadId === threadId && grant.toolName === toolName);
 }
 
 export function failClosedOnHeadlessToolApprovalSync(): boolean {

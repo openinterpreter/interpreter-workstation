@@ -361,7 +361,9 @@ export const settingsSetTool: BuiltinToolDefinition = {
       if (path === 'headlessToolApprovalMode' || path.startsWith('headlessToolApprovalMode.') ||
           path.startsWith('headlessToolApprovalMode[') ||
           path === 'nativeMcpReadGrants' || path.startsWith('nativeMcpReadGrants.') ||
-          path.startsWith('nativeMcpReadGrants[')) {
+          path.startsWith('nativeMcpReadGrants[') ||
+          path === 'nativeCuaDiscoveryGrants' || path.startsWith('nativeCuaDiscoveryGrants.') ||
+          path.startsWith('nativeCuaDiscoveryGrants[')) {
         return {
           content: [{ type: 'text', text: 'Headless tool policy and native MCP read grants are operator-owned and cannot be edited by an agent.' }],
           isError: true,
@@ -445,6 +447,13 @@ export const settingsSetTool: BuiltinToolDefinition = {
               text: 'The cuaAccessPolicy setting is read-only for agents. You can read it with interpreter_settings_get, but only the user can change it in Settings > Permissions.',
             },
           ],
+          isError: true,
+        };
+      }
+
+      if (!isEqual(get(modifiedConfig, 'nativeCuaDiscoveryGrants'), get(config, 'nativeCuaDiscoveryGrants'))) {
+        return {
+          content: [{ type: 'text', text: 'Native Computer Use discovery grants are operator-owned and cannot be edited by an agent.' }],
           isError: true,
         };
       }

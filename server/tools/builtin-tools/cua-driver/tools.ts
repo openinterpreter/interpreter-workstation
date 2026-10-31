@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { approvalManager } from '../../../approvalManager';
 import { waitForComputerUseSetupReady } from '../../../computerUseSetupGate';
 import { thumbnailService } from '../../../thumbnailService';
-import { failClosedOnHeadlessToolApprovalSync, getBrowserAccessPolicy, getCuaAccessPolicy } from '../../../configStore';
+import { failClosedOnHeadlessToolApprovalSync, getBrowserAccessPolicy, getCuaAccessPolicy, hasNativeCuaDiscoveryGrant } from '../../../configStore';
 import { getBrowserControlStatus } from '../../../utils/browserExtensionRelay';
 import {
   checkFileAccessPermission,
@@ -3319,6 +3319,10 @@ async function requestApproval(
     if (discoveryMode === 'deny') {
       throw new Error('Computer Use inspect access to the desktop is denied by Settings > Permissions.');
     }
+    // Operator-owned, exact-thread read grant. No global inspect permission,
+    // target control, other discovery tool, or argument-bearing call is implied.
+    if (failClosedOnHeadlessToolApprovalSync() && Object.keys(args).length === 0 &&
+        hasNativeCuaDiscoveryGrant(context?.threadId, toolName)) return;
     if (failClosedOnHeadlessToolApprovalSync()) {
       throw new Error('Computer Use discovery requires an operator inspect grant; unattended approval was denied before acquiring the desktop lock.');
     }

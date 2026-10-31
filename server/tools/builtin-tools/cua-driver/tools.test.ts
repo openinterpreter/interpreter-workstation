@@ -812,6 +812,41 @@ describe('macOS Computer Use wrapper behavior', () => {
     });
   });
 
+  test('operator exact-thread app-list grant never broadens inspect, control or other threads', async () => {
+    await withPlatform('linux', async () => {
+      const owner = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+      const other = '01a0d435-bb2b-7047-afe7-0a639be8e5d5';
+      setConfigOverride({ agents: {}, headlessToolApprovalMode: 'fail-closed',
+        nativeCuaDiscoveryGrants: [{ threadId: owner, toolName: 'list_apps' }] } as any);
+      setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+        permissions: { inspect: { mode: 'ask' }, control: { mode: 'ask' } }, appPolicies: [],
+      }));
+      try {
+        await expect(requestApprovalForTest('list_apps', {}, { threadId: owner })).resolves.toBeUndefined();
+        for (const context of [{ threadId: other }, {}, undefined]) {
+          await expect(requestApprovalForTest('list_apps', {}, context))
+            .rejects.toThrow('unattended approval was denied');
+        }
+        await expect(requestApprovalForTest('list_apps', { extra: true }, { threadId: owner }))
+          .rejects.toThrow('unattended approval was denied');
+        await expect(requestApprovalForTest('list_windows', {}, { threadId: owner }))
+          .rejects.toThrow('unattended approval was denied');
+        await expect(requestApprovalForTest('get_app_state', { app: 'LocalApp' }, { threadId: owner }))
+          .rejects.toThrow('unattended approval was denied');
+        await expect(requestApprovalForTest('click', { app: 'LocalApp' }, { threadId: owner }))
+          .rejects.toThrow('unattended approval was denied');
+        setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+          permissions: { inspect: { mode: 'deny' }, control: { mode: 'ask' } }, appPolicies: [],
+        }));
+        await expect(requestApprovalForTest('list_apps', {}, { threadId: owner }))
+          .rejects.toThrow('denied by Settings');
+      } finally {
+        setCuaAccessPolicyProviderForCuaDriverTest(null);
+        setConfigOverride(null);
+      }
+    });
+  });
+
   test('does not ask twice for reviewed overlay control actions but still honors Settings deny', async () => {
     await withPlatform('darwin', async () => {
       setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
