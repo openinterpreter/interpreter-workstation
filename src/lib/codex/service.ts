@@ -1053,13 +1053,16 @@ export class CodexService {
     cwd?: string,
     config?: Record<string, JsonValue>,
     clientUserMessageId?: string,
+    onAdmissionPhase?: (phase: 'resume' | 'start') => void,
   ): Promise<string> {
     await this.reconcileTerminalTurn(threadId);
     this.assertNoActiveTurn(threadId);
     this.activeTurns.set(threadId, null);
     try {
+      onAdmissionPhase?.('resume');
       const resumedId = await this.client.resumeThread(threadId, null, null, cwd, config);
       if (resumedId !== threadId) throw new Error('Existing thread identity changed');
+      onAdmissionPhase?.('start');
       const turn = await this.client.startTurn({ threadId, message, cwd, clientUserMessageId });
       this.activeTurns.set(threadId, turn.id);
       return turn.id;
