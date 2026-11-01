@@ -101,7 +101,7 @@ import {
   startQwenAsrStreamSession,
 } from '../utils/qwenAsrStream';
 import { inferSmartTurn } from '../utils/smartTurnService';
-import { isThreadUnavailableError, requiresFreshThread } from '../utils/codexThreadRecovery';
+import { requiresFreshThread } from '../utils/codexThreadRecovery';
 import {
   getMainAgentBaseInstructions,
   getMainAgentDeveloperPrompt,
@@ -1215,18 +1215,11 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
         if (error instanceof Error && error.message === FRESH_THREAD_REQUIRED_MESSAGE) {
           throw error;
         }
-        if (isThreadUnavailableError(error)) {
-          console.warn('[Agent API] Starting fresh Codex thread after stale thread id.', {
-            staleThreadId: targetThreadId,
-          });
-          targetThreadId = undefined;
-          // Continue with a fresh thread for this turn.
-        } else {
-          console.warn(
-            '[Agent API] Failed to inspect Codex thread before send; continuing with normal resume flow.',
-            error instanceof Error ? error.message : error,
-          );
-        }
+        // The next native resume reports the precise failure. Never replace a
+        // supplied saved-thread ID with a new chat merely because preflight
+        // could not read it; durable inputs belong to that same thread.
+        console.warn('[Agent API] Existing thread preflight unavailable; retaining thread identity.',
+          error instanceof Error ? error.message : error);
       }
     }
 
@@ -1254,6 +1247,7 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
       attachments,
       skills: explicitSkills,
       threadId: targetThreadId,
+      clientUserMessageId: request.clientUserMessageId,
       binding: request.agentId
         ? {
           agentId: request.agentId,

@@ -239,6 +239,7 @@ export function validateStreamRequestBody(
     "message",
     "system",
     "threadId",
+    "clientUserMessageId",
     "workspacePath",
     "model",
     "profileId",
@@ -269,6 +270,13 @@ export function validateStreamRequestBody(
 
   if (hasOwn(data, "threadId") && data.threadId !== null && typeof data.threadId !== "string") {
     console.warn("Invalid StreamRequestBody:", [{ message: "threadId must be string or null" }]);
+    return false;
+  }
+
+  if (hasOwn(data, "clientUserMessageId") &&
+      (typeof data.clientUserMessageId !== "string" ||
+       !/^[A-Za-z0-9_-]{1,160}$/.test(data.clientUserMessageId))) {
+    console.warn("Invalid StreamRequestBody:", [{ message: "clientUserMessageId must be a bounded native ID" }]);
     return false;
   }
 

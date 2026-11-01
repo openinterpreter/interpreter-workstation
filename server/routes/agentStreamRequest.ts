@@ -11,6 +11,7 @@ type StreamRequestCommon = {
   message?: string;
   system?: string;
   threadId?: string | null;
+  clientUserMessageId?: string;
   workspacePath?: string | null;
   reasoningEffort?: ReasoningEffort;
   attachments: StreamImageAttachment[];
@@ -46,6 +47,7 @@ function buildCommonRequestFields(body: StreamRequestBody): StreamRequestCommon 
     message: body.message,
     system: body.system,
     threadId: body.threadId,
+    clientUserMessageId: body.clientUserMessageId,
     workspacePath: body.workspacePath,
     reasoningEffort: body.reasoningEffort,
     attachments: body.attachments ?? [],

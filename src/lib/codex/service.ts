@@ -19,7 +19,6 @@ import {
 import type { Profile } from "./profiles";
 import { providerConfigToJsonValue } from "./profiles";
 import { attachCodexServerRequestApprovals } from "../../../server/utils/codexServerRequestApprovals";
-import { isThreadUnavailableError } from "../../../server/utils/codexThreadRecovery";
 
 import {
   type AppServerNotification,
@@ -141,6 +140,8 @@ export type StreamEvent =
 type RunTurnOptions = {
   threadId?: string;
   message?: string;
+  /** Stable native input identity when the caller has durable custody. */
+  clientUserMessageId?: string;
   attachments?: StreamImageAttachment[];
   skills?: StreamSkillReference[];
   sandboxPolicy?: v2.SandboxPolicy;
@@ -497,6 +498,66 @@ export class CodexService {
     });
   }
 
+  /** All ordinary ingress converges on the same native turn/start or
+   * turn/steer submission. This is an RPC receipt, not durable admission:
+   * durable producers must still reconcile their client ID in native history.
+   */
+  private async submitNativeInput(
+    input: { kind: 'start'; params: Parameters<CodexClient['startTurn']>[0];
+      existingThread?: { config?: Record<string, JsonValue>;
+        onPhase?: (phase: 'resume' | 'start') => void } }
+      | { kind: 'steer'; params: Parameters<CodexClient['steerTurn']>[0] },
+  ): Promise<{ turnId: string; status?: v2.TurnStatus }> {
+    if (input.kind === 'start') {
+      const { threadId } = input.params;
+      if (input.existingThread) {
+        await this.reconcileTerminalTurn(threadId);
+        this.assertNoActiveTurn(threadId);
+        this.activeTurns.set(threadId, null);
+      }
+      try {
+        if (input.existingThread) {
+          input.existingThread.onPhase?.('resume');
+          await this.resumeExistingInputThread({ threadId, modelProvider: null, model: null,
+            cwd: input.params.cwd, config: input.existingThread.config });
+          input.existingThread.onPhase?.('start');
+        }
+        const turn = await this.client.startTurn(input.params);
+        this.activeTurns.set(threadId, turn.id);
+        return { turnId: turn.id, status: turn.status };
+      } catch (error) {
+        if (this.activeTurns.get(threadId) === null) this.activeTurns.delete(threadId);
+        throw error;
+      }
+    }
+    const response = await this.client.steerTurn(input.params);
+    this.activeTurns.set(input.params.threadId, response.turnId);
+    return { turnId: response.turnId };
+  }
+
+  /** Shared existing-thread preparation for UI, peer, timer and external
+   * inputs. Producers choose their own auth and durable custody; none may
+   * replace a loaded thread's shell scope or silently change its identity.
+   */
+  private async resumeExistingInputThread(options: {
+    threadId: string;
+    modelProvider?: string | null;
+    model?: string | null;
+    cwd?: string | null;
+    config?: Record<string, JsonValue> | null;
+    baseInstructions?: string | null;
+    developerInstructions?: string | null;
+    additionalWritableRoots?: string[];
+  }): Promise<string> {
+    const resumedId = await this.client.resumeThread(
+      options.threadId, options.modelProvider, options.model, options.cwd,
+      configForExistingThread(options.config), options.baseInstructions,
+      options.developerInstructions, options.additionalWritableRoots,
+    );
+    if (resumedId !== options.threadId) throw new Error('Existing thread identity changed');
+    return resumedId;
+  }
+
   private assertNoActiveTurn(threadId: string): void {
     if (!this.activeTurns.has(threadId)) {
       return;
@@ -640,13 +701,13 @@ export class CodexService {
       };
     }
 
-    return this.client.resumeThread(
-      options.threadId,
-      options.modelProvider,
-      options.model,
-      options.cwd,
-      configForExistingThread(runConfig),
-    );
+    return this.resumeExistingInputThread({
+      threadId: options.threadId,
+      modelProvider: options.modelProvider,
+      model: options.model,
+      cwd: options.cwd,
+      config: runConfig,
+    });
   }
 
   /**
@@ -895,9 +956,10 @@ export class CodexService {
     });
 
     try {
-      const turn = await this.client.startTurn({
+      const turn = await this.submitNativeInput({ kind: 'start', params: {
         threadId,
         message: options.message,
+        clientUserMessageId: options.clientUserMessageId,
         attachments: options.attachments,
         skills: options.skills,
         sandboxPolicy: options.sandboxPolicy,
@@ -906,12 +968,11 @@ export class CodexService {
         effort: options.effort,
         summary: options.summary,
         additionalWritableRoots: options.additionalWritableRoots,
-      });
+      } });
 
-      turnId = turn.id;
+      turnId = turn.turnId;
       turnStarted = true;
-      this.activeTurns.set(threadId, turnId);
-      options.onEvent({ kind: "turn", threadId, turnId, status: turn.status });
+      options.onEvent({ kind: "turn", threadId, turnId, status: turn.status! });
       scheduleIdleTimeout("turn started");
 
       if (options.signal) {
@@ -1055,22 +1116,10 @@ export class CodexService {
     clientUserMessageId?: string,
     onAdmissionPhase?: (phase: 'resume' | 'start') => void,
   ): Promise<string> {
-    await this.reconcileTerminalTurn(threadId);
-    this.assertNoActiveTurn(threadId);
-    this.activeTurns.set(threadId, null);
-    try {
-      onAdmissionPhase?.('resume');
-      const resumedId = await this.client.resumeThread(threadId, null, null, cwd,
-        configForExistingThread(config));
-      if (resumedId !== threadId) throw new Error('Existing thread identity changed');
-      onAdmissionPhase?.('start');
-      const turn = await this.client.startTurn({ threadId, message, cwd, clientUserMessageId });
-      this.activeTurns.set(threadId, turn.id);
-      return turn.id;
-    } catch (error) {
-      if (this.activeTurns.get(threadId) === null) this.activeTurns.delete(threadId);
-      throw error;
-    }
+    const turn = await this.submitNativeInput({ kind: 'start', params: {
+      threadId, message, cwd, clientUserMessageId,
+    }, existingThread: { config, onPhase: onAdmissionPhase } });
+    return turn.turnId;
   }
 
   async setThreadName(threadId: string, name: string): Promise<void> {
@@ -1141,15 +1190,14 @@ export class CodexService {
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        const response = await this.client.steerTurn({
+        const response = await this.submitNativeInput({ kind: 'steer', params: {
           threadId,
           turnId: activeTurnId,
           message: params.message,
           ...(params.clientUserMessageId ? { clientUserMessageId: params.clientUserMessageId } : {}),
           attachments: params.attachments,
           skills: params.skills,
-        });
-        this.activeTurns.set(threadId, response.turnId);
+        } });
         return response.turnId;
       } catch (error) {
         const actualTurnId = extractSteerMismatchActualTurnId(error);
@@ -1206,9 +1254,7 @@ export class CodexService {
     dynamicTools?: v2.DynamicToolSpec[] | null,
     additionalWritableRoots?: string[],
   ) {
-    const nextConfig = threadId
-      ? configForExistingThread(config)
-      : withElectronRunAsNodeConfig(config);
+    const nextConfig = threadId ? config : withElectronRunAsNodeConfig(config);
 
     if (!threadId) {
       return this.client.startThreadWithConfig(
@@ -1223,38 +1269,11 @@ export class CodexService {
       );
     }
 
-    try {
-      return await this.client.resumeThread(
-        threadId,
-        modelProvider,
-        model,
-        cwd,
-        nextConfig,
-        baseInstructions,
-        developerInstructions,
-        additionalWritableRoots,
-      );
-    } catch (error) {
-      // NOTE(victor): Upstream app-server reports stale thread resumes as
-      // InvalidRequest markers like "thread not found", "thread not loaded", or
-      // "invalid thread id". Only those should start a fresh thread; transport
-      // exits still need to surface. See server/utils/codexThreadRecovery.ts and
-      // codex/codex-rs/app-server/src/codex_message_processor.rs.
-      if (!isThreadUnavailableError(error)) {
-        throw error;
-      }
-
-      return this.client.startThreadWithConfig(
-        model,
-        modelProvider,
-        baseInstructions,
-        cwd,
-        nextConfig,
-        developerInstructions,
-        dynamicTools,
-        additionalWritableRoots,
-      );
-    }
+    // An input addressed to a retained thread must not silently create a
+    // different conversation if OIX cannot resume it. The caller can surface
+    // the native failure and preserve its own durable event for recovery.
+    return this.resumeExistingInputThread({ threadId, modelProvider, model, cwd,
+      config: nextConfig, baseInstructions, developerInstructions, additionalWritableRoots });
   }
 }
 

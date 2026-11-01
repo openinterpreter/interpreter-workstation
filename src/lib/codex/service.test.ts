@@ -1307,7 +1307,7 @@ describe("CodexService", () => {
     await rejection;
   });
 
-  test("starts a fresh thread when resumeThread reports a stale thread", async () => {
+  test("never redirects an existing-thread input into a new conversation on stale resume", async () => {
     const fake = createFakeClient({
       async resumeThread() {
         throw new JSONRPCErrorException(
@@ -1318,26 +1318,15 @@ describe("CodexService", () => {
     });
     const service = new CodexService(fake.client);
 
-    const run = service.runTurn({
+    await assert.rejects(service.runTurn({
       threadId: "thr_existing",
       message: "hello",
       model: "test-model",
       onEvent: () => {},
-    });
-
-    await waitFor(() => fake.calls.startTurn === 1);
+    }), /thread not found/);
     assert.equal(fake.calls.resumeThread, 1);
-    assert.equal(fake.calls.startThread, 1);
-
-    fake.emit({
-      method: SERVER_METHOD.turnCompleted,
-      params: {
-        threadId: "thr_new",
-        turn: createTurn("turn_1", "completed"),
-      },
-    });
-
-    await run;
+    assert.equal(fake.calls.startThread, 0);
+    assert.equal(fake.calls.startTurn, 0);
   });
 
   test("wake admission starts only the exact existing thread and keeps its active-turn guard", async () => {
@@ -1382,6 +1371,40 @@ describe("CodexService", () => {
     assert.deepEqual(fake.calls.resumeThreadConfig[0], { mcp_servers: {} });
     assert.equal(fake.calls.startTurn, 1);
     assert.equal(nativeClientId, 'wake_stable');
+  });
+
+  test("ordinary stream, idle durable wake and active input share native scope and input IDs", async () => {
+    const ids: Array<string | undefined> = [];
+    const fake = createFakeClient({
+      async resumeThread(id, _provider, _model, _cwd, config) {
+        if (config?.shell_environment_policy) throw new Error('loaded shell policy changed');
+        return id;
+      },
+      async startTurn(params) {
+        ids.push(params.clientUserMessageId);
+        return createTurn(`turn_${ids.length}`);
+      },
+    });
+    const service = new CodexService(fake.client);
+    const run = service.runTurn({ threadId: 'thr_existing', message: 'UI input',
+      clientUserMessageId: 'ui_stable', model: 'test-model',
+      config: { mcp_servers: {}, shell_environment_policy: { set: { INTERPRETER_CALLER_TOKEN: 'original' } } },
+      onEvent: () => {},
+    });
+    await waitFor(() => fake.calls.startTurn === 1);
+    fake.emit({ method: SERVER_METHOD.turnCompleted,
+      params: { threadId: 'thr_existing', turn: createTurn('turn_1', 'completed') } });
+    assert.equal((await run).turnId, 'turn_1');
+
+    assert.equal(await service.startExistingThreadTurn('thr_existing', 'timer input', '/workspace',
+      { mcp_servers: {}, shell_environment_policy: { set: { INTERPRETER_CALLER_TOKEN: 'unrelated' } } },
+      'wake_stable'), 'turn_2');
+    assert.equal(await service.steer('thr_existing', { turnId: 'turn_2', message: 'peer input',
+      clientUserMessageId: 'peer_stable' }), 'turn_2');
+    assert.deepEqual(ids, ['ui_stable', 'wake_stable']);
+    assert.equal(fake.calls.steerTurn[0]?.clientUserMessageId, 'peer_stable');
+    assert.deepEqual(fake.calls.resumeThreadConfig, [{ mcp_servers: {} }, { mcp_servers: {} }]);
+    assert.equal(fake.calls.startThread, 0);
   });
 
   test("wake admission never replaces a missing thread", async () => {
