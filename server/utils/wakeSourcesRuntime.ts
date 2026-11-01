@@ -1,12 +1,4 @@
-import { nanoid } from 'nanoid';
 import { getCodexService } from '../../src/lib/codex/service';
-import { agentTabManager } from '../agentTabManager';
-import { getServerPort } from './serverPort';
-import {
-  buildInterpreterCliServerConnection,
-  buildInterpreterCliShellEnvironmentPolicy,
-} from './interpreterCliRuntime';
-import { resolveAgentInterpreterCliTransport } from './codexRuntime';
 import { WakeSources, WakeAdmissionFailure } from './wakeSources';
 
 export async function startWakeThreadTurn(
@@ -19,29 +11,13 @@ export async function startWakeThreadTurn(
   try { thread = await service.readThread(threadId); }
   catch (error) { throw new WakeAdmissionFailure('preflight', error); }
   if (thread.id !== threadId) throw new Error('Wake destination changed');
-  // Native wake admission resumes OIX directly, bypassing runCodexAgentTurn.
-  // A resumed thread does not retain that request's shell policy, so bind its
-  // existing caller (or a fresh, thread-scoped caller after a host restart)
-  // and reapply only the app-tool bridge. Preserve its native model/provider.
-  const binding = agentTabManager.getBindingForThread(threadId);
-  const callerToken = binding?.callerToken ?? `agtok_${nanoid()}`;
-  if (!binding) {
-    agentTabManager.bindThread({
-      agentId: `wake-${nanoid()}`,
-      callerToken,
-      threadId,
-      workspacePath: thread.cwd ?? undefined,
-    });
-  }
-  const connection = buildInterpreterCliServerConnection(getServerPort(), {
-    transport: resolveAgentInterpreterCliTransport(process.platform),
-  });
+  // An existing OIX thread retains its shell policy and caller token. Adding
+  // keys during resume is rejected for loaded threads, while minting a token
+  // here would not rotate the token already held by that native thread. The
+  // original scoped caller remains recoverable through its persisted hash.
   let phase: 'resume' | 'start' = 'resume';
   try { return await service.startExistingThreadTurn(threadId, message, thread.cwd ?? undefined, {
     mcp_servers: {},
-    shell_environment_policy: buildInterpreterCliShellEnvironmentPolicy(
-      callerToken, process.env, process.platform, thread.cwd ?? undefined, connection,
-    ),
   }, clientUserMessageId, next => { phase = next; }); }
   catch (error) { throw new WakeAdmissionFailure(phase, error); }
 }

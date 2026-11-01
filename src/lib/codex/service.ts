@@ -1060,7 +1060,8 @@ export class CodexService {
     this.activeTurns.set(threadId, null);
     try {
       onAdmissionPhase?.('resume');
-      const resumedId = await this.client.resumeThread(threadId, null, null, cwd, config);
+      const resumedId = await this.client.resumeThread(threadId, null, null, cwd,
+        configForExistingThread(config));
       if (resumedId !== threadId) throw new Error('Existing thread identity changed');
       onAdmissionPhase?.('start');
       const turn = await this.client.startTurn({ threadId, message, cwd, clientUserMessageId });
