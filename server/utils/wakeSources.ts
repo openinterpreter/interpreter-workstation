@@ -36,7 +36,31 @@ export type WakeEvent = {
   turnId?: string;
   nextAttemptAt?: string;
   error?: string;
+  /** Safe, durable exception metadata; never stores native/provider content. */
+  failure?: { phase: 'preflight' | 'resume' | 'start' | 'steer' | 'persist' | 'inspect';
+    name: string; category: 'loaded-environment' | 'timeout' | 'unavailable' | 'unknown';
+    code?: string; messageSha256: string };
 };
+export class WakeAdmissionFailure extends Error {
+  constructor(readonly phase: 'preflight' | 'resume' | 'start', readonly original: unknown) {
+    super('Native wake admission failed');
+    this.name = 'WakeAdmissionFailure';
+  }
+}
+function nativeFailure(error: unknown, phase: NonNullable<WakeEvent['failure']>['phase']): NonNullable<WakeEvent['failure']> {
+  const original = error instanceof WakeAdmissionFailure ? error.original : error;
+  const name = original instanceof Error && /^(?:Error|[A-Za-z]{1,60}Error)$/.test(original.name)
+    ? original.name : 'UnknownError';
+  const message = original instanceof Error ? original.message : '';
+  const category = /loaded thread may only rotate existing shell environment values/i.test(message)
+    ? 'loaded-environment' : /timed? ?out|deadline/i.test(message) ? 'timeout'
+      : /unavailable|disconnect|connection refused/i.test(message) ? 'unavailable' : 'unknown';
+  const rawCode = original && typeof original === 'object' && 'code' in original ? original.code : undefined;
+  const code = typeof rawCode === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(rawCode) ? rawCode : undefined;
+  const messageSha256 = createHash('sha256').update(message).digest('hex');
+  return { phase: error instanceof WakeAdmissionFailure ? error.phase : phase, name, category,
+    ...(code ? { code } : {}), messageSha256 };
+}
 type State = { sources: WakeSource[]; events: WakeEvent[] };
 const EMPTY: State = { sources: [], events: [] };
 const ID = /^[a-zA-Z0-9_-]{1,160}$/;
@@ -156,6 +180,7 @@ export class WakeSources {
       if (event.status === 'admitted') {
         event.message = '';
         delete event.error;
+        delete event.failure;
         delete event.offeredAt;
         delete event.nextAttemptAt;
       }
@@ -566,6 +591,7 @@ export class WakeSources {
 
   private async deliver(event: WakeEvent, now: number): Promise<void> {
     if (event.nextAttemptAt && Date.parse(event.nextAttemptAt) > now) return;
+    let admissionPhase: NonNullable<WakeEvent['failure']>['phase'] = 'inspect';
     try {
       const source = this.state.sources.find(s => s.id === event.sourceId && s.threadId === event.threadId);
       if (source?.paused) return;
@@ -581,6 +607,7 @@ export class WakeSources {
           event.status = 'admitted';
           event.message = '';
           delete event.error;
+          delete event.failure;
           delete event.offeredAt;
           delete event.nextAttemptAt;
           const source = this.state.sources.find(s => s.id === event.sourceId && s.threadId === event.threadId);
@@ -610,17 +637,30 @@ export class WakeSources {
       // Mark intent before the RPC: a crash between RPC and response must be
       // reconciled against native history, rather than immediately retried.
       await this.exclusive(async () => { event.status = 'offered'; event.offeredAt = new Date(now).toISOString(); await this.save(); });
+      admissionPhase = state.activeTurnId ? 'steer' : 'start';
       const turnId = state.activeTurnId
         ? await this.native.steer(event.threadId, state.activeTurnId, wakeInput(event), wakeClientId(event))
         : await this.native.start(event.threadId, wakeInput(event), wakeClientId(event));
+      admissionPhase = 'persist';
       await this.exclusive(async () => { event.turnId = turnId; await this.save(); });
     } catch (error) {
-      const explanation = safeError(error);
+      const explanation = safeError(error instanceof WakeAdmissionFailure ? error.original : error);
+      const failure = nativeFailure(error, admissionPhase);
+      event.failure = failure;
+      // Diagnostic contains only bounded IDs and a digest, never native error
+      // prose, user messages, provider responses or tool arguments.
+      console.error('[Wake admission diagnostic]', JSON.stringify({
+        sourceId: event.sourceId, eventId: event.eventId, clientId: wakeClientId(event), ...failure,
+      }));
       // The native steer endpoint explicitly rejected this input before
       // admission: the inspected turn ended between inspect and steer. Unlike
       // a timeout/disconnect, this is not an ambiguous accepted RPC; retry by
       // inspecting the SAME thread, which can now be idle.
-      if (event.status === 'offered' && error instanceof Error && error.message === 'no active turn to steer') {
+      if (event.status === 'offered' && ((error instanceof WakeAdmissionFailure &&
+          (error.phase === 'preflight' || error.phase === 'resume')) ||
+          (error instanceof Error && error.message === 'no active turn to steer'))) {
+        // A pre-start failure cannot have submitted this user message; start
+        // and steer failures remain ambiguous and must never replay blindly.
         event.status = 'pending';
         delete event.offeredAt;
       }

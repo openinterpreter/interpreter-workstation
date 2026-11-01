@@ -7,7 +7,7 @@ import {
   buildInterpreterCliShellEnvironmentPolicy,
 } from './interpreterCliRuntime';
 import { resolveAgentInterpreterCliTransport } from './codexRuntime';
-import { WakeSources } from './wakeSources';
+import { WakeSources, WakeAdmissionFailure } from './wakeSources';
 
 export async function startWakeThreadTurn(
   threadId: string,
@@ -15,7 +15,9 @@ export async function startWakeThreadTurn(
   service = getCodexService(),
   clientUserMessageId?: string,
 ): Promise<string> {
-  const thread = await service.readThread(threadId);
+  let thread;
+  try { thread = await service.readThread(threadId); }
+  catch (error) { throw new WakeAdmissionFailure('preflight', error); }
   if (thread.id !== threadId) throw new Error('Wake destination changed');
   // Native wake admission resumes OIX directly, bypassing runCodexAgentTurn.
   // A resumed thread does not retain that request's shell policy, so bind its
@@ -34,12 +36,14 @@ export async function startWakeThreadTurn(
   const connection = buildInterpreterCliServerConnection(getServerPort(), {
     transport: resolveAgentInterpreterCliTransport(process.platform),
   });
-  return service.startExistingThreadTurn(threadId, message, thread.cwd ?? undefined, {
+  let phase: 'resume' | 'start' = 'resume';
+  try { return await service.startExistingThreadTurn(threadId, message, thread.cwd ?? undefined, {
     mcp_servers: {},
     shell_environment_policy: buildInterpreterCliShellEnvironmentPolicy(
       callerToken, process.env, process.platform, thread.cwd ?? undefined, connection,
     ),
-  }, clientUserMessageId);
+  }, clientUserMessageId, next => { phase = next; }); }
+  catch (error) { throw new WakeAdmissionFailure(phase, error); }
 }
 
 export const wakeSources = new WakeSources({
