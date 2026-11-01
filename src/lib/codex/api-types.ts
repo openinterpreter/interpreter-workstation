@@ -42,6 +42,8 @@ export type StopRequestBody = {
 export type SteerRequestBody = {
   threadId?: string;
   turnId?: string;
+  /** Stable per-input native ID for a retried steer; not a delivery receipt. */
+  clientUserMessageId?: string;
   message?: string;
   attachments?: StreamImageAttachment[];
   skills?: StreamSkillReference[];

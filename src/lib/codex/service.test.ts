@@ -1026,6 +1026,18 @@ describe("CodexService", () => {
     ]);
   });
 
+  test("passes an explicit stable input ID to native steer without starting another turn", async () => {
+    const fake = createFakeClient();
+    const service = new CodexService(fake.client);
+    const id = await service.steer("thr_existing", {
+      message: "follow up", turnId: "turn_1", clientUserMessageId: "peer_event-1",
+    });
+    assert.equal(id, "turn_1");
+    assert.equal(fake.calls.steerTurn.length, 1);
+    assert.equal(fake.calls.steerTurn[0]?.clientUserMessageId, "peer_event-1");
+    assert.equal(fake.calls.startTurnCwd.length, 0);
+  });
+
   test("retries steer once when the cached active turn id is stale", async () => {
     const fake = createFakeClient({
       async steerTurn(params) {
