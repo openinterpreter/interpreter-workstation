@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { WakeSources, wakeClientId, wakeInput, wakeTokenValid, type WakeNative } from './wakeSources';
+import { WakeSources, WakeAdmissionFailure, wakeClientId, wakeInput, wakeTokenValid, type WakeNative } from './wakeSources';
 import { nextCivilDaily } from './civilSchedule';
 
 async function fixture() {
@@ -842,6 +842,102 @@ setTimeout(()=>process.stdout.write(b.subarray(i+2)),30);`;
       expect(wake.list('thread-1').sources).toHaveLength(0);
       await wake.tick();
       expect(attempts).toBe(1); // no retry storm, no fallback; retained for recovery
+    } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  test('resume rejection is durably diagnosed and may retry the same stable ID without another user turn', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-resume-reject-'));
+    let attempts = 0;
+    const ids: string[] = [];
+    const messages: string[] = [];
+    const native: WakeNative = {
+      inspect: async () => ({ messages }), steer: async () => { throw new Error('unexpected'); },
+      start: async (_thread, message, id) => {
+        attempts++; ids.push(id!);
+        if (attempts === 1) throw new WakeAdmissionFailure('resume', new Error('native sensitive diagnostic'));
+        messages.push(message); return 'native-turn';
+      },
+    };
+    const wake = new WakeSources(native, root);
+    try {
+      await wake.initialize();
+      await wake.ingest('thread-1', 'daily', 'daily-21', 'private instruction');
+      await wake.tick();
+      const first = wake.list('thread-1').events[0]!;
+      expect(first.status).toBe('pending');
+      expect(first.failure?.phase).toBe('resume');
+      expect(first.failure?.messageSha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(JSON.stringify(first)).not.toContain('native sensitive diagnostic');
+      await wake.tick(Date.now() + 70_000);
+      expect(attempts).toBe(2);
+      expect(ids[0]).toBe(ids[1]);
+      await wake.tick(Date.now() + 70_001);
+      expect(wake.list('thread-1').events[0]?.status).toBe('admitted');
+    } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  test('native start timeout stays offered through restart, then reconciles a late client-ID receipt once', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-start-timeout-'));
+    let attempts = 0;
+    const ids: string[] = [];
+    const native: WakeNative = {
+      inspect: async () => ({ messages: [], clientIds: ids }),
+      steer: async () => { throw new Error('unexpected'); },
+      start: async (_thread, _message, id) => {
+        attempts++;
+        if (attempts === 1) throw new WakeAdmissionFailure('start', new Error('timeout after submission'));
+        ids.push(id!); return 'second';
+      },
+    };
+    const first = new WakeSources(native, root);
+    try {
+      await first.initialize();
+      const event = await first.ingest('thread-1', 'daily', 'daily-21', 'private instruction');
+      await first.tick();
+      expect(first.list('thread-1').events[0]?.status).toBe('offered');
+      expect(first.list('thread-1').events[0]?.failure?.phase).toBe('start');
+      await first.stop();
+      const resumed = new WakeSources(native, root);
+      try {
+        await resumed.initialize();
+        await resumed.tick(Date.now() + 70_000);
+        expect(attempts).toBe(1);
+        ids.push(wakeClientId(event));
+        await resumed.tick(Date.now() + 70_001);
+        expect(resumed.list('thread-1').events[0]?.status).toBe('admitted');
+        expect(resumed.list('thread-1').events[0]?.failure).toBeUndefined();
+        expect(attempts).toBe(1);
+      } finally { await resumed.stop(); }
+    } finally { await first.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  test('due schedule survives a pre-start rejection and re-arms only after a native receipt', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-schedule-rejection-'));
+    const receipts: string[] = [];
+    let attempts = 0;
+    const wake = new WakeSources({
+      inspect: async () => ({ messages: [], clientIds: receipts }),
+      steer: async () => { throw new Error('unexpected'); },
+      start: async (_thread, _message, clientId) => {
+        attempts++;
+        if (attempts === 1) throw new WakeAdmissionFailure('resume', new Error('native resume rejected'));
+        receipts.push(clientId!); return 'native-turn';
+      },
+    }, root);
+    try {
+      await wake.initialize();
+      await wake.put({ id: 'daily', threadId: 'thread-1', kind: 'schedule',
+        message: 'maintenance', at: new Date(Date.now() - 1_000).toISOString(), everyMs: 600_000 });
+      await wake.tick();
+      expect(wake.list('thread-1').events.map(e => [e.eventId, e.status])).toEqual([['daily-1', 'pending']]);
+      expect(wake.list('thread-1').sources[0]?.nextAt).toBeUndefined();
+      await wake.tick(Date.now() + 70_000);
+      expect(wake.list('thread-1').events[0]?.status).toBe('offered');
+      await wake.tick(Date.now() + 70_001);
+      expect(wake.list('thread-1').events[0]?.status).toBe('admitted');
+      expect(wake.list('thread-1').sources[0]?.status).toBe('waiting');
+      expect(wake.list('thread-1').sources[0]?.nextAt).toBeTruthy();
+      expect(attempts).toBe(2);
     } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
   });
 });
