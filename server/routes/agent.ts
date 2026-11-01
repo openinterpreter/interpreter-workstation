@@ -1387,6 +1387,7 @@ router.post('/chat/steer', async (req: Request, res: Response) => {
   try {
     const turnId = await getCodexService().steer(body.threadId as string, {
       turnId: body.turnId,
+      clientUserMessageId: body.clientUserMessageId,
       message: body.message,
       attachments: body.attachments,
       skills: body.skills,
