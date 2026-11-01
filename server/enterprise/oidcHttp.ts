@@ -1,7 +1,8 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, json, type Request, type Response } from 'express';
 import { TLSSocket } from 'node:tls';
 import type { OidcConfiguration, OidcIntegration } from './oidc';
 import type { EnterpriseDirectory, VerifiedIdentity } from './controlPlane';
+import { EnterpriseAccessDenied, type ServerDirectory } from './serverDirectory';
 
 type HttpOptions = Readonly<{
   config: OidcConfiguration;
@@ -120,5 +121,48 @@ export function createEnterpriseBrowserRouter(options: Readonly<{
   }
   router.get('/organizations/:organizationId/overview', (req, res) => read(req, res, 'overview'));
   router.get('/organizations/:organizationId/members', (req, res) => read(req, res, 'members'));
+  return router;
+}
+
+/** Separate, unmounted admin mutation seam. Must share the exact HTTPS origin
+ * and server-owned session verifier with the read-only browser router. */
+export function createEnterpriseAdminMutationRouter(options: Readonly<{
+  applicationOrigin: string;
+  allowInsecureLoopbackForTests?: boolean;
+  verifySession: (token: string) => Promise<VerifiedIdentity | null>;
+  directory: Pick<ServerDirectory, 'deactivateMember'>;
+}>): Router {
+  const origin = new URL(options.applicationOrigin);
+  const loopback = options.allowInsecureLoopbackForTests === true;
+  if (origin.origin !== options.applicationOrigin ||
+      (loopback ? !(origin.protocol === 'http:' && origin.hostname === '127.0.0.1') : origin.protocol !== 'https:')) {
+    throw new Error('Invalid admin API origin');
+  }
+  const sessionName = loopback ? 'interpreter-enterprise-session' : '__Host-interpreter-enterprise-session';
+  const router = Router();
+  router.post('/organizations/:organizationId/members/:subject/deactivate', json({ limit: '2kb', strict: true }), async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Vary', 'Origin, Sec-Fetch-Site');
+    // Requiring both exact Origin and a non-simple header prevents a form POST
+    // from riding a SameSite cookie even if an upstream proxy changes CORS.
+    if (!exactOrigin(req, origin, loopback) || req.get('origin') !== origin.origin ||
+        (req.get('sec-fetch-site') && req.get('sec-fetch-site') !== 'same-origin') ||
+        req.get('x-interpreter-csrf') !== '1' || !req.is('application/json') ||
+        req.get('authorization') || !req.body || Array.isArray(req.body) || Object.keys(req.body).length !== 0) {
+      return void res.status(403).end();
+    }
+    const token = cookie(req, sessionName);
+    if (!token) return void res.status(401).end();
+    try {
+      const identity = await options.verifySession(token);
+      if (!identity?.sessionId || !identity.issuer || !identity.subject || identity.organizationId !== req.params.organizationId) {
+        return void res.status(403).end();
+      }
+      await options.directory.deactivateMember(identity, req.params.subject);
+      return void res.status(204).end();
+    } catch (error) {
+      return void res.status(error instanceof EnterpriseAccessDenied ? 403 : 503).end();
+    }
+  });
   return router;
 }
