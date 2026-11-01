@@ -138,8 +138,8 @@ test('Simple React interface is default, preserves live state, exposes its setti
     const result = await page.evaluate(async () => (window as any).electron.apiRequest({
       method: 'POST', path: '/api/simple-interface/promote',
     }));
-    return result.ok && result.data?.ready && result.data?.diagnostic === null;
-  }, { timeout: 90_000 }).toBe(true);
+    return { ok: result.ok, ready: result.data?.ready, diagnostic: result.data?.diagnostic ?? result.data?.error ?? null };
+  }, { timeout: 90_000 }).toEqual({ ok: true, ready: true, diagnostic: null });
   // Next hot-reloads the current project's stable interface frame in place.
   let canvas = await waitForInterfaceFrame(page, async (frame) =>
     await frame.getByRole('heading', { name: 'A live React canvas' }).isVisible());

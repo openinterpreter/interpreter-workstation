@@ -148,6 +148,11 @@ async function main() {
   }
 
   ensureBundledInterpreterCliSmoke();
+  execFileSync(PNPM_BIN, ['run', 'ensure:simple-interface-runtime-assets'], {
+    cwd: ROOT,
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+  });
 
   const supportsIsolation = bunSupportsTestIsolation();
   const isolationArgs = supportsIsolation ? ['--isolate'] : [];
