@@ -74,7 +74,7 @@ export function EnterpriseAdminDashboard({ organizationId }: { organizationId: s
           <h2 className="mt-1 text-xl font-semibold text-foreground">{view?.overview.organization.name ?? 'Administration'}</h2>
           <p className="mt-1 text-sm text-muted-foreground">Identity, access and audit at a glance</p>
         </div>
-        <span className="rounded-full border border-border bg-muted/30 px-3 py-1 text-xs text-muted-foreground">Verified organization session required</span>
+        <span className="rounded-full border border-border bg-muted/30 px-3 py-1 text-xs text-muted-foreground">{view ? 'Session verified' : 'Verified organization session required'}</span>
       </header>
       {error ? <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-foreground">{error}</div> :
         !view ? <p role="status" className="text-sm text-muted-foreground">Checking organization access…</p> : <>

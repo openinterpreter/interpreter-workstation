@@ -15,6 +15,8 @@ describe('admin dashboard shell', () => {
     vi.stubGlobal('fetch', fetchMock);
     render(<EnterpriseAdminDashboard organizationId="org-a" />);
     expect(await screen.findByText('Acme')).toBeInTheDocument();
+    expect(screen.getByText('Session verified')).toBeInTheDocument();
+    expect(screen.queryByText('Verified organization session required')).not.toBeInTheDocument();
     expect(screen.getByText('Alice')).toBeInTheDocument();
     expect(screen.getByText('not enforced')).toBeInTheDocument();
     expect(screen.getByText(/Audit export and SCIM are not available/)).toBeInTheDocument();
