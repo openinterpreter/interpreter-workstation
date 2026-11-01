@@ -836,11 +836,14 @@ export function SimpleShell({
                         : "Open drawer"
                     }
                     aria-expanded={drawerVisible}
-                    onClick={() =>
-                      !isCompact
-                        ? collapseSurface()
-                        : setSurfaceMode("conversation")
-                    }
+                    onClick={() => {
+                      if (isCompact) {
+                        setSurfaceMode("conversation");
+                      } else {
+                        if (isSettingsOpen) onCloseSettings();
+                        setSurfaceMode("compact");
+                      }
+                    }}
                     className="flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-full px-1.5 text-left text-[11px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
                   >
                     <ChevronRight
@@ -860,9 +863,14 @@ export function SimpleShell({
                       isSettingsOpen ? "Back to conversation" : "Open Settings"
                     }
                     aria-expanded={isSettingsOpen}
-                    onClick={() =>
-                      (isSettingsOpen ? (() => { onCloseSettings(); setSurfaceMode("conversation"); })() : openSettings())
-                    }
+                    onClick={() => {
+                      if (isSettingsOpen) {
+                        onCloseSettings();
+                        setSurfaceMode("conversation");
+                      } else {
+                        openSettings();
+                      }
+                    }}
                     className="mr-0.5 flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-[background-color,color,scale] duration-150 hover:bg-foreground/[0.06] hover:text-foreground active:scale-[0.94]"
                   >
                     {isSettingsOpen ? <ArrowLeft className="size-3.5" /> : <Settings2 className="size-3" />}
