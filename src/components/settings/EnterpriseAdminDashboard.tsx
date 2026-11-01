@@ -9,14 +9,18 @@ type Overview = {
 };
 type Member = { subject: string; displayName: string; role: 'admin' | 'member'; active: boolean };
 
-/** Read-only browser UI; session remains in an HttpOnly cookie and is never a prop. Unmounted. */
+/** Same-origin browser admin UI; the HttpOnly session is never a prop. Unmounted. */
 export function EnterpriseAdminDashboard({ organizationId }: { organizationId: string }) {
   const [view, setView] = useState<{ overview: Overview; members: Member[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pendingSubject, setPendingSubject] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [revision, setRevision] = useState(0);
 
   useEffect(() => {
     setView(null);
     setError(null);
+    setPendingSubject(null);
     if (!organizationId) {
       setError('A verified organization session is required.');
       return;
@@ -39,7 +43,28 @@ export function EnterpriseAdminDashboard({ organizationId }: { organizationId: s
       })
       .catch(() => { if (!controller.signal.aborted) setError('Organization data is unavailable. Access was not granted.'); });
     return () => controller.abort();
-  }, [organizationId]);
+  }, [organizationId, revision]);
+
+  async function deactivate(subject: string) {
+    if (!view || busy || pendingSubject !== subject ||
+        !view.members.some((member) => member.subject === subject && member.active && member.role === 'member')) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/enterprise/organizations/${encodeURIComponent(organizationId)}/members/${encodeURIComponent(subject)}/deactivate`, {
+        method: 'POST', credentials: 'same-origin', cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', 'X-Interpreter-CSRF': '1' }, body: '{}',
+      });
+      if (response.status !== 204) throw new Error('Access denied');
+      setRevision((value) => value + 1); // Refetch authoritative tenant and session state.
+    } catch {
+      setView(null); // Do not retain a stale directory after revocation or outage.
+      setError('The change was not confirmed. Organization data is unavailable.');
+    } finally {
+      setPendingSubject(null);
+      setBusy(false);
+    }
+  }
 
   return (
     <section className="space-y-5 rounded-2xl border border-border bg-background p-5 shadow-sm" aria-label="Organization dashboard">
@@ -49,7 +74,7 @@ export function EnterpriseAdminDashboard({ organizationId }: { organizationId: s
           <h2 className="mt-1 text-xl font-semibold text-foreground">{view?.overview.organization.name ?? 'Administration'}</h2>
           <p className="mt-1 text-sm text-muted-foreground">Identity, access and audit at a glance</p>
         </div>
-        <span className="rounded-full border border-border bg-muted/30 px-3 py-1 text-xs text-muted-foreground">Read-only</span>
+        <span className="rounded-full border border-border bg-muted/30 px-3 py-1 text-xs text-muted-foreground">Verified organization session required</span>
       </header>
       {error ? <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-foreground">{error}</div> :
         !view ? <p role="status" className="text-sm text-muted-foreground">Checking organization access…</p> : <>
@@ -74,11 +99,20 @@ export function EnterpriseAdminDashboard({ organizationId }: { organizationId: s
             <div className="border-b border-border bg-muted/20 px-4 py-3"><h3 className="text-sm font-semibold">Directory</h3></div>
             {view.members.length === 0 ? <p className="p-4 text-sm text-muted-foreground">No members in this organization.</p> :
               <div className="overflow-x-auto"><table className="w-full text-left text-sm">
-                <thead className="text-xs text-muted-foreground"><tr><th className="px-4 py-3 font-medium">Person</th><th className="px-4 py-3 font-medium">Role</th><th className="px-4 py-3 font-medium">Status</th></tr></thead>
+                <thead className="text-xs text-muted-foreground"><tr><th className="px-4 py-3 font-medium">Person</th><th className="px-4 py-3 font-medium">Role</th><th className="px-4 py-3 font-medium">Status</th><th className="px-4 py-3 font-medium">Access</th></tr></thead>
                 <tbody>{view.members.map((member) => <tr key={member.subject} className="border-t border-border">
                   <td className="px-4 py-3 font-medium text-foreground">{member.displayName}</td>
                   <td className="px-4 py-3 capitalize text-muted-foreground">{member.role}</td>
                   <td className="px-4 py-3 text-muted-foreground">{member.active ? 'Active' : 'Inactive'}</td>
+                  <td className="px-4 py-3 text-muted-foreground">{member.active && member.role === 'member' ?
+                    pendingSubject === member.subject ? <span className="inline-flex flex-wrap items-center gap-2">
+                      <span>Remove {member.displayName}'s access?</span>
+                      <button type="button" disabled={busy} className="rounded-md border border-destructive/50 px-2 py-1 text-destructive disabled:opacity-50"
+                        onClick={() => void deactivate(member.subject)}>Confirm deactivation</button>
+                      <button type="button" disabled={busy} className="rounded-md border border-border px-2 py-1 disabled:opacity-50"
+                        onClick={() => setPendingSubject(null)}>Cancel</button>
+                    </span> : <button type="button" disabled={busy} className="rounded-md border border-border px-2 py-1 hover:bg-muted disabled:opacity-50"
+                      onClick={() => setPendingSubject(member.subject)}>Deactivate</button> : '—'}</td>
                 </tr>)}</tbody>
               </table></div>}
           </div>

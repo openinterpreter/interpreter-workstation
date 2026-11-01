@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { lstat, mkdir, open, rename, rm } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import type { EnterpriseDirectory, OrganizationMember, VerifiedIdentity } from './controlPlane';
 import { evaluateTenantPolicy } from './tenantPolicy';
 
@@ -15,6 +16,10 @@ export const MAX_DIRECTORY_BYTES = 8_000_000;
 export interface EnterpriseStateStore {
   read(): Promise<DirectoryState>;
   change<T>(fn: (data: DirectoryState) => T, create?: boolean): Promise<T>;
+}
+
+export class EnterpriseAccessDenied extends Error {
+  constructor() { super('Access denied'); }
 }
 
 export const blankDirectoryState = (): DirectoryState => ({ version: 1, organizations: Object.create(null), attempts: Object.create(null), sessions: Object.create(null), audit: [] });
@@ -113,9 +118,15 @@ export class ServerDirectory implements EnterpriseDirectory {
   private async change<T>(fn: (data: Data) => T, create = false): Promise<T> {
     if (this.store) return this.store.change(fn, create);
     await this.init(create);
-    // Cross-process exclusion: a leftover lock fails closed and requires an operator
-    // to inspect it. Do not silently break a lock or lose an audit/membership write.
-    await mkdir(this.lock, { mode: 0o700 });
+    // Wait briefly for another request's atomic commit. A leftover lock still
+    // fails closed and requires inspection; never break it or lose audit writes.
+    for (let attempt = 0; ; attempt++) {
+      try { await mkdir(this.lock, { mode: 0o700 }); break; }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || attempt >= 39) throw error;
+        await delay(25);
+      }
+    }
     let temp: string | null = null;
     try {
       const data = await this.read();
@@ -221,6 +232,29 @@ export class ServerDirectory implements EnterpriseDirectory {
         if (session.organizationId === actor.organizationId && session.subject === member.subject) session.revoked = true;
       }
       data.audit.push({ organizationId: actor.organizationId, subject: actor.subject, action: 'organization.member.update', outcome: 'allowed', at: new Date().toISOString() });
+    });
+  }
+
+  /** Atomic, admin-only deactivation; never provisions or promotes an identity. */
+  async deactivateMember(actor: VerifiedIdentity, subject: string): Promise<void> {
+    if (!key(subject)) throw new EnterpriseAccessDenied();
+    await this.change((data) => {
+      const org = data.organizations[actor.organizationId];
+      if (!org || !evaluateTenantPolicy({ identity: actor, organizationId: actor.organizationId,
+        issuer: org.issuer, member: org.members[actor.subject], sessionActive: this.active(data, actor), action: 'member.manage' })) {
+        throw new EnterpriseAccessDenied();
+      }
+      const target = org.members[subject];
+      if (!target || !target.active || target.organizationId !== actor.organizationId ||
+          (target.role === 'admin' && !Object.values(org.members).some((m) => m.subject !== subject && m.active && m.role === 'admin'))) {
+        throw new EnterpriseAccessDenied();
+      }
+      org.members[subject] = { ...target, active: false };
+      for (const session of Object.values(data.sessions)) {
+        if (session.organizationId === actor.organizationId && session.subject === subject) session.revoked = true;
+      }
+      data.audit.push({ organizationId: actor.organizationId, subject: actor.subject,
+        action: 'organization.member.deactivate', outcome: 'allowed', at: new Date().toISOString() });
     });
   }
 
