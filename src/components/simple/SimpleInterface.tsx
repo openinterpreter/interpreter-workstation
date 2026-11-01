@@ -31,6 +31,8 @@ type BridgeRequest = {
   point?: unknown;
   key?: unknown;
   token?: unknown;
+  captureId?: unknown;
+  answerSdp?: unknown;
 };
 
 type HostView = {
@@ -78,6 +80,7 @@ export function SimpleInterface({ onMessage }: Props) {
   const rootRef = useRef<HTMLElement | null>(null);
   const revisionRef = useRef<string | null>(null);
   const runtimeUrlRef = useRef<string | null>(null);
+  const assetRevisionRef = useRef<number | null>(null);
   const uiSnapshotRequestsRef = useRef(new Map<string, (value: Record<string, unknown>) => void>());
   const inFlightRef = useRef(false);
   const [hostViews, setHostViews] = useState<Record<string, HostView>>({});
@@ -144,7 +147,14 @@ export function SimpleInterface({ onMessage }: Props) {
       if (revisionRef.current && next.revision && revisionRef.current !== next.revision) {
         await captureUiState();
       }
+      if (revisionRef.current === next.revision
+        && assetRevisionRef.current !== null
+        && typeof next.assetRevision === "number"
+        && next.assetRevision !== assetRevisionRef.current) {
+        postHostEvent("project-assets-changed", { revision: next.assetRevision });
+      }
       revisionRef.current = next.revision || null;
+      assetRevisionRef.current = next.assetRevision ?? null;
       // Reset mounts before exposing the new iframe. A passive effect after
       // render can erase registrations sent by an iframe that loads promptly.
       if (runtimeUrlRef.current !== nextRuntimeUrl) {
@@ -155,6 +165,7 @@ export function SimpleInterface({ onMessage }: Props) {
         previous?.revision === next.revision &&
         previous?.diagnostic === next.diagnostic &&
         previous?.sourceRevision === next.sourceRevision &&
+        previous?.assetRevision === next.assetRevision &&
         previous?.ready === next.ready &&
         previous?.runtimeUrl === next.runtimeUrl
           ? previous
@@ -171,7 +182,7 @@ export function SimpleInterface({ onMessage }: Props) {
     } finally {
       inFlightRef.current = false;
     }
-  }, [captureUiState]);
+  }, [captureUiState, postHostEvent]);
 
   useEffect(() => {
     void refresh();
@@ -181,6 +192,7 @@ export function SimpleInterface({ onMessage }: Props) {
     const onProjectChanged = () => {
       authorizedDropRootsRef.current.clear();
       revisionRef.current = null;
+      assetRevisionRef.current = null;
       runtimeUrlRef.current = null;
       setHostViews({});
       setStatus(null);
@@ -225,6 +237,7 @@ export function SimpleInterface({ onMessage }: Props) {
         typeof request.type !== "string"
       )
         return;
+      const source = event.source as Window;
       if (request.type === "ready") return;
       if (request.type === "interaction") {
         window.dispatchEvent(new CustomEvent("simple-interface:interaction"));
@@ -242,6 +255,32 @@ export function SimpleInterface({ onMessage }: Props) {
         ).slice(0, 4000);
         setError(message);
         void simpleInterfaceClient.runtimeError(message).catch(() => {});
+        return;
+      }
+      if (request.type === "tab-captures-list" && typeof request.id === "string") {
+        void simpleInterfaceClient.tabCaptures()
+          .then((value) => respond(source, request.id as string, true, value.captures))
+          .catch((failure) => respond(source, request.id as string, false, undefined, failure instanceof Error ? failure.message : 'Tab capture is unavailable.'));
+        return;
+      }
+      if (request.type === "tab-capture-answer" && typeof request.id === "string") {
+        if (typeof request.captureId !== "string" || typeof request.answerSdp !== "string") {
+          respond(source, request.id, false, undefined, 'Invalid tab-capture answer.');
+          return;
+        }
+        void simpleInterfaceClient.answerTabCapture(request.captureId, request.answerSdp)
+          .then((value) => respond(source, request.id as string, true, value))
+          .catch((failure) => respond(source, request.id as string, false, undefined, failure instanceof Error ? failure.message : 'Tab capture is unavailable.'));
+        return;
+      }
+      if (request.type === "tab-capture-stop" && typeof request.id === "string") {
+        if (typeof request.captureId !== "string") {
+          respond(source, request.id, false, undefined, 'Invalid tab capture.');
+          return;
+        }
+        void simpleInterfaceClient.stopTabCapture(request.captureId)
+          .then((value) => respond(source, request.id as string, true, value))
+          .catch((failure) => respond(source, request.id as string, false, undefined, failure instanceof Error ? failure.message : 'Tab capture is unavailable.'));
         return;
       }
       if (request.type === "selection") {
@@ -314,7 +353,6 @@ export function SimpleInterface({ onMessage }: Props) {
       }
       if (typeof request.id !== "string") return;
       const requestId = request.id;
-      const source = event.source as Window;
       if (request.type === "run-agent") {
         const value = request.value as { runId?: unknown; message?: unknown; system?: unknown; timeoutMs?: unknown } | undefined;
         if (isWorkstationReadOnly() || !value || typeof value.runId !== "string" || typeof value.message !== "string") {
@@ -461,6 +499,11 @@ export function SimpleInterface({ onMessage }: Props) {
         >
           <iframe
             ref={rememberIframe}
+            onLoad={() => {
+              if (typeof assetRevisionRef.current === "number") {
+                postHostEvent("project-assets-changed", { revision: assetRevisionRef.current });
+              }
+            }}
             data-simple-interface-frame
             title="Interpreter interface"
             src={runtimeUrl}

@@ -3,6 +3,7 @@ import { isWorkstationReadOnly } from '../../remote/workstationConnection';
 export type SimpleAppStatus = {
   revision: string;
   sourceRevision: string;
+  assetRevision?: number;
   diagnostic: string | null;
   ready: boolean;
   runtimeUrl?: string | null;
@@ -50,6 +51,9 @@ export const simpleInterfaceClient = {
   openProject: (path: string, options?: { activate?: boolean }) => request<SimpleProject>('POST', '/projects/open', { path, ...options }),
   presentation: () => request<SimplePresentation | null>('GET', '/presentation'),
   clearPresentation: () => request<{ success: true }>('POST', '/presentation/clear'),
+  tabCaptures: () => request<{ captures: Array<{ captureId: string; tabId: number; title: string; offerSdp: string; createdAt: number }> }>('GET', '/app/tab-captures'),
+  answerTabCapture: (captureId: string, answerSdp: string) => request<{ success: true }>('POST', `/app/tab-captures/${encodeURIComponent(captureId)}/answer`, { answerSdp }),
+  stopTabCapture: (captureId: string) => request<{ success: true }>('POST', `/app/tab-captures/${encodeURIComponent(captureId)}/stop`, {}),
   appUrl: async (runtimeUrl: string) => appendWindowSessionKey(runtimeUrl),
   assetUrl: (asset: string) => getApiUrl(`/api/simple-interface/assets/${encodeURIComponent(asset)}`),
 };

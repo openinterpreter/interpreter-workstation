@@ -148,8 +148,12 @@ export function useSimpleLive({ onDelegate }: UseSimpleLiveOptions) {
             const requestText = delegatedRequestText(payload.delegation, inputTranscriptRef.current);
             inputTranscriptRef.current = '';
             if (requestText) {
-              delegationIdsRef.current.push(payload.delegation.id);
-              onDelegate(requestText, payload.delegation.id);
+              try {
+                onDelegate(requestText, payload.delegation.id);
+                delegationIdsRef.current.push(payload.delegation.id);
+              } catch (cause) {
+                setError(cause instanceof Error ? cause.message : 'Could not send the voice request to Interpreter.');
+              }
             }
           }
           if (payload.type === 'error') {

@@ -107,6 +107,17 @@ describe('electron-builder mac privacy metadata', () => {
 
 describe('assertRequiredBundledResources', () => {
   function writeRelayRuntime(resourcesRoot: string): void {
+    const runtime = path.join(resourcesRoot, 'simple-interface-runtime');
+    const windows = fs.existsSync(path.join(resourcesRoot, 'oix/bin/interpreter.exe'));
+    for (const name of ['next', 'react']) {
+      const file = path.join(runtime, 'node_modules', name, 'package.json');
+      writeFile(file);
+      writeFileSync(file, JSON.stringify({ version: '16.4.3' }));
+    }
+    writeFileSync(path.join(runtime, 'package.json'), JSON.stringify({ dependencies: { next: '16.4.3' } }));
+    writeFileSync(path.join(runtime, 'runtime-manifest.json'), JSON.stringify({
+      platform: windows ? 'win32' : 'darwin', arch: windows ? 'x64' : 'arm64',
+    }));
     for (const relativePath of [
       'browser-extension-relay/package.json',
       'browser-extension-relay/runtime-manifest.json',

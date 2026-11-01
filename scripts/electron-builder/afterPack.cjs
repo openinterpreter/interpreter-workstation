@@ -30,8 +30,8 @@ function wildcardMatches(pattern, value) {
   return new RegExp(`^${escaped}$`).test(value);
 }
 
-function assertBundledRelayLibvipsPolicy(resourcesRoot) {
-  const scopeDir = path.join(resourcesRoot, 'browser-extension-relay', 'node_modules', '@img');
+function assertBundledRelayLibvipsPolicy(resourcesRoot, runtimeName = 'browser-extension-relay') {
+  const scopeDir = path.join(resourcesRoot, runtimeName, 'node_modules', '@img');
   if (!fs.existsSync(scopeDir)) return;
 
   const packageDirs = fs.readdirSync(scopeDir, { withFileTypes: true })
@@ -137,6 +137,11 @@ function getRequiredBundledResourcePaths(resourcesRoot, platform, arch) {
     path.join(resourcesRoot, 'browser-extension-relay', 'dist', 'extension', 'manifest.json'),
     path.join(resourcesRoot, 'browser-extension-relay', 'node_modules', 'hono', 'package.json'),
   ];
+  const simpleRuntimePaths = [
+    path.join(resourcesRoot, 'simple-interface-runtime', 'runtime-manifest.json'),
+    path.join(resourcesRoot, 'simple-interface-runtime', 'node_modules', 'next', 'package.json'),
+    path.join(resourcesRoot, 'simple-interface-runtime', 'node_modules', 'react', 'package.json'),
+  ];
 
   if (platform === 'darwin' || platform === 'mac') {
     return [
@@ -144,6 +149,7 @@ function getRequiredBundledResourcePaths(resourcesRoot, platform, arch) {
       path.join(resourcesRoot, 'pdfcpu', 'pdfcpu'),
       ...jsReplRuntimePaths,
       ...relayRuntimePaths,
+      ...simpleRuntimePaths,
       path.join(resourcesRoot, 'qwen-asr', `darwin-${arch}`, 'qwen_asr'),
       path.join(resourcesRoot, 'cua-driver', 'cua-driver'),
       path.join(resourcesRoot, 'cua-driver', 'tool-metadata.json'),
@@ -166,6 +172,7 @@ function getRequiredBundledResourcePaths(resourcesRoot, platform, arch) {
       path.join(resourcesRoot, 'pdfcpu', 'pdfcpu'),
       ...jsReplRuntimePaths,
       ...relayRuntimePaths,
+      ...simpleRuntimePaths,
       path.join(resourcesRoot, 'qwen-asr', `linux-${arch}`, 'qwen_asr'),
     ];
   }
@@ -178,6 +185,7 @@ function getRequiredBundledResourcePaths(resourcesRoot, platform, arch) {
       path.join(resourcesRoot, 'codex-windows-sandbox-setup.exe'),
       ...jsReplRuntimePaths,
       ...relayRuntimePaths,
+      ...simpleRuntimePaths,
       path.join(resourcesRoot, 'cua-driver', 'windows-uia.ps1'),
       path.join(resourcesRoot, 'interpreter-overlay', 'native', 'window_pin.node'),
     ];
@@ -193,6 +201,18 @@ function assertRequiredBundledResources(resourcesRoot, platform, arch) {
     }
   }
 
+  const simpleRuntimeDir = path.join(resourcesRoot, 'simple-interface-runtime');
+  const simpleManifest = JSON.parse(fs.readFileSync(path.join(simpleRuntimeDir, 'runtime-manifest.json'), 'utf8'));
+  const normalizedPlatform = platform === 'mac' ? 'darwin' : platform === 'windows' ? 'win32' : platform;
+  if (simpleManifest.platform !== normalizedPlatform || simpleManifest.arch !== arch) {
+    throw new Error(`[afterPack] Wrong bundled Simple runtime: ${simpleManifest.platform}-${simpleManifest.arch}; expected ${normalizedPlatform}-${arch}`);
+  }
+  const expectedNext = JSON.parse(fs.readFileSync(path.join(simpleRuntimeDir, 'package.json'), 'utf8')).dependencies.next;
+  const actualNext = JSON.parse(fs.readFileSync(path.join(simpleRuntimeDir, 'node_modules', 'next', 'package.json'), 'utf8')).version;
+  if (actualNext !== expectedNext) {
+    throw new Error(`[afterPack] Wrong bundled Next.js version: ${actualNext}; expected ${expectedNext}`);
+  }
+
   const liveRelayTreePath = path.join(resourcesRoot, 'browser-extension-relay');
   const relayArchivePath = path.join(resourcesRoot, 'browser-extension-relay.zip');
   if (!fs.existsSync(liveRelayTreePath)) {
@@ -202,6 +222,7 @@ function assertRequiredBundledResources(resourcesRoot, platform, arch) {
     throw new Error(`[afterPack] Packaged app must not include a relay archive: ${relayArchivePath}`);
   }
   assertBundledRelayLibvipsPolicy(resourcesRoot);
+  assertBundledRelayLibvipsPolicy(resourcesRoot, 'simple-interface-runtime');
 }
 
 function getMacExtraResourceBinariesForSigning(resourcesRoot) {
@@ -441,6 +462,11 @@ async function afterPack(context) {
       console.log('[afterPack] Adding browser-extension-relay native binaries for signing...');
       scanDirRecursive(relayRuntimeDir, (name) => name.endsWith('.node') || name.endsWith('.dylib'));
     }
+
+    // Next's platform-native compiler and image libraries live outside ASAR.
+    // Sign them with the app so cold startup also works under hardened runtime.
+    scanDirRecursive(path.join(resourcesRoot, 'simple-interface-runtime'),
+      (name) => name.endsWith('.node') || name.endsWith('.dylib'));
 
     const opts = packager.platformSpecificBuildOptions || {};
     opts.binaries = Array.from(new Set([...(opts.binaries || []), ...toSign]));

@@ -1,0 +1,13 @@
+{
+  "name": "interpreter-simple-interface-runtime",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "motion": "12.23.26",
+    "next": "16.4.3",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1"
+  }
+}

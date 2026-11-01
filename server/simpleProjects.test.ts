@@ -48,7 +48,7 @@ describe('standalone Simple interface projects', () => {
     expect(packageManifest.dependencies).toMatchObject({
       '@interpreter/interface': 'file:.interpreter/packages/interface',
       '@interpreter/motion': 'file:.interpreter/packages/motion',
-      next: '16.4.0',
+      next: '16.4.3',
     });
     expect(readFileSync(join(projectPath, 'AGENTS.md'), 'utf8')).toContain('full-stack Next.js interface project');
     const skill = readFileSync(join(projectPath, '.interpreter', 'skills', 'interface-design', 'SKILL.md'), 'utf8');
@@ -66,7 +66,7 @@ describe('standalone Simple interface projects', () => {
     expect(skill).toContain('Keep critical controls');
     expect(skill).toContain('visible without scrolling');
     expect(skill).toContain('app/api/');
-    expect(skill).toContain('any ordinary npm dependency');
+    expect(skill).toContain('standard Next.js and design dependencies are already bundled');
     expect(skill).toContain('copy an external image into `public/`');
     expect((await openSimpleProject(projectPath)).metadata.id).toBe(project.metadata.id);
   });

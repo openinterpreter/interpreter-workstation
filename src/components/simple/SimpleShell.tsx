@@ -143,6 +143,16 @@ export function SimpleShell({
   const [approvalCount, setApprovalCount] = useState(0);
   const [whatsNewVisible, setWhatsNewVisible] = useState(false);
   useEffect(() => {
+    if (whatsNewVisible) {
+      setSurfaceMode((current) => current === "compact" ? "conversation" : current);
+    }
+  }, [whatsNewVisible]);
+  useEffect(() => {
+    if (approvalCount > 0) {
+      setSurfaceMode((current) => current === "compact" ? "conversation" : current);
+    }
+  }, [approvalCount]);
+  useEffect(() => {
     const update = () => setApprovalCount(getApprovalsSnapshot().filter((approval) =>
       threadId !== null && (approval.owner?.identity.threadId ?? approval.context?.threadId) === threadId,
     ).length);
@@ -184,15 +194,7 @@ export function SimpleShell({
   const readOnly = isWorkstationReadOnly();
   const handleLiveDelegate = useCallback(
     (text: string) => {
-      window.dispatchEvent(
-        new CustomEvent("agent-runtime:send", {
-          detail: {
-            tabId: SIMPLE_PRIMARY_AGENT_ID,
-            text: `[From GPT Live]\n${text}`,
-            workspacePath,
-          },
-        }),
-      );
+      sendSimpleMessage(text, workspacePath, "GPT Live");
     },
     [workspacePath],
   );
@@ -463,7 +465,7 @@ export function SimpleShell({
   const isPresentationOpen = surfaceMode === "presentation";
   const isSettingsOpen = surfaceMode === "settings";
   const isCompact = surfaceMode === "compact";
-  const drawerVisible = !isCompact || approvalCount > 0 || whatsNewVisible;
+  const drawerVisible = !isCompact;
   const visibleDrawerMode = isCompact ? lastExpandedSurfaceMode : surfaceMode;
   const drawerHeight =
     isCompact ? "auto" : visibleDrawerMode === "conversation"
@@ -720,13 +722,7 @@ export function SimpleShell({
                 background: var(--oa-composer-surface, var(--background)) !important;
               }
               .simple-activity-tab {
-                background: var(--simple-surface-fill);
-                backdrop-filter: blur(28px) saturate(1.18);
-                -webkit-backdrop-filter: blur(28px) saturate(1.18);
-                border-radius: 14px 14px 0 0;
-                border: 1px solid color-mix(in srgb, var(--foreground) 9%, transparent);
-                border-bottom: 0;
-                box-shadow: inset 0 1px color-mix(in srgb, var(--foreground) 3%, transparent);
+                border-bottom: var(--border-width) solid var(--border);
               }
               .simple-drawer {
                 background: var(--simple-surface-fill);
@@ -832,6 +828,65 @@ export function SimpleShell({
               }
             `}</style>
 
+                <div
+                  data-simple-drawer-surface="true"
+                  className="simple-drawer absolute bottom-[calc(100%-1px)] left-5 right-5 z-0 flex flex-col overflow-hidden rounded-t-[14px]"
+                  style={{ boxShadow: "0 0 0 var(--border-width) var(--border), 0 18px 48px rgba(0,0,0,.18)" }}
+                >
+                <motion.div
+                  data-simple-activity-tab="true"
+                  data-pill-drag-handle="true"
+                  className="simple-activity-tab relative z-10 flex h-8 w-full shrink-0 items-center gap-1 px-2.5"
+                >
+                  <button
+                    type="button"
+                    aria-label={
+                      !isCompact
+                        ? "Close drawer"
+                        : "Open drawer"
+                    }
+                    aria-expanded={drawerVisible}
+                    onClick={() => {
+                      if (isCompact) {
+                        setSurfaceMode("conversation");
+                      } else {
+                        if (isSettingsOpen) onCloseSettings();
+                        setSurfaceMode("compact");
+                      }
+                    }}
+                    className="flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-full px-1.5 text-left text-[11px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
+                  >
+                    <ChevronRight
+                      className={`size-3.5 shrink-0 transition-transform duration-200 ${drawerVisible ? "-rotate-90" : "rotate-0"}`}
+                    />
+                    <span className="truncate">
+                      {isStreaming
+                        ? displayedActivitySummary
+                        : messageCount
+                          ? displayedActivitySummary
+                          : "Ready"}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={
+                      isSettingsOpen ? "Back to conversation" : "Open Settings"
+                    }
+                    aria-expanded={isSettingsOpen}
+                    onClick={() => {
+                      if (isSettingsOpen) {
+                        onCloseSettings();
+                        setSurfaceMode("conversation");
+                      } else {
+                        openSettings();
+                      }
+                    }}
+                    className="mr-0.5 flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-[background-color,color,scale] duration-150 hover:bg-foreground/[0.06] hover:text-foreground active:scale-[0.94]"
+                  >
+                    {isSettingsOpen ? <ArrowLeft className="size-3.5" /> : <Settings2 className="size-3" />}
+                  </button>
+                </motion.div>
+
                 <motion.div
                   data-simple-drawer="true"
                   aria-hidden={!drawerVisible}
@@ -848,47 +903,14 @@ export function SimpleShell({
                     duration: isCompact ? 0.18 : 0.26,
                     ease: [0.16, 1, 0.3, 1],
                   }}
-                  className={`simple-drawer absolute bottom-[calc(100%-1px)] left-5 right-5 z-0 flex flex-col overflow-hidden rounded-t-[20px] ${drawerVisible ? "pointer-events-auto" : "pointer-events-none"}`}
+                  className={`relative flex min-h-0 flex-col overflow-hidden ${drawerVisible ? "pointer-events-auto" : "pointer-events-none"}`}
                   style={{
-                    height: drawerHeight,
+                    height: drawerVisible ? drawerHeight : 0,
                     transformOrigin: "bottom center",
-                    boxShadow:
-                      "0 0 0 1px color-mix(in srgb, var(--foreground) 9%, transparent), 0 18px 48px rgba(0,0,0,.18)",
+
                   }}
                 >
-                  {surfaceMode !== "compact" && (
-                    <motion.header
-                      layout="position"
-                      data-pill-drag-handle="true"
-                      initial={{ opacity: 0, y: 4 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{
-                        duration: 0.14,
-                        delay: 0.06,
-                        ease: [0.16, 1, 0.3, 1],
-                      }}
-                      className="flex h-12 shrink-0 cursor-grab items-center justify-between px-3 text-ui-sm active:cursor-grabbing"
-                    >
-                      <button
-                        type="button"
-                        aria-label="Back to interface"
-                        onClick={collapseSurface}
-                        className="flex min-h-10 items-center gap-2 rounded-full px-2.5 text-muted-foreground transition-[color,background-color,scale] duration-150 hover:bg-foreground/5 hover:text-foreground active:scale-[0.96]"
-                      >
-                        <ArrowLeft className="size-4" />
-                        <span>Back</span>
-                      </button>
-                      <span className="pr-3 font-medium text-foreground">
-                        {isSettingsOpen
-                          ? settingsView === "models"
-                            ? "Models"
-                            : "Settings"
-                          : isPresentationOpen
-                            ? (presentation?.title ?? "Update")
-                            : "Conversation"}
-                      </span>
-                    </motion.header>
-                  )}
+                  <SimpleWhatsNew firstRunSession={firstRunSession} onVisibilityChange={setWhatsNewVisible} />
 
                   {isConversationOpen && (
                     <details className="shrink-0 border-t border-foreground/[0.06] px-5 py-2 text-ui-xs text-muted-foreground" data-simple-activity-details>
@@ -1209,54 +1231,10 @@ export function SimpleShell({
                       <Approvals ownerThreadId={threadId} />
                     </section>
                   )}
-                  <SimpleWhatsNew firstRunSession={firstRunSession} onVisibilityChange={setWhatsNewVisible} />
                 </motion.div>
 
-                <motion.div
-                  data-simple-activity-tab="true"
-                  data-pill-drag-handle="true"
-                  className="simple-activity-tab relative z-10 -mb-px ml-5 flex h-8 w-[calc(100%-2.5rem)] items-center gap-1 px-2.5"
-                >
-                  <button
-                    type="button"
-                    aria-label={
-                      isConversationOpen
-                        ? "Collapse conversation"
-                        : "Show conversation"
-                    }
-                    aria-expanded={isConversationOpen}
-                    onClick={() =>
-                      isConversationOpen
-                        ? collapseSurface()
-                        : setSurfaceMode("conversation")
-                    }
-                    className="flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-full px-1.5 text-left text-[11px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
-                  >
-                    <ChevronRight
-                      className={`size-3.5 shrink-0 transition-transform duration-200 ${isConversationOpen ? "-rotate-90" : "rotate-0"}`}
-                    />
-                    <span className="truncate">
-                      {isStreaming
-                        ? displayedActivitySummary
-                        : messageCount
-                          ? displayedActivitySummary
-                          : "Ready"}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={
-                      isSettingsOpen ? "Close settings" : "Open Settings"
-                    }
-                    aria-expanded={isSettingsOpen}
-                    onClick={() =>
-                      isSettingsOpen ? collapseSurface() : openSettings()
-                    }
-                    className="mr-0.5 flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-[background-color,color,scale] duration-150 hover:bg-foreground/[0.06] hover:text-foreground active:scale-[0.94]"
-                  >
-                    <Settings2 className="size-3" />
-                  </button>
-                </motion.div>
+
+                </div>
 
                 <motion.div
                   data-simple-composer-capsule="true"

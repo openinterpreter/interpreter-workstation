@@ -10,6 +10,7 @@ const MAX_UI_STATE_BYTES = 256 * 1024;
 export type SimpleAppStatus = {
   revision: string;
   sourceRevision: string;
+  assetRevision?: number;
   diagnostic: string | null;
   ready: boolean;
   runtimeUrl?: string | null;
