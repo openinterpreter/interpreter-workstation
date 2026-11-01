@@ -16,8 +16,9 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
   it('rejects untrusted CA and plaintext before any tenant bootstrap', async () => {
     const base = { host: '127.0.0.1', port: Number(process.env.ENTERPRISE_TEST_DB_PORT), database: 'enterprise_fixture',
       user: 'enterprise_fixture', password: process.env.ENTERPRISE_TEST_DB_PASSWORD!, caCertificate: readFileSync(process.env.ENTERPRISE_TEST_DB_CA!, 'utf8') };
-    const wrong = createEnterprisePostgresPool({ ...base, caCertificate: '-----BEGIN CERTIFICATE-----\ninvalid\n-----END CERTIFICATE-----' });
-    try { await expect(wrong.query('SELECT 1')).rejects.toThrow(); } finally { await wrong.end(); }
+    const wrong = createEnterprisePostgresPool({ ...base,
+      caCertificate: readFileSync(`${process.env.ENTERPRISE_TEST_DB_FIXTURE}/untrusted-ca.pem`, 'utf8') });
+    try { await expect(wrong.query('SELECT 1')).rejects.toThrow(/certificate|verify|self.signed/i); } finally { await wrong.end(); }
     const plaintext = new pg.Client({ host: base.host, port: base.port, database: base.database, user: base.user,
       password: base.password, ssl: false, connectionTimeoutMillis: 1500 });
     try { await expect(plaintext.connect()).rejects.toThrow(); } finally { await plaintext.end().catch(() => {}); }

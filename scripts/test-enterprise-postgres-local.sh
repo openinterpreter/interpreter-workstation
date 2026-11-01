@@ -12,6 +12,7 @@ stop() {
 trap stop EXIT
 "$pgbin/initdb" -D "$fixture/data" --auth-local=trust --auth-host=scram-sha-256 --no-instructions >"$fixture/init.log"
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -sha256 -keyout "$fixture/ca.key" -out "$fixture/ca.pem" -subj '/CN=Interpreter disposable test CA' >/dev/null 2>&1
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -sha256 -keyout "$fixture/untrusted-ca.key" -out "$fixture/untrusted-ca.pem" -subj '/CN=Untrusted disposable test CA' >/dev/null 2>&1
 openssl req -newkey rsa:2048 -nodes -sha256 -keyout "$fixture/server.key" -out "$fixture/server.csr" -subj '/CN=127.0.0.1' >/dev/null 2>&1
 printf 'subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n' >"$fixture/server.ext"
 openssl x509 -req -in "$fixture/server.csr" -CA "$fixture/ca.pem" -CAkey "$fixture/ca.key" -CAcreateserial -days 1 -sha256 -extfile "$fixture/server.ext" -out "$fixture/server.pem" >/dev/null 2>&1
