@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -273,6 +275,46 @@ describe('durable thread wake sources', () => {
       expect(f.counts()).toEqual({ starts: 0, steers: 2 });
     } finally { await f.cleanup(); }
   });
+
+  test('a real supervised process survives two same-turn inputs and a wake-owner restart', async () => {
+    const f = await fixture();
+    // This is a real process, not a promise standing in for a command. Native
+    // app-server turn/steer and tool policy still require installed acceptance.
+    const child = spawn(process.execPath, ['-e',
+      "process.stdout.write('ready\\n');setTimeout(()=>{process.stdout.write('late-result\\n');process.exit(0)},2200)"],
+    { stdio: ['ignore', 'pipe', 'pipe'] });
+    const pid = child.pid;
+    let output = '';
+    child.stdout!.on('data', chunk => { output += chunk.toString(); });
+    const exited = once(child, 'close');
+    try {
+      await once(child.stdout!, 'data');
+      const before = await f.make();
+      f.setActive('active-command-turn');
+      await before.ingest('thread-1', 'user', 'message-1', 'A user follow-up');
+      await before.ingest('thread-1', 'peer', 'message-2', 'A peer follow-up');
+      for (let attempt = 0; attempt < 4 && f.counts().steers < 2; attempt++) await before.tick();
+      expect(f.counts()).toEqual({ starts: 0, steers: 2 });
+      expect(child.exitCode).toBeNull();
+      expect(output).not.toContain('late-result');
+      for (let attempt = 0; attempt < 4 && before.list('thread-1').events.some(e => e.status !== 'admitted'); attempt++) {
+        await before.tick();
+      }
+      expect(before.list('thread-1').events.map(e => e.status)).toEqual(['admitted', 'admitted']);
+      await before.stop();
+      const after = await f.make();
+      expect((await after.ingest('thread-1', 'peer', 'message-2', 'duplicate')).status).toBe('admitted');
+      await after.tick();
+      expect(f.counts()).toEqual({ starts: 0, steers: 2 });
+      const [code] = await exited;
+      expect(code).toBe(0);
+      expect(output).toContain('late-result');
+      expect(child.pid).toBe(pid);
+    } finally {
+      if (child.exitCode === null) child.kill();
+      await f.cleanup();
+    }
+  }, 15_000);
 
   test('shutdown does not release custody until an in-flight native admission has settled', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'wake-maintenance-'));
