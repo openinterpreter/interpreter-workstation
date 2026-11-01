@@ -93,6 +93,7 @@ engine:
   "distribution": {
     "id": "example-enterprise",
     "hostedApiBaseUrl": "https://ai.example.com",
+    "feedbackUrl": "",
     "auth": {
       "provider": "supabase",
       "url": "https://auth.example.com",
@@ -116,6 +117,12 @@ engine:
   }
 }
 ```
+
+`distribution.feedbackUrl` is optional public endpoint configuration, not a
+credential. Leave it blank to keep the existing hosted API feedback route and
+all other hosted API behavior unchanged. After independently verifying a
+replacement feedback service, a distribution may set a dedicated HTTPS
+`/v0/feedback` URL without migrating auth, billing, or unrelated API routes.
 
 Build without permanently modifying `product.json`:
 

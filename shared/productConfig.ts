@@ -3,6 +3,8 @@ import product from '../product.json';
 export interface DistributionProductConfig {
   id: string;
   hostedApiBaseUrl: string;
+  /** Optional public, unprivileged feedback endpoint; blank preserves the hosted API route. */
+  feedbackUrl: string;
   auth: {
     provider: 'none' | 'supabase';
     url: string;
