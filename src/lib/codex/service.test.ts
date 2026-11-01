@@ -1355,11 +1355,33 @@ describe("CodexService", () => {
     assert.equal(fake.calls.startTurn, 1);
     assert.equal(fake.calls.resumeThreadModel[0], null);
     assert.equal(fake.calls.resumeThreadModelProvider[0], null);
-    assert.deepEqual(fake.calls.resumeThreadConfig[0], {
-      mcp_servers: {}, shell_environment_policy: bridgePolicy,
-    });
+    assert.deepEqual(fake.calls.resumeThreadConfig[0], { mcp_servers: {} });
     await assert.rejects(service.startExistingThreadTurn("thr_existing", "duplicate"), /already responding/);
     assert.equal(fake.calls.startTurn, 1);
+  });
+
+  test("loaded native wake preserves its original shell keys and stable client ID", async () => {
+    let nativeClientId: string | undefined;
+    const fake = createFakeClient({
+      async resumeThread(threadId, _provider, _model, _cwd, config) {
+        if (config?.shell_environment_policy) {
+          throw new Error('loaded thread may only rotate existing shell environment values');
+        }
+        return threadId;
+      },
+      async startTurn(params) {
+        nativeClientId = params.clientUserMessageId;
+        return createTurn('turn_1');
+      },
+    });
+    const service = new CodexService(fake.client);
+    assert.equal(await service.startExistingThreadTurn('thr_existing', 'timer input', '/workspace', {
+      mcp_servers: {},
+      shell_environment_policy: { set: { INTERPRETER_CALLER_TOKEN: 'agtok_unrelated' } },
+    }, 'wake_stable'), 'turn_1');
+    assert.deepEqual(fake.calls.resumeThreadConfig[0], { mcp_servers: {} });
+    assert.equal(fake.calls.startTurn, 1);
+    assert.equal(nativeClientId, 'wake_stable');
   });
 
   test("wake admission never replaces a missing thread", async () => {

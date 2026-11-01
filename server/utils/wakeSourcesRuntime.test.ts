@@ -31,10 +31,9 @@ describe('native wake browser-tool bridge', () => {
       expect((error as WakeAdmissionFailure).phase).toBe('start');
     }
     expect(submissions).toBe(1);
-    const binding = agentTabManager.getBindingForThread(threadId);
-    if (binding) { boundTokens.push(binding.callerToken); }
+    expect(agentTabManager.getBindingForThread(threadId)).toBeUndefined();
   });
-  test('reapplies a scoped shell policy on the SAME thread, without changing its model', async () => {
+  test('resumes the SAME thread without replacing its native shell policy or minting a caller', async () => {
     const threadId = `wake-bridge-${crypto.randomUUID()}`;
     let received: unknown[] = [];
     const service = {
@@ -46,23 +45,12 @@ describe('native wake browser-tool bridge', () => {
     } as unknown as CodexService;
 
     expect(await startWakeThreadTurn(threadId, 'approved wake', service)).toBe('native-turn');
-    const binding = agentTabManager.getBindingForThread(threadId);
-    expect(binding?.callerToken).toStartWith('agtok_');
-    boundTokens.push(binding!.callerToken);
     expect(received.slice(0, 3)).toEqual([threadId, 'approved wake', '/workspace/worker']);
-    const config = received[3] as {
-      mcp_servers: Record<string, unknown>;
-      shell_environment_policy: { set: Record<string, string> };
-    };
-    expect(config.mcp_servers).toEqual({});
-    expect(config.shell_environment_policy.set.INTERPRETER_CALLER_TOKEN).toBe(binding?.callerToken);
-    expect(config.shell_environment_policy.set.INTERPRETER_CLI_SERVER_CONNECTION).toBeTruthy();
-    expect(config.shell_environment_policy.set.INTERPRETER_CLI_PATH).toEndWith('/interpreter-app');
-    expect(config.shell_environment_policy.set.PATH).toContain('shell-safe-bin');
-    expect(Object.keys(config)).toEqual(['mcp_servers', 'shell_environment_policy']);
+    expect(received[3]).toEqual({ mcp_servers: {} });
+    expect(agentTabManager.getBindingForThread(threadId)).toBeUndefined();
 
     expect(await startWakeThreadTurn(threadId, 'next wake', service)).toBe('native-turn');
-    expect(agentTabManager.getBindingForThread(threadId)?.callerToken).toBe(binding?.callerToken);
+    expect(agentTabManager.getBindingForThread(threadId)).toBeUndefined();
     expect(await startWakeThreadTurn(threadId, 'identified wake', service, 'wake_fixture'))
       .toBe('native-turn');
     expect(received[4]).toBe('wake_fixture');
@@ -100,7 +88,7 @@ describe('native wake browser-tool bridge', () => {
       },
     } as unknown as CodexService;
     await startWakeThreadTurn(threadId, 'wake', service);
-    expect(config.shell_environment_policy.set.INTERPRETER_CALLER_TOKEN).toBe(callerToken);
+    expect(config).toEqual({ mcp_servers: {} });
     expect(agentTabManager.getBindingForThread(threadId)?.allowedToolNames)
       .toEqual(['builtin-interpreter.interpreter_browser_page_inspect']);
   });
