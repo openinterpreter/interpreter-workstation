@@ -811,6 +811,20 @@ setTimeout(()=>process.stdout.write(b.subarray(i+2)),30);`;
     } finally { await f.cleanup(); }
   });
 
+  test('oversized command output is not misreported as subscription usage', async () => {
+    const f = await fixture();
+    try {
+      const wake = await f.make();
+      await wake.put({ id: 'bounded', threadId: 'thread-1', kind: 'command',
+        argv: [process.execPath, '-e', `process.stdout.write('x'.repeat(65536));`] });
+      await wake.tick();
+      for (let i = 0; i < 100 && wake.list('thread-1').sources[0]?.status !== 'error'; i++)
+        await new Promise(resolve => setTimeout(resolve, 10));
+      expect(wake.list('thread-1').sources[0]?.error).toBe('Wake command exceeded bounded output before a provider receipt');
+      expect(wake.list('thread-1').events).toHaveLength(0);
+    } finally { await f.cleanup(); }
+  });
+
   test('native usage and authentication faults remain retained and do not retry rapidly', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'wake-errors-'));
     let attempts = 0;
