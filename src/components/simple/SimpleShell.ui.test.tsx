@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useEffect } from "react";
 import { describe, expect, test, vi } from "vitest";
 
 const ipcMocks = vi.hoisted(() => ({
@@ -19,6 +20,7 @@ const simpleClientMocks = vi.hoisted(() => ({
   createProject: vi.fn(),
   openProject: vi.fn(),
 }));
+const noticeMocks = vi.hoisted(() => ({ visible: false }));
 
 vi.mock("../../../agent/components/AgentThread", () => ({
   AgentThread: ({
@@ -42,7 +44,10 @@ vi.mock("../../../agent/components/AgentThread", () => ({
   ),
 }));
 vi.mock('../Approvals', () => ({ Approvals: () => <div>Pending approval card</div> }));
-vi.mock('./SimpleWhatsNew', () => ({ SimpleWhatsNew: () => null }));
+vi.mock('./SimpleWhatsNew', () => ({ SimpleWhatsNew: ({ onVisibilityChange }: { onVisibilityChange: (visible: boolean) => void }) => {
+  useEffect(() => onVisibilityChange(noticeMocks.visible), [onVisibilityChange]);
+  return noticeMocks.visible ? <section aria-label="What's New">Update note</section> : null;
+} }));
 vi.mock('./SimpleChannelsSettings', () => ({ SimpleChannelsSettings: () => null }));
 vi.mock('../../stores/approvalsStore', () => ({
   getApprovalsSnapshot: () => [],
@@ -186,6 +191,23 @@ const props = {
 };
 
 describe("Simple shell", () => {
+  test("one top handle closes and reopens the entire drawer, including update notices", async () => {
+    noticeMocks.visible = true;
+    try {
+      const user = userEvent.setup();
+      const { container } = render(<SimpleShell {...props} />);
+      const drawer = container.querySelector('[data-simple-drawer="true"]');
+      await user.click(await screen.findByRole("button", { name: "Close drawer" }));
+      expect(drawer).toHaveAttribute("aria-hidden", "true");
+      expect(screen.queryByRole("region", { name: "What's New" })).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Open drawer" }));
+      expect(drawer).toHaveAttribute("aria-hidden", "false");
+      expect(screen.getByRole("region", { name: "What's New" })).toBeVisible();
+      expect(screen.getAllByRole("button", { name: "Open Settings" })).toHaveLength(1);
+    } finally {
+      noticeMocks.visible = false;
+    }
+  });
   test("applies the selected profile's low reasoning setting", async () => {
     render(<SimpleShell {...props} />);
     expect(

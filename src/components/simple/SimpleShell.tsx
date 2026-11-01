@@ -143,6 +143,16 @@ export function SimpleShell({
   const [approvalCount, setApprovalCount] = useState(0);
   const [whatsNewVisible, setWhatsNewVisible] = useState(false);
   useEffect(() => {
+    if (whatsNewVisible) {
+      setSurfaceMode((current) => current === "compact" ? "conversation" : current);
+    }
+  }, [whatsNewVisible]);
+  useEffect(() => {
+    if (approvalCount > 0) {
+      setSurfaceMode((current) => current === "compact" ? "conversation" : current);
+    }
+  }, [approvalCount]);
+  useEffect(() => {
     const update = () => setApprovalCount(getApprovalsSnapshot().filter((approval) =>
       threadId !== null && (approval.owner?.identity.threadId ?? approval.context?.threadId) === threadId,
     ).length);
@@ -455,7 +465,7 @@ export function SimpleShell({
   const isPresentationOpen = surfaceMode === "presentation";
   const isSettingsOpen = surfaceMode === "settings";
   const isCompact = surfaceMode === "compact";
-  const drawerVisible = !isCompact || approvalCount > 0 || whatsNewVisible;
+  const drawerVisible = !isCompact;
   const visibleDrawerMode = isCompact ? lastExpandedSurfaceMode : surfaceMode;
   const drawerHeight =
     isCompact ? "auto" : visibleDrawerMode === "conversation"
