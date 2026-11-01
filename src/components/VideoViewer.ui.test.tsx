@@ -67,4 +67,50 @@ describe('VideoViewer timestamped voice notes', () => {
     expect(screen.getByRole('button', { name: 'Speak a note' })).toBeDisabled();
     expect(mock.writeFile).not.toHaveBeenCalled();
   });
+
+  test('loads a persisted fractional-time transcript after remount and seeks without changing the video', async () => {
+    const persisted = { version: 1, notes: [{ id: 'saved-1', atSeconds: 4.625, text: 'A saved observation.' }] };
+    mock.readFile.mockResolvedValue({ content: JSON.stringify(persisted) });
+    const first = render(<VideoViewer filePath="/private/review.mp4" />);
+    await waitFor(() => expect(screen.getByText('A saved observation.')).toBeInTheDocument());
+    first.unmount();
+    const second = render(<VideoViewer filePath="/private/review.mp4" />);
+    await waitFor(() => expect(screen.getByText('A saved observation.')).toBeInTheDocument());
+    const video = second.container.querySelector('video')!;
+    fireEvent.click(screen.getByRole('button', { name: '00:00:04' }));
+    expect(video.currentTime).toBe(4.625);
+    expect(mock.writeFile).not.toHaveBeenCalled();
+    expect(mock.readFile).toHaveBeenCalledWith('/private/review.mp4.review.json');
+  });
+
+  test('does not resume a previously paused video after speech transcription', async () => {
+    const { container } = render(<VideoViewer filePath="/private/review.mp4" />);
+    await waitFor(() => expect(screen.getByText('Speak a note')).toBeEnabled());
+    const video = container.querySelector('video')!;
+    Object.defineProperty(video, 'paused', { configurable: true, value: true });
+    vi.spyOn(video, 'pause').mockImplementation(() => {});
+    const play = vi.spyOn(video, 'play').mockResolvedValue();
+    video.currentTime = 9.875;
+    fireEvent.click(screen.getByText('Speak a note'));
+    act(() => mock.captureOptions!.onSpeechStart());
+    await act(async () => mock.captureOptions!.onUtterance(new Blob(['wav'])));
+    expect(play).not.toHaveBeenCalled();
+    expect(JSON.parse(mock.writeFile.mock.calls[0]![1] as string).notes[0].atSeconds).toBe(9.875);
+  });
+
+  test('surfaces transcription errors without writing notes or resuming playback', async () => {
+    mock.transcribeVoiceWav.mockRejectedValue(new Error('Speech runtime unavailable'));
+    const { container } = render(<VideoViewer filePath="/private/review.mp4" />);
+    await waitFor(() => expect(screen.getByText('Speak a note')).toBeEnabled());
+    const video = container.querySelector('video')!;
+    Object.defineProperty(video, 'paused', { configurable: true, value: false });
+    vi.spyOn(video, 'pause').mockImplementation(() => {});
+    const play = vi.spyOn(video, 'play').mockResolvedValue();
+    fireEvent.click(screen.getByText('Speak a note'));
+    act(() => mock.captureOptions!.onSpeechStart());
+    await act(async () => mock.captureOptions!.onUtterance(new Blob(['wav'])));
+    expect(screen.getByRole('alert')).toHaveTextContent('Speech runtime unavailable');
+    expect(mock.writeFile).not.toHaveBeenCalled();
+    expect(play).not.toHaveBeenCalled();
+  });
 });

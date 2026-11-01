@@ -25,3 +25,14 @@ and a guarded installed release. Component tests with mocked audio/network do
 not prove those conditions or a physical-phone recording. A project-specific
 distribution or customer delivery must remain separate from this generic
 Workstation capability.
+
+The isolated synthetic-media check used a three-second H.264/YUV420p fixture
+at 390 × 844. Chromium at a 390 × 844 viewport decoded it with `readyState=4`,
+advanced playback to 0.839 seconds, reported no decoder error and kept the
+document width at 390 pixels. This verifies the browser decoder and sizing,
+not an installed Workstation or physical phone. Component tests verify the
+speech-start pause, fractional-time transcription and sidecar write, resume
+only when previously playing, reload/seek, malformed-sidecar refusal and
+transcription-failure refusal with mocked microphone/file/backend boundaries.
+Real microphone, selected speech runtime, private source media and installed
+phone QA remain separate acceptance gates.
