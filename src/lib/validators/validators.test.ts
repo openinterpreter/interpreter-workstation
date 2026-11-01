@@ -181,6 +181,17 @@ describe("lifecycle validators", () => {
 });
 
 describe("HTTP validators", () => {
+  test("stream input accepts only a bounded native client ID", () => {
+    const body = { message: 'saved input', threadId: 'thr_existing', clientUserMessageId: 'ui_event_1' };
+    assert.equal(validateStreamRequestBody(body), true);
+    const warn = console.warn;
+    console.warn = () => {};
+    try {
+      for (const id of ['', 'contains space', 'x'.repeat(161), 42]) {
+        assert.equal(validateStreamRequestBody({ ...body, clientUserMessageId: id }), false);
+      }
+    } finally { console.warn = warn; }
+  });
   test("accepts a bounded native steer ID but rejects malformed or oversized IDs", () => {
     const base = { threadId: "thr_1", turnId: "turn_1", message: "follow up" };
     assert.equal(validateSteerRequestBody({ ...base, clientUserMessageId: "peer_event-1" }), true);

@@ -23,6 +23,8 @@ export type StreamRequestBody = {
   message?: string;
   system?: string;
   threadId?: string | null;
+  /** Optional stable ID for a caller with its own persisted input receipt. */
+  clientUserMessageId?: string;
   workspacePath?: string | null;
   model?: string;
   profileId?: ProfileId | string;

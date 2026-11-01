@@ -31,6 +31,26 @@ The producer-neutral mapping is: keep one durable `threadId`; give each upstream
 
 The interactive `/api/agent/chat/steer` path also accepts an optional bounded `clientUserMessageId`, passed unchanged to native `turn/steer` with the expected turn ID. That direct response only identifies a turn; unlike the wake-event route, it does **not** persist an event before admission or implement external-source retry/ordering. Use the durable event route for infrastructure input. Native command execution is distinct from steer: an agent's supported supervised/background command must retain its process/session ID and eventual output/exit, while another event steers the turn; do not restart or duplicate the command to accept a new input. A unit fixture exercises two inputs during an unfinished command, but installed long-command and post-restart native process acceptance remain separate release checks.
 
+## Common native input path
+
+Ordinary interactive streams, direct active-turn steers, and durable timer or
+external inputs share Workstation's existing-thread resume policy and native
+input submission in `CodexService`. A prepared new chat starts its first turn;
+an existing idle chat resumes **that exact thread** before `turn/start`; an
+active turn uses `turn/steer` with its expected turn ID. A failed resume does
+not substitute a new conversation. Each producer retains its own authentication
+and permissions: this common native path does not make an external sender a
+desktop tool caller or grant access to a different thread. The interactive
+`/api/agent/chat/stream` endpoint may accept a bounded
+`clientUserMessageId` supplied by a caller that already persists that identity;
+the durable wake route derives and stores one from its thread/source/event ID.
+An RPC turn ID alone is not a durable input receipt. Inspect native history for
+the exact client ID or marker before acknowledging an external source; an
+ambiguous offered input stays in order until independently reconciled or
+explicitly held under the operator no-replay procedure. Workstation does not
+own native command processes: supported OIX process/session output and exit
+continue while a new input is steered, and must not be restarted to accept it.
+
 An operator can inspect native queue custody without starting another runtime: GET `/api/agent/threads/:threadId/native-custody` on loopback using the same bearer token. The existing app-server client reads `thread/read` and paginated `thread/queue/list` and returns only native status, active approval/user-input flags, last turn ID/status, bounded queued-submission IDs and client-message IDs, and count. No input bodies or transcript text are returned. It fails closed on invalid pagination, unavailable native queue support, malformed IDs, or authentication failure. The Workstation host's normal session access policy still applies. This endpoint is **diagnostic**, not an admission acknowledgement or a substitute for maintaining event custody.
 
 For a host-wide pre-restart check, GET `/api/agent/custody/global` on loopback with that same bearer token. This read-only diagnostic counts **all** in-process Workstation message queues, pending agent-tab requests, pending tab startup inputs, created tab requests awaiting completion, and pending approvals without applying the current window/workspace filter. It returns opaque queue owner/request IDs, not queued text or approval details, and fails with 503 instead of an invented empty result when inspection fails. `nativeQueueScope: "thread-only"` explicitly means this endpoint does **not** attest a global native OIX queue: inspect every affected native thread with the separate route above and preserve any unknown custody as a stop condition. An empty per-thread renderer list is not a substitute for the global check. Neither endpoint freezes incoming producers; take a fresh snapshot after coordinating an input checkpoint and immediately before a supervised restart.
