@@ -246,6 +246,34 @@ describe('durable thread wake sources', () => {
     } finally { await f.cleanup(); }
   });
 
+  test('two sources steer one active turn before a supervised command finishes, without restarting it', async () => {
+    const f = await fixture();
+    let finishCommand!: (value: string) => void;
+    const commandResult = new Promise<string>(resolve => { finishCommand = resolve; });
+    let commandFinished = false;
+    void commandResult.then(() => { commandFinished = true; });
+    try {
+      const wake = await f.make();
+      f.setActive('long-command-turn');
+      await wake.ingest('thread-1', 'timer', 'timer-1', 'scheduled input');
+      await wake.ingest('thread-1', 'peer', 'peer-1', 'trusted peer input');
+      for (let attempt = 0; attempt < 4 && f.counts().steers < 2; attempt++) await wake.tick();
+      expect(f.counts()).toEqual({ starts: 0, steers: 2 });
+      expect(commandFinished).toBe(false);
+      for (let attempt = 0; attempt < 4 && wake.list('thread-1').events.some(e => e.status !== 'admitted'); attempt++) {
+        await wake.tick();
+      }
+      expect(wake.list('thread-1').events.map(e => e.status)).toEqual(['admitted', 'admitted']);
+      finishCommand('exit 0; retained output');
+      expect(await commandResult).toContain('retained output');
+      await wake.stop();
+      const resumed = await f.make();
+      expect((await resumed.ingest('thread-1', 'peer', 'peer-1', 'duplicate')).status).toBe('admitted');
+      await resumed.tick();
+      expect(f.counts()).toEqual({ starts: 0, steers: 2 });
+    } finally { await f.cleanup(); }
+  });
+
   test('shutdown does not release custody until an in-flight native admission has settled', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'wake-maintenance-'));
     let release!: () => void;
