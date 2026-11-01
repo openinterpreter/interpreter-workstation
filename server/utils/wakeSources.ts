@@ -54,11 +54,21 @@ export const wakeClientId = (event: Pick<WakeEvent, 'threadId' | 'sourceId' | 'e
   `wake_${createHash('sha256').update(JSON.stringify([event.threadId, event.sourceId, event.eventId])).digest('hex')}`;
 function safeError(error: unknown): string {
   const message = error instanceof Error ? error.message.toLowerCase() : '';
+  // A supervising SIGKILL/oversized stdout is not a subscription allowance.
+  // Do not classify "Command exited after timeout or output limit" as quota.
+  if (error instanceof WakeCommandExit) return error.reason === 'timeout'
+    ? 'Wake command timed out before a provider receipt'
+    : error.reason === 'output'
+      ? 'Wake command exceeded bounded output before a provider receipt'
+      : 'Wake command exited nonzero; check local service diagnostics';
   if (/usage|quota|credit|billing|limit/.test(message)) return 'Usage limit reached; operator action required';
   if (/oauth|token|credential|authentication|unauthoriz|login/.test(message)) return 'Authentication unavailable; operator action required';
   if (/overload|capacity|unavailable|timeout|disconnect/.test(message)) return 'Runtime temporarily unavailable';
   if (/command exited/.test(message)) return 'Command exited nonzero or exceeded limits';
   return 'Wake source failed; check local service diagnostics';
+}
+class WakeCommandExit extends Error {
+  constructor(readonly reason: 'timeout' | 'output' | 'exit') { super('Wake command failed'); }
 }
 export function wakeTokenValid(actual: string | undefined, supplied: string | undefined): boolean {
   if (!actual || !supplied) return false;
@@ -667,14 +677,20 @@ export class WakeSources {
         this.commands.set(key, child);
         const chunks: Buffer[] = [];
         let size = 0;
-        const timeout = setTimeout(() => child.kill('SIGKILL'), 120_000);
+        // The enrolled World adapter may run two sequential 90-second bounded
+        // reads (pending and peek). Its parent must outlive both child limits,
+        // otherwise an ordinary timeout is mistaken for an allowance error.
+        let reason: 'timeout' | 'output' | undefined;
+        const timeout = setTimeout(() => { reason = 'timeout'; child.kill('SIGKILL'); }, 200_000);
         child.stdout.on('data', (chunk: Buffer) => {
           size += chunk.length;
-          if (size > MAX_STDOUT) child.kill('SIGKILL');
+          if (size > MAX_STDOUT) { reason = 'output'; child.kill('SIGKILL'); }
           else chunks.push(chunk);
         });
         child.on('error', reject);
-        child.on('close', code => { this.commands.delete(key); clearTimeout(timeout); code === 0 && size <= MAX_STDOUT ? resolve(Buffer.concat(chunks, size).toString('utf8')) : reject(new Error(`Command exited ${code ?? 'after timeout or output limit'}`)); });
+        child.on('close', code => { this.commands.delete(key); clearTimeout(timeout);
+          code === 0 && size <= MAX_STDOUT ? resolve(Buffer.concat(chunks, size).toString('utf8')) :
+            reject(new WakeCommandExit(reason ?? 'exit')); });
       });
       if (source.status === 'cancelled') return;
       const output = JSON.parse(stdout) as { id?: string; message?: string; status?: string };
