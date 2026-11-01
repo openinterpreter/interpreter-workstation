@@ -52,11 +52,15 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
       const otherApp = express();
       expect(mountEnterpriseAdminRoutes(otherApp, { ...options, enabled: true,
         organizationId: 'tenant-b', issuer: 'https://synthetic.invalid/b' })).toBe(true);
-      const post = (path: string, token: string) => request(app).post(path)
+      // Supertest otherwise creates a transient listener on all interfaces.
+      const httpA = app.listen(0, '127.0.0.1');
+      const httpB = otherApp.listen(0, '127.0.0.1');
+      try {
+      const post = (path: string, token: string) => request(httpA).post(path)
         .set('Host', '127.0.0.1:39394').set('Origin', origin).set('Sec-Fetch-Site', 'same-origin')
         .set('X-Interpreter-CSRF', '1').set('Content-Type', 'application/json')
         .set('Cookie', `interpreter-enterprise-session=${token}`).send({});
-      const overview = (tenant: string, token: string) => request(app).get(`/api/enterprise/organizations/${tenant}/overview`)
+      const overview = (tenant: string, token: string) => request(httpA).get(`/api/enterprise/organizations/${tenant}/overview`)
         .set('Host', '127.0.0.1:39394').set('Cookie', `interpreter-enterprise-session=${token}`);
       const target = '/api/enterprise/organizations/tenant-a/members/worker/deactivate';
       expect((await overview('tenant-b', admin.token)).status).toBe(403);
@@ -64,7 +68,7 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
       expect((await post(target, worker.token)).status).toBe(403);
       expect((await post(target, admin.token)).status).toBe(204);
       expect((await overview('tenant-a', worker.token)).status).toBe(403);
-      expect((await request(otherApp).get('/api/enterprise/organizations/tenant-b/overview')
+      expect((await request(httpB).get('/api/enterprise/organizations/tenant-b/overview')
         .set('Host', '127.0.0.1:39394').set('Cookie', `interpreter-enterprise-session=${other.token}`)).status).toBe(200);
       expect((await b.auditSummary('tenant-a')).eventCount).toBeGreaterThan(0);
       expect((await b.auditSummary('tenant-b')).eventCount).toBeGreaterThan(0);
@@ -82,9 +86,12 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
         const offline = express();
         offline.use('/api/enterprise', createEnterpriseBrowserRouter({ ...options, directory: down,
           verifySession: (token: string) => down.verifySession(token) }));
-        expect((await request(offline).get('/api/enterprise/organizations/tenant-b/overview')
+        const httpOffline = offline.listen(0, '127.0.0.1');
+        try { expect((await request(httpOffline).get('/api/enterprise/organizations/tenant-b/overview')
           .set('Host', '127.0.0.1:39394').set('Cookie', `interpreter-enterprise-session=${other.token}`)).status).toBe(503);
+        } finally { httpOffline.close(); }
       } finally { await unavailable.end(); }
+      } finally { httpA.close(); httpB.close(); }
     } finally { await first.end().catch(() => {}); await second.end().catch(() => {}); }
   });
 });
