@@ -220,19 +220,19 @@ describe("Simple shell", () => {
       screen.getByRole("button", { name: "Generated interface action" }),
     ).toBeVisible();
     expect(
-      await screen.findByRole("button", { name: "Show conversation" }),
+      await screen.findByRole("button", { name: "Open drawer" }),
     ).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Show conversation" }));
+    await user.click(screen.getByRole("button", { name: "Open drawer" }));
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Collapse conversation" }),
+        screen.getByRole("button", { name: "Close drawer" }),
       ).toBeVisible(),
     );
     await user.click(
       screen.getByRole("button", { name: "Generated interface action" }),
     );
     expect(
-      screen.getByRole("button", { name: "Show conversation" }),
+      screen.getByRole("button", { name: "Open drawer" }),
     ).toBeVisible();
   });
 
@@ -252,13 +252,14 @@ describe("Simple shell", () => {
       '[data-simple-composer-capsule="true"]',
     );
 
-    expect(drawer).toHaveClass("left-5", "right-5");
-    expect(tab).toHaveClass("ml-5", "w-[calc(100%-2.5rem)]");
+    expect(container.querySelector('[data-simple-drawer-surface="true"]')).toHaveClass("left-5", "right-5");
+    expect(tab).toHaveClass("w-full");
+    expect(tab?.nextElementSibling).toBe(drawer);
     expect(composer).toBeInTheDocument();
     expect(drawer).toHaveAttribute("aria-hidden", "true");
 
     await user.click(
-      await screen.findByRole("button", { name: "Show conversation" }),
+      await screen.findByRole("button", { name: "Open drawer" }),
     );
 
     expect(drawer).toHaveAttribute("aria-hidden", "false");
@@ -309,8 +310,8 @@ describe("Simple shell", () => {
         onCloseSettings={onCloseSettings}
       />,
     );
-    await screen.findByRole("button", { name: "Show conversation" });
-    await user.click(screen.getByRole("button", { name: "Show conversation" }));
+    await screen.findByRole("button", { name: "Open drawer" });
+    await user.click(screen.getByRole("button", { name: "Open drawer" }));
     await user.click(screen.getByRole("button", { name: "Assign thread" }));
     await waitFor(() =>
       expect(onBindThread).toHaveBeenCalledWith("oix-thread-42"),
@@ -319,7 +320,7 @@ describe("Simple shell", () => {
       screen.getByText(`Thread ${SIMPLE_PRIMARY_AGENT_ID} oix-thread-42`),
     ).toBeInTheDocument();
     await user.click(
-      screen.getByRole("button", { name: "Collapse conversation" }),
+      screen.getByRole("button", { name: "Close drawer" }),
     );
     await user.click(screen.getByRole("button", { name: "Open Settings" }));
     expect(onOpenSettings).toHaveBeenCalledOnce();
@@ -337,10 +338,10 @@ describe("Simple shell", () => {
       screen.getByRole("button", { name: "Generated interface action" }),
     ).toBeVisible();
     expect(
-      screen.getByRole("button", { name: "Close settings" }),
+      screen.getByRole("button", { name: "Back to conversation" }),
     ).toBeVisible();
     expect(screen.getByRole("button", { name: "Send prompt" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Close settings" }));
+    await user.click(screen.getByRole("button", { name: "Back to conversation" }));
     expect(onCloseSettings).toHaveBeenCalledOnce();
   });
 
@@ -367,15 +368,15 @@ describe("Simple shell", () => {
     const user = userEvent.setup();
     render(<SimpleShell {...props} />);
     await user.click(
-      await screen.findByRole("button", { name: "Show conversation" }),
+      await screen.findByRole("button", { name: "Open drawer" }),
     );
     expect(
-      screen.getByRole("button", { name: "Collapse conversation" }),
+      screen.getByRole("button", { name: "Close drawer" }),
     ).toBeVisible();
     window.dispatchEvent(new CustomEvent("simple-interface:interaction"));
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Show conversation" }),
+        screen.getByRole("button", { name: "Open drawer" }),
       ).toBeVisible(),
     );
   });
@@ -386,8 +387,8 @@ describe("Simple shell", () => {
       throw new Error("Conflict");
     });
     render(<SimpleShell {...props} onBindThread={onBindThread} />);
-    await screen.findByRole("button", { name: "Show conversation" });
-    await user.click(screen.getByRole("button", { name: "Show conversation" }));
+    await screen.findByRole("button", { name: "Open drawer" });
+    await user.click(screen.getByRole("button", { name: "Open drawer" }));
     await user.click(screen.getByRole("button", { name: "Assign thread" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Reload Interpreter to recover",
@@ -414,16 +415,16 @@ describe("Simple shell", () => {
   test('expands the durable conversation and reveals quiet activity detail on demand', async () => {
     const user = userEvent.setup();
     render(<SimpleShell {...props} />);
-    const toggle = await screen.findByRole('button', { name: 'Show conversation' });
+    const toggle = await screen.findByRole('button', { name: 'Open drawer' });
     await user.click(toggle);
-    expect(screen.getByRole('button', { name: 'Collapse conversation' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'Close drawer' })).toHaveAttribute('aria-expanded', 'true');
     const detail = screen.getByText('Activity details');
     expect(detail.closest('details')).not.toHaveAttribute('open');
     await user.click(detail);
     expect(detail.closest('details')).toHaveAttribute('open');
     expect(screen.getByText(/messages in this conversation/)).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Collapse conversation' }));
-    expect(screen.getByRole('button', { name: 'Show conversation' })).toHaveAttribute('aria-expanded', 'false');
+    await user.click(screen.getByRole('button', { name: 'Close drawer' }));
+    expect(screen.getByRole('button', { name: 'Open drawer' })).toHaveAttribute('aria-expanded', 'false');
   });
 
   test("persists an unfinished draft for the app and overlay to share", async () => {

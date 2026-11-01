@@ -91,7 +91,7 @@ test('Simple Feedback remains reachable when hidden and its visibility survives 
 });
 
 test('Simple React interface is default, preserves live state, exposes its settings, and switches reversibly to Advanced', async ({ page }) => {
-  test.setTimeout(300_000); // The first Next install and later development recompilation can be slow.
+  test.setTimeout(300_000); // Cold Next compilation and later development recompilation can be slow.
   await waitForAppReady(page);
   await expect(page.locator('[data-simple-shell]')).toBeVisible();
   await expect(page.getByRole('region', { name: 'Primary conversation' })).toBeVisible();
@@ -140,8 +140,7 @@ test('Simple React interface is default, preserves live state, exposes its setti
     }));
     return result.ok && result.data?.ready && result.data?.diagnostic === null;
   }, { timeout: 90_000 }).toBe(true);
-  // Revisions cross-fade through two briefly overlapping frames; the last
-  // frame is always the newly promoted interface.
+  // Next hot-reloads the current project's stable interface frame in place.
   let canvas = await waitForInterfaceFrame(page, async (frame) =>
     await frame.getByRole('heading', { name: 'A live React canvas' }).isVisible());
   await expect(canvas.getByRole('heading', { name: 'A live React canvas' })).toBeVisible({ timeout: 15000 });
@@ -260,7 +259,7 @@ test('Simple React interface is default, preserves live state, exposes its setti
   await simpleModeButton.focus();
   await simpleModeButton.press('Enter');
   await expect(page.locator('[data-simple-shell]')).toBeVisible({ timeout: 15_000 });
-  await page.getByRole('button', { name: 'Back to interface' }).click();
+  await page.getByRole('button', { name: 'Close drawer' }).click();
   canvas = await waitForInterfaceFrame(page, async (frame) =>
     await frame.getByRole('heading', { name: 'Recovered canvas' }).isVisible());
   await expect(canvas.getByRole('heading', { name: 'Recovered canvas' })).toBeVisible();

@@ -69,11 +69,8 @@ function mergeDisplayStatuses(
 
     merged.push({
       name,
-      runtimeStatus: null,
-      pluginId: null,
       serverInfo: null,
       tools: {},
-      toolsError: null,
       resources: [],
       resourceTemplates: [],
       authStatus,

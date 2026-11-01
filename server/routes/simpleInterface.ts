@@ -1,4 +1,7 @@
 import { Router } from "express";
+import { agentTabManager } from "../agentTabManager";
+import { getCurrentWindowSessionKey, getWindowSessionByKey } from "../utils/windowSessions";
+import { answerBrowserTabCapture, listBrowserTabCaptures, stopBrowserTabCapture } from "../utils/browserExtensionRelay";
 import { readSimpleInterfaceAsset } from "../handlers/simpleAssets";
 import {
   readSimpleAppUiState,
@@ -15,6 +18,7 @@ import {
 } from "../handlers/simpleProjectRuntime";
 import {
   createSimpleProject,
+  getActiveSimpleProject,
   listSimpleProjects,
   openSimpleProject,
 } from "../simpleProjects";
@@ -24,6 +28,51 @@ import {
 } from "../simplePresentation";
 
 const router = Router();
+
+async function canUseTabCapture(req: { header(name: string): string | undefined }): Promise<boolean> {
+  const token = req.header('X-Interpreter-Caller-Token');
+  if (token) {
+    const binding = agentTabManager.getBindingForCallerToken(token);
+    if (!binding?.agentId.startsWith('simple-project:')) return false;
+    return binding.workspacePath === (await getActiveSimpleProject()).path;
+  }
+  const sessionKey = getCurrentWindowSessionKey();
+  return Boolean(sessionKey && getWindowSessionByKey(sessionKey));
+}
+
+router.get('/app/tab-captures', async (req, res) => {
+  if (!await canUseTabCapture(req)) return res.status(403).json({ error: 'Interpreter project access required.' });
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ captures: await listBrowserTabCaptures() });
+  } catch (error) {
+    return res.status(503).json({ error: error instanceof Error ? error.message : 'Tab capture is unavailable.' });
+  }
+});
+
+router.post('/app/tab-captures/:captureId/answer', async (req, res) => {
+  if (!await canUseTabCapture(req)) return res.status(403).json({ error: 'Interpreter project access required.' });
+  const answerSdp = req.body?.answerSdp;
+  if (typeof answerSdp !== 'string' || answerSdp.length < 20 || answerSdp.length > 200_000) {
+    return res.status(400).json({ error: 'Invalid tab-capture answer.' });
+  }
+  try {
+    const success = await answerBrowserTabCapture(req.params.captureId, answerSdp);
+    return success ? res.json({ success: true }) : res.status(404).json({ error: 'Tab capture not found.' });
+  } catch (error) {
+    return res.status(503).json({ error: error instanceof Error ? error.message : 'Tab capture is unavailable.' });
+  }
+});
+
+router.post('/app/tab-captures/:captureId/stop', async (req, res) => {
+  if (!await canUseTabCapture(req)) return res.status(403).json({ error: 'Interpreter project access required.' });
+  try {
+    const success = await stopBrowserTabCapture(req.params.captureId);
+    return success ? res.json({ success: true }) : res.status(404).json({ error: 'Tab capture not found.' });
+  } catch (error) {
+    return res.status(503).json({ error: error instanceof Error ? error.message : 'Tab capture is unavailable.' });
+  }
+});
 
 async function refreshDesktopMenu(): Promise<void> {
   if (!process.versions.electron) return;
@@ -154,6 +203,58 @@ router.get("/app/bridge.js", (_req, res) => {
     });
     const listeners = new Map();
     const emit = (name, detail) => (listeners.get(name) || []).forEach((listener) => listener(detail));
+    const refreshPublicAssets = (revision) => {
+      if (!Number.isSafeInteger(revision) || revision < 0) return;
+      document.querySelectorAll('img[src], source[src], video[poster]').forEach((element) => {
+        const attribute = element.matches('video[poster]') ? 'poster' : 'src';
+        const current = element.getAttribute(attribute);
+        if (!current) return;
+        try {
+          const url = new URL(current, window.location.href);
+          if (url.origin !== window.location.origin || url.pathname.startsWith('/_next/')) return;
+          url.searchParams.set('__interpreter_asset_revision', String(revision));
+          element.setAttribute(attribute, url.pathname + url.search + url.hash);
+        } catch {}
+      });
+    };
+    listeners.set('project-assets-changed', new Set([(detail) => refreshPublicAssets(detail?.revision)]));
+    const connectTabCapture = async (video, captureId) => {
+      if (!(video instanceof HTMLVideoElement)) throw new Error('Pass a video element to browser.captures.connect().');
+      const captures = await request('tab-captures-list');
+      const capture = captures.find((item) => item.captureId === captureId);
+      if (!capture) throw new Error('The selected Chrome tab is no longer being shared.');
+      const peer = new RTCPeerConnection({ iceServers: [] });
+      peer.ontrack = (event) => {
+        video.srcObject = event.streams[0] || new MediaStream([event.track]);
+        video.muted = true;
+        void video.play().catch(() => {});
+        if (event.track.kind === 'video') event.track.addEventListener('ended', () => {
+          if (video.srcObject) video.srcObject = null;
+          peer.close();
+        }, { once: true });
+      };
+      try {
+        await peer.setRemoteDescription({ type: 'offer', sdp: capture.offerSdp });
+        await peer.setLocalDescription(await peer.createAnswer());
+        if (peer.iceGatheringState !== 'complete') {
+          await new Promise((resolve) => {
+            const timeout = setTimeout(done, 5000);
+            function done() { clearTimeout(timeout); peer.removeEventListener('icegatheringstatechange', check); resolve(); }
+            function check() { if (peer.iceGatheringState === 'complete') done(); }
+            peer.addEventListener('icegatheringstatechange', check);
+          });
+        }
+        await request('tab-capture-answer', { captureId, answerSdp: peer.localDescription?.sdp });
+      } catch (error) {
+        peer.close();
+        throw error;
+      }
+      return { stop: async () => {
+        peer.close();
+        video.srcObject = null;
+        await request('tab-capture-stop', { captureId });
+      } };
+    };
     window.addEventListener('message', (event) => {
       const data = event.data;
       if (!data || data.protocol !== protocol) return;
@@ -178,6 +279,13 @@ router.get("/app/bridge.js", (_req, res) => {
           const group = listeners.get(name) || new Set(); group.add(listener); listeners.set(name, group);
           return () => group.delete(listener);
         },
+      }),
+      browser: Object.freeze({
+        captures: Object.freeze({
+          list: () => request('tab-captures-list'),
+          connect: connectTabCapture,
+          stop: (captureId) => request('tab-capture-stop', { captureId }),
+        }),
       }),
     });
     const controlKey = (element) => element.dataset.interpreterStateKey || element.name || element.id || (() => {

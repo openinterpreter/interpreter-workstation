@@ -39,7 +39,7 @@ export function SimpleWhatsNew({ firstRunSession, onVisibilityChange }: {
   };
 
   return (
-    <section aria-label="What's New" className="shrink-0 border-t border-foreground/[0.08] px-5 py-4 text-ui-sm">
+    <section aria-label="What's New" className="shrink-0 px-5 py-4 text-ui-sm">
       <div className="flex items-center justify-between gap-2">
         <h2 className="font-medium text-foreground">What’s New</h2>
         <button type="button" onClick={() => void dismiss()} aria-label="Dismiss What's New"

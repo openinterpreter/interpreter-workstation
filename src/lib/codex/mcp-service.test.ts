@@ -395,11 +395,8 @@ describe("McpService", () => {
     assert.equal(result.data.length, 1);
     assert.deepEqual(result.data[0], {
       name: "supabase",
-      runtimeStatus: null,
-      pluginId: null,
       serverInfo: null,
       tools: {},
-      toolsError: null,
       resources: [],
       resourceTemplates: [],
       authStatus: "notLoggedIn",
