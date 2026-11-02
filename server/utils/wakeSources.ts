@@ -25,6 +25,13 @@ export type WakeSource = {
   /** Persisted admission gate. A running command drains naturally; no child is killed. */
   paused?: boolean;
 };
+export type WakeSourceDrain = {
+  drained: true;
+  commandInFlight: false;
+  nativeOfferInFlight: false;
+  pendingEvents: number;
+  offeredEvents: number;
+};
 export type WakeEvent = {
   threadId: string;
   sourceId: string;
@@ -145,6 +152,7 @@ export class WakeSources {
   private inFlight = new Set<string>();
   private commands = new Map<string, ReturnType<typeof spawn>>();
   private commandTasks = new Set<Promise<void>>();
+  private commandTasksBySource = new Map<string, Promise<void>>();
   private ticking = false;
   private stopping = false;
   private tickFinished?: Promise<void>;
@@ -289,22 +297,52 @@ export class WakeSources {
   }
 
   /** Stop new command launches and native offers without retracting any event.
-   * Already running commands may finish and persist their output while paused.
+   * Return only after this source's running command and the preceding native
+   * tick settle, with a bounded, source-specific drain receipt.
    */
-  async pause(threadId: string, id: string): Promise<WakeSource> {
+  async pause(threadId: string, id: string): Promise<{ source: WakeSource; drain: WakeSourceDrain }> {
     if (this.stopping) throw new Error('Wake admission is draining for restart');
     if (![threadId, id].every(value => ID.test(value))) throw new Error('Invalid source ID');
-    const source = await this.exclusive(async () => {
+    await this.exclusive(async () => {
       const current = this.state.sources.find(item => item.threadId === threadId && item.id === id);
       if (!current || current.status === 'cancelled') throw new Error('Source not found');
       current.paused = true;
       await this.save();
-      return current;
     });
-    // A tick that started before pause may have begun a native RPC. Wait for
-    // that RPC to settle before returning; never infer a receipt from this gate.
-    await this.tickFinished;
-    return structuredClone(source);
+    // The tick waits for native offers, but launches command polls without
+    // awaiting them. A pause response is not a drain receipt until BOTH have
+    // settled. Never terminate a child or discard its durable event/output.
+    const key = `${threadId}:${id}`;
+    const tick = this.tickFinished;
+    const command = this.commandTasksBySource.get(key);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        Promise.all([tick, command]),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error('Wake source drain timed out; source remains paused')), 215_000);
+        }),
+      ]);
+    } catch {
+      // Keep the durable pause gate set. A caller must not interpret a child,
+      // disk, or native failure as a completed drain, nor receive raw output.
+      throw new Error('Wake source drain failed; source remains paused and custody is unverified');
+    } finally { if (timeout) clearTimeout(timeout); }
+    return this.exclusive(async () => {
+      const source = this.state.sources.find(item => item.threadId === threadId && item.id === id);
+      if (!source?.paused || source.status === 'cancelled' || this.commands.has(key) ||
+          this.commandTasksBySource.has(key) || this.inFlight.has(key) ||
+          this.state.events.some(event => event.threadId === threadId && event.sourceId === id &&
+            this.inFlight.has(`${threadId}:${event.eventId}`))) {
+        throw new Error('Wake source drain changed or remains in flight; source custody must be rechecked');
+      }
+      const events = this.state.events.filter(event => event.threadId === threadId && event.sourceId === id);
+      return { source: structuredClone(source), drain: {
+        drained: true as const, commandInFlight: false as const, nativeOfferInFlight: false as const,
+        pendingEvents: events.filter(event => event.status === 'pending').length,
+        offeredEvents: events.filter(event => event.status === 'offered').length,
+      } };
+    });
   }
 
   async resume(threadId: string, id: string): Promise<WakeSource> {
@@ -561,9 +599,14 @@ export class WakeSources {
           await this.save();
         });
       } else if (!this.inFlight.has(`${source.threadId}:${source.id}`)) {
+        const key = `${source.threadId}:${source.id}`;
         const task = this.runCommand(source);
         this.commandTasks.add(task);
-        void task.finally(() => this.commandTasks.delete(task));
+        this.commandTasksBySource.set(key, task);
+        void task.finally(() => {
+          this.commandTasks.delete(task);
+          if (this.commandTasksBySource.get(key) === task) this.commandTasksBySource.delete(key);
+        }).catch(() => undefined);
       }
     }
     // An ambiguous RPC result is never automatically resubmitted while its

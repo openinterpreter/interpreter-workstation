@@ -755,7 +755,7 @@ describe('durable thread wake sources', () => {
       const wake = await f.make();
       const marker = path.join(f.root, 'command-started');
       const script = `require('fs').writeFileSync(${JSON.stringify(marker)}, 'started');
-setTimeout(() => process.stdout.write(JSON.stringify({id:'receipt-1',message:'provider input'})), 80);`;
+setTimeout(() => process.stdout.write(JSON.stringify({id:'receipt-1',message:'provider input'})), 200);`;
       await wake.put({ id: 'provider', threadId: 'thread-1', kind: 'command', argv: [process.execPath, '-e', script] });
       await wake.tick();
       for (let i = 0; i < 100; i++) {
@@ -763,7 +763,22 @@ setTimeout(() => process.stdout.write(JSON.stringify({id:'receipt-1',message:'pr
       }
       expect(wake.list('thread-1').sources[0]?.status).toBe('running');
       const before = wake.list('thread-1').sources[0]!;
-      await wake.pause('thread-1', 'provider');
+      let pauseSettled = false;
+      const pausing = wake.pause('thread-1', 'provider').then(result => {
+        pauseSettled = true; return result;
+      });
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(pauseSettled).toBe(false);
+      const pausedReceipt = await pausing;
+      expect(pausedReceipt.source.paused).toBe(true);
+      expect(pausedReceipt.drain).toEqual({
+        drained: true, commandInFlight: false, nativeOfferInFlight: false,
+        pendingEvents: 1, offeredEvents: 0,
+      });
+      // The command output and stable event are durable at response time, not
+      // merely after a later polling loop or a killed child during restart.
+      expect(wake.list('thread-1').events.map(e => [e.eventId, e.status]))
+        .toEqual([['receipt-1', 'pending']]);
       await expect(wake.put({ id: 'provider', threadId: 'thread-1', kind: 'command', argv: ['/bin/echo', 'new'] }))
         .rejects.toThrow('Resume the paused source');
       for (let i = 0; i < 100 && !wake.list('thread-1').events.length; i++)
@@ -795,7 +810,11 @@ setTimeout(() => process.stdout.write(JSON.stringify({id:'receipt-1',message:'pr
       const wake = await f.make();
       const original = await wake.put({ id: 'poll', threadId: 'thread-1', kind: 'command',
         argv: ['/bin/echo', '{"status":"waiting"}'] });
-      await wake.pause('thread-1', 'poll');
+      const drained = await wake.pause('thread-1', 'poll');
+      expect(drained.drain).toEqual({
+        drained: true, commandInFlight: false, nativeOfferInFlight: false,
+        pendingEvents: 0, offeredEvents: 0,
+      });
       await wake.tick(Date.now() + 60_000);
       expect(wake.list('thread-1').sources[0]?.nextAt).toBe(original.nextAt);
       expect(wake.list('thread-1').events).toHaveLength(0);
@@ -810,6 +829,44 @@ setTimeout(() => process.stdout.write(JSON.stringify({id:'receipt-1',message:'pr
         await new Promise(resolve => setTimeout(resolve, 10));
       expect(recovered.list('thread-1').events).toHaveLength(0);
     } finally { await f.cleanup(); }
+  });
+
+  test('pause waits for an in-flight native offer and preserves its stable ID without replay', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-pause-offer-'));
+    let release!: (turnId: string) => void;
+    const offered = new Promise<string>(resolve => { release = resolve; });
+    let started = 0;
+    const wake = new WakeSources({
+      inspect: async () => ({ messages: [] }),
+      steer: async () => { throw new Error('unexpected steer'); },
+      start: async () => { started++; return offered; },
+    }, root);
+    try {
+      await wake.initialize();
+      await wake.put({ id: 'provider', threadId: 'thread-1', kind: 'command',
+        argv: ['/bin/echo', '{"id":"stable-offer","message":"private input"}'] });
+      await wake.tick();
+      for (let i = 0; i < 100 && !wake.list('thread-1').events.length; i++)
+        await new Promise(resolve => setTimeout(resolve, 10));
+      const delivering = wake.tick();
+      for (let i = 0; i < 100 && !started; i++) await new Promise(resolve => setTimeout(resolve, 10));
+      expect(started).toBe(1);
+      let pauseSettled = false;
+      const pausing = wake.pause('thread-1', 'provider').then(receipt => {
+        pauseSettled = true; return receipt;
+      });
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(pauseSettled).toBe(false);
+      release('turn-stable');
+      await delivering;
+      const receipt = await pausing;
+      expect(receipt.drain.offeredEvents).toBe(1);
+      expect(receipt.drain.nativeOfferInFlight).toBe(false);
+      expect(wake.list('thread-1').events.map(event => [event.eventId, event.turnId, event.status]))
+        .toEqual([['stable-offer', 'turn-stable', 'offered']]);
+      await wake.tick(Date.now() + 60_000);
+      expect(started).toBe(1);
+    } finally { release?.('turn-stable'); await wake.stop(); await rm(root, { recursive: true, force: true }); }
   });
 
   test('pause during an empty in-flight poll lets it finish without spawning another poll', async () => {
