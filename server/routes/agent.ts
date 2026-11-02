@@ -210,12 +210,9 @@ router.post('/custody/approvals/:approvalId/decide', (req: Request, res: Respons
       typeof decisionRef !== 'string' || !/^[A-Za-z0-9_.:-]{8,120}$/.test(decisionRef)) {
     return res.status(400).json({ error: 'Exact scoped Computer Use decision required.' });
   }
-  const card = approvalManager.getPendingApprovalCustody(approvalId, { threadId });
-  if (!card || card.owner.kind !== 'hidden-agent' || card.toolName !== toolName) {
+  if (!approvalManager.decideOwnedCuaApproval({ id: approvalId, threadId, toolName, decision })) {
     return res.status(409).json({ error: 'Pending card or original owner changed.' });
   }
-  const result = approvalManager.respond(approvalId, { answers: { '0': decision } });
-  if (!result.success) return res.status(409).json({ error: 'Pending card changed.' });
   console.info('[CUA approval disposition]', JSON.stringify({
     approvalId, threadId, toolName, decision, decisionRef, status: 'resolved',
   }));

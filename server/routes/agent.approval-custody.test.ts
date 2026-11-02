@@ -51,6 +51,7 @@ describe('exact approval custody metadata', () => {
     process.env.WORKSTATION_WAKE_TOKEN = token;
     pending('approval-a', 'hidden-agent', threadA, 'owner-window');
     requests.get('approval-a')!.toolName = 'cua_driver:discover_apps';
+    requests.get('approval-a')!.serverId = 'builtin-cua-driver';
     const decide = path('approval-a') + '/decide';
     const body = { threadId: threadA, toolName: 'cua_driver:discover_apps',
       decision: 'deny', decisionRef: 'owner-review-20261102' };
@@ -69,6 +70,11 @@ describe('exact approval custody metadata', () => {
     expect((await request(app).post(path('approval-b') + '/decide')
       .set('Authorization', `Bearer ${token}`).send({ ...body, toolName: 'codex_apps__sites.create_site' })).status).toBe(400);
     expect(requests.has('approval-b')).toBe(true);
+    pending('approval-unknown', 'hidden-agent', threadA, 'owner-window');
+    requests.get('approval-unknown')!.toolName = 'cua_driver:discover_apps';
+    expect((await request(app).post(path('approval-unknown') + '/decide')
+      .set('Authorization', `Bearer ${token}`).send(body)).status).toBe(409);
+    expect(requests.has('approval-unknown')).toBe(true);
   });
   test('requires local private bearer, exact ID and owner scope', async () => {
     process.env.WORKSTATION_WAKE_TOKEN = token;
