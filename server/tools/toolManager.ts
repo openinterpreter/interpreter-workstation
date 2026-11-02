@@ -1048,7 +1048,7 @@ export class ToolManager {
       const messageId = getCurrentTurnMessageId() ?? undefined;
       const requestedThreadId = toolContext?.threadId ?? getToolCallMetadata(externalToolCallId)?.threadId;
       const authenticatedCaller = toolContext?.authenticatedCallerBinding;
-      const boundThreadId = authenticatedCaller?.agentId === callerTabId
+      const boundThreadId = callerTabId && authenticatedCaller?.agentId === callerTabId
         ? authenticatedCaller.threadId
         : (callerTabId ? agentTabManager.getBindingForAgentId(callerTabId)?.threadId : undefined);
       const itemThreadId = externalToolCallId ? getToolCallMetadata(externalToolCallId)?.threadId : undefined;
