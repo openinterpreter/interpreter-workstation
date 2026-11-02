@@ -328,9 +328,14 @@ for (const action of ['pause', 'resume'] as const) {
     try {
       await readyWakeSources();
       await getCodexService().readThread(req.params.threadId);
-      const source = await wakeSources[action](req.params.threadId, req.params.sourceId);
-      res.json({ source });
-    } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid source.' }); }
+      if (action === 'pause') {
+        return res.json(await wakeSources.pause(req.params.threadId, req.params.sourceId));
+      }
+      return res.json({ source: await wakeSources.resume(req.params.threadId, req.params.sourceId) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Invalid source.';
+      res.status(message.startsWith('Wake source drain') ? 409 : 400).json({ error: message });
+    }
   });
 }
 
