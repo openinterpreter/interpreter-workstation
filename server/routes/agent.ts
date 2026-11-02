@@ -945,15 +945,27 @@ router.post('/threads/:threadId/caller/cold-bind', async (req: Request, res: Res
       typeof workspace !== 'string') return res.status(400).json({ error: 'Exact thread and workspace required.' });
   try {
     await readyWakeSources();
-    const appQueues = messageQueueStore.getCustodyInventory();
-    const tabs = agentTabManager.getGlobalCustodyInventory();
-    const events = wakeSources.list(threadId).events;
-    if (appQueues.count || tabs.pendingRequestIds.length || tabs.pendingStartupIds.length ||
-        tabs.createdRequestIds.length || approvalManager.getGlobalPendingRequestIds().length ||
-        events.some(event => event.status === 'pending' || event.status === 'offered')) {
-      return res.status(409).json({ error: 'In-process or durable input custody is not idle.' });
-    }
-    return res.json(await coldBindAgentTaskThread({ threadId, workspace }));
+    const assertAppCustody = () => {
+      const appQueues = messageQueueStore.getCustodyInventory();
+      const tabs = agentTabManager.getGlobalCustodyInventory();
+      const wakes = wakeSources.list(threadId);
+      if (appQueues.count || tabs.pendingRequestIds.length || tabs.pendingStartupIds.length ||
+          tabs.createdRequestIds.length || approvalManager.getGlobalPendingRequestIds().length ||
+          wakes.events.some(event => event.status === 'pending' || event.status === 'offered') ||
+          wakes.sources.some(source => source.status !== 'cancelled' &&
+            (!source.paused || source.status === 'running'))) {
+        throw new Error('In-process or durable input custody is not idle or paused');
+      }
+    };
+    assertAppCustody();
+    // A loaded idle thread is unsubscribed through the supported native RPC;
+    // OIX closes it after its own idle delay. The same per-thread admission
+    // fence spans the delayed unload and exact-ID cold resume. No turn is sent.
+    const service = getCodexService();
+    return res.json(await service.withColdCallerTransition(threadId, async () => {
+      assertAppCustody();
+      return coldBindAgentTaskThread({ threadId, workspace });
+    }));
   } catch {
     return res.status(409).json({ error: 'Cold caller custody or native resume failed; no turn was submitted.' });
   }

@@ -161,6 +161,7 @@ function createFakeClient(overrides: {
     threadSetNameParams: [] as Array<v2.ThreadSetNameParams>,
     threadArchiveParams: [] as Array<v2.ThreadArchiveParams>,
     threadUnarchiveParams: [] as Array<v2.ThreadUnarchiveParams>,
+    threadUnsubscribeParams: [] as Array<v2.ThreadUnsubscribeParams>,
   };
 
   const client: CodexClient = {
@@ -329,6 +330,10 @@ function createFakeClient(overrides: {
     },
     async threadLoadedList() {
       return { data: [], nextCursor: null };
+    },
+    async threadUnsubscribe(params) {
+      calls.threadUnsubscribeParams.push(params);
+      return { status: 'unsubscribed' as const };
     },
     async threadRead(params) {
       calls.threadReadParams.push(params);
@@ -1394,6 +1399,84 @@ describe("CodexService", () => {
     await assert.rejects(service.resumeThread({ threadId: id, model: null, cwd: '/workspace',
       config: { shell_environment_policy: policy }, coldShellPolicy: true }), /Cold caller bind requires/);
     assert.equal(fake.calls.resumeThread, 1);
+  });
+
+  test('loaded idle caller unsubscribes, waits for native close, then cold resumes same ID with no turn', async () => {
+    const id = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    const fake = createFakeClient();
+    let loaded = true;
+    fake.client.threadRead = async () => ({ thread: {
+      id, cwd: '/workspace', status: { type: loaded ? 'idle' : 'notLoaded' },
+      turns: [{ id: 'turn_done', status: 'completed', items: [], error: null }],
+    } as v2.Thread });
+    fake.client.threadList = async () => ({ data: [{ id } as v2.Thread], nextCursor: null });
+    fake.client.threadLoadedList = async () => ({ data: loaded ? [id] : [], nextCursor: null });
+    let release!: () => void;
+    const subscribed = new Promise<void>(resolve => { release = resolve; });
+    fake.client.threadUnsubscribe = async (params) => {
+      fake.calls.threadUnsubscribeParams.push(params);
+      release();
+      setTimeout(() => { loaded = false; }, 10);
+      return { status: 'unsubscribed' };
+    };
+    const service = new CodexService(fake.client);
+    const policy = { set: { INTERPRETER_CLI_PATH: '/tmp/launcher/interpreter-app' } };
+    const operation = service.withColdCallerTransition(id, async () => {
+      assert.equal(loaded, false);
+      return service.resumeThread({ threadId: id, model: null, cwd: '/workspace',
+        config: { mcp_servers: {}, shell_environment_policy: policy }, coldShellPolicy: true });
+    }, 1000);
+    await subscribed;
+    await assert.rejects(service.startExistingThreadTurn(id, 'queued user input'), /transition in progress/);
+    assert.equal(await operation, id);
+    assert.deepEqual(fake.calls.threadUnsubscribeParams, [{ threadId: id }]);
+    assert.equal(fake.calls.startTurn, 0);
+    assert.deepEqual(fake.calls.resumeThreadConfig[0]?.shell_environment_policy, policy);
+  });
+
+  test('loaded transition fails closed on active commands, changed queues and absent subscription', async () => {
+    const id = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    const fake = createFakeClient();
+    fake.client.threadList = async () => ({ data: [{ id } as v2.Thread], nextCursor: null });
+    fake.client.threadLoadedList = async () => ({ data: [id], nextCursor: null });
+    fake.client.threadRead = async () => ({ thread: {
+      id, cwd: '/workspace', status: { type: 'idle' },
+      turns: [{ id: 'done', status: 'completed', error: null, items: [
+        { type: 'commandExecution', status: 'inProgress' } as v2.ThreadItem,
+      ] }],
+    } as v2.Thread });
+    const service = new CodexService(fake.client);
+    await assert.rejects(service.withColdCallerTransition(id, async () => id), /no in-progress native command/);
+    assert.equal(fake.calls.threadUnsubscribeParams.length, 0);
+    fake.client.threadRead = async () => ({ thread: {
+      id, cwd: '/workspace', status: { type: 'idle' },
+      turns: [{ id: 'done', status: 'completed', error: null, items: [] }],
+    } as v2.Thread });
+    fake.client.threadQueueList = async () => ({ data: [{ id: 'queue_1', clientUserMessageId: 'opaque_1', input: [] }], nextCursor: null });
+    await assert.rejects(service.withColdCallerTransition(id, async () => id), /queue-empty/);
+    fake.client.threadQueueList = async () => ({ data: [], nextCursor: null });
+    fake.client.threadUnsubscribe = async () => ({ status: 'notSubscribed' });
+    await assert.rejects(service.withColdCallerTransition(id, async () => id), /subscriber ownership changed/);
+    assert.equal(fake.calls.resumeThread, 0);
+  });
+
+  test('loaded transition timeout restores the old subscription without installing a new caller policy', async () => {
+    const id = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    const fake = createFakeClient();
+    fake.client.threadList = async () => ({ data: [{ id } as v2.Thread], nextCursor: null });
+    fake.client.threadLoadedList = async () => ({ data: [id], nextCursor: null });
+    fake.client.threadRead = async () => ({ thread: {
+      id, cwd: '/workspace', status: { type: 'idle' },
+      turns: [{ id: 'done', status: 'completed', error: null, items: [] }],
+    } as v2.Thread });
+    const service = new CodexService(fake.client);
+    await assert.rejects(service.withColdCallerTransition(id, async () => {
+      throw new Error('must not bind while loaded');
+    }, 5), /remained loaded/);
+    assert.deepEqual(fake.calls.threadUnsubscribeParams, [{ threadId: id }]);
+    assert.equal(fake.calls.resumeThread, 1);
+    assert.deepEqual(fake.calls.resumeThreadConfig, [{ mcp_servers: {} }]);
+    assert.equal(fake.calls.startTurn, 0);
   });
 
   test("ordinary stream, idle durable wake and active input share native scope and input IDs", async () => {

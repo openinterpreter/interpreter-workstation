@@ -252,6 +252,7 @@ export type CodexClient = {
     developerInstructions?: string | null,
     additionalWritableRoots?: string[],
   ): Promise<string>;
+  threadUnsubscribe(params: v2.ThreadUnsubscribeParams): Promise<v2.ThreadUnsubscribeResponse>;
   forkThread(
     threadId: string,
     lastTurnId: string,
@@ -472,6 +473,7 @@ export function extractNotificationTurnId(notification: AppServerNotification) {
 
 export class CodexService {
   private readonly activeTurns = new Map<string, string | null>();
+  private readonly coldCarrierTransitions = new Set<string>();
   private readonly provisionedProviders = new Set<string>();
   private reservedLocalOverridesCleared = false;
   private reservedLocalOverrideCleanup: Promise<void> | null = null;
@@ -510,6 +512,10 @@ export class CodexService {
         onPhase?: (phase: 'resume' | 'start') => void } }
       | { kind: 'steer'; params: Parameters<CodexClient['steerTurn']>[0] },
   ): Promise<{ turnId: string; status?: v2.TurnStatus }> {
+    const threadId = input.params.threadId;
+    if (this.coldCarrierTransitions.has(threadId)) {
+      throw new Error('Cold caller transition in progress; retry this input after custody completes');
+    }
     if (input.kind === 'start') {
       const { threadId } = input.params;
       if (input.existingThread) {
@@ -555,7 +561,8 @@ export class CodexService {
     if (options.coldShellPolicy) {
       const custody = await this.readNativeCustody(options.threadId);
       const global = await this.readGlobalNativeCustody();
-      if (custody.status !== 'idle' || custody.queuedSubmissionCount !== 0 ||
+      if (!['idle', 'notLoaded'].includes(custody.status) || custody.queuedSubmissionCount !== 0 ||
+          (custody.lastTurnStatus !== null && !['completed', 'failed', 'interrupted'].includes(custody.lastTurnStatus)) ||
           global.queuedSubmissionCount !== 0 || global.loadedThreadIds.includes(options.threadId) ||
           !global.threads.some(row => row.threadId === options.threadId) ||
           !options.config?.shell_environment_policy) {
@@ -699,6 +706,9 @@ export class CodexService {
    * callers must not synthesize a user message merely to restore a runtime.
    */
   async resumeThread(options: ResumeThreadOptions): Promise<string> {
+    if (this.coldCarrierTransitions.has(options.threadId) && !options.coldShellPolicy) {
+      throw new Error('Cold caller transition in progress; retry native resume after custody completes');
+    }
     this.assertNoActiveTurn(options.threadId);
 
     const runConfig: Record<string, JsonValue> = {
@@ -1089,6 +1099,61 @@ export class CodexService {
       queuedSubmissionCount: submissions.length,
       queuedSubmissions: submissions,
     };
+  }
+
+  /** Release only this app-server's subscription to an idle saved thread, then
+   * cold-bind it under the SAME thread ID. Never archive/delete its history or
+   * submit a turn. A per-thread admission fence covers the entire transition.
+   * OIX owns delayed unload; another subscriber or active process fails closed.
+   */
+  async withColdCallerTransition<T>(threadId: string, bind: () => Promise<T>, timeoutMs = 80_000): Promise<T> {
+    if (this.coldCarrierTransitions.has(threadId)) throw new Error('Cold caller transition already in progress');
+    this.coldCarrierTransitions.add(threadId);
+    let unsubscribed = false;
+    let bound = false;
+    try {
+      const custody = await this.readNativeCustody(threadId);
+      const global = await this.readGlobalNativeCustody();
+      if (custody.status !== 'idle' || custody.queuedSubmissionCount || global.queuedSubmissionCount ||
+          !global.threads.some(row => row.threadId === threadId) ||
+          (custody.lastTurnStatus !== null && !['completed', 'failed', 'interrupted'].includes(custody.lastTurnStatus))) {
+        throw new Error('Cold caller transition requires exact idle terminal queue-empty native custody');
+      }
+      const thread = await this.readThread(threadId);
+      if (thread.turns.some(turn => turn.status === 'inProgress' || turn.items.some(item =>
+        (item.type === 'commandExecution' || item.type === 'mcpToolCall' || item.type === 'dynamicToolCall') &&
+        item.status === 'inProgress'))) {
+        throw new Error('Cold caller transition requires no in-progress native command or tool');
+      }
+      if (global.loadedThreadIds.includes(threadId)) {
+        const response = await this.client.threadUnsubscribe({ threadId });
+        if (response.status !== 'unsubscribed') throw new Error('Native subscriber ownership changed');
+        unsubscribed = true;
+        const deadline = Date.now() + timeoutMs;
+        for (;;) {
+          const current = await this.readNativeCustody(threadId);
+          const inventory = await this.readGlobalNativeCustody();
+          if (current.queuedSubmissionCount || inventory.queuedSubmissionCount ||
+              current.status === 'active' || !inventory.threads.some(row => row.threadId === threadId)) {
+            throw new Error('Native custody changed during cold caller transition');
+          }
+          if (!inventory.loadedThreadIds.includes(threadId) && current.status === 'notLoaded') break;
+          if (Date.now() >= deadline) throw new Error('Native thread remained loaded after unsubscribe');
+          await new Promise(resolve => setTimeout(resolve, Math.min(250, Math.max(1, deadline - Date.now()))));
+        }
+      }
+      const result = await bind();
+      bound = true;
+      return result;
+    } catch (error) {
+      // Re-subscribe with the *existing* native policy if an idle transition
+      // failed before binding. Do not install new shell keys or start a turn.
+      if (unsubscribed && !bound) {
+        try { await this.client.resumeThread(threadId, null, null, null, { mcp_servers: {} }); }
+        catch { throw new Error('Cold caller transition failed and native subscription restoration is unverified'); }
+      }
+      throw error;
+    } finally { this.coldCarrierTransitions.delete(threadId); }
   }
 
   private async readNativeQueuedSubmissions(threadId: string) {

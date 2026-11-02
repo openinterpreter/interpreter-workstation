@@ -1432,6 +1432,20 @@ describe("CodexAppServerClient", () => {
     assert.equal(threadId, "thr_existing");
   });
 
+  test('threadUnsubscribe uses the typed native RPC without archiving or submitting input', async () => {
+    const transport = new FakeTransport();
+    const client = new CodexAppServerClient(transport, null);
+    const operation = client.threadUnsubscribe({ threadId: 'thr_existing' });
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await waitFor(() => transport.sent.length >= 3);
+    const request = assertSentRequest(transport, 2, CLIENT_METHOD.threadUnsubscribe);
+    assert.deepEqual(request.params, { threadId: 'thr_existing' });
+    transport.respond(request, { status: 'unsubscribed' });
+    assert.deepEqual(await operation, { status: 'unsubscribed' });
+    assert.equal(transport.sent.length, 3);
+  });
+
   test("forkThread preserves history through one completed turn", async () => {
     const transport = new FakeTransport();
     const client = new CodexAppServerClient(transport, null);
