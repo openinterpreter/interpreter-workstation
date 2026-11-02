@@ -1402,7 +1402,7 @@ describe("CodexService", () => {
   });
 
   test('loaded idle caller unsubscribes, waits for native close, then cold resumes same ID with no turn', async () => {
-    const id = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    const id = '00000000-0000-4000-8000-000000000012';
     const fake = createFakeClient();
     let loaded = true;
     fake.client.threadRead = async () => ({ thread: {
@@ -1435,7 +1435,7 @@ describe("CodexService", () => {
   });
 
   test('loaded transition fails closed on active commands, changed queues and absent subscription', async () => {
-    const id = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    const id = '00000000-0000-4000-8000-000000000013';
     const fake = createFakeClient();
     fake.client.threadList = async () => ({ data: [{ id } as v2.Thread], nextCursor: null });
     fake.client.threadLoadedList = async () => ({ data: [id], nextCursor: null });
@@ -1461,7 +1461,7 @@ describe("CodexService", () => {
   });
 
   test('loaded transition timeout restores the old subscription without installing a new caller policy', async () => {
-    const id = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    const id = '00000000-0000-4000-8000-000000000014';
     const fake = createFakeClient();
     fake.client.threadList = async () => ({ data: [{ id } as v2.Thread], nextCursor: null });
     fake.client.threadLoadedList = async () => ({ data: [id], nextCursor: null });
@@ -1477,6 +1477,28 @@ describe("CodexService", () => {
     assert.equal(fake.calls.resumeThread, 1);
     assert.deepEqual(fake.calls.resumeThreadConfig, [{ mcp_servers: {} }]);
     assert.equal(fake.calls.startTurn, 0);
+  });
+
+  test('already-unloaded terminal thread binds without unsubscribe or a new turn', async () => {
+    const id = '00000000-0000-4000-8000-000000000015';
+    const fake = createFakeClient();
+    fake.client.threadList = async () => ({ data: [{ id } as v2.Thread], nextCursor: null });
+    fake.client.threadLoadedList = async () => ({ data: [], nextCursor: null });
+    fake.client.threadRead = async () => ({ thread: {
+      id, cwd: '/workspace', status: { type: 'notLoaded' },
+      turns: [{ id: 'done', status: 'completed', error: null, items: [] }],
+    } as v2.Thread });
+    const service = new CodexService(fake.client);
+    assert.equal(await service.withColdCallerTransition(id, () =>
+      service.resumeThread({ threadId: id, model: null, cwd: '/workspace',
+        config: { mcp_servers: {}, shell_environment_policy: { set: { INTERPRETER_CLI_PATH: '/tmp/cli' } } },
+        coldShellPolicy: true })), id);
+    assert.equal(fake.calls.threadUnsubscribeParams.length, 0);
+    assert.equal(fake.calls.resumeThread, 1);
+    assert.equal(fake.calls.startTurn, 0);
+    fake.client.threadQueueList = async () => ({ data: [{ id: 'queue_1', clientUserMessageId: 'pending_1', input: [] }], nextCursor: null });
+    await assert.rejects(service.withColdCallerTransition(id, async () => id), /queue-empty/);
+    assert.equal(fake.calls.resumeThread, 1);
   });
 
   test("ordinary stream, idle durable wake and active input share native scope and input IDs", async () => {

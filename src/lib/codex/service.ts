@@ -1114,7 +1114,7 @@ export class CodexService {
     try {
       const custody = await this.readNativeCustody(threadId);
       const global = await this.readGlobalNativeCustody();
-      if (custody.status !== 'idle' || custody.queuedSubmissionCount || global.queuedSubmissionCount ||
+      if (!['idle', 'notLoaded'].includes(custody.status) || custody.queuedSubmissionCount || global.queuedSubmissionCount ||
           !global.threads.some(row => row.threadId === threadId) ||
           (custody.lastTurnStatus !== null && !['completed', 'failed', 'interrupted'].includes(custody.lastTurnStatus))) {
         throw new Error('Cold caller transition requires exact idle terminal queue-empty native custody');

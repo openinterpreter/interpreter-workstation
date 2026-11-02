@@ -945,7 +945,7 @@ router.post('/threads/:threadId/caller/cold-bind', async (req: Request, res: Res
       typeof workspace !== 'string') return res.status(400).json({ error: 'Exact thread and workspace required.' });
   try {
     await readyWakeSources();
-    const assertAppCustody = () => {
+    const assertAppCustody = (requireSettled = false) => {
       const appQueues = messageQueueStore.getCustodyInventory();
       const tabs = agentTabManager.getGlobalCustodyInventory();
       const wakes = wakeSources.list(threadId);
@@ -953,17 +953,28 @@ router.post('/threads/:threadId/caller/cold-bind', async (req: Request, res: Res
           tabs.createdRequestIds.length || approvalManager.getGlobalPendingRequestIds().length ||
           wakes.events.some(event => event.status === 'pending' || event.status === 'offered') ||
           wakes.sources.some(source => source.status !== 'cancelled' &&
-            (!source.paused || source.status === 'running'))) {
+            (!source.paused || (requireSettled && source.status === 'running')))) {
         throw new Error('In-process or durable input custody is not idle or paused');
       }
+      return wakes;
     };
-    assertAppCustody();
+    const wakes = assertAppCustody();
+    // Persisted paused=true is NOT a drain receipt: an earlier pause may have
+    // timed out after setting the flag while a child or native offer continued.
+    for (const source of wakes.sources.filter(source => source.status !== 'cancelled')) {
+      const { drain } = await wakeSources.pause(threadId, source.id);
+      if (!drain.drained || drain.commandInFlight || drain.nativeOfferInFlight ||
+          drain.pendingEvents || drain.offeredEvents) {
+        throw new Error('Wake source drain is incomplete');
+      }
+    }
+    assertAppCustody(true);
     // A loaded idle thread is unsubscribed through the supported native RPC;
     // OIX closes it after its own idle delay. The same per-thread admission
     // fence spans the delayed unload and exact-ID cold resume. No turn is sent.
     const service = getCodexService();
     return res.json(await service.withColdCallerTransition(threadId, async () => {
-      assertAppCustody();
+      assertAppCustody(true);
       return coldBindAgentTaskThread({ threadId, workspace });
     }));
   } catch {
