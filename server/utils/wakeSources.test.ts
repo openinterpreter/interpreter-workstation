@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { WakeSources, WakeAdmissionFailure, wakeClientId, wakeInput, wakeTokenValid, type WakeNative } from './wakeSources';
+import { WakeSources, WakeAdmissionFailure, HistoricalHoldConflict, wakeClientId, wakeInput, wakeTokenValid, type WakeNative } from './wakeSources';
 import { nextCivilDaily } from './civilSchedule';
 
 async function fixture() {
@@ -29,6 +29,36 @@ async function fixture() {
 }
 
 describe('durable thread wake sources', () => {
+  test('historical hold reports busy during a concurrent wake inspection without changing the event', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-hold-busy-'));
+    let entered!: () => void;
+    let release!: () => void;
+    const inspecting = new Promise<void>(resolve => { entered = resolve; });
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const wake = new WakeSources({
+      inspect: async () => { entered(); await blocked; return { messages: [] }; },
+      custody: async () => ({ queuedSubmissionCount: 0, lastTurnId: 'latest',
+        turnStatus: 'completed', threadStatus: 'idle' }),
+      start: async () => 'turn-1', steer: async () => 'turn-1',
+    }, root);
+    try {
+      await wake.initialize();
+      const event = await wake.ingest('thread-1', 'provider', 'event-1', 'input');
+      const tick = wake.tick();
+      await inspecting;
+      try {
+        await wake.holdHistoricalOffered('thread-1', 'provider', event.eventId,
+          wakeClientId(event), 'latest', 'decision-1');
+        throw new Error('Expected busy conflict');
+      } catch (error) {
+        expect(error).toBeInstanceOf(HistoricalHoldConflict);
+        expect((error as HistoricalHoldConflict).code).toBe('BUSY');
+      }
+      expect(wake.list('thread-1').events[0]?.status).toBe('pending');
+      release();
+      await tick;
+    } finally { release(); await wake.stop(); await rm(root, { recursive: true, force: true }); }
+  });
   test('a stalled native history inspection preserves pending custody and does not pin other threads', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'wake-inspect-deadline-'));
     const messages: string[] = [];
@@ -86,17 +116,21 @@ describe('durable thread wake sources', () => {
         steer: async () => { throw new Error('unexpected steer'); },
       }, root);
       await resumed.initialize();
-      await expect(resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
-        'wrong-client', latest, 'decision-1')).rejects.toThrow('mismatch');
+      const category = async (operation: Promise<unknown>) => {
+        try { await operation; return 'SUCCESS'; }
+        catch (error) { return error instanceof HistoricalHoldConflict ? error.code : 'UNEXPECTED'; }
+      };
+      expect(await category(resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
+        'wrong-client', latest, 'decision-1'))).toBe('CUSTODY_MISMATCH');
       clientIds = [clientId];
-      await expect(resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
-        clientId, latest, 'decision-1')).rejects.toThrow('receipt exists');
+      expect(await category(resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
+        clientId, latest, 'decision-1'))).toBe('RECEIPT_EXISTS');
       clientIds = []; queued = 1;
-      await expect(resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
-        clientId, latest, 'decision-1')).rejects.toThrow('queue-empty');
+      expect(await category(resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
+        clientId, latest, 'decision-1'))).toBe('CUSTODY_CHANGED');
       queued = 0; latest = 'changed-turn';
-      await expect(resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
-        clientId, 'later-turn', 'decision-1')).rejects.toThrow('queue-empty');
+      expect(await category(resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
+        clientId, 'later-turn', 'decision-1'))).toBe('CUSTODY_CHANGED');
       const held = await resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
         clientId, latest, 'decision-1');
       expect(held.status).toBe('held');
