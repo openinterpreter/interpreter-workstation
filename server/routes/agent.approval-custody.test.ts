@@ -6,6 +6,7 @@ import { approvalManager } from '../approvalManager';
 import type { ApprovalOwnerKind, QuestionRequestInternal } from '../../shared/types/approval';
 
 const app = express();
+app.use(express.json());
 app.use('/api/agent', agentRouter);
 const token = 'private-test-token';
 const threadA = '00000000-0000-4000-8000-000000000001';
@@ -46,6 +47,35 @@ afterEach(() => {
 });
 
 describe('exact approval custody metadata', () => {
+  test('operator exact-owner CUA disposition rejects another thread and non-CUA cards', async () => {
+    process.env.WORKSTATION_WAKE_TOKEN = token;
+    pending('approval-a', 'hidden-agent', threadA, 'owner-window');
+    requests.get('approval-a')!.toolName = 'cua_driver:discover_apps';
+    requests.get('approval-a')!.serverId = 'builtin-cua-driver';
+    const decide = path('approval-a') + '/decide';
+    const body = { threadId: threadA, toolName: 'cua_driver:discover_apps',
+      decision: 'deny', decisionRef: 'owner-review-20261102' };
+    expect((await request(app).post(decide).send(body)).status).toBe(401);
+    expect((await request(app).post(decide).set('Authorization', `Bearer ${token}`)
+      .send({ ...body, threadId: threadB })).status).toBe(409);
+    expect((await request(app).post(decide).set('Authorization', `Bearer ${token}`)
+      .send({ ...body, toolName: 'cua_driver:control:Chrome' })).status).toBe(409);
+    expect(requests.has('approval-a')).toBe(true);
+    const result = await request(app).post(decide).set('Authorization', `Bearer ${token}`).send(body);
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ status: 'resolved', continuationStatus: 'not-verified', decision: 'deny' });
+    expect(requests.has('approval-a')).toBe(false);
+    expect((await request(app).post(decide).set('Authorization', `Bearer ${token}`).send(body)).status).toBe(409);
+    pending('approval-b', 'hidden-agent', threadA, 'owner-window');
+    expect((await request(app).post(path('approval-b') + '/decide')
+      .set('Authorization', `Bearer ${token}`).send({ ...body, toolName: 'codex_apps__sites.create_site' })).status).toBe(400);
+    expect(requests.has('approval-b')).toBe(true);
+    pending('approval-unknown', 'hidden-agent', threadA, 'owner-window');
+    requests.get('approval-unknown')!.toolName = 'cua_driver:discover_apps';
+    expect((await request(app).post(path('approval-unknown') + '/decide')
+      .set('Authorization', `Bearer ${token}`).send(body)).status).toBe(409);
+    expect(requests.has('approval-unknown')).toBe(true);
+  });
   test('requires local private bearer, exact ID and owner scope', async () => {
     process.env.WORKSTATION_WAKE_TOKEN = token;
     pending('approval-a', 'normal-agent', threadA, 'owner-window');

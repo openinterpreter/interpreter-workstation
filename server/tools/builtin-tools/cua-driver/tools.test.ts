@@ -819,15 +819,21 @@ describe('macOS Computer Use wrapper behavior', () => {
         permissions: { inspect: { mode: 'ask' }, control: { mode: 'ask' } }, appPolicies: [],
       }));
       try {
+        const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+        const verified = { threadId, verifiedCallerThreadId: threadId };
         for (const [tool, args] of [
           ['list_apps', {}], ['get_app_state', { app: 'Google Chrome' }],
           ['click', { app: 'Google Chrome', element_index: 3 }],
-        ] as const) await expect(requestApprovalForTest(tool, args)).resolves.toBeUndefined();
+        ] as const) await expect(requestApprovalForTest(tool, args, verified)).resolves.toBeUndefined();
+        await expect(requestApprovalForTest('list_apps', {})).rejects.toThrow('unattended approval was denied');
+        await expect(requestApprovalForTest('click', { app: 'Google Chrome' }, {
+          threadId, verifiedCallerThreadId: '00000000-0000-0000-0000-000000000000',
+        })).rejects.toThrow('unattended approval was denied');
         setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
           permissions: { inspect: { mode: 'deny' }, control: { mode: 'deny' } }, appPolicies: [],
         }));
-        await expect(requestApprovalForTest('list_apps', {})).rejects.toThrow('denied by Settings');
-        await expect(requestApprovalForTest('click', { app: 'Google Chrome' })).rejects.toThrow('denied by Settings');
+        await expect(requestApprovalForTest('list_apps', {}, verified)).rejects.toThrow('denied by Settings');
+        await expect(requestApprovalForTest('click', { app: 'Google Chrome' }, verified)).rejects.toThrow('denied by Settings');
         setConfigOverride({ agents: {}, codexApprovalPolicy: 'on-request', headlessToolApprovalMode: 'ordinary-auto' } as any);
         setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
           permissions: { inspect: { mode: 'ask' }, control: { mode: 'ask' } }, appPolicies: [],
@@ -850,14 +856,16 @@ describe('macOS Computer Use wrapper behavior', () => {
         permissions: { inspect: { mode: 'ask' }, control: { mode: 'ask' } }, appPolicies: [],
       }));
       try {
-        await expect(requestApprovalForTest('list_apps', {}, { threadId: owner })).resolves.toBeUndefined();
+        await expect(requestApprovalForTest('list_apps', {}, { threadId: owner, verifiedCallerThreadId: owner })).resolves.toBeUndefined();
+        await expect(requestApprovalForTest('list_apps', {}, { threadId: owner }))
+          .rejects.toThrow('unattended approval was denied');
         for (const context of [{ threadId: other }, {}, undefined]) {
           await expect(requestApprovalForTest('list_apps', {}, context))
             .rejects.toThrow('unattended approval was denied');
         }
-        await expect(requestApprovalForTest('list_apps', { extra: true }, { threadId: owner }))
+        await expect(requestApprovalForTest('list_apps', { extra: true }, { threadId: owner, verifiedCallerThreadId: owner }))
           .rejects.toThrow('unattended approval was denied');
-        await expect(requestApprovalForTest('list_windows', {}, { threadId: owner }))
+        await expect(requestApprovalForTest('list_windows', {}, { threadId: owner, verifiedCallerThreadId: owner }))
           .rejects.toThrow('unattended approval was denied');
         await expect(requestApprovalForTest('get_app_state', { app: 'LocalApp' }, { threadId: owner }))
           .rejects.toThrow('unattended approval was denied');

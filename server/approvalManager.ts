@@ -742,6 +742,17 @@ class ApprovalManager {
     };
   }
 
+  /** Exact original-owner CUA card only; never resolves a provider or foreign-server request. */
+  decideOwnedCuaApproval(input: {
+    id: string; threadId: string; toolName: string; decision: 'approve' | 'deny';
+  }): boolean {
+    const card = this.getPendingApprovalCustody(input.id, { threadId: input.threadId });
+    const request = this.requests.get(input.id);
+    if (!card || !request || card.owner.kind !== 'hidden-agent' ||
+        request.serverId !== 'builtin-cua-driver' || card.toolName !== input.toolName) return false;
+    return this.respond(input.id, { answers: { '0': input.decision } }).success;
+  }
+
   /**
    * Backwards compatibility - alias for getRequests
    */

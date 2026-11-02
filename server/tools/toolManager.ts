@@ -1046,6 +1046,15 @@ export class ToolManager {
 
       const effectiveAgentId = agentId ?? callerTabId;
       const messageId = getCurrentTurnMessageId() ?? undefined;
+      const requestedThreadId = toolContext?.threadId ?? getToolCallMetadata(externalToolCallId)?.threadId;
+      const authenticatedCaller = toolContext?.authenticatedCallerBinding;
+      const boundThreadId = callerTabId && authenticatedCaller?.agentId === callerTabId
+        ? authenticatedCaller.threadId
+        : (callerTabId ? agentTabManager.getBindingForAgentId(callerTabId)?.threadId : undefined);
+      const itemThreadId = externalToolCallId ? getToolCallMetadata(externalToolCallId)?.threadId : undefined;
+      const verifiedCallerThreadId = requestedThreadId && boundThreadId === requestedThreadId
+        && (!externalToolCallId || itemThreadId === requestedThreadId)
+        ? requestedThreadId : undefined;
 
       // NOTE(filesystem-approvals): Enforce workspace boundaries before handler
       // execution. This is the builtin-tool approval choke point for CLI, MCP
@@ -1061,6 +1070,7 @@ export class ToolManager {
           workspace: workspace || undefined,
           callerTabId,
           threadId: toolContext?.threadId ?? getToolCallMetadata(externalToolCallId)?.threadId,
+          verifiedCallerThreadId,
           modelConfig,
           agentId: effectiveAgentId,
           toolCallId,

@@ -28,6 +28,8 @@ export interface BuiltinToolContext {
   callerTabId?: string;
   /** Agent runtime thread that issued the call. Used to scope per-thread tool state such as js_repl kernels. */
   threadId?: string;
+  /** Server-verified caller/thread match; never set from untrusted tool arguments. */
+  verifiedCallerThreadId?: string;
   /** Optional explicit output path from `interpreter-app tools ... --save-to-disk <path>`. */
   saveToDiskPath?: string;
   /** True only for internal overlay actions already accepted through computer_batch review. */

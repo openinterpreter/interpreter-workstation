@@ -194,6 +194,32 @@ router.get('/custody/approvals/:approvalId', (req: Request, res: Response) => {
   }
 });
 
+// Operator-only exact-card disposition. This never grants a policy or resolves
+// another tool's card; the ordinary approval manager resumes the original waiter.
+router.post('/custody/approvals/:approvalId/decide', (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  const { approvalId } = req.params;
+  const { threadId, toolName, decision, decisionRef } = req.body ?? {};
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(approvalId) ||
+      typeof threadId !== 'string' || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId) ||
+      typeof toolName !== 'string' || !/^cua_driver:[A-Za-z0-9_.:-]{1,100}$/.test(toolName) ||
+      !['approve', 'deny'].includes(decision) ||
+      typeof decisionRef !== 'string' || !/^[A-Za-z0-9_.:-]{8,120}$/.test(decisionRef)) {
+    return res.status(400).json({ error: 'Exact scoped Computer Use decision required.' });
+  }
+  if (!approvalManager.decideOwnedCuaApproval({ id: approvalId, threadId, toolName, decision })) {
+    return res.status(409).json({ error: 'Pending card or original owner changed.' });
+  }
+  console.info('[CUA approval disposition]', JSON.stringify({
+    approvalId, threadId, toolName, decision, decisionRef, status: 'resolved',
+  }));
+  return res.json({ approvalId, threadId, toolName, decision, decisionRef, status: 'resolved',
+    continuationStatus: 'not-verified' });
+});
+
 function wakeMutationAllowed(req: Request): boolean {
   const address = req.socket.remoteAddress;
   if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address ?? '')) return false;

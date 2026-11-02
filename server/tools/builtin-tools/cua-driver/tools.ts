@@ -3319,11 +3319,13 @@ async function requestApproval(
     if (discoveryMode === 'deny') {
       throw new Error('Computer Use inspect access to the desktop is denied by Settings > Permissions.');
     }
-    if (autoApproveOrdinaryHeadlessToolsSync()) return;
+    if (autoApproveOrdinaryHeadlessToolsSync() && context?.threadId &&
+        context.verifiedCallerThreadId === context.threadId) return;
     // Operator-owned, exact-thread read grant. No global inspect permission,
     // target control, other discovery tool, or argument-bearing call is implied.
     if (failClosedOnHeadlessToolApprovalSync() && Object.keys(args).length === 0 &&
-        hasNativeCuaDiscoveryGrant(context?.threadId, toolName)) return;
+        context?.threadId && context.verifiedCallerThreadId === context.threadId &&
+        hasNativeCuaDiscoveryGrant(context.threadId, toolName)) return;
     if (failClosedOnHeadlessToolApprovalSync()) {
       throw new Error('Computer Use discovery requires an operator inspect grant; unattended approval was denied before acquiring the desktop lock.');
     }
@@ -3378,7 +3380,8 @@ async function requestApproval(
       `Computer Use ${kind} access to "${displayTarget}" is denied by Settings > Permissions.`,
     );
   }
-  if (autoApproveOrdinaryHeadlessToolsSync()) return;
+  if (autoApproveOrdinaryHeadlessToolsSync() && context?.threadId &&
+      context.verifiedCallerThreadId === context.threadId) return;
   if (kind === 'control' && context?.overlayReviewedAction === true) {
     return;
   }
