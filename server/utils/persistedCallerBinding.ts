@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { constants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { constants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { getInterpreterAppDataDir } from '../configStore';
 import type { AgentThreadBinding } from '../agentTabManager';
@@ -134,4 +134,43 @@ export function revokeNativeCallerBinding(token: string, root = getInterpreterAp
   if (!TOKEN.test(token)) return;
   try { unlinkSync(path.join(secureDirectory(root, false), `${digest(token)}.json`)); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+}
+
+/** Revoke only older persisted callers of the exact thread after a verified cold bind. */
+export function revokeOtherNativeCallerBindingsForThread(
+  threadId: string, keepToken: string, root = getInterpreterAppDataDir(), dryRun = false,
+): number {
+  if (process.platform !== 'linux') return 0;
+  if (!ID.test(threadId) || !TOKEN.test(keepToken)) throw new Error('Invalid cold caller scope');
+  let dir: string;
+  try { dir = secureDirectory(root, false); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+    throw error;
+  }
+  const names = readdirSync(dir).filter(name => !name.startsWith('.'));
+  if (names.length > 512) throw new Error('Native caller binding inventory exceeds bound');
+  const remove: string[] = [];
+  for (const name of names) {
+    if (!/^[0-9a-f]{64}\.json$/.test(name)) throw new Error('Invalid native caller binding entry');
+    const hash = name.slice(0, 64);
+    const file = path.join(dir, name);
+    const fd = openSync(file, FLAGS);
+    try {
+      const stat = fstatSync(fd);
+      if (!stat.isFile() || stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0 || stat.size > MAX_BYTES) {
+        throw new Error('Untrusted native caller binding entry');
+      }
+      const record: unknown = JSON.parse(readFileSync(fd, 'utf8'));
+      if (!validRecord(record, hash)) throw new Error('Invalid native caller binding record');
+      if (record.threadId === threadId && hash !== digest(keepToken)) {
+        if (record.allowedToolNames?.length || record.toolProfileId) {
+          throw new Error('A prior native caller has a narrower tool scope');
+        }
+        remove.push(file);
+      }
+    } finally { closeSync(fd); }
+  }
+  if (!dryRun) for (const file of remove) unlinkSync(file);
+  return remove.length;
 }

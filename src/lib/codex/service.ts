@@ -163,11 +163,13 @@ type RunTurnOptions = {
 
 type ResumeThreadOptions = {
   threadId: string;
-  model: string;
+  model: string | null;
   modelProvider?: string | null;
   providerConfig?: Profile["providerConfig"];
   cwd?: string;
   config?: Record<string, JsonValue> | null;
+  /** Only after bounded native custody proves this saved thread is not loaded. */
+  coldShellPolicy?: boolean;
 };
 
 type ForkThreadOptions = ResumeThreadOptions & {
@@ -548,10 +550,21 @@ export class CodexService {
     baseInstructions?: string | null;
     developerInstructions?: string | null;
     additionalWritableRoots?: string[];
+    coldShellPolicy?: boolean;
   }): Promise<string> {
+    if (options.coldShellPolicy) {
+      const custody = await this.readNativeCustody(options.threadId);
+      const global = await this.readGlobalNativeCustody();
+      if (custody.status !== 'idle' || custody.queuedSubmissionCount !== 0 ||
+          global.queuedSubmissionCount !== 0 || global.loadedThreadIds.includes(options.threadId) ||
+          !global.threads.some(row => row.threadId === options.threadId) ||
+          !options.config?.shell_environment_policy) {
+        throw new Error('Cold caller bind requires an unloaded idle thread and empty native queues');
+      }
+    }
     const resumedId = await this.client.resumeThread(
       options.threadId, options.modelProvider, options.model, options.cwd,
-      configForExistingThread(options.config), options.baseInstructions,
+      options.coldShellPolicy ? options.config : configForExistingThread(options.config), options.baseInstructions,
       options.developerInstructions, options.additionalWritableRoots,
     );
     if (resumedId !== options.threadId) throw new Error('Existing thread identity changed');
@@ -707,6 +720,7 @@ export class CodexService {
       model: options.model,
       cwd: options.cwd,
       config: runConfig,
+      coldShellPolicy: options.coldShellPolicy,
     });
   }
 
