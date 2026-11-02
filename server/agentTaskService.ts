@@ -15,6 +15,7 @@ import {
 } from './utils/interpreterCliRuntime';
 import { buildGroqProxyBaseUrl, routeGroqProfileThroughProxy } from './utils/groqResponsesProxy';
 import { getServerPort } from './utils/serverPort';
+import { revokeOtherNativeCallerBindingsForThread } from './utils/persistedCallerBinding';
 import { IPC_CHANNELS } from '../electron/ipc/registry';
 import type { AgentModelConfig } from '../shared/types/model';
 import type { AgentPermissionOwnerReference } from '../shared/types/approval';
@@ -185,6 +186,52 @@ export async function resumeAgentTaskThread(
   });
 
   return { threadId };
+}
+
+/** Operator-only cold rebind: no input, model change, token export or loaded-shell mutation. */
+export async function coldBindAgentTaskThread(options: { threadId: string; workspace: string }) {
+  const workspace = normalizeHeadlessTaskWorkspace(options.workspace);
+  if (!workspace) throw new Error(HEADLESS_TASK_WORKSPACE_ERROR);
+  const service = getCodexService();
+  const thread = await service.readThread(options.threadId);
+  const custody = await service.readNativeCustody(options.threadId);
+  const global = await service.readGlobalNativeCustody();
+  if (thread.id !== options.threadId || thread.cwd !== workspace ||
+      custody.status !== 'idle' || custody.queuedSubmissionCount !== 0 ||
+      global.queuedSubmissionCount !== 0 || global.loadedThreadIds.includes(options.threadId) ||
+      !global.threads.some(row => row.threadId === options.threadId)) {
+    throw new Error('Cold caller bind requires the exact unloaded idle thread, workspace and empty native queues');
+  }
+  const oldBinding = agentTabManager.getBindingForThread(options.threadId);
+  if (oldBinding && (oldBinding.workspacePath !== workspace || oldBinding.windowSessionKey ||
+      oldBinding.parentOwner || oldBinding.allowedToolNames?.length || oldBinding.toolProfileId)) {
+    throw new Error('Existing caller owner or tool scope differs');
+  }
+  const callerToken = `agtok_${nanoid()}`;
+  // Inventory the private on-disk scopes before native resume; a process
+  // restart must not turn a previously restricted caller into an open one.
+  revokeOtherNativeCallerBindingsForThread(options.threadId, callerToken, undefined, true);
+  const agentId = `cold-${nanoid()}`;
+  const policy = buildInterpreterCliShellEnvironmentPolicy(
+    callerToken, process.env, process.platform, workspace,
+    buildInterpreterCliServerConnection(getServerPort(), {
+      transport: resolveAgentInterpreterCliTransport(process.platform),
+    }),
+  );
+  // Register before native resume so autonomous native turns cannot race the
+  // caller binding. If resume rejects, restore the prior exact owner.
+  agentTabManager.bindThread({ agentId, callerToken, threadId: options.threadId, workspacePath: workspace });
+  try {
+    await service.resumeThread({ threadId: options.threadId, model: null, cwd: workspace,
+      config: { mcp_servers: {}, shell_environment_policy: policy }, coldShellPolicy: true });
+  } catch (error) {
+    agentTabManager.disposeBinding(callerToken);
+    if (oldBinding) agentTabManager.bindThread({ ...oldBinding, threadId: options.threadId });
+    throw error;
+  }
+  if (oldBinding) agentTabManager.disposeBinding(oldBinding.callerToken);
+  const revokedPriorBindings = revokeOtherNativeCallerBindingsForThread(options.threadId, callerToken);
+  return { threadId: options.threadId, carrier: 'cold-bound' as const, revokedPriorBindings };
 }
 
 /** Preserve the source thread and continue its native OIX state from a completed turn. */

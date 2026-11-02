@@ -7,6 +7,7 @@ import { agentTabManager } from '../agentTabManager';
 import { approvalManager } from '../approvalManager';
 
 const app = express();
+app.use(express.json());
 app.use('/api/agent', agentRouter);
 const url = '/api/agent/custody/global';
 const nativeUrl = '/api/agent/custody/native-global';
@@ -18,6 +19,15 @@ afterEach(() => {
 });
 
 describe('global custody inventory', () => {
+  test('cold caller bind is operator-only and requires exact thread/workspace', async () => {
+    process.env.WORKSTATION_WAKE_TOKEN = 'private-test-token';
+    const url = '/api/agent/threads/00000000-0000-4000-8000-000000000001/caller/cold-bind';
+    expect((await request(app).post(url).send({ workspace: '/workspace' })).status).toBe(401);
+    expect((await request(app).post(url).set('Authorization', 'Bearer private-test-token')
+      .set('Origin', 'https://elsewhere.example').send({ workspace: '/workspace' })).status).toBe(401);
+    expect((await request(app).post(url).set('Authorization', 'Bearer private-test-token')
+      .send({})).status).toBe(400);
+  });
   test('native and CUA inventory requires the same local bearer and rejects foreign origins', async () => {
     process.env.WORKSTATION_WAKE_TOKEN = 'private-test-token';
     expect((await request(app).get(nativeUrl)).status).toBe(401);

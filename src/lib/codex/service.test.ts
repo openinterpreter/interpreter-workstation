@@ -1373,6 +1373,29 @@ describe("CodexService", () => {
     assert.equal(nativeClientId, 'wake_stable');
   });
 
+  test('cold carrier includes shell policy only after native idle, unloaded and queue-zero proof', async () => {
+    const id = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    const fake = createFakeClient({});
+    fake.client.threadRead = async () => ({ thread: {
+      id, cwd: '/workspace', status: { type: 'idle' }, turns: [],
+    } as v2.Thread });
+    fake.client.threadList = async () => ({ data: [{ id } as v2.Thread], nextCursor: null });
+    const service = new CodexService(fake.client);
+    const policy = { set: { INTERPRETER_CLI_PATH: '/tmp/launcher/interpreter-app' } };
+    assert.equal(await service.resumeThread({ threadId: id, model: null, cwd: '/workspace',
+      config: { mcp_servers: {}, shell_environment_policy: policy }, coldShellPolicy: true }), id);
+    assert.deepEqual(fake.calls.resumeThreadConfig[0]?.shell_environment_policy, policy);
+    fake.client.threadLoadedList = async () => ({ data: [id], nextCursor: null });
+    await assert.rejects(service.resumeThread({ threadId: id, model: null, cwd: '/workspace',
+      config: { shell_environment_policy: policy }, coldShellPolicy: true }), /Cold caller bind requires/);
+    assert.equal(fake.calls.resumeThread, 1);
+    fake.client.threadLoadedList = async () => ({ data: [], nextCursor: null });
+    fake.client.threadQueueList = async () => ({ data: [{ id: 'queue_1', clientUserMessageId: 'pending_1', input: [] }], nextCursor: null });
+    await assert.rejects(service.resumeThread({ threadId: id, model: null, cwd: '/workspace',
+      config: { shell_environment_policy: policy }, coldShellPolicy: true }), /Cold caller bind requires/);
+    assert.equal(fake.calls.resumeThread, 1);
+  });
+
   test("ordinary stream, idle durable wake and active input share native scope and input IDs", async () => {
     const ids: Array<string | undefined> = [];
     const fake = createFakeClient({

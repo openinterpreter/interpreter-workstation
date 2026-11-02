@@ -78,4 +78,19 @@ offered event for receipt inspection, never an automatic replay. A source-only
 fix does not resolve a previously offered event or prove that a running host
 has been updated.
 
+If an older saved thread has **no** usable CLI carrier, an authenticated
+loopback operator may cold-bind the existing thread with
+`POST /api/agent/threads/:threadId/caller/cold-bind` and JSON
+`{"workspace":"/absolute/original/workspace"}` using the already-configured
+`WORKSTATION_WAKE_TOKEN`. This submits no user input. It rejects a loaded or
+active thread, any native/app queued input, pending approval or tab request,
+pending/offered wake event, workspace mismatch, or a previously restricted
+tool caller. The server rechecks native custody before resuming and leaves the
+existing model/provider settings unchanged. Do not use it to mutate a loaded
+thread's shell environment or to dispose held events. A successful response
+is **not** proof of model output or that the CLI tool catalog is available in
+the next actual turn: inspect `interpreter-app` from that original caller and
+then verify a separate new event/turn receipt. An ambiguous response requires
+fresh read-only custody, not a blind second bind or input replay.
+
 To temporarily stop new work from one configured source without deleting its record or pending events, POST on loopback to `/api/agent/threads/:threadId/wake-sources/:sourceId/pause`; POST to the corresponding `/resume` path when ready. These local same-origin mutations preserve the source's configuration, next time and sequence, and any pending/offered event. While paused, the dispatcher neither launches a new command nor offers that source's event to native admission. A command already running is **not killed**: it can finish and persist its output as pending input. Before a service stop, wait until its `status` is no longer `running` and separately reconcile any already-offered native input. Pausing does not inspect, freeze or acknowledge an external provider queue, and a provider poll may have made an upstream message temporarily invisible. Do not use DELETE/PUT as a pause/restart substitute: DELETE cancels and discards pending input; PUT edits and resets timing. A paused source must be resumed before it can be edited. As with ordinary admission, verify the event's durable native `admitted` receipt before upstream acknowledgement.

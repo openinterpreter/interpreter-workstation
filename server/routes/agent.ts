@@ -34,6 +34,7 @@ import { taskStore } from '../tools/builtin-tools/tasks/taskStore';
 import { buildAgentTurnErrorTrace } from '../utils/agentTurnErrorTrace';
 import {
   forkAgentTaskThread,
+  coldBindAgentTaskThread,
   resumeAgentTaskThread,
   startAgentTask,
   resolveAgentModelConfig,
@@ -923,6 +924,33 @@ router.post('/threads/:threadId/resume', async (req: Request, res: Response) => 
     return res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to resume thread.',
     });
+  }
+});
+
+// A saved native thread may acquire a new CLI carrier only while cold. This
+// does not start a user turn or dispose any durable wake event.
+router.post('/threads/:threadId/caller/cold-bind', async (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  const threadId = req.params.threadId;
+  const workspace = req.body?.workspace;
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId) ||
+      typeof workspace !== 'string') return res.status(400).json({ error: 'Exact thread and workspace required.' });
+  try {
+    await readyWakeSources();
+    const appQueues = messageQueueStore.getCustodyInventory();
+    const tabs = agentTabManager.getGlobalCustodyInventory();
+    const events = wakeSources.list(threadId).events;
+    if (appQueues.count || tabs.pendingRequestIds.length || tabs.pendingStartupIds.length ||
+        tabs.createdRequestIds.length || approvalManager.getGlobalPendingRequestIds().length ||
+        events.some(event => event.status === 'pending' || event.status === 'offered')) {
+      return res.status(409).json({ error: 'In-process or durable input custody is not idle.' });
+    }
+    return res.json(await coldBindAgentTaskThread({ threadId, workspace }));
+  } catch {
+    return res.status(409).json({ error: 'Cold caller custody or native resume failed; no turn was submitted.' });
   }
 });
 
