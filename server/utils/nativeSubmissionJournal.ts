@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { mkdir, open } from 'node:fs/promises';
 import path from 'node:path';
@@ -12,94 +12,97 @@ export const submissionTerminalPhase = (completed: boolean, observedTurn: boolea
   !observedTurn ? 'terminal_no_turn' : completed ? 'terminal_success' : 'terminal_failure';
 type Entry = { requestId: string; threadId: string; clientUserMessageId: string;
   phase: SubmissionPhase; turnId: string | null; at: string };
+const THREAD_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+const MAX_RECEIPT_BYTES = 16_384;
 
-/** Append-only, content-free, forward-only receipts. An unacknowledged request
- * remains inspectable after a process restart, never automatically resubmitted. */
+/** An immutable, exclusive per-ID claim and bounded event tail. Two servers
+ * cannot claim the same native ID; uncertain claims are never recycled.
+ * Only disk exhaustion denies a new ID, before native admission. */
 export class NativeSubmissionJournal {
-  private readonly file: string;
-  private serial = Promise.resolve();
+  private readonly directory: string;
   constructor(root = getInterpreterAppDataDir()) {
-    this.file = path.join(root, 'native-submission-receipts.jsonl');
+    this.directory = path.join(root, 'native-submission-receipts');
   }
 
-  private async entries(): Promise<Entry[]> {
-    let raw: string;
-    try {
-      const file = await open(this.file, constants.O_RDONLY | constants.O_NOFOLLOW);
-      try {
-        const stat = await file.stat();
-        if (!stat.isFile() || stat.size > 4_194_304 || (stat.mode & 0o077) !== 0) {
-          throw new Error('Submission journal inspection bound exceeded');
-        }
-        raw = await file.readFile('utf8');
-      } finally { await file.close(); }
+  private filename(threadId: string, clientUserMessageId: string): string {
+    if (!THREAD_ID.test(threadId) || !SUBMISSION_ID.test(clientUserMessageId)) {
+      throw new Error('Exact saved native thread and client ID required');
     }
+    return path.join(this.directory, createHash('sha256').update(JSON.stringify([threadId, clientUserMessageId]))
+      .digest('hex') + '.jsonl');
+  }
+
+  private async read(threadId: string, clientUserMessageId: string): Promise<Entry[] | null> {
+    let file;
+    try { file = await open(this.filename(threadId, clientUserMessageId), constants.O_RDONLY | constants.O_NOFOLLOW); }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw error;
     }
-    if (Buffer.byteLength(raw) > 4_194_304) throw new Error('Submission journal inspection bound exceeded');
-    const lines = raw.trimEnd() ? raw.trimEnd().split('\n') : [];
-    if (lines.length > 20_000) throw new Error('Submission journal inspection bound exceeded');
-    return lines.map(line => {
-      const entry = JSON.parse(line) as Entry;
-      if (!SUBMISSION_ID.test(entry.requestId) || !SUBMISSION_ID.test(entry.clientUserMessageId) ||
-          !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(entry.threadId) ||
-          !['received', 'turn_started', 'terminal_success', 'terminal_failure', 'terminal_no_turn'].includes(entry.phase) ||
-          (entry.turnId !== null && !SUBMISSION_ID.test(entry.turnId))) {
-        throw new Error('Invalid submission journal');
-      }
-      return entry;
-    });
-  }
-
-  private async append(entry: Entry): Promise<void> {
-    await mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 });
-    const file = await open(this.file,
-      constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
     try {
       const stat = await file.stat();
-      if (!stat.isFile() || (stat.mode & 0o077) !== 0) throw new Error('Invalid submission journal permissions');
+      if (!stat.isFile() || (stat.mode & 0o077) !== 0 || stat.size > MAX_RECEIPT_BYTES) {
+        throw new Error('Invalid submission receipt');
+      }
+      const raw = await file.readFile('utf8');
+      const lines = raw.trimEnd() ? raw.trimEnd().split('\n') : [];
+      if (!lines.length || lines.length > 16) throw new Error('Incomplete submission receipt');
+      const entries = lines.map(line => JSON.parse(line) as Entry);
+      for (const entry of entries) {
+        if (entry.threadId !== threadId || entry.clientUserMessageId !== clientUserMessageId ||
+            !SUBMISSION_ID.test(entry.requestId) ||
+            !['received', 'turn_started', 'terminal_success', 'terminal_failure', 'terminal_no_turn'].includes(entry.phase) ||
+            (entry.turnId !== null && !SUBMISSION_ID.test(entry.turnId))) {
+          throw new Error('Invalid submission receipt');
+        }
+      }
+      if (entries[0].phase !== 'received' || entries.some(entry => entry.requestId !== entries[0].requestId)) {
+        throw new Error('Invalid submission receipt claim');
+      }
+      return entries;
+    } finally { await file.close(); }
+  }
+
+  async begin(threadId: string, clientUserMessageId = `task_${randomUUID().replace(/-/g, '')}`) {
+    const filename = this.filename(threadId, clientUserMessageId);
+    await mkdir(this.directory, { recursive: true, mode: 0o700 });
+    let file;
+    try { file = await open(filename,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') return null;
+      throw error;
+    }
+    const entry: Entry = { requestId: randomUUID(), threadId, clientUserMessageId,
+      phase: 'received', turnId: null, at: new Date().toISOString() };
+    try {
       await file.writeFile(`${JSON.stringify(entry)}\n`);
+      await file.sync();
+      const directory = await open(this.directory, constants.O_RDONLY | constants.O_DIRECTORY);
+      try { await directory.sync(); } finally { await directory.close(); }
+    } finally { await file.close(); }
+    return entry;
+  }
+
+  async advance(entry: Entry, phase: Exclude<SubmissionPhase, 'received'>, turnId: string | null) {
+    if (turnId !== null && !SUBMISSION_ID.test(turnId)) throw new Error('Invalid native turn ID');
+    const filename = this.filename(entry.threadId, entry.clientUserMessageId);
+    const prior = await this.read(entry.threadId, entry.clientUserMessageId);
+    if (!prior?.length || prior[0].requestId !== entry.requestId) throw new Error('Submission claim changed');
+    const file = await open(filename, constants.O_APPEND | constants.O_WRONLY | constants.O_NOFOLLOW);
+    try {
+      const stat = await file.stat();
+      if (!stat.isFile() || (stat.mode & 0o077) !== 0 || stat.size > MAX_RECEIPT_BYTES - 1024) {
+        throw new Error('Submission receipt bound exceeded');
+      }
+      await file.writeFile(`${JSON.stringify({ ...entry, phase, turnId, at: new Date().toISOString() })}\n`);
       await file.sync();
     } finally { await file.close(); }
   }
 
-  private synchronized<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.serial.then(operation);
-    this.serial = result.then(() => undefined, () => undefined);
-    return result;
-  }
-
-  begin(threadId: string, clientUserMessageId = `task_${randomUUID().replace(/-/g, '')}`) {
-    return this.synchronized(async () => {
-      if (!SUBMISSION_ID.test(clientUserMessageId)) throw new Error('Invalid native client ID');
-      if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId)) {
-        throw new Error('Exact saved native thread required');
-      }
-      const existing = (await this.entries()).find(entry => entry.threadId === threadId &&
-        entry.clientUserMessageId === clientUserMessageId);
-      if (existing) return null; // No duplicate admission on retry or restart.
-      const entry: Entry = { requestId: randomUUID(), threadId, clientUserMessageId,
-        phase: 'received', turnId: null, at: new Date().toISOString() };
-      await this.append(entry);
-      return entry;
-    });
-  }
-
-  advance(entry: Entry, phase: Exclude<SubmissionPhase, 'received'>, turnId: string | null) {
-    return this.synchronized(async () => {
-      if (turnId !== null && !SUBMISSION_ID.test(turnId)) throw new Error('Invalid native turn ID');
-      await this.append({ ...entry, phase, turnId, at: new Date().toISOString() });
-    });
-  }
-
-  lookup(threadId: string, clientUserMessageId: string) {
-    return this.synchronized(async () => {
-      const entries = (await this.entries()).filter(entry => entry.threadId === threadId &&
-        entry.clientUserMessageId === clientUserMessageId);
-      return entries[entries.length - 1] ?? null;
-    });
+  async lookup(threadId: string, clientUserMessageId: string) {
+    const entries = await this.read(threadId, clientUserMessageId);
+    return entries ? entries[entries.length - 1] : null;
   }
 }
 
