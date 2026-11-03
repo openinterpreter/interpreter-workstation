@@ -64,6 +64,7 @@ import {
 } from '../../src/lib/codex/lmStudioErrors';
 import {
   NativeCustodyPhaseError,
+  NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS,
   getCodexService,
   getSteerErrorCode,
   THREAD_LIST_DEFAULTS,
@@ -269,7 +270,8 @@ router.get('/threads/:threadId/native-custody', async (req: Request, res: Respon
   };
   recordPhase('request', 'received');
   try {
-    const custody = await getCodexService().readNativeCustody(req.params.threadId, undefined, recordPhase);
+    const custody = await getCodexService().readNativeCustody(req.params.threadId,
+      NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS, recordPhase);
     recordPhase('inspection', 'completed');
     res.json({ ...custody, inspectionId });
   } catch (error) {
