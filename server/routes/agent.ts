@@ -1,7 +1,7 @@
 import { Router, Request, Response, raw } from 'express';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { wakeTokenValid } from '../utils/wakeSources';
+import { HistoricalHoldConflict, wakeTokenValid } from '../utils/wakeSources';
 import { readyWakeSources, wakeSources } from '../utils/wakeSourcesRuntime';
 import { stat } from 'node:fs/promises';
 import { getCustomInstructions } from '../configStore';
@@ -336,8 +336,9 @@ router.post('/threads/:threadId/wake-events/:sourceId/:eventId/hold-historical',
     const event = await wakeSources.holdHistoricalOffered(req.params.threadId, req.params.sourceId,
       req.params.eventId, req.body.expectedClientId, req.body.expectedLatestTurnId, req.body.decisionRef);
     return res.json({ eventId: event.eventId, status: event.status, turnId: event.turnId });
-  } catch {
-    return res.status(409).json({ error: 'Historical native custody cannot support a no-replay hold.' });
+  } catch (error) {
+    return res.status(409).json({ error: 'Historical native custody cannot support a no-replay hold.',
+      code: error instanceof HistoricalHoldConflict ? error.code : 'INSPECTION_UNAVAILABLE' });
   }
 });
 

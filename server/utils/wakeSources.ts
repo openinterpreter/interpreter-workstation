@@ -54,6 +54,14 @@ export class WakeAdmissionFailure extends Error {
     this.name = 'WakeAdmissionFailure';
   }
 }
+/** Allowlisted operator diagnostics; never carry a native transcript or tool input. */
+export class HistoricalHoldConflict extends Error {
+  constructor(readonly code: 'BUSY' | 'CUSTODY_MISMATCH' | 'CUSTODY_CHANGED' |
+    'RECEIPT_EXISTS' | 'INSPECTION_UNAVAILABLE', message: string) {
+    super(message);
+    this.name = 'HistoricalHoldConflict';
+  }
+}
 function nativeFailure(error: unknown, phase: NonNullable<WakeEvent['failure']>['phase']): NonNullable<WakeEvent['failure']> {
   const original = error instanceof WakeAdmissionFailure ? error.original : error;
   const name = original instanceof Error && /^(?:Error|[A-Za-z]{1,60}Error)$/.test(original.name)
@@ -520,28 +528,35 @@ export class WakeSources {
    */
   async holdHistoricalOffered(threadId: string, sourceId: string, eventId: string,
     expectedClientId: string, expectedLatestTurnId: string, decisionRef: string): Promise<WakeEvent> {
-    if (this.stopping) throw new Error('Wake admission is draining for restart');
+    if (this.stopping) throw new HistoricalHoldConflict('BUSY', 'Wake admission is draining for restart');
     if (![threadId, sourceId, eventId, expectedLatestTurnId, decisionRef].every(x => ID.test(x)))
-      throw new Error('Invalid wake custody ID');
+      throw new HistoricalHoldConflict('CUSTODY_MISMATCH', 'Invalid wake custody ID');
     const key = `${threadId}:${eventId}`;
-    if (this.ticking || this.inFlight.has(key)) throw new Error('Wake inspection in progress');
+    if (this.ticking || this.inFlight.has(key))
+      throw new HistoricalHoldConflict('BUSY', 'Wake inspection in progress');
     this.inFlight.add(key);
     try { return await this.exclusive(async () => {
       const event = this.state.events.find(e => e.threadId === threadId && e.sourceId === sourceId && e.eventId === eventId);
       if (!event || event.status !== 'offered' || event.turnId || !event.offeredAt ||
           !Number.isFinite(Date.parse(event.offeredAt)) || Date.now() - Date.parse(event.offeredAt) < 60_000 ||
           wakeClientId(event) !== expectedClientId || !this.native.custody)
-        throw new Error('Historical offer custody mismatch');
-      const [state, custody] = await Promise.all([this.inspectWithDeadline(threadId),
-        this.native.custody(threadId, expectedLatestTurnId)]);
+        throw new HistoricalHoldConflict('CUSTODY_MISMATCH', 'Historical offer custody mismatch');
+      let state: Awaited<ReturnType<WakeNative['inspect']>>;
+      let custody: NonNullable<Awaited<ReturnType<NonNullable<WakeNative['custody']>>>>;
+      try {
+        [state, custody] = await Promise.all([this.inspectWithDeadline(threadId),
+          this.native.custody(threadId, expectedLatestTurnId)]);
+      } catch {
+        throw new HistoricalHoldConflict('INSPECTION_UNAVAILABLE', 'Native custody inspection unavailable');
+      }
       if (state.activeTurnId || custody.queuedSubmissionCount !== 0 ||
           custody.lastTurnId !== expectedLatestTurnId ||
           !['completed', 'failed', 'interrupted'].includes(custody.turnStatus ?? '') ||
           !['idle', 'systemError', 'notLoaded'].includes(custody.threadStatus ?? ''))
-        throw new Error('Historical offer requires terminal queue-empty native custody');
+        throw new HistoricalHoldConflict('CUSTODY_CHANGED', 'Historical offer requires terminal queue-empty native custody');
       if (state.clientIds?.includes(expectedClientId) ||
           state.messages.some(message => message === wakeInput(event) || message.startsWith(`${wakeInput(event)}\n`)))
-        throw new Error('Native receipt exists; reconcile admission instead');
+        throw new HistoricalHoldConflict('RECEIPT_EXISTS', 'Native receipt exists; reconcile admission instead');
       event.status = 'held';
       event.error = `Operator-held historical ambiguous native offer; decision ${decisionRef}; latest terminal turn ${expectedLatestTurnId}; not admitted or replayed`;
       delete event.nextAttemptAt;
