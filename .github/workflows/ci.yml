@@ -176,6 +176,16 @@ jobs:
       - run: pnpm run download:qwen-asr -- --current-platform
       - run: pnpm run build:js-repl-runtime
       - run: pnpm run build
+      # Exercise the native caller and durable-input contracts on Windows,
+      # rather than treating a Windows package build as behavioral coverage.
+      - name: Windows caller and wake contract tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          bun test src/lib/codex/service.test.ts src/lib/codex/app-server-client.test.ts server/routes/agent.global-custody.test.ts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bun test server/utils/wakeSources.test.ts --test-name-pattern 'pause drains a running command|native start timeout stays offered'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       # Exercise the distribution wrapper on every supported runner. This is
       # especially important on Windows, where package-manager shims require
       # platform-shell resolution.

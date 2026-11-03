@@ -23,6 +23,7 @@ export const CLIENT_METHOD = {
   accountLoginStart: "account/login/start",
   threadStart: "thread/start",
   threadResume: "thread/resume",
+  threadUnsubscribe: "thread/unsubscribe",
   threadFork: "thread/fork",
   threadSetName: "thread/name/set",
   threadGoalSet: "thread/goal/set",
@@ -148,6 +149,10 @@ export type RequestMap = {
   [CLIENT_METHOD.threadResume]: {
     params: v2.ThreadResumeParams;
     result: v2.ThreadResumeResponse;
+  };
+  [CLIENT_METHOD.threadUnsubscribe]: {
+    params: v2.ThreadUnsubscribeParams;
+    result: v2.ThreadUnsubscribeResponse;
   };
   [CLIENT_METHOD.threadFork]: {
     params: v2.ThreadForkParams;

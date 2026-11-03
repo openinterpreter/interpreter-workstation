@@ -5,6 +5,9 @@ import agentRouter from './agent';
 import { messageQueueStore } from '../utils/messageQueueStore';
 import { agentTabManager } from '../agentTabManager';
 import { approvalManager } from '../approvalManager';
+import { wakeSources } from '../utils/wakeSourcesRuntime';
+import * as codexService from '../../src/lib/codex/service';
+import * as taskService from '../agentTaskService';
 
 const app = express();
 app.use(express.json());
@@ -27,6 +30,66 @@ describe('global custody inventory', () => {
       .set('Origin', 'https://elsewhere.example').send({ workspace: '/workspace' })).status).toBe(401);
     expect((await request(app).post(url).set('Authorization', 'Bearer private-test-token')
       .send({})).status).toBe(400);
+  });
+  test('cold bind denies a previously paused source whose command drain failed', async () => {
+    process.env.WORKSTATION_WAKE_TOKEN = 'private-test-token';
+    const id = '00000000-0000-4000-8000-000000000016';
+    const source = { id: 'source_1', threadId: id, paused: true, status: 'waiting' };
+    const list = spyOn(wakeSources, 'list').mockReturnValue({ sources: [source], events: [] } as ReturnType<typeof wakeSources.list>);
+    const pause = spyOn(wakeSources, 'pause').mockRejectedValue(new Error('Wake source drain failed'));
+    try {
+      const result = await request(app).post(`/api/agent/threads/${id}/caller/cold-bind`)
+        .set('Authorization', 'Bearer private-test-token').send({ workspace: '/workspace' });
+      expect(result.status).toBe(409);
+      expect(pause).toHaveBeenCalledTimes(1);
+    } finally {
+      list.mockRestore();
+      pause.mockRestore();
+    }
+  });
+  test('already-unloaded cold bind uses successful source drain and same thread ID', async () => {
+    process.env.WORKSTATION_WAKE_TOKEN = 'private-test-token';
+    const id = '00000000-0000-4000-8000-000000000017';
+    const source = { id: 'source_2', threadId: id, paused: true, status: 'waiting' };
+    const list = spyOn(wakeSources, 'list').mockReturnValue({ sources: [source], events: [] } as ReturnType<typeof wakeSources.list>);
+    const pause = spyOn(wakeSources, 'pause').mockResolvedValue({ source, drain: {
+      drained: true, commandInFlight: false, nativeOfferInFlight: false, pendingEvents: 0, offeredEvents: 0,
+    } } as Awaited<ReturnType<typeof wakeSources.pause>>);
+    const service = spyOn(codexService, 'getCodexService').mockReturnValue({
+      withColdCallerTransition: async (_threadId: string, bind: () => Promise<unknown>) => bind(),
+    } as ReturnType<typeof codexService.getCodexService>);
+    const bind = spyOn(taskService, 'coldBindAgentTaskThread').mockResolvedValue({
+      threadId: id, carrier: 'cold-bound', revokedPriorBindings: 0,
+    } as Awaited<ReturnType<typeof taskService.coldBindAgentTaskThread>>);
+    try {
+      const result = await request(app).post(`/api/agent/threads/${id}/caller/cold-bind`)
+        .set('Authorization', 'Bearer private-test-token').send({ workspace: '/workspace' });
+      expect(result.status).toBe(200);
+      expect(result.body.threadId).toBe(id);
+      expect(pause).toHaveBeenCalledTimes(1);
+      expect(bind).toHaveBeenCalledTimes(1);
+    } finally {
+      list.mockRestore(); pause.mockRestore(); service.mockRestore(); bind.mockRestore();
+    }
+  });
+  test('cold bind denies a native offer appearing after a successful source drain', async () => {
+    process.env.WORKSTATION_WAKE_TOKEN = 'private-test-token';
+    const id = '00000000-0000-4000-8000-000000000018';
+    const source = { id: 'source_3', threadId: id, paused: true, status: 'waiting' };
+    let reads = 0;
+    const list = spyOn(wakeSources, 'list').mockImplementation(() => ({
+      sources: [source], events: ++reads < 2 ? [] : [{ sourceId: source.id, status: 'offered' }],
+    } as ReturnType<typeof wakeSources.list>));
+    const pause = spyOn(wakeSources, 'pause').mockResolvedValue({ source, drain: {
+      drained: true, commandInFlight: false, nativeOfferInFlight: false, pendingEvents: 0, offeredEvents: 0,
+    } } as Awaited<ReturnType<typeof wakeSources.pause>>);
+    try {
+      const result = await request(app).post(`/api/agent/threads/${id}/caller/cold-bind`)
+        .set('Authorization', 'Bearer private-test-token').send({ workspace: '/workspace' });
+      expect(result.status).toBe(409);
+      expect(pause).toHaveBeenCalledTimes(1);
+      expect(reads).toBeGreaterThanOrEqual(2);
+    } finally { list.mockRestore(); pause.mockRestore(); }
   });
   test('native and CUA inventory requires the same local bearer and rejects foreign origins', async () => {
     process.env.WORKSTATION_WAKE_TOKEN = 'private-test-token';

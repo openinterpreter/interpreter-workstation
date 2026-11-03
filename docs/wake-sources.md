@@ -82,12 +82,19 @@ If an older saved thread has **no** usable CLI carrier, an authenticated
 loopback operator may cold-bind the existing thread with
 `POST /api/agent/threads/:threadId/caller/cold-bind` and JSON
 `{"workspace":"/absolute/original/workspace"}` using the already-configured
-`WORKSTATION_WAKE_TOKEN`. This submits no user input. It rejects a loaded or
-active thread, any native/app queued input, pending approval or tab request,
-pending/offered wake event, workspace mismatch, or a previously restricted
-tool caller. The server rechecks native custody before resuming and leaves the
-existing model/provider settings unchanged. Do not use it to mutate a loaded
-thread's shell environment or to dispose held events. A successful response
+`WORKSTATION_WAKE_TOKEN`. This submits no user input. Every non-cancelled wake
+source on the thread must first be paused with a successful source-specific
+drain receipt. It rejects active work, native/app queued input, pending approval
+or tab request, pending/offered wake events, workspace mismatch, or a previously
+restricted tool caller. For a **loaded but idle** thread, the same route uses
+OIX's typed `thread/unsubscribe` and waits for OIX's own delayed idle unload
+before cold-resuming the **same saved thread ID** with a scoped CLI carrier.
+During that bounded transition Workstation denies new ordinary inputs to the
+thread; another subscriber, command, turn or queue prevents completion and
+fails closed without archiving, replaying or deleting input. Recheck exact
+source/native custody after any timeout. Model/provider settings are retained;
+no loaded thread has its shell keys changed. Resume paused sources only after
+verifying the original caller. A successful response
 is **not** proof of model output or that the CLI tool catalog is available in
 the next actual turn: inspect `interpreter-app` from that original caller and
 then verify a separate new event/turn receipt. An ambiguous response requires

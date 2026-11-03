@@ -2366,6 +2366,11 @@ export class CodexAppServerClient {
     return this.rpcRequest(CLIENT_METHOD.threadLoadedList, params);
   }
 
+  /** Native unsubscribe preserves the saved thread; idle unload remains OIX-owned. */
+  async threadUnsubscribe(params: v2.ThreadUnsubscribeParams): Promise<v2.ThreadUnsubscribeResponse> {
+    return this.rpcRequest(CLIENT_METHOD.threadUnsubscribe, params);
+  }
+
   async threadSetName(params: v2.ThreadSetNameParams): Promise<v2.ThreadSetNameResponse> {
     return this.rpcRequest(CLIENT_METHOD.threadSetName, params);
   }
