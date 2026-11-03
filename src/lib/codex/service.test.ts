@@ -204,13 +204,21 @@ describe('native custody metadata', () => {
     resolveRead?.({ thread: { ...createFakeClient({}).thread, id: 'thr_new' } });
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(queueCalls, 0);
+    assert.deepEqual(phases, ['thread_read:started', 'thread_read:late_completed']);
   });
 
   test('bounds unresolved queue pagination without claiming empty custody', async () => {
     const client = createFakeClient({}).client;
-    client.threadQueueList = async () => new Promise<never>(() => {});
-    await assert.rejects(new CodexService(client).readNativeCustody('thr_new', 5),
+    let resolveQueue: ((value: Awaited<ReturnType<typeof client.threadQueueList>>) => void) | undefined;
+    const phases: string[] = [];
+    client.threadQueueList = () => new Promise((resolve) => { resolveQueue = resolve; });
+    await assert.rejects(new CodexService(client).readNativeCustody('thr_new', 5,
+      (phase, status) => phases.push(`${phase}:${status}`)),
       { phase: 'queue_read', category: 'deadline' });
+    resolveQueue?.({ data: [{ id: 'late', clientUserMessageId: 'late', input: [] }], nextCursor: null });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(phases, ['thread_read:started', 'thread_read:completed',
+      'queue_read:started', 'queue_read:late_completed']);
   });
 
   test('classifies native failures without exposing the original exception text', async () => {
