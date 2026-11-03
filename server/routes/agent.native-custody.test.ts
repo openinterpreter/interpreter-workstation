@@ -32,6 +32,17 @@ describe('native custody diagnostic authentication', () => {
     expect(denied.status).toBe(401);
   });
 
+  test('exact turn receipt requires bearer and both exact native IDs', async () => {
+    process.env.WORKSTATION_WAKE_TOKEN = 'test-private-token';
+    const turn = '00000000-0000-4000-8000-000000000002';
+    const url = `/api/agent/threads/${id}/native-turn-receipt/${turn}`;
+    expect((await request(app).get(url)).status).toBe(401);
+    expect((await request(app).get(`/api/agent/threads/${id}/native-turn-receipt/nope`)
+      .set('Authorization', 'Bearer test-private-token')).status).toBe(400);
+    expect((await request(app).get(`/api/agent/threads/nope/native-turn-receipt/${turn}`)
+      .set('Authorization', 'Bearer test-private-token')).status).toBe(400);
+  });
+
   test('ambiguous offer disposition requires the private bearer and an exact no-replay confirmation', async () => {
     process.env.WORKSTATION_WAKE_TOKEN = 'test-private-token';
     const route = `/api/agent/threads/${id}/wake-events/source/event/hold`;

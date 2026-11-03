@@ -41,6 +41,7 @@ export interface StartAgentTaskOptions {
   modelConfig?: AgentModelConfig;
   workspace?: string;
   threadId?: string;
+  clientUserMessageId?: string;
   activate?: boolean;
   targetWindowSessionKey?: string;
   allowedToolNames?: string[];
@@ -322,6 +323,7 @@ async function startHeadlessAgentTask(
     allowedToolNames: options.allowedToolNames,
     parentOwner: options.parentOwner,
     threadId: options.threadId,
+    clientUserMessageId: options.clientUserMessageId,
     retainThreadCaller: true,
     onEvent: (event) => {
       if (event.kind === 'thread') {

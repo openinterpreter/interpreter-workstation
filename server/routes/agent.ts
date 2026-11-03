@@ -266,6 +266,23 @@ router.get('/threads/:threadId/native-custody', async (req: Request, res: Respon
   }
 });
 
+router.get('/threads/:threadId/native-turn-receipt/:turnId', async (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+  if (!uuid.test(req.params.threadId) || !uuid.test(req.params.turnId)) {
+    return res.status(400).json({ error: 'Exact native thread and turn required.' });
+  }
+  try {
+    const receipt = await getCodexService().readNativeTurnReceipt(req.params.threadId, req.params.turnId);
+    return receipt ? res.json(receipt) : res.status(404).json({ error: 'Native turn not found.' });
+  } catch {
+    return res.status(503).json({ error: 'Native turn receipt unavailable.' });
+  }
+});
+
 // Explicit local operator disposition of a terminal ambiguous offer. This is
 // not an admission receipt: retain the original event for manual review.
 router.post('/threads/:threadId/wake-events/:sourceId/:eventId/hold', async (req: Request, res: Response) => {
@@ -550,6 +567,9 @@ router.post('/tasks', async (req: Request, res: Response) => {
 });
 
 router.post('/tasks/stream', async (req: Request, res: Response) => {
+  if (getProgrammaticClientIdError((req.body ?? {}).clientUserMessageId)) {
+    return res.status(400).json({ error: 'Invalid clientUserMessageId.' });
+  }
   const {
     message,
     system,
@@ -557,6 +577,7 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
     idleTimeoutMs,
     workspace,
     threadId,
+    clientUserMessageId,
     mode,
     modelConfig,
     model,
@@ -628,6 +649,7 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
       workspace,
       modelConfig: resolvedModelConfig,
       threadId,
+      clientUserMessageId,
       notifyStarted: true,
       onProgress: (progress) => {
         if (progress.kind === 'turn') observedTurn = true;
@@ -819,6 +841,8 @@ export function parseProgrammaticTaskBody(body: Record<string, unknown>) {
   const threadId = typeof body.threadId === 'string' && body.threadId.trim()
     ? body.threadId.trim()
     : undefined;
+  const clientUserMessageId = typeof body.clientUserMessageId === 'string'
+    ? body.clientUserMessageId : undefined;
   const mode = body.mode === undefined ? 'headless' : body.mode;
   const modelConfig = body.modelConfig && typeof body.modelConfig === 'object'
     ? body.modelConfig as AgentModelConfig
@@ -840,12 +864,17 @@ export function parseProgrammaticTaskBody(body: Record<string, unknown>) {
     idleTimeoutMs,
     workspace,
     threadId,
+    clientUserMessageId,
     mode,
     modelConfig,
     model,
     reasoningEffort,
     runtimeConfig,
   };
+}
+
+export function getProgrammaticClientIdError(value: unknown): boolean {
+  return value !== undefined && (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(value));
 }
 function toGroqProxyBaseUrl(): string {
   return `http://localhost:${getServerPort()}/api/agent/groq-proxy`;

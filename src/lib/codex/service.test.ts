@@ -29,6 +29,23 @@ function createTurn(id: string, status: v2.TurnStatus = "inProgress"): v2.Turn {
 }
 
 describe('native custody metadata', () => {
+  test('reads only the exact saved native turn and returns no transcript or process output', async () => {
+    const fake = createFakeClient({ threadRead: async () => ({ thread: {
+      id: 'thr_new', turns: [createTurn('older'), {
+        ...createTurn('target', 'failed'),
+        items: [{ type: 'userMessage', id: 'user_1', content: [{ type: 'text', text: 'private input', text_elements: [] }] }],
+        error: { message: 'private failure', codexErrorInfo: 'serverOverloaded', additionalDetails: null },
+      }],
+    } as v2.Thread }) });
+    const service = new CodexService(fake.client);
+    const result = await service.readNativeTurnReceipt('thr_new', 'target');
+    assert.equal(result?.turnId, 'target');
+    assert.equal(result?.userItems.length, 1);
+    assert.equal(result?.clientIdLinkage, 'unavailable-from-native-turn');
+    assert.doesNotMatch(JSON.stringify(result), /private input|private failure/);
+    assert.equal(await service.readNativeTurnReceipt('thr_new', 'absent'), null);
+    await assert.rejects(service.readNativeTurnReceipt('wrong', 'target'), /mismatch/);
+  });
   test('enumerates loaded and persisted native queues without input, then verifies stable IDs', async () => {
     const id = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
     const client = createFakeClient({}).client;
