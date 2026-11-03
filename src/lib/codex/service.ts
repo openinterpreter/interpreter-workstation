@@ -40,8 +40,11 @@ const NATIVE_CUSTODY_PHASE_DEADLINE_MS = 12_000;
 // with an eight-second HTTP deadline; this cannot diagnose a request that
 // never reaches this route. An expired native RPC may still complete later.
 export const NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS = 3_000;
+export const NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS = 6_000;
+const NATIVE_CUSTODY_GLOBAL_MAX_DEADLINE_MS = 30_000;
 
-export type NativeCustodyPhase = 'thread_read' | 'queue_read';
+export type NativeCustodyPhase = 'thread_read' | 'queue_read' | 'loaded_list' | 'thread_list'
+  | 'global_queue_read' | 'verify_loaded_list' | 'verify_thread_list' | 'verify_queue_read';
 
 /** A failed inspection is never evidence that a native queue or command is empty. */
 export class NativeCustodyPhaseError extends Error {
@@ -1069,19 +1072,40 @@ export class CodexService {
   }
 
   /** Read-only, bounded inventory from the existing app-server client. No thread resumes. */
-  async readGlobalNativeCustody() {
+  async readGlobalNativeCustody(
+    deadlineMs = NATIVE_CUSTODY_GLOBAL_MAX_DEADLINE_MS,
+    onPhase?: (phase: NativeCustodyPhase, status: 'started' | 'completed' | 'late_completed' | 'late_failed') => void,
+  ) {
+    if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > NATIVE_CUSTODY_GLOBAL_MAX_DEADLINE_MS) {
+      throw new Error('Invalid global native custody deadline');
+    }
+    // One monotonic budget covers the whole inventory, including pagination and
+    // the verification pass. A timed-out native RPC is not cancelled or treated
+    // as an empty queue; its late result is a separate diagnostic event.
+    const deadlineAt = performance.now() + deadlineMs;
+    const read = async <T>(phase: NativeCustodyPhase, operation: () => Promise<T>): Promise<T> => {
+      onPhase?.(phase, 'started');
+      const remaining = Math.floor(deadlineAt - performance.now());
+      if (remaining < 1) throw new NativeCustodyPhaseError(phase, 'deadline');
+      const result = await nativeCustodyPhase(phase, operation, remaining,
+        (latePhase, status) => onPhase?.(latePhase, status === 'completed' ? 'late_completed' : 'late_failed'));
+      onPhase?.(phase, 'completed');
+      return result;
+    };
     const sourceKinds: v2.ThreadSourceKind[] = [
       'cli', 'vscode', 'exec', 'appServer', 'subAgent', 'subAgentReview',
       'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther', 'unknown',
     ];
-    const collect = async (loaded: boolean): Promise<string[]> => {
+    const collect = async (loaded: boolean, verify = false): Promise<string[]> => {
       const ids: string[] = [];
       const seenCursors = new Set<string>();
       let cursor: string | null = null;
       do {
         const page: { data: Array<string | v2.Thread>; nextCursor: string | null } = loaded
-          ? await this.client.threadLoadedList({ cursor, limit: 100 })
-          : await this.client.threadList({ sourceKinds, modelProviders: [], archived: false, cursor, limit: 100 });
+          ? await read(verify ? 'verify_loaded_list' : 'loaded_list',
+            () => this.client.threadLoadedList({ cursor, limit: 100 }))
+          : await read(verify ? 'verify_thread_list' : 'thread_list',
+            () => this.client.threadList({ sourceKinds, modelProviders: [], archived: false, cursor, limit: 100 }));
         if (!Array.isArray(page.data) || page.data.length > 100) throw new Error('Invalid native inventory page');
         ids.push(...page.data.map((item) => loaded ? item as string : (item as v2.Thread).id));
         if (ids.length > 500 || new Set(ids).size !== ids.length ||
@@ -1101,17 +1125,17 @@ export class CodexService {
     if (loadedBefore.some((id) => !threadIds.includes(id))) throw new Error('Loaded native thread missing from inventory');
     const rows = [];
     for (const threadId of threadIds) {
-      const queuedSubmissions = await this.readNativeQueuedSubmissions(threadId);
+      const queuedSubmissions = await read('global_queue_read', () => this.readNativeQueuedSubmissions(threadId));
       rows.push({ threadId, queuedSubmissionCount: queuedSubmissions.length, queuedSubmissions });
     }
-    const [loadedAfter, threadIdsAfter] = await Promise.all([collect(true), collect(false)]);
+    const [loadedAfter, threadIdsAfter] = await Promise.all([collect(true, true), collect(false, true)]);
     if (JSON.stringify(loadedBefore) !== JSON.stringify(loadedAfter) ||
         JSON.stringify(threadIds) !== JSON.stringify(threadIdsAfter)) {
       throw new Error('Native inventory changed during inspection');
     }
     for (const row of rows) {
       if (JSON.stringify(row.queuedSubmissions) !==
-          JSON.stringify(await this.readNativeQueuedSubmissions(row.threadId))) {
+          JSON.stringify(await read('verify_queue_read', () => this.readNativeQueuedSubmissions(row.threadId)))) {
         throw new Error('Native queue changed during inspection');
       }
     }

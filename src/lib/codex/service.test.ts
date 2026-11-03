@@ -105,7 +105,7 @@ describe('native custody metadata', () => {
     await assert.rejects(service.readNativeTurnReceipt('wrong', 'target'), /mismatch/);
   });
   test('enumerates loaded and persisted native queues without input, then verifies stable IDs', async () => {
-    const id = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    const id = '00000000-0000-4000-8000-000000000123';
     const client = createFakeClient({}).client;
     client.threadLoadedList = async () => ({ data: [id], nextCursor: null });
     client.threadList = async () => ({ data: [{ id } as v2.Thread], nextCursor: null, backwardsCursor: null });
@@ -124,7 +124,7 @@ describe('native custody metadata', () => {
   });
 
   test('rejects a changing native queue rather than claiming safe custody', async () => {
-    const id = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    const id = '00000000-0000-4000-8000-000000000123';
     const client = createFakeClient({}).client;
     client.threadLoadedList = async () => ({ data: [id], nextCursor: null });
     client.threadList = async () => ({ data: [{ id } as v2.Thread], nextCursor: null, backwardsCursor: null });
@@ -136,7 +136,7 @@ describe('native custody metadata', () => {
 
   test('rejects a loaded native thread omitted by persisted inventory', async () => {
     const client = createFakeClient({}).client;
-    client.threadLoadedList = async () => ({ data: ['01a0d435-bb2b-7047-afe7-0a639be8e5d4'], nextCursor: null });
+    client.threadLoadedList = async () => ({ data: ['00000000-0000-4000-8000-000000000123'], nextCursor: null });
     await assert.rejects(new CodexService(client).readGlobalNativeCustody(), /missing/);
   });
 
@@ -144,6 +144,40 @@ describe('native custody metadata', () => {
     const client = createFakeClient({}).client;
     client.threadLoadedList = async () => { throw new Error('native method unavailable'); };
     await assert.rejects(new CodexService(client).readGlobalNativeCustody(), /unavailable/);
+  });
+  test('bounds the first global native leg and records late completion without reading a queue', async () => {
+    const client = createFakeClient({}).client;
+    let finish: ((value: Awaited<ReturnType<typeof client.threadLoadedList>>) => void) | undefined;
+    const phases: string[] = [];
+    client.threadLoadedList = () => new Promise((resolve) => { finish = resolve; });
+    let listed = 0;
+    client.threadList = async () => { listed++; throw new Error('must not list after timeout'); };
+    await assert.rejects(new CodexService(client).readGlobalNativeCustody(5,
+      (phase, status) => phases.push(`${phase}:${status}`)),
+      { phase: 'loaded_list', category: 'deadline' });
+    assert.equal(listed, 0);
+    finish?.({ data: [], nextCursor: null });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(phases, ['loaded_list:started', 'loaded_list:late_completed']);
+  });
+
+  test('bounds global queue read after exact inventory and preserves late failure category', async () => {
+    const id = '00000000-0000-4000-8000-000000000123';
+    const client = createFakeClient({}).client;
+    client.threadLoadedList = async () => ({ data: [id], nextCursor: null });
+    client.threadList = async () => ({ data: [{ id } as v2.Thread], nextCursor: null, backwardsCursor: null });
+    let failQueue: ((error: Error) => void) | undefined;
+    client.threadQueueList = () => new Promise((_resolve, reject) => { failQueue = reject; });
+    const phases: string[] = [];
+    await assert.rejects(new CodexService(client).readGlobalNativeCustody(12,
+      (phase, status) => phases.push(`${phase}:${status}`)),
+      { phase: 'global_queue_read', category: 'deadline' });
+    failQueue?.(new Error('private native queue failure'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(phases, ['loaded_list:started', 'loaded_list:completed',
+      'thread_list:started', 'thread_list:completed', 'global_queue_read:started',
+      'global_queue_read:late_failed']);
+    assert.doesNotMatch(JSON.stringify(phases), /private native queue failure/);
   });
   test('pages native queue through the existing client without returning input', async () => {
     const fake = createFakeClient({});
@@ -1504,7 +1538,7 @@ describe("CodexService", () => {
   });
 
   test('cold carrier includes shell policy only after native idle, unloaded and queue-zero proof', async () => {
-    const id = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    const id = '00000000-0000-4000-8000-000000000123';
     const fake = createFakeClient({});
     fake.client.threadRead = async () => ({ thread: {
       id, cwd: '/workspace', status: { type: 'idle' }, turns: [],

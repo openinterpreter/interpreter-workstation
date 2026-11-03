@@ -65,6 +65,7 @@ import {
 import {
   NativeCustodyPhaseError,
   NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS,
+  NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS,
   getCodexService,
   getSteerErrorCode,
   THREAD_LIST_DEFAULTS,
@@ -164,10 +165,24 @@ router.get('/custody/native-global', async (req: Request, res: Response) => {
       !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
     return res.status(401).json({ error: 'Authentication required.' });
   }
+  const inspectionId = randomUUID();
+  const recordPhase = (phase: string, status: string) => {
+    console.info(JSON.stringify({ event: 'native_global_custody_inspection', inspectionId, phase, status }));
+  };
+  recordPhase('request', 'received');
   try {
-    return res.json({ native: await getCodexService().readGlobalNativeCustody(), cua: readCuaProcessLockCustody() });
-  } catch {
-    return res.status(503).json({ error: 'Native or Computer Use custody inspection unavailable.' });
+    const native = await getCodexService().readGlobalNativeCustody(
+      NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS, recordPhase);
+    const cua = readCuaProcessLockCustody();
+    recordPhase('inspection', 'completed');
+    return res.json({ native, cua, inspectionId });
+  } catch (error) {
+    recordPhase(error instanceof NativeCustodyPhaseError ? error.phase : 'unknown',
+      error instanceof NativeCustodyPhaseError ? error.category : 'native_unavailable');
+    return res.status(503).json({ error: 'Native or Computer Use custody inspection unavailable.',
+      phase: error instanceof NativeCustodyPhaseError ? error.phase : 'unknown',
+      category: error instanceof NativeCustodyPhaseError ? error.category : 'native_unavailable',
+      custodyVerified: false, inspectionId });
   }
 });
 
