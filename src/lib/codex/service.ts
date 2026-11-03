@@ -34,6 +34,42 @@ import {
 const ACTIVE_TURN_MISMATCH_PREFIX = "expected active turn id `";
 const ACTIVE_TURN_MISMATCH_SEPARATOR = "` but found `";
 const DEFAULT_RUN_TURN_IDLE_TIMEOUT_MS = 3 * 60 * 1000;
+const NATIVE_CUSTODY_PHASE_DEADLINE_MS = 12_000;
+
+export type NativeCustodyPhase = 'thread_read' | 'queue_read';
+
+/** A failed inspection is never evidence that a native queue or command is empty. */
+export class NativeCustodyPhaseError extends Error {
+  constructor(
+    readonly phase: NativeCustodyPhase,
+    readonly category: 'deadline' | 'native_unavailable',
+  ) {
+    super('Native custody inspection unavailable.');
+    this.name = 'NativeCustodyPhaseError';
+  }
+}
+
+async function nativeCustodyPhase<T>(
+  phase: NativeCustodyPhase,
+  operation: () => Promise<T>,
+  deadlineMs: number,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      operation(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new NativeCustodyPhaseError(phase, 'deadline')), deadlineMs);
+      }),
+    ]);
+  } catch (error) {
+    if (error instanceof NativeCustodyPhaseError) throw error;
+    // Neither native exception text nor a late RPC result is an operator receipt.
+    throw new NativeCustodyPhaseError(phase, 'native_unavailable');
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export type SteerErrorCode =
   | "active_turn_not_steerable"
@@ -1075,10 +1111,22 @@ export class CodexService {
     return result.thread;
   }
 
-  async readNativeCustody(threadId: string) {
-    const thread = await this.readThread(threadId);
+  async readNativeCustody(
+    threadId: string,
+    deadlineMs = NATIVE_CUSTODY_PHASE_DEADLINE_MS,
+    onPhase?: (phase: NativeCustodyPhase, status: 'started' | 'completed') => void,
+  ) {
+    if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > NATIVE_CUSTODY_PHASE_DEADLINE_MS) {
+      throw new Error('Invalid native custody deadline.');
+    }
+    onPhase?.('thread_read', 'started');
+    const thread = await nativeCustodyPhase('thread_read', () => this.readThread(threadId), deadlineMs);
+    onPhase?.('thread_read', 'completed');
     if (thread.id !== threadId) throw new Error('Native thread ID mismatch');
-    const submissions = await this.readNativeQueuedSubmissions(threadId);
+    onPhase?.('queue_read', 'started');
+    const submissions = await nativeCustodyPhase('queue_read',
+      () => this.readNativeQueuedSubmissions(threadId), deadlineMs);
+    onPhase?.('queue_read', 'completed');
     const lastTurn = thread.turns[thread.turns.length - 1];
     const status = thread.status;
     return {

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import express from 'express';
 import request from 'supertest';
+import { getCodexService, NativeCustodyPhaseError } from '../../src/lib/codex/service';
 import agentRouter from './agent';
 
 const app = express();
@@ -30,6 +31,29 @@ describe('native custody diagnostic authentication', () => {
       .get(`/api/agent/threads/${id}/native-custody`)
       .set('Authorization', 'Bearer test-private-token');
     expect(denied.status).toBe(401);
+  });
+
+  test('returns only fixed phase metadata on a bounded native failure', async () => {
+    process.env.WORKSTATION_WAKE_TOKEN = 'test-private-token';
+    const service = getCodexService();
+    const original = service.readNativeCustody;
+    const originalInfo = console.info;
+    const events: string[] = [];
+    service.readNativeCustody = async () => { throw new NativeCustodyPhaseError('thread_read', 'deadline'); };
+    console.info = (value) => { events.push(String(value)); };
+    try {
+      const result = await request(app).get(`/api/agent/threads/${id}/native-custody`)
+        .set('Authorization', 'Bearer test-private-token');
+      expect(result.status).toBe(503);
+      expect(result.body).toMatchObject({ phase: 'thread_read', category: 'deadline',
+        custodyVerified: false });
+      expect(result.body.inspectionId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(events.map((event) => JSON.parse(event).phase)).toEqual(['request', 'thread_read']);
+      expect(events.join(' ')).not.toContain('test-private-token');
+    } finally {
+      service.readNativeCustody = original;
+      console.info = originalInfo;
+    }
   });
 
   test('exact turn receipt requires bearer and both exact native IDs', async () => {

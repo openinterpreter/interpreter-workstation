@@ -107,16 +107,63 @@ describe('native custody metadata', () => {
     assert.doesNotMatch(JSON.stringify(result), /private-one|private-two/);
   });
 
+  test('emits only fixed, ordered native inspection phases on a complete read', async () => {
+    const client = createFakeClient({}).client;
+    const phases: string[] = [];
+    const result = await new CodexService(client).readNativeCustody('thr_new', 20,
+      (phase, status) => phases.push(`${phase}:${status}`));
+    assert.equal(result.threadId, 'thr_new');
+    assert.deepEqual(phases, ['thread_read:started', 'thread_read:completed',
+      'queue_read:started', 'queue_read:completed']);
+  });
+
   test('fails closed on malformed or cyclic pagination', async () => {
     const client = createFakeClient({}).client;
     client.threadQueueList = async () => ({ data: [], nextCursor: '1' });
-    await assert.rejects(new CodexService(client).readNativeCustody('thr_new'), /cursor/);
+    await assert.rejects(new CodexService(client).readNativeCustody('thr_new'),
+      { phase: 'queue_read', category: 'native_unavailable' });
   });
 
   test('fails closed when native queue inspection is unsupported', async () => {
     const client = createFakeClient({}).client;
     client.threadQueueList = async () => { throw new Error('experimental method unavailable'); };
-    await assert.rejects(new CodexService(client).readNativeCustody('thr_new'), /unavailable/);
+    await assert.rejects(new CodexService(client).readNativeCustody('thr_new'),
+      { phase: 'queue_read', category: 'native_unavailable' });
+  });
+  test('bounds an unresolved native thread read without inspecting the queue', async () => {
+    const client = createFakeClient({}).client;
+    let resolveRead: ((value: Awaited<ReturnType<typeof client.threadRead>>) => void) | undefined;
+    client.threadRead = () => new Promise((resolve) => { resolveRead = resolve; });
+    let queueCalls = 0;
+    const phases: string[] = [];
+    client.threadQueueList = async () => { queueCalls++; throw new Error('must not inspect queue'); };
+    const service = new CodexService(client);
+    await assert.rejects(service.readNativeCustody('thr_new', 5,
+      (phase, status) => phases.push(`${phase}:${status}`)),
+      { phase: 'thread_read', category: 'deadline' });
+    assert.equal(queueCalls, 0);
+    assert.deepEqual(phases, ['thread_read:started']);
+    resolveRead?.({ thread: { ...createFakeClient({}).thread, id: 'thr_new' } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(queueCalls, 0);
+  });
+
+  test('bounds unresolved queue pagination without claiming empty custody', async () => {
+    const client = createFakeClient({}).client;
+    client.threadQueueList = async () => new Promise<never>(() => {});
+    await assert.rejects(new CodexService(client).readNativeCustody('thr_new', 5),
+      { phase: 'queue_read', category: 'deadline' });
+  });
+
+  test('classifies native failures without exposing the original exception text', async () => {
+    const client = createFakeClient({}).client;
+    client.threadRead = async () => { throw new Error('private native transport response'); };
+    await assert.rejects(new CodexService(client).readNativeCustody('thr_new'), (error: unknown) => {
+      assert.equal((error as { phase: string }).phase, 'thread_read');
+      assert.equal((error as { category: string }).category, 'native_unavailable');
+      assert.doesNotMatch(String(error), /private native transport response/);
+      return true;
+    });
   });
   test('reports native pending approval flags without transcript content', async () => {
     const client = createFakeClient({}).client;
