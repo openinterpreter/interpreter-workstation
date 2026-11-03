@@ -5,7 +5,11 @@ import path from 'node:path';
 import { getInterpreterAppDataDir } from '../configStore';
 
 export const SUBMISSION_ID = /^[A-Za-z0-9_-]{1,160}$/;
-export type SubmissionPhase = 'received' | 'turn_started' | 'terminal_success' | 'terminal_failure';
+export type SubmissionPhase = 'received' | 'turn_started' | 'terminal_success' |
+  'terminal_failure' | 'terminal_no_turn';
+export const submissionTerminalPhase = (completed: boolean, observedTurn: boolean):
+  'terminal_success' | 'terminal_failure' | 'terminal_no_turn' =>
+  !observedTurn ? 'terminal_no_turn' : completed ? 'terminal_success' : 'terminal_failure';
 type Entry = { requestId: string; threadId: string; clientUserMessageId: string;
   phase: SubmissionPhase; turnId: string | null; at: string };
 
@@ -41,7 +45,7 @@ export class NativeSubmissionJournal {
       const entry = JSON.parse(line) as Entry;
       if (!SUBMISSION_ID.test(entry.requestId) || !SUBMISSION_ID.test(entry.clientUserMessageId) ||
           !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(entry.threadId) ||
-          !['received', 'turn_started', 'terminal_success', 'terminal_failure'].includes(entry.phase) ||
+          !['received', 'turn_started', 'terminal_success', 'terminal_failure', 'terminal_no_turn'].includes(entry.phase) ||
           (entry.turnId !== null && !SUBMISSION_ID.test(entry.turnId))) {
         throw new Error('Invalid submission journal');
       }

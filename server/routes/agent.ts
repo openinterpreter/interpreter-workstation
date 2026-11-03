@@ -1,7 +1,7 @@
 import { Router, Request, Response, raw } from 'express';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { nativeSubmissionJournal, SUBMISSION_ID } from '../utils/nativeSubmissionJournal';
+import { nativeSubmissionJournal, submissionTerminalPhase, SUBMISSION_ID } from '../utils/nativeSubmissionJournal';
 import { wakeTokenValid } from '../utils/wakeSources';
 import { readyWakeSources, wakeSources } from '../utils/wakeSourcesRuntime';
 import { stat } from 'node:fs/promises';
@@ -706,7 +706,7 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
 
     await receiptProgress;
     if (receipt) await nativeSubmissionJournal.advance(receipt,
-      result.completed ? 'terminal_success' : 'terminal_failure', observedTurnId);
+      submissionTerminalPhase(result.completed, observedTurn), observedTurnId);
     emit('result', result);
     const unacknowledged = getUnacknowledgedTaskError(result, observedTurn);
     if (unacknowledged) emit('error', unacknowledged);
@@ -715,7 +715,7 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
     if (receipt) {
       try {
         await receiptProgress;
-        await nativeSubmissionJournal.advance(receipt, 'terminal_failure', observedTurnId);
+        await nativeSubmissionJournal.advance(receipt, submissionTerminalPhase(false, observedTurn), observedTurnId);
       } catch { /* Unknown receipt state: never imply absent native admission. */ }
     }
     const message = error instanceof Error ? error.message : String(error);

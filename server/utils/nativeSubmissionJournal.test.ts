@@ -2,10 +2,16 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { NativeSubmissionJournal } from './nativeSubmissionJournal';
+import { NativeSubmissionJournal, submissionTerminalPhase } from './nativeSubmissionJournal';
 
 const thread = '00000000-0000-4000-8000-000000000001';
 describe('forward native submission journal', () => {
+  test('a successful wrapper without a native turn is never an admitted terminal success', () => {
+    expect(submissionTerminalPhase(true, false)).toBe('terminal_no_turn');
+    expect(submissionTerminalPhase(false, false)).toBe('terminal_no_turn');
+    expect(submissionTerminalPhase(false, true)).toBe('terminal_failure');
+    expect(submissionTerminalPhase(true, true)).toBe('terminal_success');
+  });
   test('records before acknowledgement, survives restart, rejects concurrent and restarted duplicates', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'native-receipt-'));
     try {
