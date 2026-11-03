@@ -10,6 +10,41 @@ type Turn = {
 
 const sha256 = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex');
 
+/** A current native thread-read observation, not an OS process-liveness probe.
+ * Never return command text, cwd, output, or private native error prose. */
+export function nativeCommandSessionSnapshot(input: unknown, threadActive: boolean) {
+  if (input === null || input === undefined) return { scope: 'native-thread-read-not-os-process-custody' as const, sessions: [] };
+  if (!input || typeof input !== 'object') throw new Error('Invalid native command turn');
+  const turn = input as Turn;
+  if (!Array.isArray(turn.items) || turn.items.length > 200 ||
+      !['inProgress', 'completed', 'failed', 'interrupted'].includes(turn.status)) {
+    throw new Error('Invalid native command turn');
+  }
+  const commands = turn.items.filter((item) => item?.type === 'commandExecution');
+  if (commands.length > 32) throw new Error('Native command session bound exceeded');
+  const sessions = commands.map((item) => {
+    if (typeof item.id !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(item.id) ||
+        (item.processId !== null && item.processId !== undefined &&
+          (typeof item.processId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(item.processId))) ||
+        !['inProgress', 'completed', 'failed', 'declined'].includes(item.status as string) ||
+        (item.exitCode !== null && item.exitCode !== undefined &&
+          (!Number.isSafeInteger(item.exitCode) || typeof item.exitCode !== 'number'))) {
+      throw new Error('Invalid native command session');
+    }
+    const output = item.aggregatedOutput;
+    if (output !== null && output !== undefined &&
+        (typeof output !== 'string' || Buffer.byteLength(output) > 16_777_216)) {
+      throw new Error('Native command output bound exceeded');
+    }
+    return { itemId: item.id, processId: item.processId ?? null, status: item.status,
+      nativeTurnActiveAtRead: threadActive && turn.status === 'inProgress' && item.status === 'inProgress',
+      exitCode: item.exitCode ?? null,
+      outputBytes: typeof output === 'string' ? Buffer.byteLength(output) : null,
+      outputSha256: typeof output === 'string' ? sha256(output) : null };
+  });
+  return { scope: 'native-thread-read-not-os-process-custody' as const, sessions };
+}
+
 /** Exact-turn, content-free native receipt. An absent client ID is never inferred from an item ID. */
 export function nativeTurnReceipt(input: unknown) {
   if (!input || typeof input !== 'object') throw new Error('Invalid native turn');

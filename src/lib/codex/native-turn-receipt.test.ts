@@ -1,8 +1,35 @@
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { nativeTurnReceipt } from './native-turn-receipt';
+import { nativeCommandSessionSnapshot, nativeTurnReceipt } from './native-turn-receipt';
 
 const sha = (value: string) => createHash('sha256').update(value).digest('hex');
+
+describe('current native command observation', () => {
+  const turn = { id: 'turn_1', status: 'inProgress', items: [
+    { type: 'commandExecution', id: 'item_1', processId: 'process_1', status: 'inProgress',
+      aggregatedOutput: 'private incremental output', exitCode: null, command: 'private shell' },
+  ] };
+  test('reports native in-progress session and output digest without disclosing private text or claiming OS liveness', () => {
+    const observation = nativeCommandSessionSnapshot(turn, true);
+    expect(observation).toEqual({ scope: 'native-thread-read-not-os-process-custody', sessions: [
+      { itemId: 'item_1', processId: 'process_1', status: 'inProgress', nativeTurnActiveAtRead: true,
+        exitCode: null, outputBytes: 26, outputSha256: sha('private incremental output') },
+    ] });
+    expect(JSON.stringify(observation)).not.toMatch(/private|shell/);
+  });
+  test('never upgrades a saved or racy completed native turn to live process custody', () => {
+    expect(nativeCommandSessionSnapshot(turn, false).sessions[0].nativeTurnActiveAtRead).toBe(false);
+    expect(nativeCommandSessionSnapshot({ ...turn, status: 'completed', items: [
+      { ...turn.items[0], status: 'completed', exitCode: 0 },
+    ] }, true).sessions[0]).toMatchObject({ nativeTurnActiveAtRead: false, exitCode: 0 });
+    expect(nativeCommandSessionSnapshot(null, true).sessions).toEqual([]);
+  });
+  test('fails closed on malformed identifiers, excessive output and unbounded items', () => {
+    expect(() => nativeCommandSessionSnapshot({ ...turn, items: [{ ...turn.items[0], processId: 'private process' }] }, true)).toThrow();
+    expect(() => nativeCommandSessionSnapshot({ ...turn, items: [{ ...turn.items[0], aggregatedOutput: 'x'.repeat(16_777_217) }] }, true)).toThrow();
+    expect(() => nativeCommandSessionSnapshot({ ...turn, items: Array(201).fill(turn.items[0]) }, true)).toThrow();
+  });
+});
 
 describe('exact native turn receipt', () => {
   test('returns bounded user and supervised-command hashes, never message, output or error prose', () => {
