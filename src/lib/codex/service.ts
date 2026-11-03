@@ -53,13 +53,24 @@ async function nativeCustodyPhase<T>(
   phase: NativeCustodyPhase,
   operation: () => Promise<T>,
   deadlineMs: number,
+  onLate?: (phase: NativeCustodyPhase, status: 'completed' | 'failed') => void,
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
   try {
+    const pending = operation();
+    if (onLate) void pending.then(() => {
+      if (timedOut) onLate(phase, 'completed');
+    }, () => {
+      if (timedOut) onLate(phase, 'failed');
+    });
     return await Promise.race([
-      operation(),
+      pending,
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new NativeCustodyPhaseError(phase, 'deadline')), deadlineMs);
+        timer = setTimeout(() => {
+          timedOut = true;
+          reject(new NativeCustodyPhaseError(phase, 'deadline'));
+        }, deadlineMs);
       }),
     ]);
   } catch (error) {
@@ -1138,6 +1149,46 @@ export class CodexService {
       queuedSubmissionCount: submissions.length,
       queuedSubmissions: submissions,
     };
+  }
+
+  /** Exact forward submission custody. A journaled RPC acknowledgement is not
+   * substituted for an OIX user item; only an exact native client ID links it.
+   * Command records describe saved turn state, not live OS process custody. */
+  async readNativeSubmissionCustody(threadId: string, clientUserMessageId: string,
+    deadlineMs = NATIVE_CUSTODY_PHASE_DEADLINE_MS,
+    onPhase?: (phase: NativeCustodyPhase, status: 'started' | 'completed' | 'late_completed' | 'late_failed') => void) {
+    if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId) ||
+        !/^[A-Za-z0-9_-]{1,160}$/.test(clientUserMessageId) ||
+        !Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > NATIVE_CUSTODY_PHASE_DEADLINE_MS) {
+      throw new Error('Invalid exact submission inspection');
+    }
+    onPhase?.('thread_read', 'started');
+    const thread = await nativeCustodyPhase('thread_read', () => this.readThread(threadId), deadlineMs,
+      (phase, status) => onPhase?.(phase, status === 'completed' ? 'late_completed' : 'late_failed'));
+    onPhase?.('thread_read', 'completed');
+    if (thread.id !== threadId || thread.turns.length > 2000) throw new Error('Invalid native thread inspection bound');
+    onPhase?.('queue_read', 'started');
+    const queue = await nativeCustodyPhase('queue_read',
+      () => this.readNativeQueuedSubmissions(threadId), deadlineMs,
+      (phase, status) => onPhase?.(phase, status === 'completed' ? 'late_completed' : 'late_failed'));
+    onPhase?.('queue_read', 'completed');
+    const matches: Array<{ turnId: string; userItemId: string; status: string;
+      commandSessions: ReturnType<typeof nativeTurnReceipt>['commandSessions'] }> = [];
+    for (const turn of thread.turns) {
+      const receipt = nativeTurnReceipt(turn);
+      for (const user of receipt.userItems) {
+        if (user.clientUserMessageId === clientUserMessageId) matches.push({
+          turnId: receipt.turnId, userItemId: user.itemId, status: receipt.status,
+          commandSessions: receipt.commandSessions,
+        });
+      }
+    }
+    return { threadId, clientUserMessageId,
+      linkage: matches.length === 1 ? 'native_user_item' : matches.length ? 'ambiguous' : 'not_observed',
+      nativeMatch: matches.length === 1 ? matches[0] : null,
+      queuedSubmissionIds: queue.filter(item => item.clientUserMessageId === clientUserMessageId).map(item => item.id),
+      custodyVerified: matches.length <= 1,
+      commandSessionScope: 'saved-native-turn-only-not-live-process-custody' as const };
   }
 
   /** Read one saved native turn without exposing its message, command or error text. */

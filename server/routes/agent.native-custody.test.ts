@@ -15,6 +15,15 @@ afterEach(() => {
 });
 
 describe('native custody diagnostic authentication', () => {
+  test('submission receipt route requires exact thread, client ID and operator bearer', async () => {
+    process.env.WORKSTATION_WAKE_TOKEN = 'test-private-token';
+    const route = `/api/agent/threads/${id}/submissions/owned_1/custody`;
+    expect((await request(app).get(route)).status).toBe(401);
+    expect((await request(app).get(`/api/agent/threads/${id}/submissions/bad%20id/custody`)
+      .set('Authorization', 'Bearer test-private-token')).status).toBe(400);
+    expect((await request(app).get('/api/agent/threads/invalid/submissions/owned_1/custody')
+      .set('Authorization', 'Bearer test-private-token')).status).toBe(400);
+  });
   test('rejects absent bearer and invalid thread without invoking the native client', async () => {
     process.env.WORKSTATION_WAKE_TOKEN = 'test-private-token';
     const denied = await request(app).get(`/api/agent/threads/${id}/native-custody`);

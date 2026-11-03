@@ -32,8 +32,12 @@ export function nativeTurnReceipt(input: unknown) {
     if (text.some((part) => typeof part !== 'string')) throw new Error('Invalid native user text');
     const value = JSON.stringify(content);
     if (Buffer.byteLength(value) > 1_048_576) throw new Error('Native user item bound exceeded');
+    if (item.clientId !== undefined && item.clientId !== null &&
+        (typeof item.clientId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(item.clientId))) {
+      throw new Error('Invalid native client identifier');
+    }
     return { itemId: item.id, contentSha256: sha256(value), contentBytes: Buffer.byteLength(value),
-      clientUserMessageId: null as null };
+      clientUserMessageId: typeof item.clientId === 'string' ? item.clientId : null };
   });
   const commandSessions = turn.items.filter((item) => item.type === 'commandExecution').map((item) => {
     const output = item.aggregatedOutput;
@@ -61,6 +65,7 @@ export function nativeTurnReceipt(input: unknown) {
     ? errorCategory : 'unclassified';
   return { turnId: turn.id, status: turn.status, userItems, commandSessions,
     error: typeof message === 'string' ? { category, bytes: Buffer.byteLength(message), sha256: sha256(message) } : null,
-    clientIdLinkage: 'unavailable-from-native-turn' as const,
+    clientIdLinkage: userItems.some(item => item.clientUserMessageId !== null)
+      ? 'native-user-item' as const : 'unavailable-from-native-turn' as const,
     commandSessionScope: 'saved-native-turn-only-not-live-process-custody' as const };
 }

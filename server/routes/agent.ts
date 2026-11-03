@@ -1,6 +1,7 @@
 import { Router, Request, Response, raw } from 'express';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { nativeSubmissionJournal, submissionTerminalPhase, SUBMISSION_ID } from '../utils/nativeSubmissionJournal';
 import { wakeTokenValid } from '../utils/wakeSources';
 import { readyWakeSources, wakeSources } from '../utils/wakeSourcesRuntime';
 import { stat } from 'node:fs/promises';
@@ -631,6 +632,18 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
     });
   }
 
+  // Persist a stable exact-thread receipt before acknowledging a saved task.
+  // A retry of its client ID never submits a second native input.
+  let receipt: Awaited<ReturnType<typeof nativeSubmissionJournal.begin>> = null;
+  try {
+    if (threadId) {
+      receipt = await nativeSubmissionJournal.begin(threadId, clientUserMessageId);
+      if (!receipt) return res.status(409).json({ error: 'Submission client ID already recorded; inspect exact custody.' });
+    }
+  } catch {
+    return res.status(503).json({ error: 'Submission receipt unavailable; native input not started.' });
+  }
+
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
@@ -638,6 +651,8 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
 
   let streamClosed = false;
   let observedTurn = false;
+  let observedTurnId: string | null = null;
+  let receiptProgress = Promise.resolve();
   res.on('close', () => {
     streamClosed = true;
   });
@@ -649,6 +664,9 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
       streamClosed = true;
     }
   };
+
+  if (receipt) emit('submission', { requestId: receipt.requestId,
+    threadId: receipt.threadId, clientUserMessageId: receipt.clientUserMessageId, phase: receipt.phase });
 
   try {
     await applyProgrammaticTaskRuntimeConfigFromBody(runtimeConfig);
@@ -666,24 +684,72 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
       workspace,
       modelConfig: resolvedModelConfig,
       threadId,
-      clientUserMessageId,
+      clientUserMessageId: receipt?.clientUserMessageId ?? clientUserMessageId,
       notifyStarted: true,
       onProgress: (progress) => {
-        if (progress.kind === 'turn') observedTurn = true;
+        if (progress.kind === 'turn') {
+          observedTurn = true;
+          observedTurnId = progress.turnId;
+          if (receipt) {
+            receiptProgress = receiptProgress.then(async () => {
+              await nativeSubmissionJournal.advance(receipt!, 'turn_started', progress.turnId);
+              for (const event of toProgrammaticTaskProgressSseEvents(progress)) emit(event.event, event.payload);
+            });
+            return;
+          }
+        }
         for (const event of toProgrammaticTaskProgressSseEvents(progress)) {
           emit(event.event, event.payload);
         }
       },
     });
 
+    await receiptProgress;
+    if (receipt) await nativeSubmissionJournal.advance(receipt,
+      submissionTerminalPhase(result.completed, observedTurn), observedTurnId);
     emit('result', result);
     const unacknowledged = getUnacknowledgedTaskError(result, observedTurn);
     if (unacknowledged) emit('error', unacknowledged);
     res.end();
   } catch (error) {
+    if (receipt) {
+      try {
+        await receiptProgress;
+        await nativeSubmissionJournal.advance(receipt, submissionTerminalPhase(false, observedTurn), observedTurnId);
+      } catch { /* Unknown receipt state: never imply absent native admission. */ }
+    }
     const message = error instanceof Error ? error.message : String(error);
     emit('error', { message });
     res.end();
+  }
+});
+
+// Operator-only forward receipt: no task prose, browser token, or source body.
+router.get('/threads/:threadId/submissions/:clientUserMessageId/custody', async (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  const { threadId, clientUserMessageId } = req.params;
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId) ||
+      !SUBMISSION_ID.test(clientUserMessageId)) return res.status(400).json({ error: 'Invalid submission scope.' });
+  let receipt: Awaited<ReturnType<typeof nativeSubmissionJournal.lookup>> | null = null;
+  const inspectionId = randomUUID();
+  try {
+    receipt = await nativeSubmissionJournal.lookup(threadId, clientUserMessageId);
+    if (!receipt) return res.status(404).json({ error: 'Submission receipt not recorded.' });
+    const native = await getCodexService().readNativeSubmissionCustody(threadId, clientUserMessageId,
+      undefined, (phase, status) => console.info(JSON.stringify({
+        event: 'native_submission_inspection', inspectionId, phase, status,
+      })));
+    return res.json({ ...receipt, native, inspectionId });
+  } catch (error) {
+    return res.status(503).json({ error: 'Native submission custody unavailable.',
+      ...(receipt ? { requestId: receipt.requestId, clientUserMessageId: receipt.clientUserMessageId,
+        recordedPhase: receipt.phase, recordedTurnId: receipt.turnId } : {}), inspectionId,
+      phase: error instanceof NativeCustodyPhaseError ? error.phase : 'unknown',
+      category: error instanceof NativeCustodyPhaseError ? error.category : 'native_unavailable',
+      custodyVerified: false });
   }
 });
 
