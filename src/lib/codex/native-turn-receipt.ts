@@ -61,5 +61,6 @@ export function nativeTurnReceipt(input: unknown) {
     ? errorCategory : 'unclassified';
   return { turnId: turn.id, status: turn.status, userItems, commandSessions,
     error: typeof message === 'string' ? { category, bytes: Buffer.byteLength(message), sha256: sha256(message) } : null,
-    clientIdLinkage: 'unavailable-from-native-turn' as const };
+    clientIdLinkage: 'unavailable-from-native-turn' as const,
+    commandSessionScope: 'saved-native-turn-only-not-live-process-custody' as const };
 }

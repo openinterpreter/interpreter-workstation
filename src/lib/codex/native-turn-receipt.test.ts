@@ -19,6 +19,7 @@ describe('exact native turn receipt', () => {
       status: 'completed', exitCode: 7, outputSha256: sha('private stdout'), outputBytes: 14 }]);
     expect(result.error).toEqual({ category: 'serverOverloaded', sha256: sha('private error'), bytes: 13 });
     expect(result.clientIdLinkage).toBe('unavailable-from-native-turn');
+    expect(result.commandSessionScope).toBe('saved-native-turn-only-not-live-process-custody');
     expect(JSON.stringify(result)).not.toMatch(/private|secret/);
   });
 
