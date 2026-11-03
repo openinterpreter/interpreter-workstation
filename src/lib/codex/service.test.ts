@@ -13,6 +13,7 @@ import {
 import {
   type CodexClient,
   CodexService,
+  NativeCustodyPhaseError,
   type StreamEvent,
   THREAD_LIST_DEFAULTS,
 } from "@/lib/codex/service";
@@ -29,6 +30,63 @@ function createTurn(id: string, status: v2.TurnStatus = "inProgress"): v2.Turn {
 }
 
 describe('native custody metadata', () => {
+  test('links one exact persisted client ID to its native user item and saved command, not another turn', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    const client = createFakeClient({ threadRead: async () => ({ thread: {
+      id, status: { type: 'idle' }, turns: [{ ...createTurn('turn_one', 'completed'), items: [
+        { type: 'userMessage', id: 'user_one', clientId: 'owned_1',
+          content: [{ type: 'text', text: 'PRIVATE INPUT' }] },
+        { type: 'commandExecution', id: 'cmd_one', processId: 'process_1', status: 'completed',
+          aggregatedOutput: 'PRIVATE OUTPUT', exitCode: 0 },
+      ] }, { ...createTurn('turn_other', 'completed'), items: [
+        { type: 'userMessage', id: 'user_other', clientId: 'other_2',
+          content: [{ type: 'text', text: 'OTHER PRIVATE' }] },
+      ] }],
+    } as unknown as v2.Thread }) }).client;
+    client.threadQueueList = async () => ({ data: [], nextCursor: null });
+    const receipt = await new CodexService(client).readNativeSubmissionCustody(id, 'owned_1');
+    assert.equal(receipt.linkage, 'native_user_item');
+    assert.equal(receipt.nativeMatch?.turnId, 'turn_one');
+    assert.equal(receipt.nativeMatch?.userItemId, 'user_one');
+    assert.equal(receipt.nativeMatch?.commandSessions[0]?.processId, 'process_1');
+    assert.equal(receipt.nativeMatch?.commandSessions[0]?.exitCode, 0);
+    assert.doesNotMatch(JSON.stringify(receipt), /PRIVATE|OTHER/);
+  });
+  test('a late thread read cannot turn a deadline into empty custody or stop the RPC', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    let complete!: (value: { thread: v2.Thread }) => void;
+    let calls = 0;
+    const client = createFakeClient({ threadRead: () => ++calls === 1
+      ? new Promise(resolve => { complete = resolve; })
+      : Promise.resolve({ thread: { id, turns: [], status: { type: 'idle' } } as v2.Thread }) }).client;
+    client.threadQueueList = async () => ({ data: [], nextCursor: null });
+    const service = new CodexService(client);
+    const phases: string[] = [];
+    await assert.rejects(service.readNativeSubmissionCustody(id, 'known_1', 1,
+      (phase, status) => { phases.push(`${phase}:${status}`); }),
+      (error: unknown) => error instanceof NativeCustodyPhaseError && error.phase === 'thread_read' && error.category === 'deadline');
+    complete({ thread: { id, turns: [], status: { type: 'idle' } } as v2.Thread });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(phases, ['thread_read:started', 'thread_read:late_completed']);
+    const receipt = await service.readNativeSubmissionCustody(id, 'known_1', 100);
+    assert.equal(receipt.linkage, 'not_observed');
+    assert.equal(receipt.commandSessionScope, 'saved-native-turn-only-not-live-process-custody');
+  });
+  test('an unresolved queue read is unknown, and late native queue completion stays separate', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    const client = createFakeClient({ threadRead: async () => ({ thread:
+      { id, turns: [], status: { type: 'idle' } } as v2.Thread }) }).client;
+    let complete!: (value: { data: []; nextCursor: null }) => void;
+    client.threadQueueList = () => new Promise(resolve => { complete = resolve; });
+    const phases: string[] = [];
+    await assert.rejects(new CodexService(client).readNativeSubmissionCustody(id, 'owned_2', 1,
+      (phase, status) => { phases.push(`${phase}:${status}`); }),
+      (error: unknown) => error instanceof NativeCustodyPhaseError && error.phase === 'queue_read' && error.category === 'deadline');
+    complete({ data: [], nextCursor: null });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(phases, ['thread_read:started', 'thread_read:completed',
+      'queue_read:started', 'queue_read:late_completed']);
+  });
   test('reads only the exact saved native turn and returns no transcript or process output', async () => {
     const fake = createFakeClient({ threadRead: async () => ({ thread: {
       id: 'thr_new', turns: [createTurn('older'), {
