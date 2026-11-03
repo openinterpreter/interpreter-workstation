@@ -111,6 +111,34 @@ describe('native custody diagnostic authentication', () => {
       .set('Authorization', 'Bearer test-private-token')).status).toBe(400);
   });
 
+  test('exact turn receipt reports only a fixed deadline phase, never private native output', async () => {
+    process.env.WORKSTATION_WAKE_TOKEN = 'test-private-token';
+    const service = getCodexService();
+    const original = service.readNativeTurnReceipt;
+    const originalInfo = console.info;
+    const events: string[] = [];
+    let observedDeadline: number | undefined;
+    service.readNativeTurnReceipt = async (_thread, _turn, deadline) => {
+      observedDeadline = deadline;
+      throw new NativeCustodyPhaseError('thread_read', 'deadline');
+    };
+    console.info = (value) => { events.push(String(value)); };
+    try {
+      const result = await request(app)
+        .get(`/api/agent/threads/${id}/native-turn-receipt/00000000-0000-4000-8000-000000000002`)
+        .set('Authorization', 'Bearer test-private-token');
+      expect(result.status).toBe(503);
+      expect(result.body).toMatchObject({ phase: 'thread_read', category: 'deadline', custodyVerified: false });
+      expect(result.body.inspectionId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(observedDeadline).toBe(NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS);
+      expect(events.map((event) => JSON.parse(event).phase)).toEqual(['request', 'thread_read']);
+      expect(events.join(' ')).not.toContain('test-private-token');
+    } finally {
+      service.readNativeTurnReceipt = original;
+      console.info = originalInfo;
+    }
+  });
+
   test('ambiguous offer disposition requires the private bearer and an exact no-replay confirmation', async () => {
     process.env.WORKSTATION_WAKE_TOKEN = 'test-private-token';
     const route = `/api/agent/threads/${id}/wake-events/source/event/hold`;

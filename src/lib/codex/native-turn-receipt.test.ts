@@ -37,6 +37,10 @@ describe('exact native turn receipt', () => {
       { type: 'userMessage', id: 'item_1', content: [{ type: 'text', text: 'private task' }] },
       { type: 'commandExecution', id: 'item_2', processId: 'process_1',
         status: 'completed', aggregatedOutput: 'private stdout', exitCode: 7, command: 'secret command' },
+      { type: 'agentMessage', id: 'agent_1', text: 'private helpful response' },
+      { type: 'mcpToolCall', id: 'tool_1', status: 'completed', server: 'private-server',
+        tool: 'private-outbound', arguments: { body: 'private payload' } },
+      { type: 'functionCallOutput', id: 'output_1', output: 'private provider receipt' },
     ], error: { message: 'private error', codexErrorInfo: 'serverOverloaded' } };
     const result = nativeTurnReceipt(input);
     expect(result.userItems).toEqual([{ itemId: 'item_1',
@@ -44,6 +48,12 @@ describe('exact native turn receipt', () => {
       contentBytes: Buffer.byteLength(JSON.stringify(input.items[0].content)), clientUserMessageId: null }]);
     expect(result.commandSessions).toEqual([{ itemId: 'item_2', processId: 'process_1',
       status: 'completed', exitCode: 7, outputSha256: sha('private stdout'), outputBytes: 14 }]);
+    expect(result.agentMessages).toEqual([{ itemId: 'agent_1', contentSha256: sha('private helpful response'), contentBytes: 24 }]);
+    expect(result.toolObservations).toEqual([
+      { itemId: 'tool_1', kind: 'mcpToolCall', status: 'completed' },
+      { itemId: 'output_1', kind: 'functionCallOutput', status: 'recorded' },
+    ]);
+    expect(result.externalDeliveryScope).toBe('not-established-by-native-turn');
     expect(result.error).toEqual({ category: 'serverOverloaded', sha256: sha('private error'), bytes: 13 });
     expect(result.clientIdLinkage).toBe('unavailable-from-native-turn');
     expect(result.commandSessionScope).toBe('saved-native-turn-only-not-live-process-custody');
@@ -65,6 +75,14 @@ describe('exact native turn receipt', () => {
     expect(() => nativeTurnReceipt({ id: 'turn_3', status: 'completed', items: Array(2001).fill({ type: 'userMessage', id: 'x' }) })).toThrow();
     expect(() => nativeTurnReceipt({ id: 'turn_3', status: 'completed', items: [
       { type: 'commandExecution', id: 'cmd', aggregatedOutput: 'x'.repeat(16_777_217) },
+    ] })).toThrow();
+  });
+  test('rejects excessive model output and malformed tool item rather than disclosing it', () => {
+    expect(() => nativeTurnReceipt({ id: 'turn_3', status: 'completed', items: [
+      { type: 'agentMessage', id: 'item_1', text: 'x'.repeat(1_048_577) },
+    ] })).toThrow();
+    expect(() => nativeTurnReceipt({ id: 'turn_3', status: 'completed', items: [
+      { type: 'mcpToolCall', id: 'invalid tool id', status: 'completed' },
     ] })).toThrow();
   });
 });

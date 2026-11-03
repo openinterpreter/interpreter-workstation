@@ -310,11 +310,23 @@ router.get('/threads/:threadId/native-turn-receipt/:turnId', async (req: Request
   if (!uuid.test(req.params.threadId) || !uuid.test(req.params.turnId)) {
     return res.status(400).json({ error: 'Exact native thread and turn required.' });
   }
+  const inspectionId = randomUUID();
+  const recordPhase = (phase: string, status: string) => {
+    console.info(JSON.stringify({ event: 'native_turn_receipt_inspection', inspectionId, phase, status }));
+  };
+  recordPhase('request', 'received');
   try {
-    const receipt = await getCodexService().readNativeTurnReceipt(req.params.threadId, req.params.turnId);
-    return receipt ? res.json(receipt) : res.status(404).json({ error: 'Native turn not found.' });
-  } catch {
-    return res.status(503).json({ error: 'Native turn receipt unavailable.' });
+    const receipt = await getCodexService().readNativeTurnReceipt(req.params.threadId, req.params.turnId,
+      NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS, recordPhase);
+    recordPhase('inspection', 'completed');
+    return receipt ? res.json({ ...receipt, inspectionId }) : res.status(404).json({ error: 'Native turn not found.', inspectionId });
+  } catch (error) {
+    recordPhase(error instanceof NativeCustodyPhaseError ? error.phase : 'unknown',
+      error instanceof NativeCustodyPhaseError ? error.category : 'native_unavailable');
+    return res.status(503).json({ error: 'Native turn receipt unavailable.',
+      phase: error instanceof NativeCustodyPhaseError ? error.phase : 'unknown',
+      category: error instanceof NativeCustodyPhaseError ? error.category : 'native_unavailable',
+      custodyVerified: false, inspectionId });
   }
 });
 

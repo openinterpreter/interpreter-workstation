@@ -1224,8 +1224,16 @@ export class CodexService {
   }
 
   /** Read one saved native turn without exposing its message, command or error text. */
-  async readNativeTurnReceipt(threadId: string, turnId: string) {
-    const thread = await this.readThread(threadId);
+  async readNativeTurnReceipt(threadId: string, turnId: string,
+    deadlineMs = NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS,
+    onPhase?: (phase: NativeCustodyPhase, status: 'started' | 'completed' | 'late_completed' | 'late_failed') => void) {
+    if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > NATIVE_CUSTODY_PHASE_DEADLINE_MS) {
+      throw new Error('Invalid native turn receipt deadline');
+    }
+    onPhase?.('thread_read', 'started');
+    const thread = await nativeCustodyPhase('thread_read', () => this.readThread(threadId), deadlineMs,
+      (phase, status) => onPhase?.(phase, status === 'completed' ? 'late_completed' : 'late_failed'));
+    onPhase?.('thread_read', 'completed');
     if (thread.id !== threadId) throw new Error('Native thread ID mismatch');
     const turn = thread.turns.find((item) => item.id === turnId);
     if (!turn) return null;

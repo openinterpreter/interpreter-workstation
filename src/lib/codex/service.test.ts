@@ -30,6 +30,20 @@ function createTurn(id: string, status: v2.TurnStatus = "inProgress"): v2.Turn {
 }
 
 describe('native custody metadata', () => {
+  test('exact historical turn receipt times out without claiming failure or cancelling late native read', async () => {
+    const id = '00000000-0000-4000-8000-000000000042';
+    const client = createFakeClient({}).client;
+    let resolveRead: ((value: Awaited<ReturnType<typeof client.threadRead>>) => void) | undefined;
+    client.threadRead = () => new Promise((resolve) => { resolveRead = resolve; });
+    const phases: string[] = [];
+    await assert.rejects(new CodexService(client).readNativeTurnReceipt(id, 'turn_one', 5,
+      (phase, status) => phases.push(`${phase}:${status}`)),
+    { phase: 'thread_read', category: 'deadline' });
+    assert.deepEqual(phases, ['thread_read:started']);
+    resolveRead!({ thread: { id, status: { type: 'idle' }, turns: [createTurn('turn_one', 'completed')] } as v2.Thread });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(phases, ['thread_read:started', 'thread_read:late_completed']);
+  });
   test('binds active command observation to the exact current native thread read, never an OS PID assertion', async () => {
     const id = '00000000-0000-4000-8000-000000000042';
     const client = createFakeClient({ threadRead: async () => ({ thread: {
