@@ -62,6 +62,7 @@ import {
   isLmStudioPromptTemplateFailure,
 } from '../../src/lib/codex/lmStudioErrors';
 import {
+  NativeCustodyPhaseError,
   getCodexService,
   getSteerErrorCode,
   THREAD_LIST_DEFAULTS,
@@ -259,10 +260,26 @@ router.get('/threads/:threadId/native-custody', async (req: Request, res: Respon
   if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(req.params.threadId)) {
     return res.status(400).json({ error: 'Invalid thread ID.' });
   }
+  // A response can be lost on transport; fixed, content-free phases distinguish
+  // an absent request from a native read that has not yet returned.
+  const inspectionId = randomUUID();
+  const recordPhase = (phase: string, status: string) => {
+    console.info(JSON.stringify({ event: 'native_custody_inspection', inspectionId, phase, status }));
+  };
+  recordPhase('request', 'received');
   try {
-    res.json(await getCodexService().readNativeCustody(req.params.threadId));
-  } catch {
-    res.status(503).json({ error: 'Native custody inspection unavailable.' });
+    const custody = await getCodexService().readNativeCustody(req.params.threadId, undefined, recordPhase);
+    recordPhase('inspection', 'completed');
+    res.json({ ...custody, inspectionId });
+  } catch (error) {
+    // Failure remains unknown custody; expose only the fixed phase/category.
+    recordPhase(error instanceof NativeCustodyPhaseError ? error.phase : 'unknown',
+      error instanceof NativeCustodyPhaseError ? error.category : 'native_unavailable');
+    res.status(503).json(error instanceof NativeCustodyPhaseError
+      ? { error: 'Native custody inspection unavailable.', phase: error.phase,
+          category: error.category, custodyVerified: false, inspectionId }
+      : { error: 'Native custody inspection unavailable.',
+          phase: 'unknown', category: 'native_unavailable', custodyVerified: false, inspectionId });
   }
 });
 
