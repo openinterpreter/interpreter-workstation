@@ -30,6 +30,22 @@ function createTurn(id: string, status: v2.TurnStatus = "inProgress"): v2.Turn {
 }
 
 describe('native custody metadata', () => {
+  test('binds active command observation to the exact current native thread read, never an OS PID assertion', async () => {
+    const id = '00000000-0000-4000-8000-000000000042';
+    const client = createFakeClient({ threadRead: async () => ({ thread: {
+      id, status: { type: 'active', activeFlags: [] }, turns: [{ ...createTurn('turn_active'), items: [
+        { type: 'commandExecution', id: 'cmd_1', processId: 'native_process_1',
+          status: 'inProgress', aggregatedOutput: 'PRIVATE OUTPUT', exitCode: null },
+      ] }],
+    } as unknown as v2.Thread }) }).client;
+    client.threadQueueList = async () => ({ data: [], nextCursor: null });
+    const result = await new CodexService(client).readNativeCustody(id);
+    assert.deepEqual(result.commandSessionSnapshot.sessions.map(({ itemId, processId, nativeTurnActiveAtRead }) =>
+      ({ itemId, processId, nativeTurnActiveAtRead })),
+    [{ itemId: 'cmd_1', processId: 'native_process_1', nativeTurnActiveAtRead: true }]);
+    assert.equal(result.commandSessionSnapshot.scope, 'native-thread-read-not-os-process-custody');
+    assert.doesNotMatch(JSON.stringify(result), /PRIVATE OUTPUT/);
+  });
   test('links one exact persisted client ID to its native user item and saved command, not another turn', async () => {
     const id = '00000000-0000-4000-8000-000000000001';
     const client = createFakeClient({ threadRead: async () => ({ thread: {

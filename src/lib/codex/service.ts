@@ -1,5 +1,5 @@
 import { match } from "ts-pattern";
-import { nativeTurnReceipt } from './native-turn-receipt';
+import { nativeCommandSessionSnapshot, nativeTurnReceipt } from './native-turn-receipt';
 import { JSONRPCErrorException } from "json-rpc-2.0";
 import type { v2 } from "../../../server/handlers/codex-generated-types/index";
 import type { JsonValue } from "../../../server/handlers/codex-generated-types/serde_json/JsonValue";
@@ -1177,6 +1177,7 @@ export class CodexService {
       activeFlags: status.type === 'active' ? status.activeFlags : [],
       lastTurnId: lastTurn?.id ?? null,
       lastTurnStatus: lastTurn?.status ?? null,
+      commandSessionSnapshot: nativeCommandSessionSnapshot(lastTurn, status.type === 'active'),
       queuedSubmissionCount: submissions.length,
       queuedSubmissions: submissions,
     };
