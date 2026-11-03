@@ -1,4 +1,5 @@
 import { match } from "ts-pattern";
+import { nativeTurnReceipt } from './native-turn-receipt';
 import { JSONRPCErrorException } from "json-rpc-2.0";
 import type { v2 } from "../../../server/handlers/codex-generated-types/index";
 import type { JsonValue } from "../../../server/handlers/codex-generated-types/serde_json/JsonValue";
@@ -1089,6 +1090,15 @@ export class CodexService {
       queuedSubmissionCount: submissions.length,
       queuedSubmissions: submissions,
     };
+  }
+
+  /** Read one saved native turn without exposing its message, command or error text. */
+  async readNativeTurnReceipt(threadId: string, turnId: string) {
+    const thread = await this.readThread(threadId);
+    if (thread.id !== threadId) throw new Error('Native thread ID mismatch');
+    const turn = thread.turns.find((item) => item.id === turnId);
+    if (!turn) return null;
+    return nativeTurnReceipt(turn);
   }
 
   private async readNativeQueuedSubmissions(threadId: string) {

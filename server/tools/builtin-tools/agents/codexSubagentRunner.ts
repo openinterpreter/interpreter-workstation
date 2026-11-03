@@ -21,6 +21,7 @@ export interface RunCodexSubagentOptions {
   modelConfig: AgentModelConfig;
   skills?: StreamSkillReference[];
   threadId?: string;
+  clientUserMessageId?: string;
   abortSignal?: AbortSignal;
   timeoutMs?: number;
   idleTimeoutMs?: number | null;
@@ -208,6 +209,7 @@ export async function runCodexSubagent(options: RunCodexSubagentOptions): Promis
       message: options.message,
       skills: options.skills,
       threadId: options.threadId ?? session.threadId,
+      clientUserMessageId: options.clientUserMessageId,
       binding: {
         agentId: session.agentId,
         callerToken: session.callerToken,
