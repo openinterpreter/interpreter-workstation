@@ -35,6 +35,11 @@ const ACTIVE_TURN_MISMATCH_PREFIX = "expected active turn id `";
 const ACTIVE_TURN_MISMATCH_SEPARATOR = "` but found `";
 const DEFAULT_RUN_TURN_IDLE_TIMEOUT_MS = 3 * 60 * 1000;
 const NATIVE_CUSTODY_PHASE_DEADLINE_MS = 12_000;
+// Keep the exact-thread operator HTTP read bounded independently of the native
+// RPC's lifetime. Two sequential reads reserve response time for an operator
+// with an eight-second HTTP deadline; this cannot diagnose a request that
+// never reaches this route. An expired native RPC may still complete later.
+export const NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS = 3_000;
 
 export type NativeCustodyPhase = 'thread_read' | 'queue_read';
 
@@ -1125,18 +1130,20 @@ export class CodexService {
   async readNativeCustody(
     threadId: string,
     deadlineMs = NATIVE_CUSTODY_PHASE_DEADLINE_MS,
-    onPhase?: (phase: NativeCustodyPhase, status: 'started' | 'completed') => void,
+    onPhase?: (phase: NativeCustodyPhase, status: 'started' | 'completed' | 'late_completed' | 'late_failed') => void,
   ) {
     if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > NATIVE_CUSTODY_PHASE_DEADLINE_MS) {
       throw new Error('Invalid native custody deadline.');
     }
     onPhase?.('thread_read', 'started');
-    const thread = await nativeCustodyPhase('thread_read', () => this.readThread(threadId), deadlineMs);
+    const thread = await nativeCustodyPhase('thread_read', () => this.readThread(threadId), deadlineMs,
+      (phase, status) => onPhase?.(phase, status === 'completed' ? 'late_completed' : 'late_failed'));
     onPhase?.('thread_read', 'completed');
     if (thread.id !== threadId) throw new Error('Native thread ID mismatch');
     onPhase?.('queue_read', 'started');
     const submissions = await nativeCustodyPhase('queue_read',
-      () => this.readNativeQueuedSubmissions(threadId), deadlineMs);
+      () => this.readNativeQueuedSubmissions(threadId), deadlineMs,
+      (phase, status) => onPhase?.(phase, status === 'completed' ? 'late_completed' : 'late_failed'));
     onPhase?.('queue_read', 'completed');
     const lastTurn = thread.turns[thread.turns.length - 1];
     const status = thread.status;

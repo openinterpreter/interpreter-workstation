@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import express from 'express';
 import request from 'supertest';
-import { getCodexService, NativeCustodyPhaseError } from '../../src/lib/codex/service';
+import { getCodexService, NativeCustodyPhaseError,
+  NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS } from '../../src/lib/codex/service';
 import agentRouter from './agent';
 
 const app = express();
@@ -48,7 +49,11 @@ describe('native custody diagnostic authentication', () => {
     const original = service.readNativeCustody;
     const originalInfo = console.info;
     const events: string[] = [];
-    service.readNativeCustody = async () => { throw new NativeCustodyPhaseError('thread_read', 'deadline'); };
+    let observedDeadline: number | undefined;
+    service.readNativeCustody = async (_thread, deadline) => {
+      observedDeadline = deadline;
+      throw new NativeCustodyPhaseError('thread_read', 'deadline');
+    };
     console.info = (value) => { events.push(String(value)); };
     try {
       const result = await request(app).get(`/api/agent/threads/${id}/native-custody`)
@@ -57,6 +62,7 @@ describe('native custody diagnostic authentication', () => {
       expect(result.body).toMatchObject({ phase: 'thread_read', category: 'deadline',
         custodyVerified: false });
       expect(result.body.inspectionId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(observedDeadline).toBe(NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS);
       expect(events.map((event) => JSON.parse(event).phase)).toEqual(['request', 'thread_read']);
       expect(events.join(' ')).not.toContain('test-private-token');
     } finally {
