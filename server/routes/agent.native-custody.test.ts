@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import express from 'express';
 import request from 'supertest';
 import { getCodexService, NativeCustodyPhaseError,
-  NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS } from '../../src/lib/codex/service';
+  NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS,
+  NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS } from '../../src/lib/codex/service';
 import agentRouter from './agent';
 
 const app = express();
@@ -16,6 +17,34 @@ afterEach(() => {
 });
 
 describe('native custody diagnostic authentication', () => {
+  test('global native operator route rejects missing bearer and emits only fixed failure metadata', async () => {
+    process.env.WORKSTATION_WAKE_TOKEN = 'test-private-token';
+    const route = '/api/agent/custody/native-global';
+    expect((await request(app).get(route)).status).toBe(401);
+    const service = getCodexService();
+    const original = service.readGlobalNativeCustody;
+    const originalInfo = console.info;
+    const events: string[] = [];
+    let deadline: number | undefined;
+    service.readGlobalNativeCustody = async (value) => {
+      deadline = value;
+      throw new NativeCustodyPhaseError('verify_queue_read', 'deadline');
+    };
+    console.info = (value) => { events.push(String(value)); };
+    try {
+      const result = await request(app).get(route).set('Authorization', 'Bearer test-private-token');
+      expect(result.status).toBe(503);
+      expect(deadline).toBe(NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS);
+      expect(result.body).toMatchObject({ phase: 'verify_queue_read', category: 'deadline',
+        custodyVerified: false });
+      expect(result.body.inspectionId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(events.map((event) => JSON.parse(event).phase)).toEqual(['request', 'verify_queue_read']);
+      expect(events.join(' ')).not.toContain('test-private-token');
+    } finally {
+      service.readGlobalNativeCustody = original;
+      console.info = originalInfo;
+    }
+  });
   test('submission receipt route requires exact thread, client ID and operator bearer', async () => {
     process.env.WORKSTATION_WAKE_TOKEN = 'test-private-token';
     const route = `/api/agent/threads/${id}/submissions/owned_1/custody`;
