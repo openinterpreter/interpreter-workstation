@@ -10,6 +10,7 @@ import {
   getProjectStatus,
   startProject,
   stopProject,
+  trustedProjectRunner,
 } from './projectRunner';
 import { runWithWindowSessionOverride } from '../utils/windowSessions';
 import { runWithWorkspaceOverride } from '../utils/workspace';
@@ -37,6 +38,7 @@ afterEach(async () => {
 
 async function createRunnableProject(options?: {
   launcher?: boolean;
+  startupDelayMs?: number;
 }): Promise<string> {
   const projectDir = await mkdtemp(path.join(tmpdir(), 'interpreter-project-runner-'));
   tempDirs.push(projectDir);
@@ -53,6 +55,7 @@ async function createRunnableProject(options?: {
 import http from 'node:http';
 
 const port = Number(process.env.PORT);
+await new Promise((resolve) => setTimeout(resolve, ${options?.startupDelayMs ?? 0}));
 const server = http.createServer((_request, response) => {
   response.statusCode = 200;
   response.end('ok');
@@ -149,6 +152,18 @@ describe('projectRunner', () => {
 
     expect(message).toBe("Could not start the project because Workstation's bundled project runtime could not be launched.");
   });
+
+  test('a trusted Simple startup can use a longer bounded budget without changing the generic one', async () => {
+    const projectDir = await createRunnableProject({ startupDelayMs: 800 });
+    const short = await trustedProjectRunner.start(projectDir, {}, 100);
+    expect(short.success).toBe(false);
+    expect(short.state.status).toBe('error');
+
+    const longer = await trustedProjectRunner.start(projectDir, {}, 5000);
+    expect(longer.success).toBe(true);
+    expect(longer.state.status).toBe('running');
+    await trustedProjectRunner.stop(projectDir);
+  }, 15_000);
 
   // Startup and shutdown each have their own 5 s readiness check; Bun's
   // default 5 s test deadline cannot encompass both even when each succeeds.
