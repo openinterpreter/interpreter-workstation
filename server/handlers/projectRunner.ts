@@ -253,9 +253,9 @@ async function terminateRuntime(runtime: ProjectRuntime): Promise<boolean> {
   return await waitForChildExit(runtime.child, PROJECT_KILL_TIMEOUT_MS);
 }
 
-async function waitForProject(runtime: ProjectRuntime): Promise<boolean> {
+async function waitForProject(runtime: ProjectRuntime, startupTimeoutMs: number): Promise<boolean> {
   const start = Date.now();
-  while (Date.now() - start < PROJECT_STARTUP_TIMEOUT_MS) {
+  while (Date.now() - start < startupTimeoutMs) {
     if (runtime.finalized || runtime.spawnError) {
       return false;
     }
@@ -344,6 +344,7 @@ export async function startProject(
 async function startProjectAtResolvedPath(
   normalizedPath: string,
   envOverrides: NodeJS.ProcessEnv = {},
+  startupTimeoutMs = PROJECT_STARTUP_TIMEOUT_MS,
 ): Promise<{ success: boolean; state: ProjectRunnerState; error?: string }> {
   registerCleanup();
 
@@ -436,7 +437,7 @@ async function startProjectAtResolvedPath(
   emitProjectRunnerChanged(toProjectRunnerState(runtime), broadcastScope);
 
   runtime.startupPromise = (async () => {
-    const ready = await waitForProject(runtime);
+    const ready = await waitForProject(runtime, startupTimeoutMs);
     if (!ready) {
       throw new Error(getRuntimeError(runtime));
     }
@@ -527,6 +528,7 @@ async function stopProjectAtResolvedPath(
  */
 export const trustedProjectRunner = {
   status: (projectPath: string) => getProjectStatusAtResolvedPath(normalizeProjectKey(projectPath)),
-  start: (projectPath: string, env?: NodeJS.ProcessEnv) => startProjectAtResolvedPath(normalizeProjectKey(projectPath), env),
+  start: (projectPath: string, env?: NodeJS.ProcessEnv, startupTimeoutMs?: number) =>
+    startProjectAtResolvedPath(normalizeProjectKey(projectPath), env, startupTimeoutMs),
   stop: (projectPath: string) => stopProjectAtResolvedPath(normalizeProjectKey(projectPath)),
 };
