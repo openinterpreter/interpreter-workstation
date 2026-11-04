@@ -335,7 +335,7 @@ async function refreshProject(workstationOrigin: string): Promise<SimpleAppStatu
     NEXT_TELEMETRY_DISABLED: '1',
     [INTERPRETER_CLI_SERVER_CONNECTION_ENV]: workstationOrigin,
     [INTERPRETER_CALLER_TOKEN_ENV]: projectRuntimeToken(project.path),
-  });
+  }, 120_000); // Cold Next compilation can outlast the generic project budget.
   return {
     revision: project.metadata.id,
     sourceRevision: fingerprint,

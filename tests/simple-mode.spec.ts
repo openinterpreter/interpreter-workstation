@@ -39,18 +39,34 @@ async function waitForInterfaceFrame(
   predicate: (frame: Frame) => Promise<boolean>,
 ): Promise<Frame> {
   let active: Frame | null = null;
-  await expect.poll(async () => {
-    const frames = await page.locator('iframe[data-simple-interface-frame]').all();
-    for (const element of frames.reverse()) {
-      const frame = await (await element.elementHandle())?.contentFrame().catch(() => null);
-      if (!frame) continue;
-      if (await predicate(frame).catch(() => false)) {
-        active = frame;
-        return true;
+  try {
+    await expect.poll(async () => {
+      const frames = await page.locator('iframe[data-simple-interface-frame]').all();
+      for (const element of frames.reverse()) {
+        const frame = await (await element.elementHandle())?.contentFrame().catch(() => null);
+        if (!frame) continue;
+        if (await predicate(frame).catch(() => false)) {
+          active = frame;
+          return true;
+        }
       }
-    }
-    return false;
-  }, { timeout: 60_000 }).toBe(true);
+      return false;
+    }, { timeout: 120_000 }).toBe(true);
+  } catch (error) {
+    const frameCount = await page.locator('iframe[data-simple-interface-frame]').count().catch(() => -1);
+    const status = await page.evaluate(async () => {
+      const response = await (window as any).electron.apiRequest({
+        method: 'GET', path: '/api/simple-interface/',
+      });
+      return {
+        httpStatus: response.status,
+        ready: response.data?.ready,
+        diagnosticPresent: Boolean(response.data?.diagnostic),
+        runtimeUrlPresent: Boolean(response.data?.runtimeUrl),
+      };
+    }).catch(() => ({ httpStatus: -1, ready: null, diagnosticPresent: false, runtimeUrlPresent: false }));
+    throw new Error(`Simple frame did not appear: ${JSON.stringify({ frameCount, status, waitFailed: Boolean(error) })}`);
+  }
   if (!active) throw new Error('The active Simple interface frame did not appear.');
   return active;
 }
@@ -266,7 +282,7 @@ test('Simple React interface is default, preserves live state, exposes its setti
 });
 
 test('generated React forms submit into durable project state without opening a network form route', async ({ page }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(300_000); // Cold project startup and the first Next render have separate bounded budgets.
   await waitForAppReady(page);
   const sandboxRoot = await mkdtemp(path.join(tmpdir(), 'interpreter-simple-form-'));
   const project = path.join(sandboxRoot, 'tasks');
@@ -295,11 +311,17 @@ test('generated React forms submit into durable project state without opening a 
         <p>Saved tasks: {tasks.join(', ')}</p></Page>;
       }
     `, 'utf8');
+    const promotionStarted = Date.now();
     const promoted = await page.evaluate(async () => (window as any).electron.apiRequest({
       method: 'POST', path: '/api/simple-interface/promote',
     }));
     expect(promoted.ok).toBe(true);
-    expect(promoted.data.ready).toBe(true);
+    expect(promoted.data.ready, JSON.stringify({
+      httpStatus: promoted.status,
+      diagnosticPresent: Boolean(promoted.data.diagnostic),
+      runtimeUrlPresent: Boolean(promoted.data.runtimeUrl),
+      elapsedMs: Date.now() - promotionStarted,
+    })).toBe(true);
     const canvas = await waitForInterfaceFrame(page, async (frame) =>
       await frame.getByRole('button', { name: 'Save task' }).isVisible());
     await expect(page.locator('iframe[data-simple-interface-frame]').last()).toHaveAttribute('sandbox', /allow-forms/);
