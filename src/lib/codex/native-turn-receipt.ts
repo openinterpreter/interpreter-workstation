@@ -91,6 +91,28 @@ export function nativeTurnReceipt(input: unknown) {
       outputSha256: typeof output === 'string' ? sha256(output) : null,
       outputBytes: typeof output === 'string' ? Buffer.byteLength(output) : null };
   });
+  // These are native item observations, not evidence of provider or device
+  // delivery. In particular, command completion does not identify its target.
+  if (turn.items.length > 200) throw new Error('Native turn item bound exceeded');
+  const agentItems = turn.items.filter((item) => item.type === 'agentMessage');
+  const toolItems = turn.items.filter((item) =>
+    ['mcpToolCall', 'dynamicToolCall', 'functionCallOutput'].includes(item.type));
+  if (agentItems.length > 32 || toolItems.length > 64) throw new Error('Native handling item bound exceeded');
+  const agentMessages = agentItems.map((item) => {
+    if (typeof item.id !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(item.id) ||
+        typeof item.text !== 'string' || Buffer.byteLength(item.text) > 1_048_576) {
+      throw new Error('Invalid native agent item');
+    }
+    return { itemId: item.id, contentBytes: Buffer.byteLength(item.text), contentSha256: sha256(item.text) };
+  });
+  const toolObservations = toolItems.map((item) => {
+    if (typeof item.id !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(item.id)) {
+      throw new Error('Invalid native tool item');
+    }
+    const status = typeof item.status === 'string' &&
+      ['inProgress', 'completed', 'failed', 'declined'].includes(item.status) ? item.status : 'unclassified';
+    return { itemId: item.id, kind: item.type, status: item.type === 'functionCallOutput' ? 'recorded' : status };
+  });
   const message = turn.error?.message;
   const info = turn.error?.codexErrorInfo;
   const errorCategory = typeof info === 'string' ? info
@@ -99,6 +121,7 @@ export function nativeTurnReceipt(input: unknown) {
   const category = errorCategory && ['serverOverloaded', 'unauthorized', 'usageLimitReached'].includes(errorCategory)
     ? errorCategory : 'unclassified';
   return { turnId: turn.id, status: turn.status, userItems, commandSessions,
+    agentMessages, toolObservations, externalDeliveryScope: 'not-established-by-native-turn' as const,
     error: typeof message === 'string' ? { category, bytes: Buffer.byteLength(message), sha256: sha256(message) } : null,
     clientIdLinkage: userItems.some(item => item.clientUserMessageId !== null)
       ? 'native-user-item' as const : 'unavailable-from-native-turn' as const,
