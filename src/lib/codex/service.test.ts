@@ -691,6 +691,11 @@ describe("CodexService", () => {
     assert.deepEqual(observed, ['thread', 'turn']);
     assert.equal(fake.calls.startTurn, 1);
     assert.equal(fake.calls.interruptTurn.length, 0);
+    assert.throws(() => fake.emit({ method: SERVER_METHOD.turnCompleted, params: {
+      threadId: 'thr_new', turn: createTurn('turn_new', 'completed'),
+    } }), /no subscriber attached/);
+    assert.deepEqual(observed, ['thread', 'turn']);
+    assert.equal(fake.calls.startTurn, 1);
   });
 
   test('a failed progress observer before admission does not strand the thread or skip native completion', async () => {
