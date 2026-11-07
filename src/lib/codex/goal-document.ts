@@ -64,7 +64,10 @@ export function verifyGoalDocument(
       !Number.isSafeInteger(document.missionRevision) || document.missionRevision < 1 ||
       typeof document.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(document.sha256) ||
       document.sha256 !== digest(content) ||
-      document.path !== `managed-goals/${threadId}/mission-${document.missionRevision}-${document.sha256}.md`) {
+      ![
+        `managed-goals/${threadId}/mission-${document.missionRevision}-${document.sha256}.md`,
+        `managed-goals\\${threadId}\\mission-${document.missionRevision}-${document.sha256}.md`,
+      ].includes(document.path)) {
     throw new Error('Managed Goal document receipt unavailable.');
   }
 }

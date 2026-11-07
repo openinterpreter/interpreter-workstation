@@ -67,8 +67,12 @@ describe('Workstation consumer for OIX-owned managed Goal documents', () => {
   });
 
   test('denies forged path, cross-thread owner, digest, bytes and missing content', async () => {
+    const windowsPath = metadata().path.replaceAll('/', '\\');
+    assert.doesNotThrow(() => verifyGoalDocument(threadId,
+      { ...metadata(), path: windowsPath }, documentText));
     for (const forged of [
       { ...metadata(), path: `managed-goals/${threadId}/../secrets.md` },
+      { ...metadata(), path: metadata().path.replace('/mission-', '\\mission-') },
       { ...metadata(), path: metadata().path.replace(threadId, '00000000-0000-4000-8000-000000000078') },
       { ...metadata(), sha256: 'f'.repeat(64) },
       { ...metadata(), byteLength: metadata().byteLength + 1 },
