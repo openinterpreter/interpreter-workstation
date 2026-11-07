@@ -97,6 +97,25 @@ describe('ThreadGoalBar', () => {
     expect(screen.queryByText('Old owner')).not.toBeInTheDocument();
   });
 
+  test('hides the previous thread Goal immediately while the next owner loads', async () => {
+    let resolveNext!: (response: Response) => void;
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ goal: goal({ objective: 'Previous objective' }) })))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveNext = resolve; }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { ThreadGoalBar } = await import('./ThreadGoalBar');
+    const view = render(<ThreadGoalBar threadId="thread-one" />);
+    expect(await screen.findByText('Previous objective')).toBeVisible();
+    view.rerender(<ThreadGoalBar threadId="thread-two" />);
+    expect(screen.queryByText('Previous objective')).not.toBeInTheDocument();
+    expect(screen.getByText('Loading goal')).toBeVisible();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    await act(async () => resolveNext(new Response(JSON.stringify({ goal: goal({ threadId: 'thread-two' }) }))));
+    expect(await screen.findByText('Finish the durable work')).toBeVisible();
+  });
+
   test('does not display a Goal whose native owner differs from the selected thread', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       goal: goal({ threadId: 'thread-two', objective: 'Another owner' }),

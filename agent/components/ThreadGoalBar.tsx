@@ -19,6 +19,10 @@ function isThreadGoal(value: unknown): value is v2.ThreadGoal {
 }
 
 export function ThreadGoalBar({ threadId, readOnly = false }: ThreadGoalBarProps) {
+  return <ThreadGoalBarForThread key={threadId} threadId={threadId} readOnly={readOnly} />;
+}
+
+function ThreadGoalBarForThread({ threadId, readOnly = false }: ThreadGoalBarProps) {
   const selectedThreadId = useRef(threadId);
   const readSequence = useRef(0);
   selectedThreadId.current = threadId;
