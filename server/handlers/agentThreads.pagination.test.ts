@@ -13,9 +13,10 @@ describe('complete thread inventory', () => {
     const ids = Array.from({ length: 525 }, (_, index) => `thread_${index}`);
     let calls = 0;
     const result = await listAllThreadIds({ listThreads: async ({ cursor }) => {
-      expect(cursor ?? null).toBe(calls ? String(calls) : null);
+      expect(cursor ?? null).toBe(calls ? `${calls}|thread_${calls * 100 - 1}` : null);
       const start = calls++ * 100;
-      return page(ids.slice(start, start + 100), start + 100 < ids.length ? String(calls) : null);
+      return page(ids.slice(start, start + 100), start + 100 < ids.length
+        ? `${calls}|thread_${start + 99}` : null);
     } }, params);
     expect(result).toEqual(ids);
     expect(calls).toBe(6);
@@ -36,5 +37,7 @@ describe('complete thread inventory', () => {
       .rejects.toThrow(/invalid or repeated thread inventory ID/i);
     await expect(listAllThreadIds({ listThreads: async () => page(Array.from({ length: 101 }, (_, i) => `t${i}`), null) }, params))
       .rejects.toThrow(/invalid thread inventory page/i);
+    await expect(listAllThreadIds({ listThreads: async () => page(['thread_1'], 'cursor\nprivate') }, params))
+      .rejects.toThrow(/invalid or repeated thread inventory cursor/i);
   });
 });

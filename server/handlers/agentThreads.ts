@@ -54,7 +54,10 @@ export async function listAllThreadIds(
     }
     cursor = response.nextCursor;
     if (cursor !== null) {
-      if (typeof cursor !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(cursor)
+      // The native thread-store cursor is opaque (for example, timestamp|ID).
+      // Bound its size and reject control characters, but never reinterpret it.
+      if (typeof cursor !== 'string' || cursor.length < 1 || cursor.length > 1024
+        || /[\x00-\x1f\x7f]/.test(cursor)
         || seenCursors.has(cursor) || seenCursors.size >= 10_000) {
         throw new Error('Invalid or repeated thread inventory cursor');
       }
