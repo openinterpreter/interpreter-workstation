@@ -628,6 +628,7 @@ export interface JsonRpcTransport {
   onClose(handler: (error?: Error) => void): void;
   stop(): void | Promise<void>;
   getStderrSnapshot?(): string;
+  getSelectedRuntimeVersion?(): Promise<string | null>;
 }
 
 export interface CodexCliRunner {
@@ -1505,6 +1506,11 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
   private droppedStdoutDiagnosticLineCount = 0;
   private startPromise: Promise<void> | null = null;
   private oixRuntimeResolutionPromise: Promise<OixRuntimeResolution> | null = null;
+
+  async getSelectedRuntimeVersion(): Promise<string | null> {
+    // Never resolve/install a new runtime just to inspect a native process.
+    return (await this.oixRuntimeResolutionPromise)?.version ?? null;
+  }
 
   constructor(
     private readonly spawnProcess: SpawnProcess = (command, args, env) =>
@@ -2398,6 +2404,24 @@ export class CodexAppServerClient {
     return this.rpcRequest(CLIENT_METHOD.threadBackgroundTerminalsClean, {
       threadId,
     });
+  }
+
+  private async assertNativeTerminalStatusAvailable() {
+    // An inspection must not start a runtime or silently retry on a different one.
+    if (!this.initialized || !this.transport.getSelectedRuntimeVersion ||
+        !/^0\.0\.(?:59|[6-9][0-9]|[1-9][0-9]{2,})$/.test(await this.transport.getSelectedRuntimeVersion() ?? '')) {
+      throw new Error('Native terminal status is unavailable on the selected OIX runtime.');
+    }
+  }
+
+  async threadBackgroundTerminalsStatus(params: RequestMap[typeof CLIENT_METHOD.threadBackgroundTerminalsStatus]['params']) {
+    await this.assertNativeTerminalStatusAvailable();
+    return this.rpcRequest(CLIENT_METHOD.threadBackgroundTerminalsStatus, params);
+  }
+
+  async threadBackgroundTerminalsList(params: RequestMap[typeof CLIENT_METHOD.threadBackgroundTerminalsList]['params']) {
+    await this.assertNativeTerminalStatusAvailable();
+    return this.rpcRequest(CLIENT_METHOD.threadBackgroundTerminalsList, params);
   }
 
   async modelList(params: v2.ModelListParams = {}): Promise<v2.ModelListResponse> {

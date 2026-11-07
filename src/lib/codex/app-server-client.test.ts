@@ -179,6 +179,7 @@ function makeStreamErrorNotification(
 }
 
 class FakeTransport implements JsonRpcTransport {
+  getSelectedRuntimeVersion?: () => Promise<string | null>;
   private messageHandler: ((message: string) => void) | null = null;
   private closeHandler: ((error?: Error) => void) | null = null;
   private started = false;
@@ -322,6 +323,37 @@ function completeInitHandshake(transport: FakeTransport) {
 }
 
 describe("CodexAppServerClient", () => {
+  test('native terminal methods deny selected .58 and send only exact .59 owner reads', async () => {
+    const transport = new FakeTransport();
+    let version = '0.0.58';
+    transport.getSelectedRuntimeVersion = async () => version;
+    const client = new CodexAppServerClient(transport, null);
+    const connected = client.ensureConnected();
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await connected;
+    const owner = { threadId: 'thread_1', turnId: 'turn_1', itemId: 'item_1',
+      nativeProcessId: 'native_1', maxWaitMs: 50 };
+    const baseline = transport.sent.length;
+    await assert.rejects(client.threadBackgroundTerminalsStatus(owner), /unavailable/);
+    await assert.rejects(client.threadBackgroundTerminalsList({ threadId: owner.threadId }), /unavailable/);
+    assert.equal(transport.sent.length, baseline);
+    version = '0.0.59';
+    const pending = client.threadBackgroundTerminalsStatus(owner);
+    await waitFor(() => transport.sent.length === baseline + 1);
+    const rpc = assertSentRequest(transport, baseline, CLIENT_METHOD.threadBackgroundTerminalsStatus);
+    assert.deepEqual(rpc.params, owner);
+    transport.respond(rpc, { phase: 'exited', outputBytes: 6, outputSha256: 'a'.repeat(64),
+      outputCapReached: false, exitCode: 0, terminalGeneration: 3, observationTimedOut: false });
+    assert.equal((await pending).phase, 'exited');
+    const listPending = client.threadBackgroundTerminalsList({ threadId: owner.threadId, limit: 100 });
+    await waitFor(() => transport.sent.length === baseline + 2);
+    const listRpc = assertSentRequest(transport, baseline + 1, CLIENT_METHOD.threadBackgroundTerminalsList);
+    assert.deepEqual(listRpc.params, { threadId: owner.threadId, limit: 100 });
+    transport.respond(listRpc, { data: [], nextCursor: null });
+    assert.deepEqual(await listPending, { data: [], nextCursor: null });
+    client.shutdown();
+  });
   test("uses stdio transport handshake and typed methods", async () => {
     setConfigOverride({
       agents: {},

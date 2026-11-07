@@ -1,5 +1,7 @@
 import { match } from "ts-pattern";
 import { nativeCommandSessionSnapshot, nativeTurnReceipt } from './native-turn-receipt';
+import { boundNativeTerminalStatus, validateNativeTerminalRequest, type NativeTerminalStatusRequest,
+  type NativeTerminalStatusResponse } from './native-terminal-status';
 import { JSONRPCErrorException } from "json-rpc-2.0";
 import type { v2 } from "../../../server/handlers/codex-generated-types/index";
 import type { JsonValue } from "../../../server/handlers/codex-generated-types/serde_json/JsonValue";
@@ -44,6 +46,7 @@ export const NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS = 6_000;
 const NATIVE_CUSTODY_GLOBAL_MAX_DEADLINE_MS = 30_000;
 
 export type NativeCustodyPhase = 'thread_read' | 'queue_read' | 'loaded_list' | 'thread_list'
+  | 'terminal_status'
   | 'global_queue_read' | 'verify_loaded_list' | 'verify_thread_list' | 'verify_queue_read';
 
 /** A failed inspection is never evidence that a native queue or command is empty. */
@@ -394,6 +397,12 @@ export type CodexClient = {
   threadList(params?: v2.ThreadListParams): Promise<v2.ThreadListResponse>;
   threadLoadedList(params?: v2.ThreadLoadedListParams): Promise<v2.ThreadLoadedListResponse>;
   threadRead(params: v2.ThreadReadParams): Promise<v2.ThreadReadResponse>;
+  threadBackgroundTerminalsStatus?(params: Omit<NativeTerminalStatusRequest, 'terminalGeneration'>): Promise<NativeTerminalStatusResponse>;
+  threadBackgroundTerminalsList?(params: { threadId: string; cursor?: string | null; limit?: number | null }): Promise<{
+    data: Array<{ itemId: string; turnId?: string | null; nativeProcessId?: string | null;
+      terminalGeneration?: number | null; [key: string]: unknown }>;
+    nextCursor: string | null;
+  }>;
   threadQueueList(params: { threadId: string; cursor?: string | null; limit?: number | null }): Promise<{
     data: Array<{ id: string; clientUserMessageId: string; input: unknown[] }>;
     nextCursor: string | null;
@@ -1238,6 +1247,46 @@ export class CodexService {
     const turn = thread.turns.find((item) => item.id === turnId);
     if (!turn) return null;
     return nativeTurnReceipt(turn);
+  }
+
+  async readNativeTerminalStatus(request: NativeTerminalStatusRequest,
+    deadlineMs = NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS,
+    onPhase?: (phase: NativeCustodyPhase, status: 'started' | 'completed' | 'late_completed' | 'late_failed') => void) {
+    validateNativeTerminalRequest(request);
+    if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS ||
+        !this.client.threadBackgroundTerminalsStatus) {
+      throw new NativeCustodyPhaseError('terminal_status', 'native_unavailable');
+    }
+    const { terminalGeneration, ...params } = request;
+    onPhase?.('terminal_status', 'started');
+    const observation = await nativeCustodyPhase('terminal_status',
+      () => this.client.threadBackgroundTerminalsStatus!(params), deadlineMs,
+      (phase, status) => onPhase?.(phase, status === 'completed' ? 'late_completed' : 'late_failed'));
+    onPhase?.('terminal_status', 'completed');
+    return boundNativeTerminalStatus(observation, terminalGeneration);
+  }
+
+  async listNativeTerminalOwners(threadId: string, cursor?: string | null) {
+    if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId) ||
+        cursor !== undefined && cursor !== null && !/^[A-Za-z0-9_-]{1,160}$/.test(cursor) ||
+        !this.client.threadBackgroundTerminalsList) {
+      throw new NativeCustodyPhaseError('terminal_status', 'native_unavailable');
+    }
+    const result = await nativeCustodyPhase('terminal_status',
+      () => this.client.threadBackgroundTerminalsList!({ threadId, cursor, limit: 100 }),
+      NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS);
+    if (!result || !Array.isArray(result.data) || result.data.length > 100 ||
+        result.nextCursor !== null && (typeof result.nextCursor !== 'string' ||
+          !/^[A-Za-z0-9_-]{1,160}$/.test(result.nextCursor))) {
+      throw new NativeCustodyPhaseError('terminal_status', 'native_unavailable');
+    }
+    const data = result.data.map((item) => {
+      const owner = { threadId, turnId: item.turnId, itemId: item.itemId,
+        nativeProcessId: item.nativeProcessId, terminalGeneration: item.terminalGeneration };
+      validateNativeTerminalRequest(owner as NativeTerminalStatusRequest);
+      return owner;
+    });
+    return { data, nextCursor: result.nextCursor };
   }
 
   private async readNativeQueuedSubmissions(threadId: string) {
