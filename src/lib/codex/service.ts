@@ -852,7 +852,19 @@ export class CodexService {
     await this.reconcileTerminalTurn(threadId);
     this.assertNoActiveTurn(threadId);
     this.activeTurns.set(threadId, null);
-    options.onEvent({ kind: "thread", threadId });
+    // A disconnected progress observer must not prevent native admission or
+    // leave the exact thread permanently marked active before turn/start.
+    // The durable submission receipt remains the authority after lost output.
+    let observerAvailable = true;
+    const emitEvent = (event: StreamEvent) => {
+      if (!observerAvailable) return;
+      try {
+        options.onEvent(event);
+      } catch {
+        observerAvailable = false;
+      }
+    };
+    emitEvent({ kind: "thread", threadId });
     const idleTimeoutMs = normalizeRunTurnIdleTimeoutMs(options.idleTimeoutMs);
 
     let turnId = "";
@@ -989,7 +1001,7 @@ export class CodexService {
           liveTurnBlockingItems.delete(notification.params.item.id);
         }
 
-        options.onEvent({ kind: "notification", notification });
+        emitEvent({ kind: "notification", notification });
         scheduleIdleTimeout(describeTurnActivity(notification));
 
         if (notification.method === SERVER_METHOD.turnCompleted) {
@@ -1051,7 +1063,7 @@ export class CodexService {
 
       turnId = turn.turnId;
       turnStarted = true;
-      options.onEvent({ kind: "turn", threadId, turnId, status: turn.status! });
+      emitEvent({ kind: "turn", threadId, turnId, status: turn.status! });
       scheduleIdleTimeout("turn started");
 
       if (options.signal) {

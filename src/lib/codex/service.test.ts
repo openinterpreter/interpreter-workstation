@@ -644,6 +644,44 @@ function createConfigReadResponseWithUserLayer(
 }
 
 describe("CodexService", () => {
+  test('a failed progress observer before admission does not strand the thread or skip native completion', async () => {
+    const fake = createFakeClient();
+    const service = new CodexService(fake.client);
+    const run = service.runTurn({ message: 'owned input', model: 'test-model',
+      clientUserMessageId: 'owned_1', onEvent: () => { throw new Error('private stream transport'); } });
+    await waitFor(() => fake.calls.startTurn === 1);
+    fake.emit({ method: SERVER_METHOD.turnCompleted, params: {
+      threadId: 'thr_new', turn: createTurn('turn_1', 'completed'),
+    } });
+    assert.deepEqual(await run, { threadId: 'thr_new', turnId: 'turn_1', status: 'completed' });
+    assert.equal(fake.calls.startTurn, 1);
+  });
+
+  test('a failed progress observer after admission cannot interrupt the native turn', async () => {
+    const fake = createFakeClient();
+    const service = new CodexService(fake.client);
+    const observed: string[] = [];
+    const run = service.runTurn({ message: 'owned input', model: 'test-model', onEvent: (event) => {
+      observed.push(event.kind);
+      if (event.kind === 'notification') throw new Error('private disconnected stream');
+    } });
+    await waitFor(() => fake.calls.startTurn === 1);
+    fake.emit({ method: SERVER_METHOD.itemStarted, params: {
+      threadId: 'thr_new', turnId: 'turn_1',
+      item: { type: 'commandExecution', id: 'cmd_1', processId: 'process_1', status: 'inProgress' },
+    } });
+    fake.emit({ method: SERVER_METHOD.itemCompleted, params: {
+      threadId: 'thr_new', turnId: 'turn_1',
+      item: { type: 'commandExecution', id: 'cmd_1', processId: 'process_1', status: 'completed', exitCode: 0 },
+    } });
+    fake.emit({ method: SERVER_METHOD.turnCompleted, params: {
+      threadId: 'thr_new', turn: createTurn('turn_1', 'completed'),
+    } });
+    assert.equal((await run).status, 'completed');
+    assert.deepEqual(observed, ['thread', 'turn', 'notification']);
+    assert.equal(fake.calls.startTurn, 1);
+  });
+
   test("starts a turn and resolves on turn/completed", async () => {
     const fake = createFakeClient();
     const service = new CodexService(fake.client);
