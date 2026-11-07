@@ -25,6 +25,7 @@ export function ThreadGoalBar({ threadId, readOnly = false }: ThreadGoalBarProps
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [available, setAvailable] = useState(true);
 
   const refresh = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -38,7 +39,11 @@ export function ThreadGoalBar({ threadId, readOnly = false }: ThreadGoalBarProps
       const nextGoal = typeof payload === 'object' && payload !== null
         ? (payload as { goal?: unknown }).goal
         : null;
+      const nextAvailable = !(typeof payload === 'object' && payload !== null
+        && (payload as { available?: unknown }).available === false);
+      setAvailable(nextAvailable);
       setGoal(isThreadGoal(nextGoal) ? nextGoal : null);
+      if (!nextAvailable) setEditing(false);
       if (isThreadGoal(nextGoal)) setDraft(nextGoal.objective);
       setError(null);
     } catch (loadError) {
@@ -188,6 +193,17 @@ export function ThreadGoalBar({ threadId, readOnly = false }: ThreadGoalBarProps
               </button>
             </div>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!available) {
+    return (
+      <div className="mx-auto w-full max-w-[48rem] px-2 sm:px-[var(--unit-padding-medium)]">
+        <div role="status" className="oa-composer-surface px-3 py-2 text-ui-xs text-[var(--oa-text-faint)]"
+          style={{ borderRadius: 'var(--oa-radius-22)' }}>
+          Native Goal controls are unavailable on this host.
         </div>
       </div>
     );

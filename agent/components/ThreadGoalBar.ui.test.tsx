@@ -48,6 +48,18 @@ describe('ThreadGoalBar', () => {
     );
   });
 
+  test('distinguishes an unavailable native Goal from a thread without a Goal', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ goal: null, available: false })));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { ThreadGoalBar } = await import('./ThreadGoalBar');
+    render(<ThreadGoalBar threadId="thread-one" />);
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Native Goal controls are unavailable on this host.');
+    expect(screen.queryByRole('button', { name: /goal/i })).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   test('shows Goal state without mutation controls in read-only mode', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ goal: goal({ status: 'paused' }) })),
