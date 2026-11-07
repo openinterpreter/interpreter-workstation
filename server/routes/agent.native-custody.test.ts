@@ -4,6 +4,7 @@ import request from 'supertest';
 import { getCodexService, NativeCustodyPhaseError,
   NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS,
   NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS } from '../../src/lib/codex/service';
+import { nativeSubmissionJournal } from '../utils/nativeSubmissionJournal';
 import agentRouter from './agent';
 
 const app = express();
@@ -53,6 +54,33 @@ describe('native custody diagnostic authentication', () => {
       .set('Authorization', 'Bearer test-private-token')).status).toBe(400);
     expect((await request(app).get('/api/agent/threads/invalid/submissions/owned_1/custody')
       .set('Authorization', 'Bearer test-private-token')).status).toBe(400);
+  });
+  test('exact submission custody returns only correlated synthetic receipt metadata', async () => {
+    process.env.WORKSTATION_WAKE_TOKEN = 'test-private-token';
+    const service = getCodexService();
+    const originalRead = service.readNativeSubmissionCustody;
+    const originalLookup = nativeSubmissionJournal.lookup;
+    nativeSubmissionJournal.lookup = async () => ({ requestId: 'request_1', threadId: id,
+      clientUserMessageId: 'owned_1', phase: 'received', turnId: null,
+      at: '2026-11-07T00:00:00.000Z' });
+    service.readNativeSubmissionCustody = async () => ({ threadId: id,
+      clientUserMessageId: 'owned_1', linkage: 'not_observed', nativeMatch: null,
+      queuedSubmissionIds: [], custodyVerified: true,
+      commandSessionScope: 'saved-native-turn-only-not-live-process-custody' });
+    try {
+      const result = await request(app).get(`/api/agent/threads/${id}/submissions/owned_1/custody`)
+        .set('Authorization', 'Bearer test-private-token');
+      expect(result.status).toBe(200);
+      expect(result.body).toMatchObject({ phase: 'received', requestId: 'request_1',
+        threadId: id, clientUserMessageId: 'owned_1', turnId: null,
+        native: { linkage: 'not_observed', custodyVerified: true,
+          commandSessionScope: 'saved-native-turn-only-not-live-process-custody' } });
+      expect(result.body.inspectionId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(JSON.stringify(result.body)).not.toContain('test-private-token');
+    } finally {
+      service.readNativeSubmissionCustody = originalRead;
+      nativeSubmissionJournal.lookup = originalLookup;
+    }
   });
   test('rejects absent bearer and invalid thread without invoking the native client', async () => {
     process.env.WORKSTATION_WAKE_TOKEN = 'test-private-token';
