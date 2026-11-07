@@ -1,0 +1,60 @@
+import { createHash } from 'node:crypto';
+import type { v2 } from '../../../server/handlers/codex-generated-types/index';
+
+/** The experimental OIX managed-document RPC owns the file; Workstation never writes it. */
+export type ThreadGoalDocument = {
+  path: string;
+  sha256: string;
+  byteLength: number;
+  missionRevision: number;
+};
+
+export type ThreadGoalDocumentSetParams = {
+  threadId: string;
+  document: string;
+  status?: v2.ThreadGoalStatus | null;
+  expectedMissionRevision?: number | null;
+};
+
+export type ThreadGoalDocumentSetResponse = {
+  goal: v2.ThreadGoal;
+  document: ThreadGoalDocument;
+};
+
+export type ThreadGoalDocumentGetResponse = {
+  goal: v2.ThreadGoal | null;
+  document: ThreadGoalDocument | null;
+  content: string | null;
+};
+
+const digest = (content: string) => createHash('sha256').update(content, 'utf8').digest('hex');
+const MAX_DOCUMENT_BYTES = 1_048_576;
+const threadIdPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+
+export function validateGoalDocumentInput(input: ThreadGoalDocumentSetParams): void {
+  if (typeof input.threadId !== 'string' || !threadIdPattern.test(input.threadId) ||
+      typeof input.document !== 'string' || !input.document.trim() ||
+      Buffer.byteLength(input.document, 'utf8') > MAX_DOCUMENT_BYTES ||
+      input.expectedMissionRevision !== undefined && input.expectedMissionRevision !== null &&
+      (!Number.isSafeInteger(input.expectedMissionRevision) || input.expectedMissionRevision < 1)) {
+    throw new Error('Invalid managed Goal document or mission revision.');
+  }
+}
+
+export function verifyGoalDocument(
+  threadId: string,
+  document: ThreadGoalDocument | null,
+  content: string | null,
+): void {
+  if (!threadIdPattern.test(threadId)) throw new Error('Invalid managed Goal thread.');
+  if (document === null && content === null) return;
+  if (!document || typeof content !== 'string' || !content.trim() ||
+      Buffer.byteLength(content, 'utf8') > MAX_DOCUMENT_BYTES ||
+      !Number.isSafeInteger(document.byteLength) || document.byteLength !== Buffer.byteLength(content, 'utf8') ||
+      !Number.isSafeInteger(document.missionRevision) || document.missionRevision < 1 ||
+      typeof document.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(document.sha256) ||
+      document.sha256 !== digest(content) ||
+      document.path !== `managed-goals/${threadId}/mission-${document.missionRevision}-${document.sha256}.md`) {
+    throw new Error('Managed Goal document receipt unavailable.');
+  }
+}

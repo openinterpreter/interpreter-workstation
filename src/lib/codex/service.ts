@@ -2,6 +2,8 @@ import { match } from "ts-pattern";
 import { nativeCommandSessionSnapshot, nativeTurnReceipt } from './native-turn-receipt';
 import { boundNativeTerminalStatus, validateNativeTerminalRequest, type NativeTerminalStatusRequest,
   type NativeTerminalStatusResponse } from './native-terminal-status';
+import { validateGoalDocumentInput, verifyGoalDocument, type ThreadGoalDocumentGetResponse,
+  type ThreadGoalDocumentSetParams, type ThreadGoalDocumentSetResponse } from './goal-document';
 import { JSONRPCErrorException } from "json-rpc-2.0";
 import type { v2 } from "../../../server/handlers/codex-generated-types/index";
 import type { JsonValue } from "../../../server/handlers/codex-generated-types/serde_json/JsonValue";
@@ -410,6 +412,8 @@ export type CodexClient = {
   threadSetName(params: v2.ThreadSetNameParams): Promise<v2.ThreadSetNameResponse>;
   threadGoalSet(params: v2.ThreadGoalSetParams): Promise<v2.ThreadGoalSetResponse>;
   threadGoalGet(params: v2.ThreadGoalGetParams): Promise<v2.ThreadGoalGetResponse>;
+  threadGoalDocumentGet?(params: { threadId: string }): Promise<ThreadGoalDocumentGetResponse>;
+  threadGoalDocumentSet?(params: ThreadGoalDocumentSetParams): Promise<ThreadGoalDocumentSetResponse>;
   threadGoalClear(params: v2.ThreadGoalClearParams): Promise<v2.ThreadGoalClearResponse>;
   threadArchive(params: v2.ThreadArchiveParams): Promise<v2.ThreadArchiveResponse>;
   threadUnarchive(params: v2.ThreadUnarchiveParams): Promise<v2.ThreadUnarchiveResponse>;
@@ -1391,6 +1395,27 @@ export class CodexService {
   async getThreadGoal(threadId: string): Promise<v2.ThreadGoal | null> {
     const result = await this.client.threadGoalGet({ threadId });
     return result.goal;
+  }
+
+  /** Full mission bytes remain in OIX's owned state directory, not an app file. */
+  async getThreadGoalDocument(threadId: string): Promise<ThreadGoalDocumentGetResponse> {
+    if (!this.client.threadGoalDocumentGet) throw new Error('Managed Goal document unavailable.');
+    const result = await this.client.threadGoalDocumentGet({ threadId });
+    verifyGoalDocument(threadId, result.document, result.content);
+    if (result.goal !== null && result.goal?.threadId !== threadId ||
+        result.goal === null && result.document !== null) {
+      throw new Error('Managed Goal document receipt unavailable.');
+    }
+    return result;
+  }
+
+  async setThreadGoalDocument(input: ThreadGoalDocumentSetParams): Promise<ThreadGoalDocumentSetResponse> {
+    validateGoalDocumentInput(input);
+    if (!this.client.threadGoalDocumentSet) throw new Error('Managed Goal document unavailable.');
+    const result = await this.client.threadGoalDocumentSet(input);
+    verifyGoalDocument(input.threadId, result.document, input.document);
+    if (result.goal?.threadId !== input.threadId) throw new Error('Managed Goal document receipt unavailable.');
+    return result;
   }
 
   async setThreadGoal(
