@@ -880,6 +880,7 @@ export class CodexService {
     let completionQueued = false;
     let lastTurnActivity = "turn started";
     let preAckNotifications: AppServerNotification[] = [];
+    let preAckBytes = 0;
     let preAckOverflow = false;
     let drainPreAckNotifications = () => {};
 
@@ -992,8 +993,16 @@ export class CodexService {
           if (!eventThreadId && !extractNotificationTurnId(notification)) return;
           // A native completion may precede its turn/start RPC response. Do not
           // attach any pre-ack event to an unknown turn, especially an old one.
-          if (preAckNotifications.length < 256) preAckNotifications.push(notification);
-          else preAckOverflow = true;
+          if (preAckOverflow) return;
+          try {
+            const bytes = Buffer.byteLength(JSON.stringify(notification));
+            if (preAckNotifications.length < 256 && bytes <= 8_388_608 - preAckBytes) {
+              preAckBytes += bytes;
+              preAckNotifications.push(notification);
+            } else preAckOverflow = true;
+          } catch {
+            preAckOverflow = true;
+          }
           return;
         }
         if (!this.belongsToTurn(notification, threadId, turnId)) {

@@ -698,6 +698,27 @@ describe("CodexService", () => {
     assert.equal(fake.calls.startTurn, 1);
   });
 
+  test('bounds pre-ack output bytes without disclosing content or cancelling native admission', async () => {
+    let fake!: ReturnType<typeof createFakeClient>;
+    fake = createFakeClient({ startTurn: async () => {
+      fake.emit({ method: SERVER_METHOD.itemCompleted, params: {
+        threadId: 'thr_new', turnId: 'turn_new',
+        item: { type: 'commandExecution', id: 'cmd_1', processId: 'process_1',
+          status: 'completed', exitCode: 0, aggregatedOutput: 'PRIVATE'.repeat(1_200_000) },
+      } });
+      return createTurn('turn_new');
+    } });
+    await assert.rejects(new CodexService(fake.client).runTurn({
+      message: 'owned input', model: 'test-model', onEvent: () => {},
+    }), (error: unknown) => {
+      assert.match(String(error), /pre-ack bound/);
+      assert.doesNotMatch(String(error), /PRIVATE/);
+      return true;
+    });
+    assert.equal(fake.calls.startTurn, 1);
+    assert.equal(fake.calls.interruptTurn.length, 0);
+  });
+
   test('a failed progress observer before admission does not strand the thread or skip native completion', async () => {
     const fake = createFakeClient();
     const service = new CodexService(fake.client);
