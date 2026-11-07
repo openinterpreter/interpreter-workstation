@@ -3,6 +3,7 @@
 const path = require('path');
 const fs = require('fs');
 const { listPackage } = require('@electron/asar');
+const { ensureBundledWhatwgUrlDependency } = require('./ensureBundledWhatwgUrlDependency.cjs');
 const { assertBundledCodexSkills } = require('./checkBundledCodexSkills.cjs');
 
 function listAsarEntries(archivePath) {
@@ -362,6 +363,14 @@ async function afterPack(context) {
   };
 
   const nodeModulesDirs = getNodeModulesDirs();
+  // A pnpm transitive dependency can disappear when electron-builder flattens
+  // dependencies into app.asar. Stage it before app signing, or abort release.
+  const bytesPackageStatus = ensureBundledWhatwgUrlDependency({
+    resourcesRoot,
+    sourceNodeModulesRoot: path.join(process.cwd(), 'node_modules'),
+    asarEntries: listAsarEntries(path.join(resourcesRoot, 'app.asar')),
+  });
+  console.log('[afterPack] whatwg-url dependency:', bytesPackageStatus);
   console.log('[afterPack] node_modules directories:', nodeModulesDirs);
 
   if (isMac || isLinux) {

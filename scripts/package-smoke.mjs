@@ -225,6 +225,35 @@ process.stdout.write(${JSON.stringify(`${PACKAGE_SMOKE_SENTRY_SENTINEL}\n`)});
   }
 }
 
+function runWhatwgUrlRuntimeSmoke() {
+  const resourcesRoot = findBundledResourcesRoot();
+  const appBinary = resolvePackagedAppBinary(resourcesRoot);
+  const scriptPath = path.join(resourcesRoot, '__package-smoke-whatwg-url.cjs');
+  writeFileSync(
+    scriptPath,
+    "const { URL } = require('whatwg-url');\n" +
+    "if (typeof URL !== 'function') throw new Error('whatwg-url dependencies are incomplete');\n" +
+    "console.log('[package-smoke] whatwg-url runtime ok');\n",
+    'utf8',
+  );
+  try {
+    const output = execFileSync(appBinary, [scriptPath], {
+      cwd: resourcesRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        NODE_PATH: path.join(resourcesRoot, 'app.asar', 'node_modules'),
+      },
+    });
+    if (!output.includes('[package-smoke] whatwg-url runtime ok')) {
+      throw new Error('[package-smoke] whatwg-url startup dependency check failed');
+    }
+    console.log(output.trim());
+  } finally {
+    rmSync(scriptPath, { force: true });
+  }
+}
 function runBundledProjectRuntimeSmoke() {
   const resourcesRoot = findBundledResourcesRoot();
   const appBinary = resolvePackagedAppBinary(resourcesRoot);
@@ -374,8 +403,15 @@ async function main() {
   }
 
   assertPackagedLicenseResources();
+  // This deterministic regression must pass before any packaged desktop
+  // runtime is accepted for distribution.
+  execFileSync(process.execPath, ['--test', path.join(ROOT, 'scripts', 'electron-builder', 'ensureBundledWhatwgUrlDependency.test.cjs')], {
+    cwd: ROOT,
+    stdio: 'inherit',
+  });
   runJsReplRuntimeSmoke();
   runSentryRuntimeSmoke();
+  runWhatwgUrlRuntimeSmoke();
   runBundledProjectRuntimeSmoke();
   await runBundledNextOfflineSmoke();
 }
