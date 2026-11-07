@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, Loader2, Trash2, X } from 'lucide-react';
 import { getApiUrl } from '../../src/ipc';
 import type { v2 } from '../../server/handlers/codex-generated-types';
@@ -19,6 +19,9 @@ function isThreadGoal(value: unknown): value is v2.ThreadGoal {
 }
 
 export function ThreadGoalBar({ threadId, readOnly = false }: ThreadGoalBarProps) {
+  const selectedThreadId = useRef(threadId);
+  const readSequence = useRef(0);
+  selectedThreadId.current = threadId;
   const [goal, setGoal] = useState<v2.ThreadGoal | null>(null);
   const [draft, setDraft] = useState('');
   const [editing, setEditing] = useState(false);
@@ -28,6 +31,8 @@ export function ThreadGoalBar({ threadId, readOnly = false }: ThreadGoalBarProps
   const [available, setAvailable] = useState(true);
 
   const refresh = useCallback(async (quiet = false) => {
+    const sequence = ++readSequence.current;
+    const isCurrent = () => selectedThreadId.current === threadId && readSequence.current === sequence;
     if (!quiet) setLoading(true);
     try {
       const response = await fetch(
@@ -36,24 +41,29 @@ export function ThreadGoalBar({ threadId, readOnly = false }: ThreadGoalBarProps
       );
       if (!response.ok) throw new Error(`Goal request failed (${response.status})`);
       const payload: unknown = await response.json();
+      if (!isCurrent()) return;
       const nextGoal = typeof payload === 'object' && payload !== null
         ? (payload as { goal?: unknown }).goal
         : null;
       const nextAvailable = !(typeof payload === 'object' && payload !== null
         && (payload as { available?: unknown }).available === false);
+      if (nextAvailable && nextGoal != null && (!isThreadGoal(nextGoal) || nextGoal.threadId !== threadId)) {
+        throw new Error('Invalid native Goal owner');
+      }
       setAvailable(nextAvailable);
-      setGoal(isThreadGoal(nextGoal) ? nextGoal : null);
+      setGoal(nextAvailable && isThreadGoal(nextGoal) ? nextGoal : null);
       if (!nextAvailable) setEditing(false);
-      if (isThreadGoal(nextGoal)) setDraft(nextGoal.objective);
+      if (nextAvailable && isThreadGoal(nextGoal)) setDraft(nextGoal.objective);
       setError(null);
     } catch {
+      if (!isCurrent()) return;
       // A failed native read is not evidence that the thread has no Goal.
       setAvailable(false);
       setGoal(null);
       setEditing(false);
       setError('Native Goal controls are unavailable on this host.');
     } finally {
-      if (!quiet) setLoading(false);
+      if (!quiet && isCurrent()) setLoading(false);
     }
   }, [threadId]);
 
@@ -93,7 +103,9 @@ export function ThreadGoalBar({ threadId, readOnly = false }: ThreadGoalBarProps
         throw new Error(payload?.error ?? `Goal update failed (${response.status})`);
       }
       const payload = await response.json() as { goal?: unknown };
-      if (!isThreadGoal(payload.goal)) throw new Error('Invalid goal response');
+      if (!isThreadGoal(payload.goal) || payload.goal.threadId !== threadId) {
+        throw new Error('Invalid goal response');
+      }
       setGoal(payload.goal);
       setDraft(payload.goal.objective);
       setEditing(false);

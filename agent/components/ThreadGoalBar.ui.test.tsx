@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { v2 } from '../../server/handlers/codex-generated-types';
 
@@ -77,6 +77,36 @@ describe('ThreadGoalBar', () => {
     expect(await screen.findByText('Finish the durable work')).toBeVisible();
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test('ignores a late Goal read from a previously selected thread', async () => {
+    let resolveOld!: (response: Response) => void;
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveOld = resolve; }))
+      .mockResolvedValue(new Response(JSON.stringify({ goal: goal({ threadId: 'thread-two', objective: 'New owner' }) })));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { ThreadGoalBar } = await import('./ThreadGoalBar');
+    const view = render(<ThreadGoalBar threadId="thread-one" />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    view.rerender(<ThreadGoalBar threadId="thread-two" />);
+    expect(await screen.findByText('New owner')).toBeVisible();
+
+    await act(async () => resolveOld(new Response(JSON.stringify({ goal: goal({ objective: 'Old owner' }) }))));
+    expect(screen.getByText('New owner')).toBeVisible();
+    expect(screen.queryByText('Old owner')).not.toBeInTheDocument();
+  });
+
+  test('does not display a Goal whose native owner differs from the selected thread', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      goal: goal({ threadId: 'thread-two', objective: 'Another owner' }),
+    }))));
+
+    const { ThreadGoalBar } = await import('./ThreadGoalBar');
+    render(<ThreadGoalBar threadId="thread-one" />);
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Native Goal controls are unavailable on this host.');
+    expect(screen.queryByText('Another owner')).not.toBeInTheDocument();
   });
 
   test('shows Goal state without mutation controls in read-only mode', async () => {
