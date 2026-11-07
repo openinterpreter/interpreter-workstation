@@ -141,4 +141,20 @@ describe('ThreadGoalBar', () => {
     expect(screen.queryByRole('button', { name: 'Resume goal' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Edit goal' })).not.toBeInTheDocument();
   });
+
+  test('does not render private upstream error text from a rejected Goal update', async () => {
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ goal: goal() })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'private native provider detail' }), { status: 503 })));
+
+    const { ThreadGoalBar } = await import('./ThreadGoalBar');
+    render(<ThreadGoalBar threadId="thread-one" />);
+    const edit = await screen.findByRole('button', { name: 'Edit goal' });
+    await act(async () => edit.click());
+    const save = screen.getByRole('button', { name: 'Save goal' });
+    await act(async () => save.click());
+
+    expect(await screen.findByText(/Native Goal update was not accepted/)).toBeVisible();
+    expect(screen.queryByText(/private native provider detail/)).not.toBeInTheDocument();
+  });
 });

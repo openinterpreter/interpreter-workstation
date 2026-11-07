@@ -103,8 +103,7 @@ function ThreadGoalBarForThread({ threadId, readOnly = false }: ThreadGoalBarPro
         },
       );
       if (!response.ok) {
-        const payload = await response.json().catch(() => null) as { error?: string } | null;
-        throw new Error(payload?.error ?? `Goal update failed (${response.status})`);
+        throw new Error('Native Goal update was not accepted. The previous Goal may still be active.');
       }
       const payload = await response.json() as { goal?: unknown };
       if (!isThreadGoal(payload.goal) || payload.goal.threadId !== threadId) {
