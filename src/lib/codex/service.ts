@@ -1322,13 +1322,18 @@ export class CodexService {
       NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS);
     if (!result || !Array.isArray(result.data) || result.data.length > 100 ||
         result.nextCursor !== null && (typeof result.nextCursor !== 'string' ||
-          !/^[A-Za-z0-9_-]{1,160}$/.test(result.nextCursor))) {
+        !/^[A-Za-z0-9_-]{1,160}$/.test(result.nextCursor)) ||
+        result.nextCursor !== null && result.nextCursor === cursor) {
       throw new NativeCustodyPhaseError('terminal_status', 'native_unavailable');
     }
+    const seenOwners = new Set<string>();
     const data = result.data.map((item) => {
       const owner = { threadId, turnId: item.turnId, itemId: item.itemId,
         nativeProcessId: item.nativeProcessId, terminalGeneration: item.terminalGeneration };
       validateNativeTerminalRequest(owner as NativeTerminalStatusRequest);
+      const key = `${owner.turnId}:${owner.itemId}:${owner.nativeProcessId}:${owner.terminalGeneration}`;
+      if (seenOwners.has(key)) throw new NativeCustodyPhaseError('terminal_status', 'native_unavailable');
+      seenOwners.add(key);
       return owner;
     });
     return { data, nextCursor: result.nextCursor };
