@@ -46,10 +46,12 @@ export function ThreadGoalBar({ threadId, readOnly = false }: ThreadGoalBarProps
       if (!nextAvailable) setEditing(false);
       if (isThreadGoal(nextGoal)) setDraft(nextGoal.objective);
       setError(null);
-    } catch (loadError) {
-      if (!quiet) {
-        setError(loadError instanceof Error ? loadError.message : 'Could not load goal');
-      }
+    } catch {
+      // A failed native read is not evidence that the thread has no Goal.
+      setAvailable(false);
+      setGoal(null);
+      setEditing(false);
+      setError('Native Goal controls are unavailable on this host.');
     } finally {
       if (!quiet) setLoading(false);
     }
@@ -203,7 +205,7 @@ export function ThreadGoalBar({ threadId, readOnly = false }: ThreadGoalBarProps
       <div className="mx-auto w-full max-w-[48rem] px-2 sm:px-[var(--unit-padding-medium)]">
         <div role="status" className="oa-composer-surface px-3 py-2 text-ui-xs text-[var(--oa-text-faint)]"
           style={{ borderRadius: 'var(--oa-radius-22)' }}>
-          Native Goal controls are unavailable on this host.
+          {error ?? 'Native Goal controls are unavailable on this host.'}
         </div>
       </div>
     );

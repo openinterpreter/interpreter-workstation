@@ -60,6 +60,25 @@ describe('ThreadGoalBar', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  test('shows a bounded unavailable state rather than interpreting a failed native read as no Goal', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('private upstream failure', { status: 503 }))
+      .mockResolvedValue(new Response(JSON.stringify({ goal: goal() })));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { ThreadGoalBar } = await import('./ThreadGoalBar');
+    render(<ThreadGoalBar threadId="thread-one" />);
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Native Goal controls are unavailable on this host.');
+    expect(screen.queryByText('private upstream failure')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /goal/i })).not.toBeInTheDocument();
+
+    window.dispatchEvent(new CustomEvent('thread-goal:updated', { detail: { threadId: 'thread-one' } }));
+    expect(await screen.findByText('Finish the durable work')).toBeVisible();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   test('shows Goal state without mutation controls in read-only mode', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ goal: goal({ status: 'paused' }) })),
