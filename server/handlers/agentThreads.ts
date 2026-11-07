@@ -32,6 +32,8 @@ export async function listAllThreadIds(
   params: v2.ThreadListParams,
 ): Promise<string[]> {
   const threadIds: string[] = [];
+  const seenIds = new Set<string>();
+  const seenCursors = new Set<string>();
   let cursor: string | null = null;
 
   do {
@@ -39,8 +41,25 @@ export async function listAllThreadIds(
       ...params,
       ...(cursor ? { cursor } : {}),
     });
-    threadIds.push(...response.data.map((thread) => thread.id));
+    if (!Array.isArray(response.data) || response.data.length > 100) {
+      throw new Error('Invalid thread inventory page');
+    }
+    for (const thread of response.data) {
+      if (typeof thread?.id !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(thread.id)
+        || seenIds.has(thread.id)) {
+        throw new Error('Invalid or repeated thread inventory ID');
+      }
+      seenIds.add(thread.id);
+      threadIds.push(thread.id);
+    }
     cursor = response.nextCursor;
+    if (cursor !== null) {
+      if (typeof cursor !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(cursor)
+        || seenCursors.has(cursor) || seenCursors.size >= 10_000) {
+        throw new Error('Invalid or repeated thread inventory cursor');
+      }
+      seenCursors.add(cursor);
+    }
   } while (cursor);
 
   return threadIds;
