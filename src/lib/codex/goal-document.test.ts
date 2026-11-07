@@ -81,6 +81,12 @@ describe('Workstation consumer for OIX-owned managed Goal documents', () => {
     }) } as unknown as CodexClient;
     await assert.rejects(new CodexService(client).getThreadGoalDocument(threadId),
       { category: 'read_unavailable' });
+    client.threadGoalDocumentGet = async () => ({ goal, document: null, content: null });
+    await assert.rejects(new CodexService(client).getThreadGoalDocument(threadId),
+      { category: 'read_unavailable' });
+    client.threadGoalDocumentGet = async () => ({ goal: null, document: null, content: null });
+    assert.deepEqual(await new CodexService(client).getThreadGoalDocument(threadId),
+      { goal: null, document: null, content: null });
   });
 
   test('failed native revision update cannot be represented as a successful or emptied mission', async () => {

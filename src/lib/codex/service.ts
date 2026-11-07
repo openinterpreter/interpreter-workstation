@@ -1405,7 +1405,7 @@ export class CodexService {
       const result = await this.client.threadGoalDocumentGet({ threadId });
       verifyGoalDocument(threadId, result.document, result.content);
       if (result.goal !== null && result.goal?.threadId !== threadId ||
-          result.goal === null && result.document !== null) {
+          (result.goal === null) !== (result.document === null)) {
         throw new Error('Invalid managed Goal document owner.');
       }
       return result;
