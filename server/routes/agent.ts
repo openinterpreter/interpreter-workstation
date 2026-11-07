@@ -301,6 +301,66 @@ router.get('/threads/:threadId/native-custody', async (req: Request, res: Respon
   }
 });
 
+// Authenticated, exact-owner read. A POST keeps opaque native identity out of
+// URL/access logs; it never sends a process action or exposes output text.
+router.post('/threads/:threadId/native-terminal-status', async (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  const body = req.body;
+  if (!body || typeof body !== 'object' || Array.isArray(body) ||
+      body.threadId !== undefined && body.threadId !== req.params.threadId) {
+    return res.status(400).json({ error: 'Exact native terminal owner required.' });
+  }
+  const request = { threadId: req.params.threadId, turnId: body.turnId,
+    itemId: body.itemId, nativeProcessId: body.nativeProcessId,
+    terminalGeneration: body.terminalGeneration, maxWaitMs: body.maxWaitMs };
+  try {
+    const { validateNativeTerminalRequest } = await import('../../src/lib/codex/native-terminal-status');
+    validateNativeTerminalRequest(request);
+  } catch {
+    return res.status(400).json({ error: 'Exact native terminal owner required.' });
+  }
+  const inspectionId = randomUUID();
+  const recordPhase = (phase: string, status: string) => {
+    console.info(JSON.stringify({ event: 'native_terminal_status_inspection', inspectionId, phase, status }));
+  };
+  recordPhase('request', 'received');
+  try {
+    const observation = await getCodexService().readNativeTerminalStatus(request,
+      NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS, recordPhase);
+    recordPhase('inspection', 'completed');
+    return res.json({ ...observation, inspectionId,
+      custodyVerified: observation.phase !== 'unknown' });
+  } catch (error) {
+    recordPhase(error instanceof NativeCustodyPhaseError ? error.phase : 'terminal_status',
+      error instanceof NativeCustodyPhaseError ? error.category : 'native_unavailable');
+    return res.status(503).json({ error: 'Native terminal observation unavailable.',
+      phase: 'terminal_status', category: error instanceof NativeCustodyPhaseError ? error.category : 'native_unavailable',
+      custodyVerified: false, inspectionId });
+  }
+});
+
+router.get('/threads/:threadId/native-terminal-owners', async (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(req.params.threadId) ||
+      req.query.cursor !== undefined && (typeof req.query.cursor !== 'string' ||
+        !/^[A-Za-z0-9_-]{1,160}$/.test(req.query.cursor))) {
+    return res.status(400).json({ error: 'Exact thread and bounded cursor required.' });
+  }
+  try {
+    const owners = await getCodexService().listNativeTerminalOwners(req.params.threadId,
+      typeof req.query.cursor === 'string' ? req.query.cursor : undefined);
+    return res.json(owners);
+  } catch {
+    return res.status(503).json({ error: 'Native terminal owners unavailable.', custodyVerified: false });
+  }
+});
+
 router.get('/threads/:threadId/native-turn-receipt/:turnId', async (req: Request, res: Response) => {
   if (!wakeMutationAllowed(req) ||
       !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {

@@ -13,6 +13,8 @@ type ClientMethod =
   | ClientRequest["method"]
   | "thread/queue/list"
   | "thread/backgroundTerminals/clean"
+  | "thread/backgroundTerminals/status"
+  | "thread/backgroundTerminals/list"
   | "mcpServer/tool/call"
   | "mcpServer/resource/read";
 type ServerMethod = ServerNotification["method"];
@@ -31,6 +33,8 @@ export const CLIENT_METHOD = {
   threadArchive: "thread/archive",
   threadUnarchive: "thread/unarchive",
   threadBackgroundTerminalsClean: "thread/backgroundTerminals/clean",
+  threadBackgroundTerminalsStatus: "thread/backgroundTerminals/status",
+  threadBackgroundTerminalsList: "thread/backgroundTerminals/list",
   skillsList: "skills/list",
   skillsConfigWrite: "skills/config/write",
   windowsSandboxSetupStart: "windowsSandbox/setupStart",
@@ -182,6 +186,19 @@ export type RequestMap = {
       threadId: string;
     };
     result: Record<string, never>;
+  };
+  [CLIENT_METHOD.threadBackgroundTerminalsStatus]: {
+    params: { threadId: string; turnId: string; itemId: string; nativeProcessId: string; maxWaitMs?: number | null };
+    result: { phase: 'running' | 'exited' | 'unknown'; outputBytes: number;
+      outputSha256: string | null; outputCapReached: boolean; exitCode: number | null;
+      terminalGeneration: number | null; observationTimedOut: boolean };
+  };
+  [CLIENT_METHOD.threadBackgroundTerminalsList]: {
+    params: { threadId: string; cursor?: string | null; limit?: number | null };
+    result: { data: Array<{ itemId: string; processId: string; turnId?: string | null;
+      nativeProcessId?: string | null; terminalGeneration?: number | null;
+      command: string; cwd: string; osPid: number | null; cpuPercent: number | null; rssKb: number | null }>;
+      nextCursor: string | null };
   };
   [CLIENT_METHOD.skillsList]: {
     params: v2.SkillsListParams;
