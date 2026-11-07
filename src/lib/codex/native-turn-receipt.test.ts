@@ -11,7 +11,8 @@ describe('current native command observation', () => {
   ] };
   test('reports native in-progress session and output digest without disclosing private text or claiming OS liveness', () => {
     const observation = nativeCommandSessionSnapshot(turn, true);
-    expect(observation).toEqual({ scope: 'native-thread-read-not-os-process-custody', sessions: [
+    expect(observation).toEqual({ scope: 'native-thread-read-not-os-process-custody',
+      observation: 'last-native-turn-only', observationTurnId: 'turn_1', observationTurnStatus: 'inProgress', sessions: [
       { itemId: 'item_1', processId: 'process_1', status: 'inProgress', nativeTurnActiveAtRead: true,
         exitCode: null, outputBytes: 26, outputSha256: sha('private incremental output') },
     ] });
@@ -22,12 +23,16 @@ describe('current native command observation', () => {
     expect(nativeCommandSessionSnapshot({ ...turn, status: 'completed', items: [
       { ...turn.items[0], status: 'completed', exitCode: 0 },
     ] }, true).sessions[0]).toMatchObject({ nativeTurnActiveAtRead: false, exitCode: 0 });
-    expect(nativeCommandSessionSnapshot(null, true).sessions).toEqual([]);
+    expect(nativeCommandSessionSnapshot(null, true)).toMatchObject({
+      observation: 'unavailable-no-native-turn', observationTurnId: null,
+      observationTurnStatus: null, sessions: [],
+    });
   });
   test('fails closed on malformed identifiers, excessive output and unbounded items', () => {
     expect(() => nativeCommandSessionSnapshot({ ...turn, items: [{ ...turn.items[0], processId: 'private process' }] }, true)).toThrow();
     expect(() => nativeCommandSessionSnapshot({ ...turn, items: [{ ...turn.items[0], aggregatedOutput: 'x'.repeat(16_777_217) }] }, true)).toThrow();
     expect(() => nativeCommandSessionSnapshot({ ...turn, items: Array(201).fill(turn.items[0]) }, true)).toThrow();
+    expect(() => nativeCommandSessionSnapshot({ ...turn, id: 'private turn' }, true)).toThrow();
   });
 });
 

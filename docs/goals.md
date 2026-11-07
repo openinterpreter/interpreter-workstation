@@ -99,3 +99,12 @@ does not prove a model response, a command result, or external delivery. A
 timeout does not cancel an outstanding native call and must not cause a blind
 retry with a different client ID. Saved command records also do not establish
 whether an operating-system process remains live.
+
+The exact-thread native custody read exposes command item ID, opaque native
+process ID, saved status, exit code, and bounded output digest/size from its
+`commandSessionSnapshot`. Its `observationTurnId` and
+`observationTurnStatus` identify the **last native turn actually read**;
+`unavailable-no-native-turn` means no command observation was available.
+Neither a previous conversational message nor that saved snapshot is a live
+process observation. A consumer displaying a previous message must label it
+historical rather than presenting it as the result of a newer turn.

@@ -59,6 +59,9 @@ describe('native custody metadata', () => {
       ({ itemId, processId, nativeTurnActiveAtRead })),
     [{ itemId: 'cmd_1', processId: 'native_process_1', nativeTurnActiveAtRead: true }]);
     assert.equal(result.commandSessionSnapshot.scope, 'native-thread-read-not-os-process-custody');
+    assert.equal(result.commandSessionSnapshot.observationTurnId, 'turn_active');
+    assert.equal(result.commandSessionSnapshot.observationTurnStatus, 'inProgress');
+    assert.equal(result.commandSessionSnapshot.observation, 'last-native-turn-only');
     assert.doesNotMatch(JSON.stringify(result), /PRIVATE OUTPUT/);
   });
   test('links one exact persisted client ID to its native user item and saved command, not another turn', async () => {

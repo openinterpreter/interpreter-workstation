@@ -13,10 +13,17 @@ const sha256 = (value: string) => createHash('sha256').update(value, 'utf8').dig
 /** A current native thread-read observation, not an OS process-liveness probe.
  * Never return command text, cwd, output, or private native error prose. */
 export function nativeCommandSessionSnapshot(input: unknown, threadActive: boolean) {
-  if (input === null || input === undefined) return { scope: 'native-thread-read-not-os-process-custody' as const, sessions: [] };
+  if (input === null || input === undefined) return {
+    scope: 'native-thread-read-not-os-process-custody' as const,
+    observation: 'unavailable-no-native-turn' as const,
+    observationTurnId: null,
+    observationTurnStatus: null,
+    sessions: [],
+  };
   if (!input || typeof input !== 'object') throw new Error('Invalid native command turn');
   const turn = input as Turn;
-  if (!Array.isArray(turn.items) || turn.items.length > 200 ||
+  if (typeof turn.id !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(turn.id) ||
+      !Array.isArray(turn.items) || turn.items.length > 200 ||
       !['inProgress', 'completed', 'failed', 'interrupted'].includes(turn.status)) {
     throw new Error('Invalid native command turn');
   }
@@ -42,7 +49,9 @@ export function nativeCommandSessionSnapshot(input: unknown, threadActive: boole
       outputBytes: typeof output === 'string' ? Buffer.byteLength(output) : null,
       outputSha256: typeof output === 'string' ? sha256(output) : null };
   });
-  return { scope: 'native-thread-read-not-os-process-custody' as const, sessions };
+  return { scope: 'native-thread-read-not-os-process-custody' as const,
+    observation: 'last-native-turn-only' as const,
+    observationTurnId: turn.id, observationTurnStatus: turn.status, sessions };
 }
 
 /** Exact-turn, content-free native receipt. An absent client ID is never inferred from an item ID. */
