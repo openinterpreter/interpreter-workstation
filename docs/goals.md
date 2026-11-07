@@ -81,3 +81,21 @@ DELETE /api/agent/threads/:threadId/goal
 host policy rejects `PUT` and `DELETE`, and the public relay does not forward
 these routes at all. The OIX app-server methods underneath them are
 `thread/goal/get`, `thread/goal/set`, and `thread/goal/clear`.
+
+## Programmatic task receipts
+
+For an authenticated saved-thread task, assign one stable
+`clientUserMessageId` before sending it. A broken progress stream is not proof
+that the native turn failed to start. Workstation binds progress arriving before
+the `turn/start` response only after that response identifies the exact turn;
+notifications from an older turn are not completion receipts for the new task.
+If the progress observer fails, the native turn can continue independently.
+
+Use the authenticated, exact-thread and exact-client-ID custody read at
+`GET /api/agent/threads/:threadId/submissions/:clientUserMessageId/custody`
+to distinguish a recorded request, an observed native user item, a native
+queue item, and an unverified or timed-out inspection. A request receipt alone
+does not prove a model response, a command result, or external delivery. A
+timeout does not cancel an outstanding native call and must not cause a blind
+retry with a different client ID. Saved command records also do not establish
+whether an operating-system process remains live.
