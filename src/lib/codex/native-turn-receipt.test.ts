@@ -33,6 +33,9 @@ describe('current native command observation', () => {
     expect(() => nativeCommandSessionSnapshot({ ...turn, items: [{ ...turn.items[0], aggregatedOutput: 'x'.repeat(16_777_217) }] }, true)).toThrow();
     expect(() => nativeCommandSessionSnapshot({ ...turn, items: Array(201).fill(turn.items[0]) }, true)).toThrow();
     expect(() => nativeCommandSessionSnapshot({ ...turn, id: 'private turn' }, true)).toThrow();
+    expect(() => nativeCommandSessionSnapshot({ ...turn, items: [turn.items[0],
+      { ...turn.items[0], processId: 'process_2', status: 'completed', exitCode: 0 },
+    ] }, true)).toThrow('Ambiguous native command item identifier');
   });
 });
 

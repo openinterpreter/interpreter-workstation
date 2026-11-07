@@ -29,6 +29,7 @@ export function nativeCommandSessionSnapshot(input: unknown, threadActive: boole
   }
   const commands = turn.items.filter((item) => item?.type === 'commandExecution');
   if (commands.length > 32) throw new Error('Native command session bound exceeded');
+  const seenItemIds = new Set<string>();
   const sessions = commands.map((item) => {
     if (typeof item.id !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(item.id) ||
         (item.processId !== null && item.processId !== undefined &&
@@ -38,6 +39,8 @@ export function nativeCommandSessionSnapshot(input: unknown, threadActive: boole
           (!Number.isSafeInteger(item.exitCode) || typeof item.exitCode !== 'number'))) {
       throw new Error('Invalid native command session');
     }
+    if (seenItemIds.has(item.id)) throw new Error('Ambiguous native command item identifier');
+    seenItemIds.add(item.id);
     const output = item.aggregatedOutput;
     if (output !== null && output !== undefined &&
         (typeof output !== 'string' || Buffer.byteLength(output) > 16_777_216)) {
