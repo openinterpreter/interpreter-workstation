@@ -31,6 +31,16 @@ const digest = (content: string) => createHash('sha256').update(content, 'utf8')
 const MAX_DOCUMENT_BYTES = 1_048_576;
 const threadIdPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 
+/** An unacknowledged write may have taken effect; never blindly submit it again. */
+export class ManagedGoalDocumentError extends Error {
+  constructor(readonly category: 'read_unavailable' | 'update_unconfirmed') {
+    super(category === 'read_unavailable'
+      ? 'Managed Goal document read unavailable.'
+      : 'Managed Goal document update unconfirmed; reread before retry.');
+    this.name = 'ManagedGoalDocumentError';
+  }
+}
+
 export function validateGoalDocumentInput(input: ThreadGoalDocumentSetParams): void {
   if (typeof input.threadId !== 'string' || !threadIdPattern.test(input.threadId) ||
       typeof input.document !== 'string' || !input.document.trim() ||

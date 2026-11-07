@@ -2,7 +2,7 @@ import { describe, test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { CodexService, type CodexClient } from './service';
-import { validateGoalDocumentInput, verifyGoalDocument } from './goal-document';
+import { ManagedGoalDocumentError, validateGoalDocumentInput, verifyGoalDocument } from './goal-document';
 
 const threadId = '00000000-0000-4000-8000-000000000077';
 const documentText = `# Mission\n${'bounded task detail\n'.repeat(300)}`;
@@ -63,7 +63,7 @@ describe('Workstation consumer for OIX-owned managed Goal documents', () => {
     assert.throws(() => validateGoalDocumentInput({ threadId, document: documentText,
       expectedMissionRevision: Number.MAX_SAFE_INTEGER + 1 }));
     await assert.rejects(new CodexService({ subscribe: () => () => {} } as unknown as CodexClient)
-      .getThreadGoalDocument(threadId), /unavailable/);
+      .getThreadGoalDocument(threadId), { category: 'read_unavailable' });
   });
 
   test('denies forged path, cross-thread owner, digest, bytes and missing content', async () => {
@@ -79,7 +79,8 @@ describe('Workstation consumer for OIX-owned managed Goal documents', () => {
       goal: { ...goal, threadId: '00000000-0000-4000-8000-000000000078' },
       document: metadata(), content: documentText,
     }) } as unknown as CodexClient;
-    await assert.rejects(new CodexService(client).getThreadGoalDocument(threadId), /unavailable/);
+    await assert.rejects(new CodexService(client).getThreadGoalDocument(threadId),
+      { category: 'read_unavailable' });
   });
 
   test('failed native revision update cannot be represented as a successful or emptied mission', async () => {
@@ -92,8 +93,29 @@ describe('Workstation consumer for OIX-owned managed Goal documents', () => {
     const service = new CodexService(client);
     assert.equal((await service.getThreadGoalDocument(threadId)).content, documentText);
     await assert.rejects(service.setThreadGoalDocument({ threadId,
-      document: `${documentText}\nnew section`, expectedMissionRevision: 1 }), /revision conflict/);
+      document: `${documentText}\nnew section`, expectedMissionRevision: 1 }),
+    (error: unknown) => error instanceof ManagedGoalDocumentError &&
+      error.category === 'update_unconfirmed' && !error.message.includes('revision conflict'));
     assert.equal((await service.getThreadGoalDocument(threadId)).content, documentText);
     assert.equal(reads, 2);
+  });
+
+  test('lost write response never converts an ambiguous native mutation into a retry', async () => {
+    const edited = `${documentText}\nActually stored before transport failure`;
+    let current = documentText;
+    let writes = 0;
+    const client = { subscribe: () => () => {},
+      threadGoalDocumentGet: async () => ({ goal, document: metadata(current, current === edited ? 2 : 1),
+        content: current }),
+      threadGoalDocumentSet: async () => { writes++; current = edited;
+        throw new Error('PRIVATE native transport failure'); },
+    } as unknown as CodexClient;
+    const service = new CodexService(client);
+    await assert.rejects(service.setThreadGoalDocument({ threadId, document: edited,
+      expectedMissionRevision: 1 }), { category: 'update_unconfirmed' });
+    const readback = await service.getThreadGoalDocument(threadId);
+    assert.equal(readback.document?.missionRevision, 2);
+    assert.equal(readback.content, edited);
+    assert.equal(writes, 1);
   });
 });
