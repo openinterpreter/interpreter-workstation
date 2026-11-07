@@ -2406,22 +2406,40 @@ export class CodexAppServerClient {
     });
   }
 
-  private async assertNativeTerminalStatusAvailable() {
+  private async assertNativeTerminalStatusAvailable(): Promise<number> {
     // An inspection must not start a runtime or silently retry on a different one.
-    if (!this.initialized || !this.transport.getSelectedRuntimeVersion ||
-        !/^0\.0\.(?:59|[6-9][0-9]|[1-9][0-9]{2,})$/.test(await this.transport.getSelectedRuntimeVersion() ?? '')) {
+    const generation = this.disconnectSequence;
+    if (!this.initialized || !this.transport.getSelectedRuntimeVersion) {
       throw new Error('Native terminal status is unavailable on the selected OIX runtime.');
     }
+    const version = await this.transport.getSelectedRuntimeVersion();
+    if (!this.initialized || this.disconnectSequence !== generation ||
+        !/^0\.0\.(?:59|[6-9][0-9]|[1-9][0-9]{2,})$/.test(version ?? '')) {
+      throw new Error('Native terminal status is unavailable on the selected OIX runtime.');
+    }
+    return generation;
+  }
+
+  private async nativeTerminalRequest<M extends typeof CLIENT_METHOD.threadBackgroundTerminalsStatus |
+      typeof CLIENT_METHOD.threadBackgroundTerminalsList>(method: M, params: RequestMap[M]['params']) {
+    const generation = await this.assertNativeTerminalStatusAvailable();
+    if (!this.initialized || this.disconnectSequence !== generation) {
+      throw new Error('Native terminal status is unavailable on the selected OIX runtime.');
+    }
+    // Unlike ordinary reads, inspection never initiates a connection/reconnect.
+    const result = await this.rpcRequest(method, params, { skipEnsureConnected: true });
+    if (!this.initialized || this.disconnectSequence !== generation) {
+      throw new Error('Native terminal observation crossed a runtime disconnect.');
+    }
+    return result;
   }
 
   async threadBackgroundTerminalsStatus(params: RequestMap[typeof CLIENT_METHOD.threadBackgroundTerminalsStatus]['params']) {
-    await this.assertNativeTerminalStatusAvailable();
-    return this.rpcRequest(CLIENT_METHOD.threadBackgroundTerminalsStatus, params);
+    return this.nativeTerminalRequest(CLIENT_METHOD.threadBackgroundTerminalsStatus, params);
   }
 
   async threadBackgroundTerminalsList(params: RequestMap[typeof CLIENT_METHOD.threadBackgroundTerminalsList]['params']) {
-    await this.assertNativeTerminalStatusAvailable();
-    return this.rpcRequest(CLIENT_METHOD.threadBackgroundTerminalsList, params);
+    return this.nativeTerminalRequest(CLIENT_METHOD.threadBackgroundTerminalsList, params);
   }
 
   async modelList(params: v2.ModelListParams = {}): Promise<v2.ModelListResponse> {

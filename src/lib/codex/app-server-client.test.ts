@@ -354,6 +354,48 @@ describe("CodexAppServerClient", () => {
     assert.deepEqual(await listPending, { data: [], nextCursor: null });
     client.shutdown();
   });
+  test('native terminal read does not reconnect when close races asynchronous runtime-version observation', async () => {
+    const transport = new FakeTransport();
+    let resolveVersion!: (version: string) => void;
+    transport.getSelectedRuntimeVersion = () => new Promise((resolve) => { resolveVersion = resolve; });
+    const client = new CodexAppServerClient(transport, null);
+    const connected = client.ensureConnected();
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await connected;
+    const baseline = transport.sent.length;
+    const pending = client.threadBackgroundTerminalsStatus({ threadId: 'thread_1', turnId: 'turn_1',
+      itemId: 'item_1', nativeProcessId: 'native_1' });
+    transport.close(new Error('disconnected'));
+    resolveVersion('0.0.59');
+    const outcome = await Promise.race([
+      pending.then(() => 'resolved', () => 'rejected'),
+      new Promise<string>((resolve) => setTimeout(() => resolve('timed_out'), 50)),
+    ]);
+    assert.equal(outcome, 'rejected');
+    assert.equal(transport.sent.length, baseline, 'read-only status must not start a replacement OIX');
+    client.shutdown();
+  });
+  test('native terminal read rejects close after request without replay or cross-generation late result', async () => {
+    const transport = new FakeTransport();
+    transport.getSelectedRuntimeVersion = async () => '0.0.59';
+    const client = new CodexAppServerClient(transport, null);
+    const connected = client.ensureConnected();
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await connected;
+    const baseline = transport.sent.length;
+    const pending = client.threadBackgroundTerminalsStatus({ threadId: 'thread_1', turnId: 'turn_1',
+      itemId: 'item_1', nativeProcessId: 'native_1' });
+    await waitFor(() => transport.sent.length === baseline + 1);
+    const rpc = assertSentRequest(transport, baseline, CLIENT_METHOD.threadBackgroundTerminalsStatus);
+    transport.close(new Error('disconnected'));
+    await assert.rejects(pending);
+    transport.respond(rpc, { phase: 'exited', outputBytes: 9, outputSha256: 'a'.repeat(64),
+      outputCapReached: false, exitCode: 0, terminalGeneration: 3, observationTimedOut: false });
+    assert.equal(transport.sent.length, baseline + 1, 'late response must not initiate a second process or RPC');
+    client.shutdown();
+  });
   test("uses stdio transport handshake and typed methods", async () => {
     setConfigOverride({
       agents: {},
