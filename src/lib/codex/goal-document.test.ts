@@ -124,4 +124,22 @@ describe('Workstation consumer for OIX-owned managed Goal documents', () => {
     assert.equal(readback.content, edited);
     assert.equal(writes, 1);
   });
+
+  test('denies a contradictory revision or requested status in an acknowledged write receipt', async () => {
+    let writes = 0;
+    const client = { subscribe: () => () => {}, threadGoalDocumentSet: async () => {
+      writes++;
+      return { goal, document: metadata(documentText, 9) };
+    } } as unknown as CodexClient;
+    const service = new CodexService(client);
+    await assert.rejects(service.setThreadGoalDocument({ threadId, document: documentText,
+      expectedMissionRevision: 1 }), { category: 'update_unconfirmed' });
+    client.threadGoalDocumentSet = async () => {
+      writes++;
+      return { goal: { ...goal, status: 'active' }, document: metadata(documentText, 2) };
+    };
+    await assert.rejects(service.setThreadGoalDocument({ threadId, document: documentText,
+      expectedMissionRevision: 1, status: 'paused' }), { category: 'update_unconfirmed' });
+    assert.equal(writes, 2);
+  });
 });

@@ -1420,7 +1420,12 @@ export class CodexService {
     try {
       const result = await this.client.threadGoalDocumentSet(input);
       verifyGoalDocument(input.threadId, result.document, input.document);
-      if (result.goal?.threadId !== input.threadId) throw new Error('Invalid managed Goal document owner.');
+      if (result.goal?.threadId !== input.threadId ||
+          input.expectedMissionRevision != null &&
+          result.document.missionRevision !== input.expectedMissionRevision + 1 ||
+          input.status != null && result.goal.status !== input.status) {
+        throw new Error('Invalid managed Goal document update receipt.');
+      }
       return result;
     } catch {
       throw new ManagedGoalDocumentError('update_unconfirmed');
