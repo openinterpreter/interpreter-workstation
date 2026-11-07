@@ -30,6 +30,7 @@ import {
   SERVER_REQUEST_METHOD,
 } from "@/lib/codex/protocol";
 import type { InitializeResponse, v2 } from "@/schemas";
+import { CodexService } from "@/lib/codex/service";
 import {
   clearConfigCache,
   getMcpServer,
@@ -323,6 +324,44 @@ function completeInitHandshake(transport: FakeTransport) {
 }
 
 describe("CodexAppServerClient", () => {
+  test('owner-bound terminal list and status traverse the real client and service without exposing native text', async () => {
+    const transport = new FakeTransport();
+    let version = '0.0.58';
+    transport.getSelectedRuntimeVersion = async () => version;
+    const client = new CodexAppServerClient(transport, null);
+    const connected = client.ensureConnected();
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await connected;
+    const service = new CodexService(client);
+    const threadId = '00000000-0000-4000-8000-000000000001';
+    const before = transport.sent.length;
+    await assert.rejects(service.listNativeTerminalOwners(threadId), /unavailable/);
+    assert.equal(transport.sent.length, before);
+    version = '0.0.59';
+    const listing = service.listNativeTerminalOwners(threadId);
+    await waitFor(() => transport.sent.length === before + 1);
+    const listRpc = assertSentRequest(transport, before, CLIENT_METHOD.threadBackgroundTerminalsList);
+    assert.deepEqual(listRpc.params, { threadId, limit: 100 });
+    transport.respond(listRpc, { data: [{ turnId: 'turn_1', itemId: 'cmd_1',
+      nativeProcessId: 'native_1', terminalGeneration: 17,
+      command: 'PRIVATE COMMAND' }], nextCursor: null });
+    const listed = await listing;
+    assert.deepEqual(listed, { data: [{ threadId, turnId: 'turn_1', itemId: 'cmd_1',
+      nativeProcessId: 'native_1', terminalGeneration: 17 }], nextCursor: null });
+    assert.doesNotMatch(JSON.stringify(listed), /PRIVATE/);
+    const observation = service.readNativeTerminalStatus({ ...listed.data[0], maxWaitMs: 50 });
+    await waitFor(() => transport.sent.length === before + 2);
+    const statusRpc = assertSentRequest(transport, before + 1, CLIENT_METHOD.threadBackgroundTerminalsStatus);
+    assert.deepEqual(statusRpc.params, { threadId, turnId: 'turn_1', itemId: 'cmd_1',
+      nativeProcessId: 'native_1', maxWaitMs: 50 });
+    transport.respond(statusRpc, { phase: 'exited', outputBytes: 9, outputSha256: 'a'.repeat(64),
+      outputCapReached: false, exitCode: 0, terminalGeneration: 17, observationTimedOut: false,
+      aggregatedOutput: 'PRIVATE OUTPUT' });
+    assert.deepEqual(await observation, { phase: 'exited', outputBytes: 9, outputSha256: 'a'.repeat(64),
+      outputCapReached: false, exitCode: 0, terminalGeneration: 17, observationTimedOut: false });
+    client.shutdown();
+  });
   test('native terminal methods deny selected .58 and send only exact .59 owner reads', async () => {
     const transport = new FakeTransport();
     let version = '0.0.58';
