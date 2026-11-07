@@ -879,6 +879,9 @@ export class CodexService {
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
     let completionQueued = false;
     let lastTurnActivity = "turn started";
+    let preAckNotifications: AppServerNotification[] = [];
+    let preAckOverflow = false;
+    let drainPreAckNotifications = () => {};
 
     const clearIdleTimer = () => {
       if (idleTimer) {
@@ -982,7 +985,17 @@ export class CodexService {
       };
 
       rejectCompletion = reject;
-      unsubscribe = this.client.subscribe((notification) => {
+      const observeNotification = (notification: AppServerNotification) => {
+        if (!turnStarted) {
+          const eventThreadId = extractNotificationThreadId(notification);
+          if (eventThreadId && eventThreadId !== threadId) return;
+          if (!eventThreadId && !extractNotificationTurnId(notification)) return;
+          // A native completion may precede its turn/start RPC response. Do not
+          // attach any pre-ack event to an unknown turn, especially an old one.
+          if (preAckNotifications.length < 256) preAckNotifications.push(notification);
+          else preAckOverflow = true;
+          return;
+        }
         if (!this.belongsToTurn(notification, threadId, turnId)) {
           return;
         }
@@ -1012,7 +1025,13 @@ export class CodexService {
           schedulePendingTurnCompletion();
           return;
         }
-      });
+      };
+      unsubscribe = this.client.subscribe(observeNotification);
+      drainPreAckNotifications = () => {
+        const buffered = preAckNotifications;
+        preAckNotifications = [];
+        for (const notification of buffered) observeNotification(notification);
+      };
 
       unsubscribeDisconnect = this.client.onDisconnect((reason) => {
         // NOTE(victor): Upstream app-server is supposed to finish a failed turn
@@ -1064,6 +1083,11 @@ export class CodexService {
       turnId = turn.turnId;
       turnStarted = true;
       emitEvent({ kind: "turn", threadId, turnId, status: turn.status! });
+      if (preAckOverflow) {
+        rejectTurn(rejectCompletion!, new Error('Native turn progress exceeded the pre-ack bound; reconcile the exact submission before retrying.'));
+        return completion;
+      }
+      drainPreAckNotifications();
       scheduleIdleTimeout("turn started");
 
       if (options.signal) {

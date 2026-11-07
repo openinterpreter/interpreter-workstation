@@ -13,6 +13,7 @@ import {
 import {
   type CodexClient,
   CodexService,
+  extractNotificationTurnId,
   NativeCustodyPhaseError,
   type StreamEvent,
   THREAD_LIST_DEFAULTS,
@@ -644,6 +645,54 @@ function createConfigReadResponseWithUserLayer(
 }
 
 describe("CodexService", () => {
+  test('does not confuse an old pre-ack completion with the newly acknowledged native turn', async () => {
+    let fake!: ReturnType<typeof createFakeClient>;
+    fake = createFakeClient({ startTurn: async () => {
+      fake.emit({ method: SERVER_METHOD.turnCompleted, params: {
+        threadId: 'thr_new', turn: createTurn('turn_old', 'failed'),
+      } });
+      fake.emit({ method: SERVER_METHOD.itemCompleted, params: {
+        threadId: 'thr_new', turnId: 'turn_new',
+        item: { type: 'commandExecution', id: 'cmd_1', processId: 'process_1',
+          status: 'completed', exitCode: 0, aggregatedOutput: 'private completed output' },
+      } });
+      fake.emit({ method: SERVER_METHOD.turnCompleted, params: {
+        threadId: 'thr_new', turn: createTurn('turn_new', 'completed'),
+      } });
+      return createTurn('turn_new');
+    } });
+    const observed: string[] = [];
+    const result = await new CodexService(fake.client).runTurn({
+      message: 'owned input', model: 'test-model',
+      onEvent: (event) => observed.push(event.kind === 'notification'
+        ? `${event.notification.method}:${extractNotificationTurnId(event.notification)}` : event.kind),
+    });
+    assert.deepEqual(result, { threadId: 'thr_new', turnId: 'turn_new', status: 'completed' });
+    assert.deepEqual(observed, ['thread', 'turn',
+      `${SERVER_METHOD.itemCompleted}:turn_new`, `${SERVER_METHOD.turnCompleted}:turn_new`]);
+    assert.equal(fake.calls.startTurn, 1);
+  });
+
+  test('bounds pre-ack native notifications without cancelling an uncertain admitted turn', async () => {
+    let fake!: ReturnType<typeof createFakeClient>;
+    fake = createFakeClient({ startTurn: async () => {
+      for (let index = 0; index < 257; index++) fake.emit({
+        method: SERVER_METHOD.itemStarted,
+        params: { threadId: 'thr_new', turnId: 'turn_new',
+          item: { type: 'agentMessage', id: `item_${index}`, text: 'private model text' } },
+      });
+      return createTurn('turn_new');
+    } });
+    const observed: string[] = [];
+    await assert.rejects(new CodexService(fake.client).runTurn({
+      message: 'owned input', model: 'test-model',
+      onEvent: (event) => observed.push(event.kind),
+    }), /pre-ack bound; reconcile the exact submission before retrying/);
+    assert.deepEqual(observed, ['thread', 'turn']);
+    assert.equal(fake.calls.startTurn, 1);
+    assert.equal(fake.calls.interruptTurn.length, 0);
+  });
+
   test('a failed progress observer before admission does not strand the thread or skip native completion', async () => {
     const fake = createFakeClient();
     const service = new CodexService(fake.client);
