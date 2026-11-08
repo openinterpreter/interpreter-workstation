@@ -17,7 +17,7 @@ import agentRouter from "./routes/agent";
 import { createSupervisorPeerRouter } from './routes/supervisorPeer';
 import { createSupervisorPeerVerifier } from './utils/supervisorPeerVerifier';
 import { getCodexService } from '../src/lib/codex/service';
-import { verifyGoalDocument } from '../src/lib/codex/goal-document';
+import { readStableSupervisorGoal } from './utils/supervisorGoalRead';
 import mcpRouter from "./routes/mcp";
 import interpreterCliRouter from "./routes/interpreterCli";
 import { initializeSandbox, cleanupSandbox } from "./utils/sandboxManager";
@@ -178,35 +178,7 @@ if (process.env.INTERPRETER_SUPERVISOR_VERIFY_URL &&
       audience: process.env.INTERPRETER_SUPERVISOR_VERIFY_AUDIENCE,
       targetComputer,
     }),
-    readGoal: async (id) => {
-      const service = getCodexService();
-      const first = await service.getThreadGoalWithRevision(id);
-      // Full document and native revision are separate reads. Fail closed on a
-      // concurrent Goal update rather than attach old mission bytes to new state.
-      let deadline: ReturnType<typeof setTimeout> | undefined;
-      let document: Awaited<ReturnType<typeof service.getThreadGoalDocument>>;
-      try {
-        document = await Promise.race([
-          service.getThreadGoalDocument(id),
-          new Promise<never>((_, reject) => {
-            deadline = setTimeout(() => reject(Error('unavailable')), 3_000);
-          }),
-        ]);
-      } finally { if (deadline) clearTimeout(deadline); }
-      const last = await service.getThreadGoalWithRevision(id);
-      if (JSON.stringify(first) !== JSON.stringify(last) ||
-          JSON.stringify(first.goal) !== JSON.stringify(document.goal) ||
-          (first.goal === null) !== (document.document === null) ||
-          (first.goal !== null && document.document?.missionRevision !== first.revision?.missionRevision)) {
-        throw Error('unavailable');
-      }
-      verifyGoalDocument(id, document.document, document.content);
-      return { ...first, document: document.document ? {
-        content: document.content!, sha256: document.document.sha256,
-        byteLength: document.document.byteLength,
-        missionRevision: document.document.missionRevision,
-      } : null };
-    },
+    readGoal: (id) => readStableSupervisorGoal(getCodexService(), id),
     resumeGoal: async (id, expected) =>
       (await getCodexService().setThreadGoalWithRevision(id, expected, { status: 'active' })).revision,
     readTerminal: (request) => getCodexService().readNativeTerminalStatus(request),
