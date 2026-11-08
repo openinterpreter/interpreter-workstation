@@ -162,6 +162,12 @@ describe('interpreterCli handlers', () => {
       ] } as any;
     };
     try {
+      const discovered = await findInterpreterCliTools('agtok_current_owner', 'current task');
+      expect(discovered.matches.some(match =>
+        match.qualifiedName === 'builtin-interpreter__interpreter_task_current')).toBe(true);
+      const foreignDiscovery = await findInterpreterCliTools('agtok_other_owner', 'current task');
+      expect(foreignDiscovery.matches.some(match =>
+        match.qualifiedName === 'builtin-interpreter__interpreter_task_current')).toBe(false);
       const tool = { serverId: 'builtin-interpreter', toolName: 'interpreter_task_current', args: {} };
       const result = await callInterpreterCliTool({ callerToken: 'agtok_current_owner', ...tool }) as {
         content: Array<{ text: string }>; isError?: boolean;
