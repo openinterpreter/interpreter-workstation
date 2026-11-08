@@ -1454,7 +1454,11 @@ export class CodexService {
       const revision = verifyThreadGoalRevision(result.goal,
         (result as { revision?: unknown }).revision, threadId);
       if (!revision || revision.goalId !== expected.goalId ||
-          revision.lifecycleRevision <= expected.lifecycleRevision) {
+          revision.lifecycleRevision !== expected.lifecycleRevision + 1 ||
+          revision.missionRevision !== expected.missionRevision +
+            (change.objective === undefined ? 0 : 1) ||
+          change.objective !== undefined && result.goal.objective !== change.objective ||
+          change.tokenBudget !== undefined && result.goal.tokenBudget !== change.tokenBudget) {
         throw new GoalRevisionUnavailableError();
       }
       return { goal: result.goal, revision };

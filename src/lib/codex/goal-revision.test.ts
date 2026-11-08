@@ -83,6 +83,23 @@ describe('exact native Goal revision read', () => {
     assert.equal(calls, 1);
   });
 
+  test('objective advances mission and lifecycle while a budget-only edit advances lifecycle', async () => {
+    let calls = 0;
+    const client = { subscribe: () => () => {}, threadGoalRevisionSet: async () => {
+      calls++;
+      return { goal: calls === 1 ? { ...goal, objective: 'New mission' } :
+        { ...goal, tokenBudget: 100 },
+        revision: { ...revision, missionRevision: calls === 1 ? 3 : 2,
+        lifecycleRevision: 4 } };
+    } } as unknown as CodexClient;
+    const service = new CodexService(client);
+    assert.equal((await service.setThreadGoalWithRevision(threadId, revision,
+      { objective: 'New mission' })).revision.missionRevision, 3);
+    assert.equal((await service.setThreadGoalWithRevision(threadId, revision,
+      { tokenBudget: 100 })).revision.missionRevision, 2);
+    assert.equal(calls, 2);
+  });
+
   test('invalid owner, incomplete preconditions and unsafe changes never reach native', async () => {
     let calls = 0;
     const client = { subscribe: () => () => {}, threadGoalRevisionSet: async () => {
@@ -123,6 +140,20 @@ describe('exact native Goal revision read', () => {
     await assert.rejects(new CodexService(stale).setThreadGoalWithRevision(threadId, revision,
       { status: 'paused' }), { category: 'mutation_unconfirmed' });
     assert.equal(calls, 2);
+    stale.threadGoalRevisionSet = async () => {
+      calls++;
+      return { goal, revision: { ...revision, lifecycleRevision: 5 } };
+    };
+    await assert.rejects(new CodexService(stale).setThreadGoalWithRevision(threadId, revision,
+      { status: 'active' }), { category: 'mutation_unconfirmed' });
+    assert.equal(calls, 3);
+    stale.threadGoalRevisionSet = async () => {
+      calls++;
+      return { goal, revision: { ...revision, lifecycleRevision: 4, missionRevision: 2 } };
+    };
+    await assert.rejects(new CodexService(stale).setThreadGoalWithRevision(threadId, revision,
+      { objective: 'Changed mission' }), { category: 'mutation_unconfirmed' });
+    assert.equal(calls, 4);
   });
 
   test('invalid exact-thread caller is denied before native read', async () => {
