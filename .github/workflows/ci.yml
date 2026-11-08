@@ -43,6 +43,8 @@ jobs:
       - run: pnpm typecheck
       - run: node --test scripts/ci/release-workflow.test.mjs
       - run: node --test scripts/ci/windows-install-path.test.mjs
+      - run: node --test scripts/ci/retry-transient-download.test.mjs
+      - run: node scripts/ci/retry-transient-download.mjs node_modules/electron/install.js
       - run: pnpm run test:unit
       - run: pnpm run test:vitest
       - run: pnpm run test:qwen-download-contract
@@ -88,6 +90,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: pnpm install --frozen-lockfile
       - run: pnpm run download:oix -- --current-platform
+      - run: node scripts/ci/retry-transient-download.mjs node_modules/electron/install.js
       - run: pnpm run test:e2e:ci
 
   voice-e2e:
@@ -172,10 +175,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
         if: runner.os != 'Windows'
       - run: pnpm run download:oix -- --current-platform
-      - run: pnpm run download:pdfcpu -- --current-platform
+      - run: node scripts/ci/retry-transient-download.mjs scripts/download-pdfcpu.mjs --current-platform
       - run: pnpm run download:qwen-asr -- --current-platform
       - run: pnpm run build:js-repl-runtime
       - run: pnpm run build
+      - run: node scripts/ci/retry-transient-download.mjs node_modules/electron/install.js
       # Exercise the distribution wrapper on every supported runner. This is
       # especially important on Windows, where package-manager shims require
       # platform-shell resolution.
