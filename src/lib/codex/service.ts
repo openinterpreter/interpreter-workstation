@@ -413,6 +413,7 @@ export type CodexClient = {
   threadSetName(params: v2.ThreadSetNameParams): Promise<v2.ThreadSetNameResponse>;
   threadGoalSet(params: v2.ThreadGoalSetParams): Promise<v2.ThreadGoalSetResponse>;
   threadGoalGet(params: v2.ThreadGoalGetParams): Promise<v2.ThreadGoalGetResponse>;
+  threadGoalRevisionGet?(params: v2.ThreadGoalGetParams): Promise<v2.ThreadGoalGetResponse>;
   threadGoalDocumentGet?(params: { threadId: string }): Promise<ThreadGoalDocumentGetResponse>;
   threadGoalDocumentSet?(params: ThreadGoalDocumentSetParams): Promise<ThreadGoalDocumentSetResponse>;
   threadGoalClear(params: v2.ThreadGoalClearParams): Promise<v2.ThreadGoalClearResponse>;
@@ -1409,8 +1410,9 @@ export class CodexService {
           !Number.isSafeInteger(maxWaitMs) || maxWaitMs < 1 || maxWaitMs > 3_000) {
         throw new GoalRevisionUnavailableError();
       }
+      if (!this.client.threadGoalRevisionGet) throw new GoalRevisionUnavailableError();
       const result = await Promise.race([
-        this.client.threadGoalGet({ threadId }),
+        this.client.threadGoalRevisionGet({ threadId }),
         new Promise<never>((_, reject) => {
           deadline = setTimeout(() => reject(new GoalRevisionUnavailableError()), maxWaitMs);
         }),

@@ -358,6 +358,28 @@ describe("CodexAppServerClient", () => {
     client.shutdown();
   });
 
+  test('Goal revision inspection never connects or replays across a native disconnect', async () => {
+    const transport = new FakeTransport();
+    const client = new CodexAppServerClient(transport, null);
+    const threadId = '00000000-0000-4000-8000-000000000077';
+    await assert.rejects(client.threadGoalRevisionGet({ threadId }), /unavailable/);
+    assert.equal(transport.sent.length, 0, 'inspection must not start OIX');
+    const connected = client.ensureConnected();
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await connected;
+    const before = transport.sent.length;
+    const pending = client.threadGoalRevisionGet({ threadId });
+    await waitFor(() => transport.sent.length === before + 1);
+    const request = assertSentRequest(transport, before, CLIENT_METHOD.threadGoalGet);
+    assert.deepEqual(request.params, { threadId });
+    transport.close(new Error('disconnected'));
+    transport.respond(request, { goal: null, revision: null });
+    await assert.rejects(pending);
+    assert.equal(transport.sent.length, before + 1, 'late response must not initiate another RPC');
+    client.shutdown();
+  });
+
   test('owner-bound terminal list and status traverse the real client and service without exposing native text', async () => {
     const transport = new FakeTransport();
     let version = '0.0.58';

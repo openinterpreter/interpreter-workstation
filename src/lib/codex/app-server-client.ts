@@ -2384,6 +2384,17 @@ export class CodexAppServerClient {
     return this.rpcRequest(CLIENT_METHOD.threadGoalGet, params);
   }
 
+  /** Owner inspection is read-only and must not launch or reconnect a native runtime. */
+  async threadGoalRevisionGet(params: v2.ThreadGoalGetParams): Promise<v2.ThreadGoalGetResponse> {
+    if (!this.initialized) throw new Error('Native Goal revision read is unavailable.');
+    const generation = this.disconnectSequence;
+    const result = await this.rpcRequest(CLIENT_METHOD.threadGoalGet, params, { skipEnsureConnected: true });
+    if (!this.initialized || this.disconnectSequence !== generation) {
+      throw new Error('Native Goal revision observation crossed a runtime disconnect.');
+    }
+    return result;
+  }
+
   async threadGoalDocumentGet(params: RequestMap[typeof CLIENT_METHOD.threadGoalDocumentGet]['params']) {
     return this.rpcRequest(CLIENT_METHOD.threadGoalDocumentGet, params);
   }

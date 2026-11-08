@@ -12,7 +12,7 @@ const revision = { goalId, status: 'active' as const, missionRevision: 2, lifecy
 describe('exact native Goal revision read', () => {
   test('accepts native identity and revision without exposing mission content', async () => {
     let calls = 0;
-    const client = { subscribe: () => () => {}, threadGoalGet: async (params: { threadId: string }) => {
+    const client = { subscribe: () => () => {}, threadGoalRevisionGet: async (params: { threadId: string }) => {
       calls++;
       assert.deepEqual(params, { threadId });
       return { goal, revision };
@@ -29,13 +29,24 @@ describe('exact native Goal revision read', () => {
     assert.throws(() => verifyThreadGoalRevision(null, revision, threadId), GoalRevisionUnavailableError);
   });
 
+  test('a client without the no-reconnect inspection method is unavailable', async () => {
+    let ordinaryReads = 0;
+    const client = { subscribe: () => () => {}, threadGoalGet: async () => {
+      ordinaryReads++;
+      return { goal, revision };
+    } } as unknown as CodexClient;
+    await assert.rejects(new CodexService(client).getThreadGoalWithRevision(threadId),
+      { category: 'read_unavailable' });
+    assert.equal(ordinaryReads, 0);
+  });
+
   test('old runtime and contradictory owner, status, or revisions fail closed', async () => {
     const cases = [undefined, { ...revision, goalId: 'not-an-id' },
       { ...revision, status: 'paused' }, { ...revision, status: 'invalid' },
       { ...revision, missionRevision: 0 },
       { ...revision, lifecycleRevision: Number.MAX_SAFE_INTEGER + 1 }];
     for (const value of cases) {
-      const client = { subscribe: () => () => {}, threadGoalGet: async () =>
+      const client = { subscribe: () => () => {}, threadGoalRevisionGet: async () =>
         ({ goal, revision: value }) } as unknown as CodexClient;
       await assert.rejects(new CodexService(client).getThreadGoalWithRevision(threadId),
         { category: 'read_unavailable' });
@@ -55,7 +66,7 @@ describe('exact native Goal revision read', () => {
 
   test('invalid exact-thread caller is denied before native read', async () => {
     let calls = 0;
-    const client = { subscribe: () => () => {}, threadGoalGet: async () => {
+    const client = { subscribe: () => () => {}, threadGoalRevisionGet: async () => {
       calls++;
       return { goal, revision };
     } } as unknown as CodexClient;
@@ -65,7 +76,7 @@ describe('exact native Goal revision read', () => {
   });
 
   test('native errors remain typed and suppress private backend text', async () => {
-    const client = { subscribe: () => () => {}, threadGoalGet: async () => {
+    const client = { subscribe: () => () => {}, threadGoalRevisionGet: async () => {
       throw new Error('PRIVATE native backend text');
     } } as unknown as CodexClient;
     await assert.rejects(new CodexService(client).getThreadGoalWithRevision(threadId),
@@ -76,7 +87,7 @@ describe('exact native Goal revision read', () => {
   test('deadline is content-free and a late native result cannot turn it into success or cause retry', async () => {
     let complete!: (result: { goal: typeof goal; revision: typeof revision }) => void;
     let calls = 0;
-    const client = { subscribe: () => () => {}, threadGoalGet: () => {
+    const client = { subscribe: () => () => {}, threadGoalRevisionGet: () => {
       calls++;
       return new Promise<{ goal: typeof goal; revision: typeof revision }>((resolve) => {
         complete = resolve;
