@@ -10,22 +10,29 @@ export function projectSupervisorTurn(thread: v2.Thread, expectedThreadId: strin
   if (!['inProgress', 'completed', 'interrupted', 'failed'].includes(current.status) ||
       !Array.isArray(current.items)) throw new Error('turn unavailable');
   let latestMessageTurnId: string | null = null;
+  let messageAvailable = true;
   for (let index = turns.length - 1; index >= 0; index--) {
-    if (!Array.isArray(turns[index].items)) throw new Error('items unavailable');
+    if (turns[index].itemsView !== 'full' || !Array.isArray(turns[index].items)) {
+      messageAvailable = false;
+      break;
+    }
     if (turns[index].items.some(item => item.type === 'agentMessage')) {
       latestMessageTurnId = turns[index].id;
       break;
     }
   }
-  const commands = current.items.filter(item => item.type === 'commandExecution');
+  const commands = current.itemsView === 'full' ?
+    current.items.filter(item => item.type === 'commandExecution') : [];
   const command = commands[commands.length - 1];
   return { threadId: expectedThreadId,
     turn: { id: current.id, status: current.status, startedAt: current.startedAt,
       completedAt: current.completedAt },
-    latestMessage: latestMessageTurnId ? { turnId: latestMessageTurnId,
+    latestMessage: !messageAvailable ? { relation: 'unavailable' } : latestMessageTurnId ? {
+      turnId: latestMessageTurnId,
       relation: latestMessageTurnId === current.id ? 'current-turn' : 'historical' } : null,
     preview: { relation: 'initial-thread-historical-non-authoritative' },
-    command: command ? { itemId: command.id, status: command.status,
+    command: current.itemsView !== 'full' ? { observation: 'saved-items-unavailable' } : command ? {
+      itemId: command.id, status: command.status,
       exitCode: command.exitCode, processId: command.processId,
       observation: 'saved-command-item-not-os-process-custody' } : null,
     observation: 'saved-native-thread-only' };

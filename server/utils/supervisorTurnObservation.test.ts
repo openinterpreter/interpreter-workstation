@@ -5,7 +5,7 @@ import type { v2 } from '../handlers/codex-generated-types/index';
 const id = '00000000-0000-4000-8000-000000000001';
 const turn = (name: string, status: v2.Turn['status'], items: v2.Turn['items']) => ({
   id: name, status, items, startedAt: 1, completedAt: status === 'inProgress' ? null : 2,
-  durationMs: null, error: null, itemsView: 'all' as never,
+  durationMs: null, error: null, itemsView: 'full' as const,
 });
 const thread = (turns: v2.Turn[]) => ({ id, turns, preview: 'private obsolete foreground wait',
   status: { type: 'active', activeFlags: [] } }) as v2.Thread;
@@ -30,5 +30,16 @@ describe('bounded saved native turn observation', () => {
     expect(() => projectSupervisorTurn(thread([]), '00000000-0000-4000-8000-000000000002')).toThrow();
     expect(projectSupervisorTurn(thread([]), id)).toEqual({ threadId: id, turn: null,
       latestMessage: null, command: null, observation: 'saved-native-thread-only' });
+  });
+  it('returns typed unavailability when a native turn omits full items', () => {
+    const partial = { ...turn('current', 'inProgress', []), itemsView: 'summary' as const };
+    const result = projectSupervisorTurn(thread([turn('prior', 'completed', [
+      { type: 'agentMessage', id: 'old', text: 'private', phase: null, memoryCitation: null,
+        delivery: null, questions: null },
+    ]), partial]), id);
+    expect(result.latestMessage).toEqual({ relation: 'unavailable' });
+    expect(result.command).toEqual({ observation: 'saved-items-unavailable' });
+    expect(result.turn?.status).toBe('inProgress');
+    expect(JSON.stringify(result)).not.toContain('private');
   });
 });

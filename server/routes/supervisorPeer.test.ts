@@ -128,7 +128,7 @@ describe('enrolled supervisor peer route seam', () => {
       resumeGoal: async () => { throw Error('unused'); },
       readTerminal: async () => { throw Error('unused'); },
       readThread: async () => { calls++; return { id: threadId, preview: 'private obsolete wait',
-        turns: [{ id: 'current', status: 'inProgress', items: [],
+        turns: [{ id: 'current', status: 'inProgress', itemsView: 'full', items: [],
           startedAt: 1, completedAt: null }] } as never; },
     }));
     server = createServer(app);
