@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { BuiltinToolContext } from '../../builtinTools';
-import { nativeTerminalStatusTool, readTerminalForCaller } from './nativeTerminalStatusTool';
+import { listTerminalsForCaller, nativeTerminalListTool, nativeTerminalStatusTool,
+  readTerminalForCaller } from './nativeTerminalStatusTool';
 
 const threadId = '00000000-0000-4000-8000-000000000077';
 const args = { turnId: 'turn_1', itemId: 'item_1', nativeProcessId: 'process_1',
@@ -51,5 +52,40 @@ describe('same-thread live native terminal tool', () => {
     const reused = await readTerminalForCaller(caller, args,
       async () => ({ ...exited, terminalGeneration: 8 }));
     expect(JSON.parse(reused.content[0]!.text).phase).toBe('unknown');
+  });
+});
+
+describe('same-thread native terminal owner listing', () => {
+  test('uses bound thread and projects only owner IDs with a bounded cursor', async () => {
+    const calls: unknown[] = [];
+    const result = await listTerminalsForCaller(caller, 'next_1', async (thread, cursor) => {
+      calls.push([thread, cursor]);
+      return { data: [{ threadId, ...args, command: 'PRIVATE COMMAND', osPid: 100 }],
+        nextCursor: 'next_2' };
+    });
+    expect(calls).toEqual([[threadId, 'next_1']]);
+    expect(JSON.parse(result.content[0]!.text)).toEqual({ available: true,
+      data: [{ turnId: args.turnId, itemId: args.itemId,
+        nativeProcessId: args.nativeProcessId, terminalGeneration: args.terminalGeneration }],
+      nextCursor: 'next_2' });
+    expect(JSON.stringify(result)).not.toContain('PRIVATE');
+    expect(nativeTerminalListTool.mainAgentOnly).toBe(true);
+  });
+
+  test('rejects cross-owner, forged cursor and delegated callers without exposing native errors', async () => {
+    let calls = 0;
+    const read = async () => { calls++; return { data: [], nextCursor: null }; };
+    const unbound = await listTerminalsForCaller({ ...caller, isSubagent: true }, undefined, read);
+    expect(JSON.parse(unbound.content[0]!.text).category).toBe('caller_unavailable');
+    const invalid = await listTerminalsForCaller(caller, '../private', read);
+    expect(JSON.parse(invalid.content[0]!.text).category).toBe('invalid_cursor');
+    expect(calls).toBe(0);
+    const other = await listTerminalsForCaller(caller, undefined,
+      async () => ({ data: [{ ...args, threadId: '00000000-0000-4000-8000-000000000078' }],
+        nextCursor: null }));
+    expect(JSON.parse(other.content[0]!.text).category).toBe('observation_unavailable');
+    const failure = await listTerminalsForCaller(caller, undefined,
+      async () => { throw new Error('PRIVATE native command'); });
+    expect(JSON.stringify(failure)).not.toContain('PRIVATE');
   });
 });
