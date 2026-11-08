@@ -586,21 +586,37 @@ export class CodexService {
   private async submitNativeInput(
     input: { kind: 'start'; params: Parameters<CodexClient['startTurn']>[0];
       existingThread?: { config?: Record<string, JsonValue>;
+        model?: string | null; modelProvider?: string | null;
+        baseInstructions?: string; developerInstructions?: string;
+        additionalWritableRoots?: string[];
+        /** UI observers already own the null reservation before turn/start. */
+        preReserved?: boolean;
         onPhase?: (phase: 'resume' | 'start') => void } }
       | { kind: 'steer'; params: Parameters<CodexClient['steerTurn']>[0] },
   ): Promise<{ turnId: string; status?: v2.TurnStatus }> {
     if (input.kind === 'start') {
       const { threadId } = input.params;
       if (input.existingThread) {
-        await this.reconcileTerminalTurn(threadId);
-        this.assertNoActiveTurn(threadId);
-        this.activeTurns.set(threadId, null);
+        if (input.existingThread.preReserved) {
+          if (!this.activeTurns.has(threadId) || this.activeTurns.get(threadId) !== null) {
+            throw new Error('Existing input reservation changed before admission');
+          }
+        } else {
+          await this.reconcileTerminalTurn(threadId);
+          this.assertNoActiveTurn(threadId);
+          this.activeTurns.set(threadId, null);
+        }
       }
       try {
         if (input.existingThread) {
           input.existingThread.onPhase?.('resume');
-          await this.resumeExistingInputThread({ threadId, modelProvider: null, model: null,
-            cwd: input.params.cwd, config: input.existingThread.config });
+          await this.resumeExistingInputThread({ threadId,
+            modelProvider: input.existingThread.modelProvider ?? null,
+            model: input.existingThread.model ?? null,
+            cwd: input.params.cwd, config: input.existingThread.config,
+            baseInstructions: input.existingThread.baseInstructions,
+            developerInstructions: input.existingThread.developerInstructions,
+            additionalWritableRoots: input.existingThread.additionalWritableRoots });
           input.existingThread.onPhase?.('start');
         }
         const turn = await this.client.startTurn(input.params);
@@ -848,8 +864,7 @@ export class CodexService {
       };
     }
 
-    const threadId = await this.resolveThread(
-      options.threadId,
+    const threadId = options.threadId ?? await this.resolveThread(
       options.model,
       options.modelProvider,
       options.cwd,
@@ -1097,7 +1112,13 @@ export class CodexService {
         effort: options.effort,
         summary: options.summary,
         additionalWritableRoots: options.additionalWritableRoots,
-      } });
+      }, ...(options.threadId ? { existingThread: {
+        preReserved: true, config: runConfig,
+        model: options.model, modelProvider: options.modelProvider,
+        baseInstructions: options.baseInstructions,
+        developerInstructions: options.developerInstructions,
+        additionalWritableRoots: options.additionalWritableRoots,
+      } } : {}) });
 
       turnId = turn.turnId;
       turnStarted = true;
@@ -1715,7 +1736,6 @@ export class CodexService {
   }
 
   private async resolveThread(
-    threadId: string | undefined,
     model: string,
     modelProvider?: string | null,
     cwd?: string,
@@ -1725,26 +1745,11 @@ export class CodexService {
     dynamicTools?: v2.DynamicToolSpec[] | null,
     additionalWritableRoots?: string[],
   ) {
-    const nextConfig = threadId ? config : withElectronRunAsNodeConfig(config);
-
-    if (!threadId) {
-      return this.client.startThreadWithConfig(
-        model,
-        modelProvider,
-        baseInstructions,
-        cwd,
-        nextConfig,
-        developerInstructions,
-        dynamicTools,
-        additionalWritableRoots,
-      );
-    }
-
-    // An input addressed to a retained thread must not silently create a
-    // different conversation if OIX cannot resume it. The caller can surface
-    // the native failure and preserve its own durable event for recovery.
-    return this.resumeExistingInputThread({ threadId, modelProvider, model, cwd,
-      config: nextConfig, baseInstructions, developerInstructions, additionalWritableRoots });
+    return this.client.startThreadWithConfig(
+      model, modelProvider, baseInstructions, cwd,
+      withElectronRunAsNodeConfig(config), developerInstructions,
+      dynamicTools, additionalWritableRoots,
+    );
   }
 }
 
