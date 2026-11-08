@@ -1465,6 +1465,7 @@ export class CodexService {
           revision.lifecycleRevision !== expected.lifecycleRevision + 1 ||
           revision.missionRevision !== expected.missionRevision +
             (change.objective === undefined ? 0 : 1) ||
+          change.status !== undefined && result.goal.status !== change.status ||
           change.objective !== undefined && result.goal.objective !== change.objective ||
           change.tokenBudget !== undefined && result.goal.tokenBudget !== change.tokenBudget) {
         throw new GoalRevisionUnavailableError();

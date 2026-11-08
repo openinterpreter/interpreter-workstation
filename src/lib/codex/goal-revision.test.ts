@@ -154,6 +154,13 @@ describe('exact native Goal revision read', () => {
     await assert.rejects(new CodexService(stale).setThreadGoalWithRevision(threadId, revision,
       { objective: 'Changed mission' }), { category: 'mutation_unconfirmed' });
     assert.equal(calls, 4);
+    stale.threadGoalRevisionSet = async () => {
+      calls++;
+      return { goal, revision: { ...revision, lifecycleRevision: 4 } };
+    };
+    await assert.rejects(new CodexService(stale).setThreadGoalWithRevision(threadId, revision,
+      { status: 'paused' }), { category: 'mutation_unconfirmed' });
+    assert.equal(calls, 5);
   });
 
   test('bounded CAS timeout leaves native RPC alive and denies a late success as unconfirmed', async () => {
