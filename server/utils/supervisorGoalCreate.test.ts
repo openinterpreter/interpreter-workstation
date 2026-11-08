@@ -165,6 +165,42 @@ describe('native completed-predecessor managed Goal creation', () => {
     expect(calls).toBe(1);
   });
 
+  it('reconciles an uncertain initial creation only by an explicit same-ID replay after restart', async () => {
+    let finish!: (value: unknown) => void;
+    let effects = 0;
+    let calls = 0;
+    const native = (params: { creationId: string; precondition: unknown }) => {
+      calls++;
+      expect(params.creationId).toBe(initialRequest.creationId);
+      expect(params.precondition).toEqual(initialRequest.precondition);
+      if (calls === 1) {
+        effects++;
+        return new Promise(resolve => { finish = resolve; });
+      }
+      return Promise.resolve({ goal, document, previousRevision: null, revision,
+        creationId: initialRequest.creationId, replayed: true });
+    };
+    const service = () => ({
+      createThreadGoalDocument: native,
+      getThreadGoalWithRevision: async () => ({ goal, revision }),
+      getThreadGoalDocument: async () => ({ goal, document, content: mission }),
+    } as never);
+
+    await expect(createSupervisorGoal(service(), threadId, initialRequest, 10))
+      .rejects.toMatchObject({ category: 'mutation_unconfirmed' });
+    expect(calls).toBe(1);
+    finish({ goal, document, previousRevision: null, revision,
+      creationId: initialRequest.creationId, replayed: false });
+    await Promise.resolve();
+    expect(calls).toBe(1);
+    const recovered = await createSupervisorGoal(service(), threadId, initialRequest);
+    expect(recovered.replayed).toBe(true);
+    expect(recovered.previousRevision).toBeNull();
+    expect(recovered.document?.content).toBe(mission);
+    expect(effects).toBe(1);
+    expect(calls).toBe(2);
+  });
+
   it('never acknowledges a wrong owner, predecessor, document, or post-create readback', async () => {
     for (const override of [
       { creationId: 'another-id' }, { previousRevision: { ...previousRevision, goalId: newId } },
