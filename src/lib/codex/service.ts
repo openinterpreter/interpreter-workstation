@@ -663,11 +663,13 @@ export class CodexService {
     try {
       const { thread } = await this.client.threadRead({ threadId, includeTurns: true });
       const last = thread.turns[thread.turns.length - 1];
+      const owned = thread.turns.find((turn) => turn.id === activeTurnId);
       if (
         thread.id === threadId &&
         thread.status.type === "idle" &&
-        last?.id === activeTurnId &&
-        (last.status === "completed" || last.status === "failed" || last.status === "interrupted") &&
+        last && (last.status === "completed" || last.status === "failed" || last.status === "interrupted") &&
+        owned &&
+        (owned.status === "completed" || owned.status === "failed" || owned.status === "interrupted") &&
         this.activeTurns.get(threadId) === activeTurnId
       ) this.activeTurns.delete(threadId);
     } catch {
@@ -773,6 +775,7 @@ export class CodexService {
    * callers must not synthesize a user message merely to restore a runtime.
    */
   async resumeThread(options: ResumeThreadOptions): Promise<string> {
+    await this.reconcileTerminalTurn(options.threadId);
     this.assertNoActiveTurn(options.threadId);
 
     const runConfig: Record<string, JsonValue> = {

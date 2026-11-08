@@ -1254,6 +1254,39 @@ describe("CodexService", () => {
     assert.equal(fake.calls.startTurn, 2);
   });
 
+  test("clears an older exact terminal owner when a later autonomous turn also completed", async () => {
+    const fake = createFakeClient({ threadRead: async () => ({ thread: {
+      id: "thr_existing", status: { type: "idle" },
+      turns: [createTurn("turn_1", "completed"), createTurn("turn_goal", "completed")],
+    } } as v2.ThreadReadResponse) });
+    const service = new CodexService(fake.client);
+    void service.runTurn({ threadId: "thr_existing", message: "first", model: "test-model", onEvent: () => {} });
+    await waitFor(() => fake.calls.startTurn === 1);
+
+    const resumed = await service.resumeThread({ threadId: "thr_existing", model: null });
+    assert.equal(resumed, "thr_existing");
+    assert.equal(fake.calls.resumeThread, 2);
+    assert.equal(fake.calls.startTurn, 1); // Resume never creates a user turn.
+  });
+
+  test("does not release an older owner if its exact native turn is missing or still active", async () => {
+    for (const turns of [
+      [createTurn("other_turn", "completed")],
+      [createTurn("turn_1", "inProgress"), createTurn("later_turn", "completed")],
+      [createTurn("turn_1", "completed"), createTurn("later_turn", "inProgress")],
+    ]) {
+      const fake = createFakeClient({ threadRead: async () => ({ thread: {
+        id: "thr_existing", status: { type: turns.at(-1)?.status === "inProgress" ? "active" : "idle" }, turns,
+      } } as v2.ThreadReadResponse) });
+      const service = new CodexService(fake.client);
+      void service.runTurn({ threadId: "thr_existing", message: "first", model: "test-model", onEvent: () => {} });
+      await waitFor(() => fake.calls.startTurn === 1);
+      await assert.rejects(service.resumeThread({ threadId: "thr_existing", model: null }),
+        /already responding in this thread/);
+      assert.equal(fake.calls.resumeThread, 1);
+    }
+  });
+
   test("retains the active guard when persisted turn identity does not match", async () => {
     const fake = createFakeClient({
       threadRead: async () => ({ thread: {

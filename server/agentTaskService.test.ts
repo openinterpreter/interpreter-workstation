@@ -2,13 +2,39 @@ import { afterEach, describe, test } from 'bun:test';
 import assert from 'node:assert/strict';
 
 import { clearConfigCache, setConfigOverride } from './configStore';
-import { startAgentTask } from './agentTaskService';
+import { resumeAgentTaskThread, startAgentTask } from './agentTaskService';
+import { agentTabManager } from './agentTabManager';
 
 type CreateHeadedTask = NonNullable<Parameters<typeof startAgentTask>[0]['createHeadedTask']>;
 
 afterEach(() => {
   setConfigOverride(null);
   clearConfigCache();
+  agentTabManager.clearAll();
+});
+
+describe('resumeAgentTaskThread caller ownership', () => {
+  const modelConfig = { provider: 'api' as const, modelId: 'test-model',
+    apiFormat: 'openai' as const, baseURL: 'https://example.test/v1' };
+
+  test('does not manufacture a binding for an existing native thread with no retained caller', async () => {
+    await assert.rejects(resumeAgentTaskThread({ threadId: 'thr_unbound',
+      workspace: '/tmp/owned-workspace', modelConfig }), /caller is unavailable/);
+    assert.equal(agentTabManager.getBindingForThread('thr_unbound'), undefined);
+  });
+
+  test('preserves the original binding when workspace or model scope differs', async () => {
+    agentTabManager.bindThread({ agentId: 'original-agent', callerToken: 'agtok_original',
+      threadId: 'thr_bound', workspacePath: '/tmp/owned-workspace', modelConfig,
+      allowedToolNames: ['builtin-interpreter.interpreter_goal_revision_get'] });
+    const original = agentTabManager.getBindingForThread('thr_bound');
+    await assert.rejects(resumeAgentTaskThread({ threadId: 'thr_bound',
+      workspace: '/tmp/other-workspace', modelConfig }), /owner scope differs/);
+    await assert.rejects(resumeAgentTaskThread({ threadId: 'thr_bound',
+      workspace: '/tmp/owned-workspace', modelConfig: { ...modelConfig, modelId: 'other-model' } }),
+    /owner scope differs/);
+    assert.equal(agentTabManager.getBindingForThread('thr_bound'), original);
+  });
 });
 
 describe('startAgentTask', () => {
