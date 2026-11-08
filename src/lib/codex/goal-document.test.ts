@@ -297,13 +297,17 @@ describe('Workstation consumer for OIX-owned managed Goal documents', () => {
     const service = new CodexService(client);
     await assert.rejects(service.createThreadGoalDocument(params),
       { category: 'stale_predecessor' });
+    await assert.rejects(service.createThreadGoalDocument({ ...params,
+      precondition: { kind: 'absent', admissionState: 'noGoal' } }),
+    { category: 'stale_predecessor',
+      message: 'Goal creation precondition changed; reread before a distinct creation.' });
     client.threadGoalDocumentCreate = async () => {
       calls++;
       throw new JSONRPCErrorException('private unsupported native method', -32601);
     };
     await assert.rejects(service.createThreadGoalDocument(params),
       { category: 'create_unavailable' });
-    assert.equal(calls, 2);
+    assert.equal(calls, 3);
   });
 
   test('a late native create reply cannot trigger another CAS or become an acknowledged mutation', async () => {

@@ -71,7 +71,7 @@ export class ManagedGoalDocumentError extends Error {
       : category === 'create_unavailable'
         ? 'Native managed Goal creation is unavailable.'
         : category === 'stale_predecessor'
-          ? 'Completed predecessor changed; reread before a distinct creation.'
+          ? 'Goal creation precondition changed; reread before a distinct creation.'
           : 'Managed Goal document update unconfirmed; reread before retry.');
     this.name = 'ManagedGoalDocumentError';
   }
