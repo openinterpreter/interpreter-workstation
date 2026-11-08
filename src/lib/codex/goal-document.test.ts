@@ -1,6 +1,9 @@
 import { describe, test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { CodexService, type CodexClient } from './service';
 import { ManagedGoalDocumentError, validateGoalDocumentInput, verifyGoalDocument } from './goal-document';
 
@@ -15,6 +18,56 @@ const goal = { threadId, objective: 'Read managed mission document', status: 'ac
   tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1 };
 
 describe('Workstation consumer for OIX-owned managed Goal documents', () => {
+  test('a reconstructed service reads complete native-owned mission bytes after an edit', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'goal-consumer-reconstruction-'));
+    const fixture = path.join(root, 'native-managed-mission.md');
+    let missionRevision = 0;
+    let lifecycleRevision = 0;
+    const goalId = '00000000-0000-4000-8000-000000000088';
+    const native = { subscribe: () => () => {},
+      threadGoalDocumentSet: async ({ document }: { document: string }) => {
+        await writeFile(fixture, document, 'utf8');
+        missionRevision = 1;
+        lifecycleRevision = 1;
+        return { goal, document: metadata(document, missionRevision) };
+      },
+      threadGoalDocumentRevisionSet: async ({ document, expectedGoalId,
+        expectedMissionRevision, expectedLifecycleRevision }: {
+        document: string; expectedGoalId: string; expectedMissionRevision: number;
+        expectedLifecycleRevision: number;
+      }) => {
+        assert.equal(expectedGoalId, goalId);
+        assert.equal(expectedMissionRevision, missionRevision);
+        assert.equal(expectedLifecycleRevision, lifecycleRevision);
+        await writeFile(fixture, document, 'utf8');
+        missionRevision++;
+        lifecycleRevision++;
+        return { goal, document: metadata(document, missionRevision),
+          revision: { goalId, status: 'active', missionRevision, lifecycleRevision } };
+      },
+      threadGoalDocumentGet: async () => {
+        if (missionRevision === 0) return { goal: null, document: null, content: null };
+        const content = await readFile(fixture, 'utf8');
+        return { goal, document: metadata(content, missionRevision), content };
+      },
+    } as unknown as CodexClient;
+    try {
+      await new CodexService(native).setThreadGoalDocument({ threadId,
+        document: documentText, status: 'active' });
+      const restartedReader = new CodexService(native);
+      assert.equal((await restartedReader.getThreadGoalDocument(threadId)).content, documentText);
+      const edited = `${documentText}\n# Revision after reconstruction`;
+      const expected = { goalId, status: 'active' as const, missionRevision: 1,
+        lifecycleRevision: 1 };
+      const receipt = await restartedReader.setThreadGoalDocumentWithRevision({ threadId,
+        document: edited }, expected);
+      assert.equal(receipt.revision.missionRevision, 2);
+      const anotherReader = new CodexService(native);
+      assert.equal((await anotherReader.getThreadGoalDocument(threadId)).content, edited);
+      assert.ok(edited.length > 4_000);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   test('accepts a >4,000-character mission and verifies the native write receipt', async () => {
     assert.ok(documentText.length > 4_000);
     let calls = 0;
