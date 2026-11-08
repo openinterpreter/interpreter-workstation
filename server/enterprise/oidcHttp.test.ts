@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import express from 'express';
 import request from 'supertest';
-import { createEnterpriseBrowserRouter, createOidcHttpRouter } from './oidcHttp';
-import type { OidcConfiguration, OidcIntegration } from './oidc';
+import { createEnterpriseAdminMutationRouter, createEnterpriseBrowserRouter, createEnterpriseLogoutRouter, createOidcHttpRouter } from './oidcHttp';
+import { OidcIntegration, type OidcConfiguration } from './oidc';
+import type { ServerDirectory } from './serverDirectory';
 
 const config: OidcConfiguration = {
   organizationId: 'org-a', issuer: 'http://127.0.0.1:39393/tenant', clientId: 'fixture',
@@ -34,6 +35,23 @@ function fixture() {
 }
 
 describe('unmounted HTTP boundary, deterministic local callback fixture', () => {
+  test('production cannot opt into the plaintext test bypass at any independent seam', () => {
+    const prior = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = 'production';
+      const integration = {} as OidcIntegration;
+      const options = { applicationOrigin: origin, allowInsecureLoopbackForTests: true,
+        verifySession: async () => null, directory: {} as ServerDirectory };
+      expect(() => new OidcIntegration(config, {} as ServerDirectory)).toThrow('isolated test process');
+      expect(() => createOidcHttpRouter({ config, integration, applicationOrigin: origin, successPath: '/settings' })).toThrow('isolated test process');
+      expect(() => createEnterpriseBrowserRouter(options)).toThrow('isolated test process');
+      expect(() => createEnterpriseAdminMutationRouter(options)).toThrow('isolated test process');
+      expect(() => createEnterpriseLogoutRouter(options)).toThrow('isolated test process');
+    } finally {
+      if (prior === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = prior;
+    }
+  });
   test('pins origin and tenant before issuing browser binding', async () => {
     const { app } = fixture();
     expect((await request(app).get('/organizations/org-b/login').set('Host', host)).status).toBe(403);
@@ -102,7 +120,10 @@ describe('unmounted HTTP boundary, deterministic local callback fixture', () => 
       applicationOrigin: origin, allowInsecureLoopbackForTests: true,
       verifySession: async (token) => active && token === session
         ? { organizationId: 'org-a', issuer: config.issuer, subject: 'alice', sessionId: 'digest-only' } : null,
-      directory: { recordAudit: async () => {}, readAdmin: async (_identity, view) => {
+      directory: { recordAudit: async () => {}, recordTenantDenial: async () => {}, listAudit: async () => {
+        if (!auditWorks) throw new Error('audit failure');
+        return [{ organizationId: 'org-a', subject: 'alice', action: 'organization.read', outcome: 'allowed', at: '2026-11-08T00:00:00.000Z' }];
+      }, readAdmin: async (_identity, view) => {
         if (!auditWorks) throw new Error('audit failure');
         return view === 'members' ? { organizationId: 'org-a', members: [] } : { organization: { id: 'org-a', name: 'Acme' } };
       } },
@@ -118,10 +139,22 @@ describe('unmounted HTTP boundary, deterministic local callback fixture', () => 
     expect(allowed.status).toBe(200);
     expect(allowed.body.organization.name).toBe('Acme');
     expect(allowed.headers['cache-control']).toBe('no-store');
+    const activity = await request(app).get('/api/enterprise/organizations/org-a/activity')
+      .set('Host', host).set('Cookie', `interpreter-enterprise-session=${session}`);
+    expect(activity.status).toBe(200);
+    expect(activity.body).toEqual({ organizationId: 'org-a', events: [{ organizationId: 'org-a', subject: 'alice',
+      action: 'organization.read', outcome: 'allowed', at: '2026-11-08T00:00:00.000Z' }] });
+    expect(activity.headers['cache-control']).toBe('no-store');
+    expect((await request(app).get('/api/enterprise/organizations/org-b/activity')
+      .set('Host', host).set('Cookie', `interpreter-enterprise-session=${session}`)).status).toBe(403);
     active = false;
     expect((await scoped()).status).toBe(403);
+    expect((await request(app).get('/api/enterprise/organizations/org-a/activity')
+      .set('Host', host).set('Cookie', `interpreter-enterprise-session=${session}`)).status).toBe(403);
     active = true;
     auditWorks = false;
     expect((await scoped()).status).toBe(503);
+    expect((await request(app).get('/api/enterprise/organizations/org-a/activity')
+      .set('Host', host).set('Cookie', `interpreter-enterprise-session=${session}`)).status).toBe(503);
   });
 });
