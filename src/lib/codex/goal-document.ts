@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { v2 } from '../../../server/handlers/codex-generated-types/index';
+import type { ThreadGoalRevision } from './goal-revision';
 
 /** The experimental OIX managed-document RPC owns the file; Workstation never writes it. */
 export type ThreadGoalDocument = {
@@ -25,6 +26,29 @@ export type ThreadGoalDocumentSetResponse = {
   revision?: unknown;
 };
 
+/** Experimental OIX thread/goal/document/create at tested tree 22d6ff263964.
+ * Creation after COMPLETE is one native transaction, not a null-only insert. */
+export type ThreadGoalDocumentCreateParams = {
+  threadId: string;
+  creationId: string;
+  objective: string;
+  document: string;
+  status: 'active';
+  expectedGoalId: string;
+  expectedStatus: 'complete';
+  expectedMissionRevision: number;
+  expectedLifecycleRevision: number;
+};
+
+export type ThreadGoalDocumentCreateResponse = {
+  creationId: string;
+  goal: v2.ThreadGoal;
+  document: ThreadGoalDocument;
+  previousRevision: ThreadGoalRevision;
+  revision: ThreadGoalRevision;
+  replayed: boolean;
+};
+
 export type ThreadGoalDocumentGetResponse = {
   goal: v2.ThreadGoal | null;
   document: ThreadGoalDocument | null;
@@ -37,10 +61,15 @@ const threadIdPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 
 /** An unacknowledged write may have taken effect; never blindly submit it again. */
 export class ManagedGoalDocumentError extends Error {
-  constructor(readonly category: 'read_unavailable' | 'update_unconfirmed') {
+  constructor(readonly category: 'read_unavailable' | 'create_unavailable' |
+    'stale_predecessor' | 'update_unconfirmed') {
     super(category === 'read_unavailable'
       ? 'Managed Goal document read unavailable.'
-      : 'Managed Goal document update unconfirmed; reread before retry.');
+      : category === 'create_unavailable'
+        ? 'Native managed Goal creation is unavailable.'
+        : category === 'stale_predecessor'
+          ? 'Completed predecessor changed; reread before a distinct creation.'
+          : 'Managed Goal document update unconfirmed; reread before retry.');
     this.name = 'ManagedGoalDocumentError';
   }
 }

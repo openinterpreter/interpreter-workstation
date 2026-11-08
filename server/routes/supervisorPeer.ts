@@ -10,7 +10,8 @@ import { authorizeSupervisorPeer, type VerifiedSupervisorGrant,
 import { threadArtifactReceipts } from '../utils/threadArtifactReceipts';
 import { nativeSubmissionJournal } from '../utils/nativeSubmissionJournal';
 import { getCodexService } from '../../src/lib/codex/service';
-import { createSupervisorGoal, SupervisorGoalCreateError } from '../utils/supervisorGoalCreate';
+import { createSupervisorGoal, SupervisorGoalCreateError,
+  type SupervisorGoalCreateInput } from '../utils/supervisorGoalCreate';
 import { projectSupervisorTurn } from '../utils/supervisorTurnObservation';
 
 type Capability = SupervisorPeerTarget['capability'];
@@ -23,7 +24,8 @@ export function createSupervisorPeerRouter(options: Readonly<{
   targetComputer: string;
   verify: (request: Request) => Promise<VerifiedSupervisorGrant | null>;
   readGoal: (threadId: string) => Promise<GoalState>;
-  createGoal?: (threadId: string, document: string) => Promise<GoalState>;
+  createGoal?: (threadId: string, input: SupervisorGoalCreateInput) =>
+    ReturnType<typeof createSupervisorGoal>;
   resumeGoal: (threadId: string, expected: ThreadGoalRevision) => Promise<ThreadGoalRevision>;
   readTerminal: (request: NativeTerminalStatusRequest) => Promise<NativeTerminalStatusResponse>;
   listTerminalOwners?: (threadId: string, cursor?: string | null) =>
@@ -84,13 +86,14 @@ export function createSupervisorPeerRouter(options: Readonly<{
     try {
       const scope = await authorize(req, 'goal:create');
       if (scope !== 'allowed') return void res.status(403).json(denied(scope));
-      const create = options.createGoal ?? ((id: string, document: string) =>
-        createSupervisorGoal(getCodexService(), id, document));
-      const state = await create(req.params.threadId, req.body?.document);
+      const create = options.createGoal ?? ((id: string, input: SupervisorGoalCreateInput) =>
+        createSupervisorGoal(getCodexService(), id, input));
+      const state = await create(req.params.threadId, req.body);
       return void res.json({ available: true, ...state });
     } catch (error) {
       const category = error instanceof SupervisorGoalCreateError ? error.category : 'mutation_unconfirmed';
-      return void res.status(category === 'invalid_document' ? 400 : category === 'goal_exists' ? 409 : 503)
+      return void res.status(category === 'invalid_request' ? 400 :
+        category === 'stale_predecessor' ? 409 : 503)
         .json(denied(category));
     }
   });

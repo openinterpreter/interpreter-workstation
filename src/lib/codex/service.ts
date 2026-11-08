@@ -4,6 +4,7 @@ import { nativeCommandSessionSnapshot, nativeTurnReceipt } from './native-turn-r
 import { boundNativeTerminalStatus, validateNativeTerminalRequest, type NativeTerminalStatusRequest,
   type NativeTerminalStatusResponse } from './native-terminal-status';
 import { ManagedGoalDocumentError, validateGoalDocumentInput, verifyGoalDocument, type ThreadGoalDocumentGetResponse,
+  type ThreadGoalDocumentCreateParams, type ThreadGoalDocumentCreateResponse,
   type ThreadGoalDocumentSetParams, type ThreadGoalDocumentSetResponse } from './goal-document';
 import { GoalMutationUnconfirmedError, GoalRevisionUnavailableError, goalCasExpectedParams,
   verifyThreadGoalRevision, type ThreadGoalRevision } from './goal-revision';
@@ -420,6 +421,7 @@ export type CodexClient = {
   threadGoalRevisionGet?(params: v2.ThreadGoalGetParams): Promise<v2.ThreadGoalGetResponse>;
   threadGoalRevisionSet?(params: v2.ThreadGoalSetParams): Promise<v2.ThreadGoalSetResponse>;
   threadGoalDocumentGet?(params: { threadId: string }): Promise<ThreadGoalDocumentGetResponse>;
+  threadGoalDocumentCreate?(params: ThreadGoalDocumentCreateParams): Promise<ThreadGoalDocumentCreateResponse>;
   threadGoalDocumentSet?(params: ThreadGoalDocumentSetParams): Promise<ThreadGoalDocumentSetResponse>;
   threadGoalDocumentRevisionSet?(params: ThreadGoalDocumentSetParams): Promise<ThreadGoalDocumentSetResponse>;
   threadGoalClear(params: v2.ThreadGoalClearParams): Promise<v2.ThreadGoalClearResponse>;
@@ -1498,6 +1500,40 @@ export class CodexService {
     } catch {
       throw new ManagedGoalDocumentError('read_unavailable');
     }
+  }
+
+  /** One exact predecessor and stable creation ID, atomically enforced by OIX.
+   * Never fall back to document/set when this experimental method is absent. */
+  async createThreadGoalDocument(
+    input: ThreadGoalDocumentCreateParams,
+    maxWaitMs = 3_000,
+  ): Promise<ThreadGoalDocumentCreateResponse> {
+    validateGoalDocumentInput(input);
+    if (!this.client.threadGoalDocumentCreate || !Number.isSafeInteger(maxWaitMs) ||
+        maxWaitMs < 1 || maxWaitMs > 3_000) {
+      throw new ManagedGoalDocumentError('create_unavailable');
+    }
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        this.client.threadGoalDocumentCreate(input),
+        new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => reject(new ManagedGoalDocumentError('update_unconfirmed')),
+            maxWaitMs);
+        }),
+      ]);
+      return result;
+    } catch (error) {
+      // This fixed native error code is the only authoritative CAS conflict.
+      // All transport/timeout failures remain unknown, never replay permission.
+      if (error && typeof error === 'object' && 'code' in error && error.code === -32009) {
+        throw new ManagedGoalDocumentError('stale_predecessor');
+      }
+      if (error && typeof error === 'object' && 'code' in error && error.code === -32601) {
+        throw new ManagedGoalDocumentError('create_unavailable');
+      }
+      throw new ManagedGoalDocumentError('update_unconfirmed');
+    } finally { if (deadline) clearTimeout(deadline); }
   }
 
   async setThreadGoalDocument(input: ThreadGoalDocumentSetParams): Promise<ThreadGoalDocumentSetResponse> {

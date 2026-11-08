@@ -2435,14 +2435,27 @@ export class CodexAppServerClient {
   }
 
   async threadGoalDocumentSet(params: RequestMap[typeof CLIENT_METHOD.threadGoalDocumentSet]['params']) {
-    // An absent-Goal create is still a mutation. A lost receipt is uncertain,
+    // A document update is still a mutation. A lost receipt is uncertain,
     // and reconnecting could create an unrelated second native owner.
-    if (!this.initialized) throw new Error('Native Goal document create is unavailable.');
+    if (!this.initialized) throw new Error('Native Goal document update is unavailable.');
     const generation = this.disconnectSequence;
     const result = await this.rpcRequest(CLIENT_METHOD.threadGoalDocumentSet, params,
       { skipEnsureConnected: true });
     if (!this.initialized || generation !== this.disconnectSequence) {
-      throw new Error('Native Goal document create crossed a runtime disconnect.');
+      throw new Error('Native Goal document update crossed a runtime disconnect.');
+    }
+    return result;
+  }
+
+  /** A creation-id retry belongs to the caller after exact receipt reconciliation;
+   * this transport never reconnects, reissues, or treats a late response as success. */
+  async threadGoalDocumentCreate(params: RequestMap[typeof CLIENT_METHOD.threadGoalDocumentCreate]['params']) {
+    if (!this.initialized) throw new Error('Native Goal creation is unavailable.');
+    const generation = this.disconnectSequence;
+    const result = await this.rpcRequest(CLIENT_METHOD.threadGoalDocumentCreate, params,
+      { skipEnsureConnected: true });
+    if (!this.initialized || generation !== this.disconnectSequence) {
+      throw new Error('Native Goal creation crossed a runtime disconnect.');
     }
     return result;
   }

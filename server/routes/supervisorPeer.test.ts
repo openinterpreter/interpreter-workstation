@@ -3,9 +3,13 @@ import { createHash } from 'node:crypto';
 import express from 'express';
 import { createServer, type Server } from 'node:http';
 import { createSupervisorPeerRouter } from './supervisorPeer';
+import { SupervisorGoalCreateError } from '../utils/supervisorGoalCreate';
 import type { VerifiedSupervisorGrant } from '../utils/supervisorPeerScope';
 
 const threadId = '00000000-0000-4000-8000-000000000001';
+const createBody = { creationId: 'unique-supervisor-job', objective: 'managed',
+  document: 'mission', expectedGoalId: '00000000-0000-4000-8000-000000000004',
+  expectedStatus: 'complete', expectedMissionRevision: 4, expectedLifecycleRevision: 7 };
 const grant: VerifiedSupervisorGrant = {
   issuer: 'enrolled-issuer', subject: 'supervisor-1', sourceComputer: 'source-1',
   targetComputer: 'target-1', threadId,
@@ -84,7 +88,7 @@ describe('enrolled supervisor peer route seam', () => {
   it('denies cross-thread creation before a native call and keeps uncertain creation typed', async () => {
     const { base, calls } = await fixture();
     const create = (url: string) => fetch(`${url}/goal/create`, { method: 'POST',
-      headers: { 'content-type': 'application/json' }, body: JSON.stringify({ document: 'mission' }) });
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify(createBody) });
     const denied = await create(base.replace(threadId, '00000000-0000-4000-8000-000000000002'));
     expect(denied.status).toBe(403);
     expect(calls.create).toBe(0);
@@ -100,15 +104,23 @@ describe('enrolled supervisor peer route seam', () => {
     const mission = '# Mission\n' + 'A retained requirement.\n'.repeat(7_000) + '\n'.repeat(600_000);
     const digest = createHash('sha256').update(mission).digest('hex');
     let received = '';
+    let receivedCreationId = '';
     app.use('/peer', createSupervisorPeerRouter({ targetComputer: 'target-1',
       verify: async () => grant,
       readGoal: async () => ({ goal: null, revision: null, document: null }),
-      createGoal: async (_id, document) => { received = document; return {
+      createGoal: async (_id, input) => { received = input.document;
+        receivedCreationId = input.creationId;
+        return {
         goal: { threadId, status: 'active', objective: 'managed' } as never,
         revision: { goalId: '00000000-0000-4000-8000-000000000004',
           status: 'active', missionRevision: 1, lifecycleRevision: 1 },
-        document: { content: document, sha256: digest, byteLength: Buffer.byteLength(document),
+        document: { content: input.document, sha256: digest,
+          byteLength: Buffer.byteLength(input.document),
           missionRevision: 1 },
+        creationId: input.creationId, replayed: false,
+        previousRevision: { goalId: input.expectedGoalId, status: 'complete',
+          missionRevision: input.expectedMissionRevision,
+          lifecycleRevision: input.expectedLifecycleRevision },
       }; },
       resumeGoal: async () => { throw Error('unused'); },
       readTerminal: async () => { throw Error('unused'); },
@@ -119,13 +131,14 @@ describe('enrolled supervisor peer route seam', () => {
     if (!address || typeof address === 'string') throw Error('No listener');
     const response = await fetch(`http://127.0.0.1:${address.port}/peer/threads/${threadId}/goal/create`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ document: mission }),
+      body: JSON.stringify({ ...createBody, document: mission }),
     });
     expect(mission.length).toBeGreaterThan(100_000);
     expect(Buffer.byteLength(mission)).toBeLessThan(1_048_576);
     expect(Buffer.byteLength(JSON.stringify({ document: mission }))).toBeGreaterThan(1_050_000);
     expect(response.status).toBe(200);
     expect(received).toBe(mission);
+    expect(receivedCreationId).toBe(createBody.creationId);
     const oversized = await fetch(`http://127.0.0.1:${address.port}/peer/threads/${threadId}/goal/create`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ document: '\n'.repeat(3_200_000) }),
@@ -137,6 +150,30 @@ describe('enrolled supervisor peer route seam', () => {
       body: JSON.stringify({ expected: '\n'.repeat(60_000) }),
     });
     expect(unrelated.status).toBe(413);
+  });
+  it('returns a typed predecessor conflict without leaking native text or changing source scope', async () => {
+    const app = express();
+    app.use(express.json());
+    let calls = 0;
+    app.use('/peer', createSupervisorPeerRouter({ targetComputer: 'target-1',
+      verify: async () => grant,
+      readGoal: async () => ({ goal: null, revision: null, document: null }),
+      createGoal: async () => { calls++;
+        throw new SupervisorGoalCreateError('stale_predecessor'); },
+      resumeGoal: async () => { throw Error('unused'); },
+      readTerminal: async () => { throw Error('unused'); },
+    }));
+    server = createServer(app);
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw Error('No listener');
+    const response = await fetch(`http://127.0.0.1:${address.port}/peer/threads/${threadId}/goal/create`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(createBody),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ available: false, category: 'stale_predecessor' });
+    expect(calls).toBe(1);
   });
   it('authorizes exact task scope before projecting a saved current turn and denies cross-thread reads', async () => {
     const app = express();
