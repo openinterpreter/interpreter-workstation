@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { agentTabManager } from '../../../agentTabManager';
+import { recoverNativeCallerBinding } from '../../../utils/persistedCallerBinding';
 import { getProfile as getCodexProfile } from '../../../../src/lib/codex/profiles';
 import type { AgentModelConfig } from '../../../../shared/types/model';
 import type { v2 } from '../../../handlers/codex-generated-types';
@@ -88,6 +89,108 @@ describe('runCodexSubagent', () => {
       workspace: '/tmp/other-headless', threadId, retainThreadCaller: true, createSession }))
       .rejects.toThrow('Persistent thread app-tool scope changed.');
     expect(tokens).toHaveLength(2);
+  });
+
+  test('failed native first turn retains its admitted thread caller for the next turn', async () => {
+    const tempHome = await mkdtemp(path.join(tmpdir(), 'codex-failed-thread-caller-'));
+    process.env.INTERPRETER_HOME = tempHome;
+    try {
+      const threadId = 'thr_failed_headless';
+      const workspace = '/tmp/failed-headless';
+      const tokens: string[] = [];
+      let disposals = 0;
+      const service = {
+        async ensureProvider() {},
+        async getAccount() { return { account: { type: 'chatgpt' } }; },
+        async runTurn(options: any) {
+          const turnId = `turn-${tokens.length + 1}`;
+          tokens.push(options.config.shell_environment_policy.set.INTERPRETER_CALLER_TOKEN);
+          options.onEvent({ kind: 'thread', threadId });
+          options.onEvent({ kind: 'turn', threadId, turnId, status: 'inProgress' });
+          return { threadId, turnId, status: tokens.length === 1 ? 'failed' : 'completed' };
+        },
+        async readThread() { return { turns: [{ id: `turn-${tokens.length}`,
+          items: tokens.length === 1 ? [] : [{ type: 'agentMessage', text: 'Recovered.' }] }] }; },
+      } as any;
+      const modelConfig: AgentModelConfig = { provider: 'openai-oauth', modelId: 'gpt-6-sol' };
+      let created = 0;
+      const createSession = async (): Promise<CodexSubagentSession> => ({
+        service, profile: getCodexProfile('default'), agentId: `headless-${++created}`,
+        callerToken: `agtok_failure_${created}`, modelConfig,
+        dispose() { disposals++; agentTabManager.disposeBinding(this.callerToken); },
+      });
+      const failed = await runCodexSubagent({ message: 'First', modelConfig, workspace,
+        retainThreadCaller: true, createSession });
+      expect(failed.completed).toBe(false);
+      expect(failed.threadId).toBe(threadId);
+      expect(disposals).toBe(0);
+      expect(agentTabManager.getBindingForThread(threadId)?.callerToken).toBe(tokens[0]);
+      if (process.platform === 'linux') {
+        const persisted = recoverNativeCallerBinding(tokens[0]);
+        expect(persisted?.threadId).toBe(threadId);
+        expect(persisted?.workspacePath).toBe(workspace);
+      }
+      await expect(runCodexSubagent({ message: 'Wrong tool scope', modelConfig,
+        workspace, threadId, allowedToolNames: ['different-tool'],
+        retainThreadCaller: true, createSession }))
+        .rejects.toThrow('Persistent thread app-tool scope changed.');
+      expect(tokens).toHaveLength(1);
+      const recovered = await runCodexSubagent({ message: 'Distinct next input', modelConfig,
+        workspace, threadId, retainThreadCaller: true, createSession });
+      expect(recovered.completed).toBe(true);
+      expect(tokens).toEqual(['agtok_failure_1', 'agtok_failure_1']);
+      expect(agentTabManager.getBindingForThread(threadId)?.callerToken).toBe(tokens[0]);
+    } finally { await removeTemporaryHome(tempHome); }
+  });
+
+  test('pre-admission failure does not retain a caller without a native thread', async () => {
+    const modelConfig: AgentModelConfig = { provider: 'openai-oauth', modelId: 'gpt-6-sol' };
+    let disposals = 0;
+    const createSession = async (): Promise<CodexSubagentSession> => ({
+      service: { async ensureProvider() {}, async getAccount() {
+        throw new Error('pre-admission failure');
+      } } as any,
+      profile: getCodexProfile('default'), agentId: 'pre-admission',
+      callerToken: 'agtok_no_native_thread', modelConfig,
+      dispose() { disposals++; agentTabManager.disposeBinding(this.callerToken); },
+    });
+    const result = await runCodexSubagent({ message: 'No native turn', modelConfig,
+      workspace: '/tmp/no-native-thread', retainThreadCaller: true, createSession });
+    expect(result.completed).toBe(false);
+    expect(disposals).toBe(1);
+    expect(agentTabManager.getBindingForCallerToken('agtok_no_native_thread')).toBeUndefined();
+  });
+
+  test('a failed post-turn observer cannot revoke an observed native thread caller', async () => {
+    const tempHome = await mkdtemp(path.join(tmpdir(), 'codex-unconfirmed-thread-caller-'));
+    process.env.INTERPRETER_HOME = tempHome;
+    try {
+      const threadId = 'thr_observed_unconfirmed';
+      const token = 'agtok_observed_unconfirmed';
+      let disposals = 0;
+      const modelConfig: AgentModelConfig = { provider: 'openai-oauth', modelId: 'gpt-6-sol' };
+      const createSession = async (): Promise<CodexSubagentSession> => ({
+        service: {
+          async ensureProvider() {},
+          async getAccount() { return { account: { type: 'chatgpt' } }; },
+          async runTurn(options: any) {
+            options.onEvent({ kind: 'thread', threadId });
+            options.onEvent({ kind: 'turn', threadId, turnId: 'turn-observed', status: 'inProgress' });
+            return { threadId, turnId: 'turn-observed', status: 'completed' };
+          },
+          async readThread() { throw new Error('observer unavailable after native turn'); },
+        } as any,
+        profile: getCodexProfile('default'), agentId: 'observed-agent',
+        callerToken: token, modelConfig,
+        dispose() { disposals++; agentTabManager.disposeBinding(this.callerToken); },
+      });
+      const result = await runCodexSubagent({ message: 'One identified input', modelConfig,
+        workspace: '/tmp/observed-unconfirmed', retainThreadCaller: true, createSession });
+      expect(result.completed).toBe(false);
+      expect(result.threadId).toBeUndefined(); // This receipt cannot claim successful observation.
+      expect(disposals).toBe(0);
+      expect(agentTabManager.getBindingForThread(threadId)?.callerToken).toBe(token);
+    } finally { await removeTemporaryHome(tempHome); }
   });
 
   test('uses the shared runtime shell CLI contract instead of attaching interpreter MCP config', async () => {
