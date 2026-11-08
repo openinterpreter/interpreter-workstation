@@ -2384,6 +2384,64 @@ export class CodexAppServerClient {
     return this.rpcRequest(CLIENT_METHOD.threadGoalGet, params);
   }
 
+  /** Owner inspection is read-only and must not launch or reconnect a native runtime. */
+  async threadGoalRevisionGet(params: v2.ThreadGoalGetParams): Promise<v2.ThreadGoalGetResponse> {
+    if (!this.initialized) throw new Error('Native Goal revision read is unavailable.');
+    const generation = this.disconnectSequence;
+    const result = await this.rpcRequest(CLIENT_METHOD.threadGoalGet, params, { skipEnsureConnected: true });
+    if (!this.initialized || this.disconnectSequence !== generation) {
+      throw new Error('Native Goal revision observation crossed a runtime disconnect.');
+    }
+    return result;
+  }
+
+  /** A CAS mutation must never be retried or reconnect a torn-down native owner. */
+  async threadGoalRevisionSet(params: v2.ThreadGoalSetParams): Promise<v2.ThreadGoalSetResponse> {
+    if (!this.initialized) throw new Error('Native Goal CAS is unavailable.');
+    const generation = this.disconnectSequence;
+    const result = await this.rpcRequest(CLIENT_METHOD.threadGoalSet, params, { skipEnsureConnected: true });
+    if (!this.initialized || this.disconnectSequence !== generation) {
+      throw new Error('Native Goal CAS result crossed a runtime disconnect.');
+    }
+    return result;
+  }
+
+  async threadGoalDocumentGet(params: RequestMap[typeof CLIENT_METHOD.threadGoalDocumentGet]['params']) {
+    if (!this.initialized) throw new Error('Native Goal document read is unavailable.');
+    const generation = this.disconnectSequence;
+    const result = await this.rpcRequest(CLIENT_METHOD.threadGoalDocumentGet, params,
+      { skipEnsureConnected: true });
+    if (!this.initialized || generation !== this.disconnectSequence) {
+      throw new Error('Native Goal document read crossed a runtime disconnect.');
+    }
+    return result;
+  }
+
+  async threadGoalDocumentSet(params: RequestMap[typeof CLIENT_METHOD.threadGoalDocumentSet]['params']) {
+    // An absent-Goal create is still a mutation. A lost receipt is uncertain,
+    // and reconnecting could create an unrelated second native owner.
+    if (!this.initialized) throw new Error('Native Goal document create is unavailable.');
+    const generation = this.disconnectSequence;
+    const result = await this.rpcRequest(CLIENT_METHOD.threadGoalDocumentSet, params,
+      { skipEnsureConnected: true });
+    if (!this.initialized || generation !== this.disconnectSequence) {
+      throw new Error('Native Goal document create crossed a runtime disconnect.');
+    }
+    return result;
+  }
+
+  /** Full document CAS must not start or reconnect a native runtime after owner teardown. */
+  async threadGoalDocumentRevisionSet(params: RequestMap[typeof CLIENT_METHOD.threadGoalDocumentSet]['params']) {
+    if (!this.initialized) throw new Error('Native Goal document CAS is unavailable.');
+    const generation = this.disconnectSequence;
+    const result = await this.rpcRequest(CLIENT_METHOD.threadGoalDocumentSet, params,
+      { skipEnsureConnected: true });
+    if (!this.initialized || generation !== this.disconnectSequence) {
+      throw new Error('Native Goal document CAS crossed a runtime disconnect.');
+    }
+    return result;
+  }
+
   async threadGoalClear(params: v2.ThreadGoalClearParams): Promise<v2.ThreadGoalClearResponse> {
     return this.rpcRequest(CLIENT_METHOD.threadGoalClear, params);
   }

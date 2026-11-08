@@ -66,5 +66,11 @@ describe('owner-bound OIX native terminal observation', () => {
     client.threadBackgroundTerminalsList = async () => ({ data: [{ itemId: owner.itemId,
       turnId: owner.turnId, nativeProcessId: null, terminalGeneration: 17 }], nextCursor: null });
     await assert.rejects(new CodexService(client).listNativeTerminalOwners(owner.threadId));
+    client.threadBackgroundTerminalsList = async () => ({ data: [owner, owner], nextCursor: null });
+    await assert.rejects(new CodexService(client).listNativeTerminalOwners(owner.threadId),
+      { phase: 'terminal_status', category: 'native_unavailable' });
+    client.threadBackgroundTerminalsList = async () => ({ data: [owner], nextCursor: 'cursor_1' });
+    await assert.rejects(new CodexService(client).listNativeTerminalOwners(owner.threadId, 'cursor_1'),
+      { phase: 'terminal_status', category: 'native_unavailable' });
   });
 });

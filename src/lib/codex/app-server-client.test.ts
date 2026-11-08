@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, test } from "bun:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, lstatSync, readlinkSync } from "node:fs";
@@ -30,6 +31,7 @@ import {
   SERVER_REQUEST_METHOD,
 } from "@/lib/codex/protocol";
 import type { InitializeResponse, v2 } from "@/schemas";
+import { CodexService } from "@/lib/codex/service";
 import {
   clearConfigCache,
   getMcpServer,
@@ -323,6 +325,177 @@ function completeInitHandshake(transport: FakeTransport) {
 }
 
 describe("CodexAppServerClient", () => {
+  test('managed Goal document get/set preserve full bytes and mission-revision precondition', async () => {
+    const transport = new FakeTransport();
+    const client = new CodexAppServerClient(transport, null);
+    const connected = client.ensureConnected();
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await connected;
+    const service = new CodexService(client);
+    const threadId = '00000000-0000-4000-8000-000000000077';
+    const content = `# Mission\n${'full mission detail\n'.repeat(300)}`;
+    const sha256 = createHash('sha256').update(content).digest('hex');
+    const metadata = { path: `managed-goals/${threadId}/mission-2-${sha256}.md`,
+      sha256, byteLength: Buffer.byteLength(content), missionRevision: 2 };
+    const goal = { threadId, objective: 'managed mission pointer', status: 'active' as const,
+      tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1 };
+    const before = transport.sent.length;
+    const writing = service.setThreadGoalDocument({ threadId, document: content,
+      expectedMissionRevision: 1, status: 'active' });
+    await waitFor(() => transport.sent.length === before + 1);
+    const setRpc = assertSentRequest(transport, before, CLIENT_METHOD.threadGoalDocumentSet);
+    assert.deepEqual(setRpc.params, { threadId, document: content,
+      expectedMissionRevision: 1, status: 'active' });
+    transport.respond(setRpc, { goal, document: metadata });
+    assert.equal((await writing).document.missionRevision, 2);
+    const reading = service.getThreadGoalDocument(threadId);
+    await waitFor(() => transport.sent.length === before + 2);
+    const getRpc = assertSentRequest(transport, before + 1, CLIENT_METHOD.threadGoalDocumentGet);
+    assert.deepEqual(getRpc.params, { threadId });
+    transport.respond(getRpc, { goal, document: metadata, content });
+    assert.equal((await reading).content, content);
+    client.shutdown();
+  });
+
+  test('Goal revision inspection never connects or replays across a native disconnect', async () => {
+    const transport = new FakeTransport();
+    const client = new CodexAppServerClient(transport, null);
+    const threadId = '00000000-0000-4000-8000-000000000077';
+    await assert.rejects(client.threadGoalRevisionGet({ threadId }), /unavailable/);
+    assert.equal(transport.sent.length, 0, 'inspection must not start OIX');
+    const connected = client.ensureConnected();
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await connected;
+    const before = transport.sent.length;
+    const pending = client.threadGoalRevisionGet({ threadId });
+    await waitFor(() => transport.sent.length === before + 1);
+    const request = assertSentRequest(transport, before, CLIENT_METHOD.threadGoalGet);
+    assert.deepEqual(request.params, { threadId });
+    transport.close(new Error('disconnected'));
+    transport.respond(request, { goal: null, revision: null });
+    await assert.rejects(pending);
+    assert.equal(transport.sent.length, before + 1, 'late response must not initiate another RPC');
+    client.shutdown();
+  });
+
+  test('Goal revision CAS never connects, reconnects or replays after a disconnect', async () => {
+    const transport = new FakeTransport();
+    const client = new CodexAppServerClient(transport, null);
+    const threadId = '00000000-0000-4000-8000-000000000077';
+    const params = { threadId, status: 'paused' as const,
+      expectedGoalId: '00000000-0000-4000-8000-000000000088', expectedStatus: 'active' as const,
+      expectedMissionRevision: 2, expectedLifecycleRevision: 3 };
+    await assert.rejects(client.threadGoalRevisionSet(params), /unavailable/);
+    assert.equal(transport.sent.length, 0);
+    const connecting = client.ensureConnected();
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await connecting;
+    const before = transport.sent.length;
+    const pending = client.threadGoalRevisionSet(params);
+    await waitFor(() => transport.sent.length === before + 1);
+    const request = assertSentRequest(transport, before, CLIENT_METHOD.threadGoalSet);
+    assert.deepEqual(request.params, params);
+    transport.close(new Error('disconnected'));
+    transport.respond(request, { goal: null });
+    await assert.rejects(pending);
+    assert.equal(transport.sent.length, before + 1);
+    client.shutdown();
+  });
+
+  test('managed document CAS preserves full expected state and never reconnects after lost receipt', async () => {
+    const transport = new FakeTransport();
+    const client = new CodexAppServerClient(transport, null);
+    const params = { threadId: '00000000-0000-4000-8000-000000000077',
+      document: '# Supervised mission', expectedGoalId: '00000000-0000-4000-8000-000000000088',
+      expectedStatus: 'active' as const, expectedMissionRevision: 2,
+      expectedLifecycleRevision: 5 };
+    await assert.rejects(client.threadGoalDocumentRevisionSet(params), /unavailable/);
+    assert.equal(transport.sent.length, 0);
+    const connecting = client.ensureConnected();
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await connecting;
+    const before = transport.sent.length;
+    const pending = client.threadGoalDocumentRevisionSet(params);
+    await waitFor(() => transport.sent.length === before + 1);
+    const request = assertSentRequest(transport, before, CLIENT_METHOD.threadGoalDocumentSet);
+    assert.deepEqual(request.params, params);
+    transport.close(new Error('unacknowledged write'));
+    transport.respond(request, { goal: null });
+    await assert.rejects(pending);
+    assert.equal(transport.sent.length, before + 1);
+    client.shutdown();
+  });
+
+  test('managed-document read and create neither start OIX nor reconnect after a lost receipt', async () => {
+    const threadId = '00000000-0000-4000-8000-000000000077';
+    for (const mode of ['read', 'create'] as const) {
+      const transport = new FakeTransport();
+      const client = new CodexAppServerClient(transport, null);
+      const request = () => mode === 'read'
+        ? client.threadGoalDocumentGet({ threadId })
+        : client.threadGoalDocumentSet({ threadId, document: '# New full mission', status: 'active' });
+      await assert.rejects(request(), /unavailable/);
+      assert.equal(transport.sent.length, 0, 'a bound caller cannot cold-start OIX');
+      const connecting = client.ensureConnected();
+      await waitFor(() => transport.sent.length >= 1);
+      completeInitHandshake(transport);
+      await connecting;
+      const before = transport.sent.length;
+      const pending = request();
+      await waitFor(() => transport.sent.length === before + 1);
+      const sent = assertSentRequest(transport, before, mode === 'read'
+        ? CLIENT_METHOD.threadGoalDocumentGet : CLIENT_METHOD.threadGoalDocumentSet);
+      transport.close(new Error('PRIVATE lost connection'));
+      transport.respond(sent, { goal: null, document: null, content: null });
+      await assert.rejects(pending);
+      assert.equal(transport.sent.length, before + 1,
+        'a late result never creates a second request or reconnect');
+      client.shutdown();
+    }
+  });
+
+  test('owner-bound terminal list and status traverse the real client and service without exposing native text', async () => {
+    const transport = new FakeTransport();
+    let version = '0.0.58';
+    transport.getSelectedRuntimeVersion = async () => version;
+    const client = new CodexAppServerClient(transport, null);
+    const connected = client.ensureConnected();
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await connected;
+    const service = new CodexService(client);
+    const threadId = '00000000-0000-4000-8000-000000000001';
+    const before = transport.sent.length;
+    await assert.rejects(service.listNativeTerminalOwners(threadId), /unavailable/);
+    assert.equal(transport.sent.length, before);
+    version = '0.0.59';
+    const listing = service.listNativeTerminalOwners(threadId);
+    await waitFor(() => transport.sent.length === before + 1);
+    const listRpc = assertSentRequest(transport, before, CLIENT_METHOD.threadBackgroundTerminalsList);
+    assert.deepEqual(listRpc.params, { threadId, limit: 100 });
+    transport.respond(listRpc, { data: [{ turnId: 'turn_1', itemId: 'cmd_1',
+      nativeProcessId: 'native_1', terminalGeneration: 17,
+      command: 'PRIVATE COMMAND' }], nextCursor: null });
+    const listed = await listing;
+    assert.deepEqual(listed, { data: [{ threadId, turnId: 'turn_1', itemId: 'cmd_1',
+      nativeProcessId: 'native_1', terminalGeneration: 17 }], nextCursor: null });
+    assert.doesNotMatch(JSON.stringify(listed), /PRIVATE/);
+    const observation = service.readNativeTerminalStatus({ ...listed.data[0], maxWaitMs: 50 });
+    await waitFor(() => transport.sent.length === before + 2);
+    const statusRpc = assertSentRequest(transport, before + 1, CLIENT_METHOD.threadBackgroundTerminalsStatus);
+    assert.deepEqual(statusRpc.params, { threadId, turnId: 'turn_1', itemId: 'cmd_1',
+      nativeProcessId: 'native_1', maxWaitMs: 50 });
+    transport.respond(statusRpc, { phase: 'exited', outputBytes: 9, outputSha256: 'a'.repeat(64),
+      outputCapReached: false, exitCode: 0, terminalGeneration: 17, observationTimedOut: false,
+      aggregatedOutput: 'PRIVATE OUTPUT' });
+    assert.deepEqual(await observation, { phase: 'exited', outputBytes: 9, outputSha256: 'a'.repeat(64),
+      outputCapReached: false, exitCode: 0, terminalGeneration: 17, observationTimedOut: false });
+    client.shutdown();
+  });
   test('native terminal methods deny selected .58 and send only exact .59 owner reads', async () => {
     const transport = new FakeTransport();
     let version = '0.0.58';

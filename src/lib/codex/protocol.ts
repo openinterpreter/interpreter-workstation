@@ -8,6 +8,8 @@ import type {
   v2,
 } from "../../../server/handlers/codex-generated-types/index";
 import type { JsonValue } from "../../../server/handlers/codex-generated-types/serde_json/JsonValue";
+import type { ThreadGoalDocumentGetResponse, ThreadGoalDocumentSetParams,
+  ThreadGoalDocumentSetResponse } from './goal-document';
 
 type ClientMethod =
   | ClientRequest["method"]
@@ -15,6 +17,8 @@ type ClientMethod =
   | "thread/backgroundTerminals/clean"
   | "thread/backgroundTerminals/status"
   | "thread/backgroundTerminals/list"
+  | "thread/goal/document/get"
+  | "thread/goal/document/set"
   | "mcpServer/tool/call"
   | "mcpServer/resource/read";
 type ServerMethod = ServerNotification["method"];
@@ -30,6 +34,8 @@ export const CLIENT_METHOD = {
   threadGoalSet: "thread/goal/set",
   threadGoalGet: "thread/goal/get",
   threadGoalClear: "thread/goal/clear",
+  threadGoalDocumentGet: "thread/goal/document/get",
+  threadGoalDocumentSet: "thread/goal/document/set",
   threadArchive: "thread/archive",
   threadUnarchive: "thread/unarchive",
   threadBackgroundTerminalsClean: "thread/backgroundTerminals/clean",
@@ -172,6 +178,14 @@ export type RequestMap = {
   [CLIENT_METHOD.threadGoalClear]: {
     params: v2.ThreadGoalClearParams;
     result: v2.ThreadGoalClearResponse;
+  };
+  [CLIENT_METHOD.threadGoalDocumentGet]: {
+    params: { threadId: string };
+    result: ThreadGoalDocumentGetResponse;
+  };
+  [CLIENT_METHOD.threadGoalDocumentSet]: {
+    params: ThreadGoalDocumentSetParams;
+    result: ThreadGoalDocumentSetResponse;
   };
   [CLIENT_METHOD.threadArchive]: {
     params: v2.ThreadArchiveParams;

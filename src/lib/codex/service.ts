@@ -2,6 +2,10 @@ import { match } from "ts-pattern";
 import { nativeCommandSessionSnapshot, nativeTurnReceipt } from './native-turn-receipt';
 import { boundNativeTerminalStatus, validateNativeTerminalRequest, type NativeTerminalStatusRequest,
   type NativeTerminalStatusResponse } from './native-terminal-status';
+import { ManagedGoalDocumentError, validateGoalDocumentInput, verifyGoalDocument, type ThreadGoalDocumentGetResponse,
+  type ThreadGoalDocumentSetParams, type ThreadGoalDocumentSetResponse } from './goal-document';
+import { GoalMutationUnconfirmedError, GoalRevisionUnavailableError, goalCasExpectedParams,
+  verifyThreadGoalRevision, type ThreadGoalRevision } from './goal-revision';
 import { JSONRPCErrorException } from "json-rpc-2.0";
 import type { v2 } from "../../../server/handlers/codex-generated-types/index";
 import type { JsonValue } from "../../../server/handlers/codex-generated-types/serde_json/JsonValue";
@@ -410,6 +414,11 @@ export type CodexClient = {
   threadSetName(params: v2.ThreadSetNameParams): Promise<v2.ThreadSetNameResponse>;
   threadGoalSet(params: v2.ThreadGoalSetParams): Promise<v2.ThreadGoalSetResponse>;
   threadGoalGet(params: v2.ThreadGoalGetParams): Promise<v2.ThreadGoalGetResponse>;
+  threadGoalRevisionGet?(params: v2.ThreadGoalGetParams): Promise<v2.ThreadGoalGetResponse>;
+  threadGoalRevisionSet?(params: v2.ThreadGoalSetParams): Promise<v2.ThreadGoalSetResponse>;
+  threadGoalDocumentGet?(params: { threadId: string }): Promise<ThreadGoalDocumentGetResponse>;
+  threadGoalDocumentSet?(params: ThreadGoalDocumentSetParams): Promise<ThreadGoalDocumentSetResponse>;
+  threadGoalDocumentRevisionSet?(params: ThreadGoalDocumentSetParams): Promise<ThreadGoalDocumentSetResponse>;
   threadGoalClear(params: v2.ThreadGoalClearParams): Promise<v2.ThreadGoalClearResponse>;
   threadArchive(params: v2.ThreadArchiveParams): Promise<v2.ThreadArchiveResponse>;
   threadUnarchive(params: v2.ThreadUnarchiveParams): Promise<v2.ThreadUnarchiveResponse>;
@@ -620,7 +629,7 @@ export class CodexService {
     if (options.coldShellPolicy) {
       const custody = await this.readNativeCustody(options.threadId);
       const global = await this.readGlobalNativeCustody();
-      if (custody.status !== 'idle' || custody.queuedSubmissionCount !== 0 ||
+      if (!['idle', 'notLoaded'].includes(custody.status) || custody.queuedSubmissionCount !== 0 ||
           global.queuedSubmissionCount !== 0 || global.loadedThreadIds.includes(options.threadId) ||
           !global.threads.some(row => row.threadId === options.threadId) ||
           !options.config?.shell_environment_policy) {
@@ -852,7 +861,19 @@ export class CodexService {
     await this.reconcileTerminalTurn(threadId);
     this.assertNoActiveTurn(threadId);
     this.activeTurns.set(threadId, null);
-    options.onEvent({ kind: "thread", threadId });
+    // A disconnected progress observer must not prevent native admission or
+    // leave the exact thread permanently marked active before turn/start.
+    // The durable submission receipt remains the authority after lost output.
+    let observerAvailable = true;
+    const emitEvent = (event: StreamEvent) => {
+      if (!observerAvailable) return;
+      try {
+        options.onEvent(event);
+      } catch {
+        observerAvailable = false;
+      }
+    };
+    emitEvent({ kind: "thread", threadId });
     const idleTimeoutMs = normalizeRunTurnIdleTimeoutMs(options.idleTimeoutMs);
 
     let turnId = "";
@@ -867,6 +888,10 @@ export class CodexService {
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
     let completionQueued = false;
     let lastTurnActivity = "turn started";
+    let preAckNotifications: AppServerNotification[] = [];
+    let preAckBytes = 0;
+    let preAckOverflow = false;
+    let drainPreAckNotifications = () => {};
 
     const clearIdleTimer = () => {
       if (idleTimer) {
@@ -970,7 +995,25 @@ export class CodexService {
       };
 
       rejectCompletion = reject;
-      unsubscribe = this.client.subscribe((notification) => {
+      const observeNotification = (notification: AppServerNotification) => {
+        if (!turnStarted) {
+          const eventThreadId = extractNotificationThreadId(notification);
+          if (eventThreadId && eventThreadId !== threadId) return;
+          if (!eventThreadId && !extractNotificationTurnId(notification)) return;
+          // A native completion may precede its turn/start RPC response. Do not
+          // attach any pre-ack event to an unknown turn, especially an old one.
+          if (preAckOverflow) return;
+          try {
+            const bytes = Buffer.byteLength(JSON.stringify(notification));
+            if (preAckNotifications.length < 256 && bytes <= 8_388_608 - preAckBytes) {
+              preAckBytes += bytes;
+              preAckNotifications.push(notification);
+            } else preAckOverflow = true;
+          } catch {
+            preAckOverflow = true;
+          }
+          return;
+        }
         if (!this.belongsToTurn(notification, threadId, turnId)) {
           return;
         }
@@ -989,7 +1032,7 @@ export class CodexService {
           liveTurnBlockingItems.delete(notification.params.item.id);
         }
 
-        options.onEvent({ kind: "notification", notification });
+        emitEvent({ kind: "notification", notification });
         scheduleIdleTimeout(describeTurnActivity(notification));
 
         if (notification.method === SERVER_METHOD.turnCompleted) {
@@ -1000,7 +1043,13 @@ export class CodexService {
           schedulePendingTurnCompletion();
           return;
         }
-      });
+      };
+      unsubscribe = this.client.subscribe(observeNotification);
+      drainPreAckNotifications = () => {
+        const buffered = preAckNotifications;
+        preAckNotifications = [];
+        for (const notification of buffered) observeNotification(notification);
+      };
 
       unsubscribeDisconnect = this.client.onDisconnect((reason) => {
         // NOTE(victor): Upstream app-server is supposed to finish a failed turn
@@ -1051,7 +1100,12 @@ export class CodexService {
 
       turnId = turn.turnId;
       turnStarted = true;
-      options.onEvent({ kind: "turn", threadId, turnId, status: turn.status! });
+      emitEvent({ kind: "turn", threadId, turnId, status: turn.status! });
+      if (preAckOverflow) {
+        rejectTurn(rejectCompletion!, new Error('Native turn progress exceeded the pre-ack bound; reconcile the exact submission before retrying.'));
+        return completion;
+      }
+      drainPreAckNotifications();
       scheduleIdleTimeout("turn started");
 
       if (options.signal) {
@@ -1277,13 +1331,18 @@ export class CodexService {
       NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS);
     if (!result || !Array.isArray(result.data) || result.data.length > 100 ||
         result.nextCursor !== null && (typeof result.nextCursor !== 'string' ||
-          !/^[A-Za-z0-9_-]{1,160}$/.test(result.nextCursor))) {
+        !/^[A-Za-z0-9_-]{1,160}$/.test(result.nextCursor)) ||
+        result.nextCursor !== null && result.nextCursor === cursor) {
       throw new NativeCustodyPhaseError('terminal_status', 'native_unavailable');
     }
+    const seenOwners = new Set<string>();
     const data = result.data.map((item) => {
       const owner = { threadId, turnId: item.turnId, itemId: item.itemId,
         nativeProcessId: item.nativeProcessId, terminalGeneration: item.terminalGeneration };
       validateNativeTerminalRequest(owner as NativeTerminalStatusRequest);
+      const key = `${owner.turnId}:${owner.itemId}:${owner.nativeProcessId}:${owner.terminalGeneration}`;
+      if (seenOwners.has(key)) throw new NativeCustodyPhaseError('terminal_status', 'native_unavailable');
+      seenOwners.add(key);
       return owner;
     });
     return { data, nextCursor: result.nextCursor };
@@ -1341,6 +1400,158 @@ export class CodexService {
   async getThreadGoal(threadId: string): Promise<v2.ThreadGoal | null> {
     const result = await this.client.threadGoalGet({ threadId });
     return result.goal;
+  }
+
+  /** Read exact native CAS identity; an old runtime or contradictory receipt is unavailable. */
+  async getThreadGoalWithRevision(threadId: string, maxWaitMs = 3_000): Promise<{
+    goal: v2.ThreadGoal | null;
+    revision: ThreadGoalRevision | null;
+  }> {
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId) ||
+          !Number.isSafeInteger(maxWaitMs) || maxWaitMs < 1 || maxWaitMs > 3_000) {
+        throw new GoalRevisionUnavailableError();
+      }
+      if (!this.client.threadGoalRevisionGet) throw new GoalRevisionUnavailableError();
+      const result = await Promise.race([
+        this.client.threadGoalRevisionGet({ threadId }),
+        new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => reject(new GoalRevisionUnavailableError()), maxWaitMs);
+        }),
+      ]);
+      const revision = verifyThreadGoalRevision(result.goal, (result as { revision?: unknown }).revision,
+        threadId);
+      return { goal: result.goal, revision };
+    } catch {
+      throw new GoalRevisionUnavailableError();
+    } finally {
+      if (deadline) clearTimeout(deadline);
+    }
+  }
+
+  /** The native runtime, not a preceding GET, atomically enforces this expected state. */
+  async setThreadGoalWithRevision(
+    threadId: string,
+    expected: ThreadGoalRevision,
+    change: { objective?: string; status?: v2.ThreadGoalStatus; tokenBudget?: number | null },
+    maxWaitMs = 3_000,
+  ): Promise<{ goal: v2.ThreadGoal; revision: ThreadGoalRevision }> {
+    if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId) ||
+        !this.client.threadGoalRevisionSet || !change ||
+        !Number.isSafeInteger(maxWaitMs) || maxWaitMs < 1 || maxWaitMs > 3_000 ||
+        !Object.entries(change).some(([key, value]) =>
+          ['objective', 'status', 'tokenBudget'].includes(key) && value !== undefined) ||
+        Object.keys(change).some(key => !['objective', 'status', 'tokenBudget'].includes(key)) ||
+        (change.objective !== undefined && (typeof change.objective !== 'string' || !change.objective.trim())) ||
+        (change.status !== undefined && !['active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'].includes(change.status)) ||
+        (change.tokenBudget !== undefined && change.tokenBudget !== null &&
+          (!Number.isSafeInteger(change.tokenBudget) || change.tokenBudget <= 0))) {
+      throw new GoalRevisionUnavailableError();
+    }
+    const params = { threadId, ...change, ...goalCasExpectedParams(expected) };
+    // A rejected/unknown native mutation is never reissued here. No read-then-write fallback.
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        this.client.threadGoalRevisionSet(params as v2.ThreadGoalSetParams),
+        new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => reject(new GoalMutationUnconfirmedError()), maxWaitMs);
+        }),
+      ]);
+      const revision = verifyThreadGoalRevision(result.goal,
+        (result as { revision?: unknown }).revision, threadId);
+      if (!revision || revision.goalId !== expected.goalId ||
+          revision.lifecycleRevision !== expected.lifecycleRevision + 1 ||
+          revision.missionRevision !== expected.missionRevision +
+            (change.objective === undefined ? 0 : 1) ||
+          change.status !== undefined && result.goal.status !== change.status ||
+          change.objective !== undefined && result.goal.objective !== change.objective ||
+          change.tokenBudget !== undefined && result.goal.tokenBudget !== change.tokenBudget) {
+        throw new GoalRevisionUnavailableError();
+      }
+      return { goal: result.goal, revision };
+    } catch {
+      throw new GoalMutationUnconfirmedError();
+    } finally {
+      if (deadline) clearTimeout(deadline);
+    }
+  }
+
+  /** Full mission bytes remain in OIX's owned state directory, not an app file. */
+  async getThreadGoalDocument(threadId: string): Promise<ThreadGoalDocumentGetResponse> {
+    verifyGoalDocument(threadId, null, null);
+    if (!this.client.threadGoalDocumentGet) throw new ManagedGoalDocumentError('read_unavailable');
+    try {
+      const result = await this.client.threadGoalDocumentGet({ threadId });
+      verifyGoalDocument(threadId, result.document, result.content);
+      if (result.goal !== null && result.goal?.threadId !== threadId ||
+          (result.goal === null) !== (result.document === null)) {
+        throw new Error('Invalid managed Goal document owner.');
+      }
+      return result;
+    } catch {
+      throw new ManagedGoalDocumentError('read_unavailable');
+    }
+  }
+
+  async setThreadGoalDocument(input: ThreadGoalDocumentSetParams): Promise<ThreadGoalDocumentSetResponse> {
+    validateGoalDocumentInput(input);
+    if (!this.client.threadGoalDocumentSet) throw new ManagedGoalDocumentError('update_unconfirmed');
+    try {
+      const result = await this.client.threadGoalDocumentSet(input);
+      verifyGoalDocument(input.threadId, result.document, input.document);
+      if (result.goal?.threadId !== input.threadId ||
+          input.expectedMissionRevision != null &&
+          result.document.missionRevision !== input.expectedMissionRevision + 1 ||
+          input.status != null && result.goal.status !== input.status) {
+        throw new Error('Invalid managed Goal document update receipt.');
+      }
+      return result;
+    } catch {
+      throw new ManagedGoalDocumentError('update_unconfirmed');
+    }
+  }
+
+  /** One native transaction updates the file pointer and Goal only if all expected state matches. */
+  async setThreadGoalDocumentWithRevision(
+    input: Omit<ThreadGoalDocumentSetParams, 'expectedMissionRevision' | 'expectedGoalId' |
+      'expectedStatus' | 'expectedLifecycleRevision'>,
+    expected: ThreadGoalRevision,
+    maxWaitMs = 3_000,
+  ): Promise<{ goal: v2.ThreadGoal; document: ThreadGoalDocumentSetResponse['document'];
+    revision: ThreadGoalRevision }> {
+    validateGoalDocumentInput(input);
+    if (!this.client.threadGoalDocumentRevisionSet || !Number.isSafeInteger(maxWaitMs) ||
+        maxWaitMs < 1 || maxWaitMs > 3_000) {
+      throw new ManagedGoalDocumentError('update_unconfirmed');
+    }
+    const params = { ...input, ...goalCasExpectedParams(expected) };
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        this.client.threadGoalDocumentRevisionSet(params),
+        new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => reject(new ManagedGoalDocumentError('update_unconfirmed')),
+            maxWaitMs);
+        }),
+      ]);
+      verifyGoalDocument(input.threadId, result.document, input.document);
+      const revision = verifyThreadGoalRevision(result.goal, result.revision, input.threadId);
+      if (!revision || revision.goalId !== expected.goalId ||
+          revision.missionRevision !== expected.missionRevision + 1 ||
+          revision.lifecycleRevision !== expected.lifecycleRevision + 1 ||
+          result.document.missionRevision !== revision.missionRevision ||
+          result.goal.status !== (input.status ?? expected.status)) {
+        throw new ManagedGoalDocumentError('update_unconfirmed');
+      }
+      return { goal: result.goal, document: result.document, revision };
+    } catch {
+      // A transport loss does not prove native rejected this write. Reconcile; never replay.
+      throw new ManagedGoalDocumentError('update_unconfirmed');
+    } finally {
+      if (deadline) clearTimeout(deadline);
+    }
   }
 
   async setThreadGoal(

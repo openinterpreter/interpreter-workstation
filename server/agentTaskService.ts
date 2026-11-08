@@ -198,7 +198,7 @@ export async function coldBindAgentTaskThread(options: { threadId: string; works
   const custody = await service.readNativeCustody(options.threadId);
   const global = await service.readGlobalNativeCustody();
   if (thread.id !== options.threadId || thread.cwd !== workspace ||
-      custody.status !== 'idle' || custody.queuedSubmissionCount !== 0 ||
+      !['idle', 'notLoaded'].includes(custody.status) || custody.queuedSubmissionCount !== 0 ||
       global.queuedSubmissionCount !== 0 || global.loadedThreadIds.includes(options.threadId) ||
       !global.threads.some(row => row.threadId === options.threadId)) {
     throw new Error('Cold caller bind requires the exact unloaded idle thread, workspace and empty native queues');
