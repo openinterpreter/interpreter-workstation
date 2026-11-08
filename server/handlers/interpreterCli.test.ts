@@ -19,6 +19,7 @@ mock.module('../utils/mcpServiceBridge', () => ({
 
 import JSZip from 'jszip';
 import { agentTabManager } from '../agentTabManager';
+import { getCodexService } from '../../src/lib/codex/service';
 import { approvalManager } from '../approvalManager';
 import { clearConfigCache, setConfigOverride } from '../configStore';
 import { calculatorTool } from '../tools/builtin-tools/utility/calculatorTool';
@@ -93,6 +94,44 @@ describe('interpreterCli handlers', () => {
     setConfigOverride(null);
     setReadToolPromptInjectionGuardRunnerForTests(null);
     clearConfigCache();
+  });
+
+  test('Goal revision CLI read requires the authenticated same-thread binding and selected tool scope', async () => {
+    const threadId = '00000000-0000-4000-8000-000000000077';
+    const otherThread = '00000000-0000-4000-8000-000000000078';
+    const service = getCodexService();
+    const original = service.getThreadGoalWithRevision;
+    const calls: string[] = [];
+    setConfigOverride({ agents: {}, mcpServers: {} } as any);
+    setToolManager(new ToolManager());
+    agentTabManager.bindThread({ agentId: 'goal-owner', threadId,
+      callerToken: 'agtok_goal_owner', allowedToolNames: [
+        'builtin-interpreter__interpreter_goal_revision_get',
+      ] });
+    agentTabManager.bindThread({ agentId: 'goal-no-tool', threadId: otherThread,
+      callerToken: 'agtok_goal_no_tool', allowedToolNames: ['builtin-utility__calculate'] });
+    service.getThreadGoalWithRevision = async (id) => {
+      calls.push(id);
+      return { goal: null, revision: null };
+    };
+    try {
+      const tool = { serverId: 'builtin-interpreter',
+        toolName: 'interpreter_goal_revision_get', args: {} };
+      const result = await callInterpreterCliTool({ callerToken: 'agtok_goal_owner', ...tool }) as {
+        content: Array<{ text: string }>; isError?: boolean;
+      };
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(result.content[0]!.text)).toEqual({ available: true,
+        goalPresent: false, revision: null });
+      expect(calls).toEqual([threadId]);
+      await expect(callInterpreterCliTool({ callerToken: 'agtok_goal_no_tool', ...tool }))
+        .rejects.toThrow();
+      await expect(callInterpreterCliTool({ callerToken: 'unknown-goal-caller', ...tool }))
+        .rejects.toThrow();
+      expect(calls).toEqual([threadId]);
+    } finally {
+      service.getThreadGoalWithRevision = original;
+    }
   });
 
   test('lists visible servers for a bound caller token', async () => {
