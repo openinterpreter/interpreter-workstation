@@ -45,6 +45,29 @@ describe('native completed-predecessor managed Goal creation', () => {
     expect(created.replayed).toBe(false);
   });
 
+  it('matches the native 4000 Unicode-scalar objective bound after trimming', async () => {
+    const objective = '😀'.repeat(4_000);
+    const trimmed = ` ${objective} `;
+    let calls = 0;
+    const newGoal = { ...goal, objective };
+    const service = {
+      createThreadGoalDocument: async (params: { objective: string }) => {
+        calls++;
+        expect(params.objective).toBe(objective);
+        return { goal: newGoal, document, previousRevision, revision,
+          creationId: request.creationId, replayed: false };
+      },
+      getThreadGoalWithRevision: async () => ({ goal: newGoal, revision }),
+      getThreadGoalDocument: async () => ({ goal: newGoal, document, content: mission }),
+    } as never;
+    expect((await createSupervisorGoal(service, threadId,
+      { ...request, objective: trimmed })).goal?.objective).toBe(objective);
+    await expect(createSupervisorGoal(service, threadId,
+      { ...request, objective: `${objective}😀` }))
+      .rejects.toMatchObject({ category: 'invalid_request' });
+    expect(calls).toBe(1);
+  });
+
   it('allows an explicit identical creation-ID reconciliation without a second native effect', async () => {
     let effects = 0;
     let calls = 0;

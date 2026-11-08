@@ -27,7 +27,7 @@ export async function createSupervisorGoal(service: Service, threadId: string,
       typeof input.document !== 'string' || !input.document.trim() ||
       Buffer.byteLength(input.document, 'utf8') > 1_048_576 ||
       typeof input.objective !== 'string' || !input.objective.trim() ||
-      input.objective.length > 4_000 ||
+      [...input.objective.trim()].length > 4_000 ||
       typeof input.creationId !== 'string' || !creationIdPattern.test(input.creationId) ||
       input.expectedStatus !== 'complete' ||
       !Number.isSafeInteger(maxWaitMs) || maxWaitMs < 1 || maxWaitMs > 3_000) {
