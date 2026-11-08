@@ -16,7 +16,8 @@ let server: Server | undefined;
 afterEach(() => server?.close());
 
 async function fixture(verified: VerifiedSupervisorGrant | null = grant, alteredDocument = false) {
-  const calls = { goal: 0, create: 0, resume: 0, terminal: 0, artifact: 0, submission: 0 };
+  const calls = { goal: 0, create: 0, resume: 0, terminal: 0, terminalList: 0,
+    artifact: 0, submission: 0 };
   const app = express();
   app.use(express.json({ limit: '2kb' }));
   app.use('/peer', createSupervisorPeerRouter({
@@ -32,6 +33,9 @@ async function fixture(verified: VerifiedSupervisorGrant | null = grant, altered
     createGoal: async () => { calls.create++; throw new Error('creation outcome unknown'); },
     resumeGoal: async (_thread, expected) => { calls.resume++; return { ...expected, status: 'active' }; },
     readTerminal: async () => { calls.terminal++; throw new Error('private command text'); },
+    listTerminalOwners: async () => { calls.terminalList++; return { data: [{ threadId,
+      turnId: '00000000-0000-4000-8000-000000000003', itemId: 'item-1',
+      nativeProcessId: 'process-1', terminalGeneration: 1 }], nextCursor: null }; },
     readJournal: async () => ({ requestId: 'request-1', threadId,
       clientUserMessageId: 'client-1', phase: 'turn_started', turnId: 'turn-1', at: 'now' }),
     readSubmission: async (_thread, clientUserMessageId) => { calls.submission++;
@@ -74,7 +78,8 @@ describe('enrolled supervisor peer route seam', () => {
     const { base, calls } = await fixture(null);
     expect((await fetch(`${base}/goal`)).status).toBe(403);
     expect((await fetch(`${base}/artifacts/receipt-1?content=true`)).status).toBe(403);
-    expect(calls).toEqual({ goal: 0, create: 0, resume: 0, terminal: 0, artifact: 0, submission: 0 });
+    expect(calls).toEqual({ goal: 0, create: 0, resume: 0, terminal: 0,
+      terminalList: 0, artifact: 0, submission: 0 });
   });
   it('denies cross-thread creation before a native call and keeps uncertain creation typed', async () => {
     const { base, calls } = await fixture();
@@ -180,6 +185,25 @@ describe('enrolled supervisor peer route seam', () => {
     expect(content.content).toBe('owned');
     expect(content.path).toBeUndefined();
     expect(calls.artifact).toBe(2);
+  });
+  it('lists only scoped native terminal owner IDs, not process status or private output', async () => {
+    const { base, calls } = await fixture();
+    const denied = await fetch(`${base.replace(threadId,
+      '00000000-0000-4000-8000-000000000002')}/terminals`);
+    expect(denied.status).toBe(403);
+    expect(calls.terminalList).toBe(0);
+    const malformed = await fetch(`${base}/terminals?cursor=../other`);
+    expect(malformed.status).toBe(400);
+    expect(calls.terminalList).toBe(0);
+    const response = await fetch(`${base}/terminals`);
+    expect(response.status).toBe(200);
+    const value = await response.json() as Record<string, unknown>;
+    expect(value).toMatchObject({ available: true, threadId,
+      observation: 'native-terminal-owners-only-not-process-status',
+      data: [{ threadId, turnId: '00000000-0000-4000-8000-000000000003',
+        itemId: 'item-1', nativeProcessId: 'process-1', terminalGeneration: 1 }] });
+    expect(JSON.stringify(value)).not.toMatch(/private|output|running|exited/);
+    expect(calls.terminalList).toBe(1);
   });
   it('uses the exact native Goal revision for a conditional resume, never a read-then-write', async () => {
     const { base, calls } = await fixture();
