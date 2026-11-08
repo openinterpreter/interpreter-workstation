@@ -134,6 +134,49 @@ describe('interpreterCli handlers', () => {
     }
   });
 
+  test('Goal resume CLI delegates one exact expected-state write to native without retry', async () => {
+    const threadId = '00000000-0000-4000-8000-000000000077';
+    const expected = { goalId: '00000000-0000-4000-8000-000000000088',
+      status: 'paused' as const, missionRevision: 2, lifecycleRevision: 5 };
+    const service = getCodexService();
+    const original = service.setThreadGoalWithRevision;
+    const calls: unknown[] = [];
+    setConfigOverride({ agents: {}, mcpServers: {} } as any);
+    setToolManager(new ToolManager());
+    agentTabManager.bindThread({ agentId: 'goal-resumer', threadId,
+      callerToken: 'agtok_goal_resumer', allowedToolNames: [
+        'builtin-interpreter__interpreter_goal_resume',
+      ] });
+    agentTabManager.bindThread({ agentId: 'goal-delegate',
+      threadId: '00000000-0000-4000-8000-000000000079',
+      callerToken: 'agtok_goal_delegate', allowedToolNames: [
+        'builtin-interpreter__interpreter_goal_resume',
+      ], parentOwner: { approvalOwnerKind: 'normal-agent', agentId: 'goal-resumer',
+        threadId, windowSessionKey: null, workspacePath: null } });
+    service.setThreadGoalWithRevision = async (owner, revision, change) => {
+      calls.push([owner, revision, change]);
+      return { goal: { threadId: owner, status: 'active' } as any,
+        revision: { ...revision, status: 'active', lifecycleRevision: 6 } };
+    };
+    try {
+      const result = await callInterpreterCliTool({ callerToken: 'agtok_goal_resumer',
+        serverId: 'builtin-interpreter', toolName: 'interpreter_goal_resume',
+        args: { expected } }) as { content: Array<{ text: string }> };
+      expect(JSON.parse(result.content[0]!.text)).toEqual({ resumed: true,
+        revision: { ...expected, status: 'active', lifecycleRevision: 6 } });
+      expect(calls).toEqual([[threadId, expected, { status: 'active' }]]);
+      const delegated = await callInterpreterCliTool({ callerToken: 'agtok_goal_delegate',
+        serverId: 'builtin-interpreter', toolName: 'interpreter_goal_resume',
+        args: { expected } }) as { content: Array<{ text: string }>; isError?: boolean };
+      expect(delegated.isError).toBe(true);
+      expect(JSON.parse(delegated.content[0]!.text).category).toBe('caller_unavailable');
+      await expect(callInterpreterCliTool({ callerToken: 'not-a-caller',
+        serverId: 'builtin-interpreter', toolName: 'interpreter_goal_resume',
+        args: { expected } })).rejects.toThrow();
+      expect(calls).toHaveLength(1);
+    } finally { service.setThreadGoalWithRevision = original; }
+  });
+
   test('lists visible servers for a bound caller token', async () => {
     setToolManager({
       async getToolServer() {
