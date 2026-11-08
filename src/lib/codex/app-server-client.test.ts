@@ -527,6 +527,55 @@ describe("CodexAppServerClient", () => {
     assert.deepEqual(await listPending, { data: [], nextCursor: null });
     client.shutdown();
   });
+  test('supervisor snapshot sends metadata plus one unloaded page without connecting or hydrating history', async () => {
+    const transport = new FakeTransport();
+    let version = '0.0.58';
+    transport.getSelectedRuntimeVersion = async () => version;
+    const client = new CodexAppServerClient(transport, null);
+    const connected = client.ensureConnected();
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await connected;
+    const baseline = transport.sent.length;
+    await assert.rejects(client.threadSupervisorSnapshot('thread_1'), /unavailable/);
+    assert.equal(transport.sent.length, baseline);
+    version = '0.0.59';
+    const pending = client.threadSupervisorSnapshot('thread_1');
+    await waitFor(() => transport.sent.length === baseline + 1);
+    const metadata = assertSentRequest(transport, baseline, CLIENT_METHOD.threadRead);
+    assert.deepEqual(metadata.params, { threadId: 'thread_1', includeTurns: false });
+    transport.respond(metadata, { thread: { id: 'thread_1', status: { type: 'idle' },
+      preview: 'private historical instruction', turns: [] } });
+    await waitFor(() => transport.sent.length === baseline + 2);
+    const page = assertSentRequest(transport, baseline + 1, CLIENT_METHOD.threadTurnsList);
+    assert.deepEqual(page.params, { threadId: 'thread_1', limit: 1,
+      sortDirection: 'desc', itemsView: 'notLoaded' });
+    transport.respond(page, { data: [{ id: 'turn_current', status: 'completed',
+      itemsView: 'notLoaded', items: [] }], nextCursor: 'opaque', backwardsCursor: null });
+    const thread = await pending;
+    assert.equal(thread.turns[0].id, 'turn_current');
+    assert.equal(thread.turns[0].items.length, 0);
+    assert.equal(transport.sent.length, baseline + 2);
+    client.shutdown();
+  });
+  test('supervisor snapshot never starts a second RPC when the first read crosses disconnect', async () => {
+    const transport = new FakeTransport();
+    transport.getSelectedRuntimeVersion = async () => '0.0.59';
+    const client = new CodexAppServerClient(transport, null);
+    const connected = client.ensureConnected();
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await connected;
+    const baseline = transport.sent.length;
+    const pending = client.threadSupervisorSnapshot('thread_1');
+    await waitFor(() => transport.sent.length === baseline + 1);
+    const rpc = assertSentRequest(transport, baseline, CLIENT_METHOD.threadRead);
+    transport.close(new Error('disconnected'));
+    transport.respond(rpc, { thread: { id: 'thread_1', status: { type: 'idle' }, turns: [] } });
+    await assert.rejects(pending);
+    assert.equal(transport.sent.length, baseline + 1);
+    client.shutdown();
+  });
   test('native terminal read does not reconnect when close races asynchronous runtime-version observation', async () => {
     const transport = new FakeTransport();
     let resolveVersion!: (version: string) => void;
