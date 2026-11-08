@@ -13,6 +13,7 @@ import { getSelectionTool } from './getSelectionTool';
 import { closeTabTool } from './closeTabTool';
 import { refreshFileTool } from './refreshFileTool';
 import { wakeScheduleTool } from './wakeScheduleTool';
+import { goalRevisionTool } from './goalRevisionTool';
 import { settingsGetTool } from './settingsGetTool';
 import { settingsSetTool } from './settingsSetTool';
 import { usageGetTool } from './usageGetTool';
@@ -46,6 +47,7 @@ export const interpreterServerDefinition: BuiltinServerDefinition = {
     closeTabTool,
     refreshFileTool,
     wakeScheduleTool,
+    goalRevisionTool,
     showInFolderTool,
     vaultTool,
     settingsGetTool,

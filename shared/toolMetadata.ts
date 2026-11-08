@@ -155,6 +155,7 @@ const TOOL_DISPLAY_INTERNAL = {
   interpreter_close_tab: { category: 'workstation', verb: { active: 'Closing tab', past: 'Closed tab' } },
   interpreter_refresh_file: { category: 'workstation', verb: { active: 'Refreshing file', past: 'Refreshed file' } },
   interpreter_wake_schedule: { category: 'workstation', verb: { active: 'Managing schedule', past: 'Managed schedule' } },
+  interpreter_goal_revision_get: { category: 'workstation', verb: { active: 'Inspecting Goal revision', past: 'Inspected Goal revision' } },
   interpreter_show_in_folder: { category: 'workstation', verb: { active: 'Revealing path', past: 'Revealed path' } },
   interpreter_get_context: { category: 'workstation', verb: { active: 'Viewing Interpreter', past: 'Viewed Interpreter' } },
   interpreter_get_selection: { category: 'workstation', verb: { active: 'Viewing selection', past: 'Viewed selection' } },
