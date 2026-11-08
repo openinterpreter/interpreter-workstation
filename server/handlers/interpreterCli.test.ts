@@ -177,6 +177,35 @@ describe('interpreterCli handlers', () => {
     } finally { service.setThreadGoalWithRevision = original; }
   });
 
+  test('native terminal CLI observation carries only the bound thread and content-free result', async () => {
+    const threadId = '00000000-0000-4000-8000-000000000077';
+    const service = getCodexService();
+    const original = service.readNativeTerminalStatus;
+    const requests: unknown[] = [];
+    setConfigOverride({ agents: {}, mcpServers: {} } as any);
+    setToolManager(new ToolManager());
+    agentTabManager.bindThread({ agentId: 'terminal-owner', threadId,
+      callerToken: 'agtok_terminal_owner', allowedToolNames: [
+        'builtin-interpreter__interpreter_native_terminal_status',
+      ] });
+    service.readNativeTerminalStatus = async request => {
+      requests.push(request);
+      return { phase: 'exited', outputBytes: 4, outputSha256: 'a'.repeat(64),
+        outputCapReached: false, exitCode: 0, terminalGeneration: 9,
+        observationTimedOut: false };
+    };
+    const args = { turnId: 'turn_1', itemId: 'item_1', nativeProcessId: 'process_1',
+      terminalGeneration: 9, maxWaitMs: 500 };
+    try {
+      const result = await callInterpreterCliTool({ callerToken: 'agtok_terminal_owner',
+        serverId: 'builtin-interpreter', toolName: 'interpreter_native_terminal_status',
+        args }) as { content: Array<{ text: string }> };
+      expect(JSON.parse(result.content[0]!.text)).toMatchObject({ available: true,
+        phase: 'exited', outputBytes: 4, exitCode: 0 });
+      expect(requests).toEqual([{ threadId, ...args }]);
+    } finally { service.readNativeTerminalStatus = original; }
+  });
+
   test('lists visible servers for a bound caller token', async () => {
     setToolManager({
       async getToolServer() {

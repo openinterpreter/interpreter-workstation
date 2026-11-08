@@ -39,6 +39,7 @@ describe('ToolManager hidden builtin discovery', () => {
       'interpreter_wake_schedule',
       'interpreter_goal_revision_get',
       'interpreter_goal_resume',
+      'interpreter_native_terminal_status',
       'interpreter_browser_tab_activate',
       'interpreter_browser_page_inspect',
       'interpreter_browser_page_trace',

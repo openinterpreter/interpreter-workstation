@@ -197,6 +197,7 @@ const HEADLESS_BROWSER_TOOL_NAMES = new Set([
   'interpreter_wake_schedule',
   'interpreter_goal_revision_get',
   'interpreter_goal_resume',
+  'interpreter_native_terminal_status',
   'interpreter_whole_computer_state_get',
   'interpreter_browser_tab_activate',
   'interpreter_browser_page_inspect',
