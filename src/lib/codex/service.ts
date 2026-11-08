@@ -1,4 +1,5 @@
 import { match } from "ts-pattern";
+import { nativeTerminalOwnerObserved } from '../../../server/utils/nativeTurnOwnership';
 import { nativeCommandSessionSnapshot, nativeTurnReceipt } from './native-turn-receipt';
 import { boundNativeTerminalStatus, validateNativeTerminalRequest, type NativeTerminalStatusRequest,
   type NativeTerminalStatusResponse } from './native-terminal-status';
@@ -663,17 +664,10 @@ export class CodexService {
     const activeTurnId = this.activeTurns.get(threadId);
     if (!activeTurnId) return; // A turn still starting cannot be reconciled.
     try {
-      const { thread } = await this.client.threadRead({ threadId, includeTurns: true });
-      const last = thread.turns[thread.turns.length - 1];
-      const owned = thread.turns.find((turn) => turn.id === activeTurnId);
-      if (
-        thread.id === threadId &&
-        thread.status.type === "idle" &&
-        last && (last.status === "completed" || last.status === "failed" || last.status === "interrupted") &&
-        owned &&
-        (owned.status === "completed" || owned.status === "failed" || owned.status === "interrupted") &&
-        this.activeTurns.get(threadId) === activeTurnId
-      ) this.activeTurns.delete(threadId);
+      const terminal = await nativeTerminalOwnerObserved(threadId, activeTurnId,
+        () => this.client.threadRead({ threadId, includeTurns: false }),
+        params => this.client.threadTurnsList(params));
+      if (terminal && this.activeTurns.get(threadId) === activeTurnId) this.activeTurns.delete(threadId);
     } catch {
       // A failed or ambiguous authoritative read must not clear the guard.
     }
