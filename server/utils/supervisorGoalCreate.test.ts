@@ -16,8 +16,12 @@ const document = { path: `managed-goals/${threadId}/mission-1-${sha256}.md`,
   sha256, byteLength: Buffer.byteLength(mission), missionRevision: 1 };
 const request: SupervisorGoalCreateInput = {
   creationId: 'new-job-20261108-unique', objective: goal.objective,
-  document: mission, expectedGoalId: oldId, expectedStatus: 'complete',
-  expectedMissionRevision: 6, expectedLifecycleRevision: 9,
+  document: mission, precondition: { kind: 'completed', expectedGoalId: oldId,
+    expectedStatus: 'complete', expectedMissionRevision: 6, expectedLifecycleRevision: 9 },
+};
+const initialRequest: SupervisorGoalCreateInput = {
+  creationId: 'first-job-20261108-unique', objective: goal.objective,
+  document: mission, precondition: { kind: 'absent', admissionState: 'noGoal' },
 };
 
 describe('native completed-predecessor managed Goal creation', () => {
@@ -43,6 +47,30 @@ describe('native completed-predecessor managed Goal creation', () => {
     expect(created.previousRevision).toEqual(previousRevision);
     expect(created.creationId).toBe(request.creationId);
     expect(created.replayed).toBe(false);
+  });
+
+  it('creates an explicit initial noGoal mission with null predecessor and durable replay', async () => {
+    let effects = 0;
+    let calls = 0;
+    const service = {
+      createThreadGoalDocument: async (params: unknown) => {
+        calls++;
+        expect(params).toEqual({ threadId, ...initialRequest, status: 'active' });
+        if (calls === 1) effects++;
+        return { goal, document, previousRevision: null, revision,
+          creationId: initialRequest.creationId, replayed: calls > 1 };
+      },
+      getThreadGoalWithRevision: async () => ({ goal, revision }),
+      getThreadGoalDocument: async () => ({ goal, document, content: mission }),
+    } as never;
+    const first = await createSupervisorGoal(service, threadId, initialRequest);
+    expect(first.previousRevision).toBeNull();
+    expect(first.document?.content).toBe(mission);
+    // A separately constructed consumer after restart must use the SAME
+    // creation ID. Native owns the replay; no read-then-write Goal fallback.
+    const again = await createSupervisorGoal(service, threadId, { ...initialRequest });
+    expect(again.replayed).toBe(true);
+    expect(effects).toBe(1);
   });
 
   it('matches the native 4000 Unicode-scalar objective bound after trimming', async () => {
@@ -96,9 +124,13 @@ describe('native completed-predecessor managed Goal creation', () => {
     let calls = 0;
     const service = { createThreadGoalDocument: async () => { calls++; throw Error('unexpected'); } } as never;
     for (const invalid of [
-      { ...request, expectedStatus: 'active' }, { ...request, creationId: '../other' },
+      { ...request, precondition: { ...request.precondition, expectedStatus: 'active' } },
+      { ...request, creationId: '../other' },
       { ...request, document: '' }, { ...request, document: 'x'.repeat(1_048_577) },
-      { ...request, expectedGoalId: 'wrong' },
+      { ...request, precondition: { ...request.precondition, expectedGoalId: 'wrong' } },
+      { ...initialRequest, precondition: { kind: 'absent', admissionState: 'noGoal',
+        expectedGoalId: oldId } },
+      { ...initialRequest, precondition: { kind: 'absent', admissionState: 'unknown' } },
     ]) {
       await expect(createSupervisorGoal(service, threadId, invalid as SupervisorGoalCreateInput))
         .rejects.toMatchObject({ category: 'invalid_request' });

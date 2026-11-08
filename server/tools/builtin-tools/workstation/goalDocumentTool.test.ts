@@ -11,8 +11,9 @@ const id = (n: number) => `00000000-0000-4000-8000-${n.toString().padStart(12, '
 const decode = (result: { content: Array<{ text: string }> }) => JSON.parse(result.content[0]!.text);
 const digest = createHash('sha256').update(longMission).digest('hex');
 const createInput = { creationId: 'distinct-mission-01', objective: 'New mission pointer',
-  document: longMission, expectedGoalId: id(20), expectedStatus: 'complete' as const,
-  expectedMissionRevision: 5, expectedLifecycleRevision: 9 };
+  document: longMission, precondition: { kind: 'completed' as const,
+    expectedGoalId: id(20), expectedStatus: 'complete' as const,
+    expectedMissionRevision: 5, expectedLifecycleRevision: 9 } };
 const previousRevision = { goalId: id(20), status: 'complete',
   missionRevision: 5, lifecycleRevision: 9 };
 const newRevision = { goalId: id(21), status: 'active',
@@ -53,7 +54,36 @@ describe('same-thread managed Goal document caller', () => {
     }
     expect(goalDocumentCreateTool.mainAgentOnly).toBe(true);
     expect(goalDocumentReadTool.mainAgentOnly).toBe(true);
-    expect(goalDocumentCreateTool.inputSchema?.required).toContain('expectedLifecycleRevision');
+    expect(goalDocumentCreateTool.inputSchema?.required).toContain('precondition');
+  });
+
+  test('five absent original Goals require explicit noGoal and return null predecessor', async () => {
+    for (let n = 11; n <= 15; n++) {
+      const threadId = id(n);
+      const context: BuiltinToolContext = { threadId, verifiedCallerThreadId: threadId };
+      const input = { ...createInput, creationId: `initial-${n}`,
+        precondition: { kind: 'absent' as const, admissionState: 'noGoal' as const } };
+      let calls = 0;
+      const service = {
+        createThreadGoalDocument: async (request: unknown) => {
+          calls++;
+          expect(request).toEqual({ ...input, threadId, status: 'active' });
+          return { creationId: input.creationId, goal: { threadId,
+            objective: input.objective, status: 'active' }, document: nativeDocument(threadId),
+          revision: newRevision, previousRevision: null, replayed: false };
+        },
+        getThreadGoalWithRevision: async () => ({ goal: { threadId,
+          objective: input.objective, status: 'active' }, revision: newRevision }),
+        getThreadGoalDocument: async () => ({ goal: { threadId,
+          objective: input.objective, status: 'active' }, document: nativeDocument(threadId),
+          content: longMission }),
+      } as never;
+      const created = decode(await createGoalDocumentForCaller(context, input, service));
+      expect(created).toMatchObject({ created: true, creationId: input.creationId });
+      expect(created.previousRevision).toBeNull();
+      expect(created.document.content).toBe(longMission);
+      expect(calls).toBe(1);
+    }
   });
 
   test('unrelated blocked or absent Goal cannot be promoted by a document creator', async () => {
@@ -104,7 +134,8 @@ describe('same-thread managed Goal document caller', () => {
     const threadId = id(8);
     let writes = 0;
     const result = await createGoalDocumentForCaller({ threadId,
-      verifiedCallerThreadId: threadId }, { ...createInput, expectedLifecycleRevision: undefined } as never,
+      verifiedCallerThreadId: threadId }, { ...createInput,
+        precondition: { ...createInput.precondition, expectedLifecycleRevision: undefined } } as never,
     { createThreadGoalDocument: async () => { writes++; throw Error('must not write'); } } as never);
     expect(decode(result)).toEqual({ created: false, category: 'invalid_request' });
     expect(writes).toBe(0);

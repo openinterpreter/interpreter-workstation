@@ -3,13 +3,15 @@ import { createHash } from 'node:crypto';
 import express from 'express';
 import { createServer, type Server } from 'node:http';
 import { createSupervisorPeerRouter } from './supervisorPeer';
-import { SupervisorGoalCreateError } from '../utils/supervisorGoalCreate';
+import { createSupervisorGoal, SupervisorGoalCreateError } from '../utils/supervisorGoalCreate';
 import type { VerifiedSupervisorGrant } from '../utils/supervisorPeerScope';
 
 const threadId = '00000000-0000-4000-8000-000000000001';
 const createBody = { creationId: 'unique-supervisor-job', objective: 'managed',
-  document: 'mission', expectedGoalId: '00000000-0000-4000-8000-000000000004',
-  expectedStatus: 'complete', expectedMissionRevision: 4, expectedLifecycleRevision: 7 };
+  document: 'mission', precondition: { kind: 'completed' as const,
+    expectedGoalId: '00000000-0000-4000-8000-000000000004',
+    expectedStatus: 'complete' as const, expectedMissionRevision: 4,
+    expectedLifecycleRevision: 7 } };
 const grant: VerifiedSupervisorGrant = {
   issuer: 'enrolled-issuer', subject: 'supervisor-1', sourceComputer: 'source-1',
   targetComputer: 'target-1', threadId,
@@ -97,6 +99,56 @@ describe('enrolled supervisor peer route seam', () => {
     expect(await uncertain.json()).toEqual({ available: false, category: 'mutation_unconfirmed' });
     expect(calls.create).toBe(1);
   });
+  it('creates an initial native-managed Goal only for the exact enrolled thread', async () => {
+    const full = '# First full mission\n' + 'Retain this task.\n'.repeat(300);
+    const sha = createHash('sha256').update(full).digest('hex');
+    const first = { creationId: 'peer-first-mission', objective: 'first mission pointer',
+      document: full, precondition: { kind: 'absent' as const,
+        admissionState: 'noGoal' as const } };
+    const goal = { threadId, status: 'active', objective: first.objective };
+    const revision = { goalId: '00000000-0000-4000-8000-000000000005',
+      status: 'active', missionRevision: 1, lifecycleRevision: 1 };
+    const document = { path: `managed-goals/${threadId}/mission-1-${sha}.md`,
+      sha256: sha, byteLength: Buffer.byteLength(full), missionRevision: 1 };
+    let writes = 0;
+    let effects = 0;
+    const native = {
+      createThreadGoalDocument: async () => { writes++;
+        if (writes === 1) effects++;
+        return { goal, revision, document, previousRevision: null,
+          creationId: first.creationId, replayed: writes > 1 }; },
+      getThreadGoalWithRevision: async () => ({ goal, revision }),
+      getThreadGoalDocument: async () => ({ goal, document, content: full }),
+    } as never;
+    const app = express();
+    app.use(express.json());
+    app.use('/peer', createSupervisorPeerRouter({ targetComputer: 'target-1',
+      verify: async () => grant,
+      readGoal: async () => ({ goal: null, revision: null, document: null }),
+      createGoal: (id, input) => createSupervisorGoal(native, id, input),
+      resumeGoal: async () => { throw Error('unused'); },
+      readTerminal: async () => { throw Error('unused'); },
+    }));
+    server = createServer(app);
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw Error('No listener');
+    const base = `http://127.0.0.1:${address.port}/peer/threads/${threadId}/goal/create`;
+    const post = (url: string, body: unknown) => fetch(url, { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    expect((await post(base.replace(threadId, '00000000-0000-4000-8000-000000000002'),
+      first)).status).toBe(403);
+    expect(writes).toBe(0);
+    const created = await post(base, first);
+    expect(created.status).toBe(200);
+    expect(await created.json()).toMatchObject({ available: true, creationId: first.creationId,
+      previousRevision: null, replayed: false, document: { content: full } });
+    const replay = await post(base, first);
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toMatchObject({ replayed: true, previousRevision: null });
+    expect(writes).toBe(2); // Two explicit requests, one native effect under its creation ID.
+    expect(effects).toBe(1);
+  });
   it('accepts a large managed mission only on the scoped peer JSON transport', async () => {
     const app = express();
     app.use('/peer/threads/:threadId/goal/create', express.json({ limit: '6292000b' }));
@@ -118,9 +170,10 @@ describe('enrolled supervisor peer route seam', () => {
           byteLength: Buffer.byteLength(input.document),
           missionRevision: 1 },
         creationId: input.creationId, replayed: false,
-        previousRevision: { goalId: input.expectedGoalId, status: 'complete',
-          missionRevision: input.expectedMissionRevision,
-          lifecycleRevision: input.expectedLifecycleRevision },
+        previousRevision: input.precondition.kind === 'completed' ? {
+          goalId: input.precondition.expectedGoalId, status: 'complete',
+          missionRevision: input.precondition.expectedMissionRevision,
+          lifecycleRevision: input.precondition.expectedLifecycleRevision } : null,
       }; },
       resumeGoal: async () => { throw Error('unused'); },
       readTerminal: async () => { throw Error('unused'); },

@@ -7,7 +7,7 @@ import { readStableSupervisorGoal } from './supervisorGoalRead';
 type Service = Pick<ReturnType<typeof getCodexService>,
   'getThreadGoalWithRevision' | 'getThreadGoalDocument' | 'createThreadGoalDocument'>;
 
-/** Exact OIX tree 22d6ff263964: one new Goal after a completed predecessor. */
+/** One native idempotent create with an explicit absent or exact predecessor claim. */
 export type SupervisorGoalCreateInput = Omit<ThreadGoalDocumentCreateParams, 'threadId' | 'status'>;
 
 export class SupervisorGoalCreateError extends Error {
@@ -29,24 +29,37 @@ export async function createSupervisorGoal(service: Service, threadId: string,
       typeof input.objective !== 'string' || !input.objective.trim() ||
       [...input.objective.trim()].length > 4_000 ||
       typeof input.creationId !== 'string' || !creationIdPattern.test(input.creationId) ||
-      input.expectedStatus !== 'complete' ||
       !Number.isSafeInteger(maxWaitMs) || maxWaitMs < 1 || maxWaitMs > 3_000) {
     throw new SupervisorGoalCreateError('invalid_request');
   }
+  const precondition = input.precondition;
   try {
-    goalCasExpectedParams({ goalId: input.expectedGoalId, status: input.expectedStatus,
-      missionRevision: input.expectedMissionRevision,
-      lifecycleRevision: input.expectedLifecycleRevision });
+    if (!precondition || typeof precondition !== 'object' || Array.isArray(precondition)) {
+      throw Error('missing precondition');
+    }
+    if (precondition.kind === 'absent') {
+      if (precondition.admissionState !== 'noGoal' ||
+          Object.keys(precondition).sort().join(',') !== 'admissionState,kind') {
+        throw Error('invalid absent claim');
+      }
+    } else if (precondition.kind === 'completed') {
+      if (precondition.expectedStatus !== 'complete' ||
+          Object.keys(precondition).sort().join(',') !==
+            'expectedGoalId,expectedLifecycleRevision,expectedMissionRevision,expectedStatus,kind') {
+        throw Error('invalid completed claim');
+      }
+      goalCasExpectedParams({ goalId: precondition.expectedGoalId,
+        status: precondition.expectedStatus,
+        missionRevision: precondition.expectedMissionRevision,
+        lifecycleRevision: precondition.expectedLifecycleRevision });
+    } else throw Error('unknown precondition');
     verifyGoalDocument(threadId, null, null);
   } catch { throw new SupervisorGoalCreateError('invalid_request'); }
 
   const objective = input.objective.trim();
   const params: ThreadGoalDocumentCreateParams = {
     threadId, creationId: input.creationId, objective,
-    document: input.document, status: 'active',
-    expectedGoalId: input.expectedGoalId, expectedStatus: 'complete',
-    expectedMissionRevision: input.expectedMissionRevision,
-    expectedLifecycleRevision: input.expectedLifecycleRevision,
+    document: input.document, status: 'active', precondition,
   };
   let result: Awaited<ReturnType<Service['createThreadGoalDocument']>>;
   let deadline: ReturnType<typeof setTimeout> | undefined;
@@ -73,11 +86,14 @@ export async function createSupervisorGoal(service: Service, threadId: string,
     if (result.creationId !== input.creationId || typeof result.replayed !== 'boolean' ||
         result.goal.threadId !== threadId || result.goal.status !== 'active' ||
         result.goal.objective !== objective ||
-        result.previousRevision.goalId !== input.expectedGoalId ||
-        result.previousRevision.status !== 'complete' ||
-        result.previousRevision.missionRevision !== input.expectedMissionRevision ||
-        result.previousRevision.lifecycleRevision !== input.expectedLifecycleRevision ||
-        result.revision.goalId === input.expectedGoalId) throw Error('receipt mismatch');
+        (precondition.kind === 'absent'
+          ? result.previousRevision !== null
+          : !result.previousRevision ||
+            result.previousRevision.goalId !== precondition.expectedGoalId ||
+            result.previousRevision.status !== precondition.expectedStatus ||
+            result.previousRevision.missionRevision !== precondition.expectedMissionRevision ||
+            result.previousRevision.lifecycleRevision !== precondition.expectedLifecycleRevision ||
+            result.revision.goalId === precondition.expectedGoalId)) throw Error('receipt mismatch');
     verifyThreadGoalRevision(result.goal, result.revision, threadId);
     verifyGoalDocument(threadId, result.document, input.document);
     const state = await readStableSupervisorGoal(service, threadId, maxWaitMs);

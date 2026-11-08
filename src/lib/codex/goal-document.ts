@@ -26,25 +26,28 @@ export type ThreadGoalDocumentSetResponse = {
   revision?: unknown;
 };
 
-/** Experimental OIX thread/goal/document/create at tested tree 22d6ff263964.
- * Creation after COMPLETE is one native transaction, not a null-only insert. */
+/** One native atomic create for an explicitly observed absent Goal or exact
+ * completed predecessor. The absent contract remains gated on the final OIX
+ * producer revision; no legacy document/set insertion is a fallback. */
+export type ThreadGoalDocumentCreatePrecondition =
+  | { kind: 'absent'; admissionState: 'noGoal' }
+  | { kind: 'completed'; expectedGoalId: string; expectedStatus: 'complete';
+      expectedMissionRevision: number; expectedLifecycleRevision: number };
+
 export type ThreadGoalDocumentCreateParams = {
   threadId: string;
   creationId: string;
   objective: string;
   document: string;
   status: 'active';
-  expectedGoalId: string;
-  expectedStatus: 'complete';
-  expectedMissionRevision: number;
-  expectedLifecycleRevision: number;
+  precondition: ThreadGoalDocumentCreatePrecondition;
 };
 
 export type ThreadGoalDocumentCreateResponse = {
   creationId: string;
   goal: v2.ThreadGoal;
   document: ThreadGoalDocument;
-  previousRevision: ThreadGoalRevision;
+  previousRevision: ThreadGoalRevision | null;
   revision: ThreadGoalRevision;
   replayed: boolean;
 };

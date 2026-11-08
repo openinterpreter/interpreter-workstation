@@ -44,8 +44,8 @@ export async function readGoalDocumentForCaller(context: BuiltinToolContext | un
   }
 }
 
-/** One native completed-predecessor CAS; never infer absence from a read or
- * fall back to the legacy document/set insertion. */
+/** One native explicit absent-or-completed CAS; never infer absence from a
+ * failed read or fall back to legacy document/set insertion. */
 export async function createGoalDocumentForCaller(context: BuiltinToolContext | undefined,
   input: SupervisorGoalCreateInput,
   service: Parameters<typeof createSupervisorGoal>[0],
@@ -108,13 +108,16 @@ export const goalDocumentReadTool: BuiltinToolDefinition = {
 
 export const goalDocumentCreateTool: BuiltinToolDefinition = {
   name: 'interpreter_goal_document_create',
-  description: 'Create this conversation’s distinct native-managed full mission after an exact completed predecessor.',
+  description: 'Create this conversation’s distinct native-managed full mission after an explicit no-Goal read or exact completed predecessor.',
   inputSchema: { type: 'object', properties: {
     creationId: { type: 'string' }, objective: { type: 'string' }, document: { type: 'string' },
-    expectedGoalId: { type: 'string' }, expectedStatus: { type: 'string', enum: ['complete'] },
-    expectedMissionRevision: { type: 'integer' }, expectedLifecycleRevision: { type: 'integer' },
-  }, required: ['creationId', 'objective', 'document', 'expectedGoalId', 'expectedStatus',
-    'expectedMissionRevision', 'expectedLifecycleRevision'] },
+    precondition: { type: 'object', properties: {
+      kind: { type: 'string', enum: ['absent', 'completed'] },
+      admissionState: { type: 'string', enum: ['noGoal'] },
+      expectedGoalId: { type: 'string' }, expectedStatus: { type: 'string', enum: ['complete'] },
+      expectedMissionRevision: { type: 'integer' }, expectedLifecycleRevision: { type: 'integer' },
+    }, required: ['kind'] },
+  }, required: ['creationId', 'objective', 'document', 'precondition'] },
   mode: 'write', mainAgentOnly: true,
   handler: (args, context) => createGoalDocumentForCaller(context,
     args as SupervisorGoalCreateInput, getCodexService()),

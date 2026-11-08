@@ -282,9 +282,10 @@ describe('Workstation consumer for OIX-owned managed Goal documents', () => {
   test('create-after-complete fails closed when the pinned native method is unavailable', async () => {
     const params = { threadId, creationId: 'new-job-unique', objective: 'new mission pointer',
       document: documentText, status: 'active' as const,
-      expectedGoalId: '00000000-0000-4000-8000-000000000088',
-      expectedStatus: 'complete' as const, expectedMissionRevision: 2,
-      expectedLifecycleRevision: 3 };
+      precondition: { kind: 'completed' as const,
+        expectedGoalId: '00000000-0000-4000-8000-000000000088',
+        expectedStatus: 'complete' as const, expectedMissionRevision: 2,
+        expectedLifecycleRevision: 3 } };
     const unavailable = new CodexService({ subscribe: () => () => {} } as unknown as CodexClient);
     await assert.rejects(unavailable.createThreadGoalDocument(params),
       { category: 'create_unavailable' });
@@ -308,9 +309,10 @@ describe('Workstation consumer for OIX-owned managed Goal documents', () => {
   test('a late native create reply cannot trigger another CAS or become an acknowledged mutation', async () => {
     const params = { threadId, creationId: 'new-job-unique', objective: 'new mission pointer',
       document: documentText, status: 'active' as const,
-      expectedGoalId: '00000000-0000-4000-8000-000000000088',
-      expectedStatus: 'complete' as const, expectedMissionRevision: 2,
-      expectedLifecycleRevision: 3 };
+      precondition: { kind: 'completed' as const,
+        expectedGoalId: '00000000-0000-4000-8000-000000000088',
+        expectedStatus: 'complete' as const, expectedMissionRevision: 2,
+        expectedLifecycleRevision: 3 } };
     let resolve!: (receipt: unknown) => void;
     let calls = 0;
     const client = { subscribe: () => () => {}, threadGoalDocumentCreate: () => {

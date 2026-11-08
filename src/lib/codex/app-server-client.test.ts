@@ -385,9 +385,10 @@ describe("CodexAppServerClient", () => {
     const client = new CodexAppServerClient(transport, null);
     const params = { threadId: '00000000-0000-4000-8000-000000000077',
       creationId: 'new-job-unique', objective: 'new mission pointer', document: '# Full mission',
-      status: 'active' as const, expectedGoalId: '00000000-0000-4000-8000-000000000088',
-      expectedStatus: 'complete' as const, expectedMissionRevision: 2,
-      expectedLifecycleRevision: 3 };
+      status: 'active' as const, precondition: { kind: 'completed' as const,
+        expectedGoalId: '00000000-0000-4000-8000-000000000088',
+        expectedStatus: 'complete' as const, expectedMissionRevision: 2,
+        expectedLifecycleRevision: 3 } };
     await assert.rejects(client.threadGoalDocumentCreate(params), /unavailable/);
     assert.equal(transport.sent.length, 0);
     const connected = client.ensureConnected();
