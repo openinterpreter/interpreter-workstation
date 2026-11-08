@@ -98,7 +98,10 @@ export async function createSupervisorGoal(service: Service, threadId: string,
     verifyGoalDocument(threadId, result.document, input.document);
     const state = await readStableSupervisorGoal(service, threadId, maxWaitMs);
     if (!state.goal || !state.revision || !state.document ||
-        JSON.stringify(state.revision) !== JSON.stringify(result.revision) ||
+        state.revision.goalId !== result.revision.goalId ||
+        state.revision.status !== result.revision.status ||
+        state.revision.missionRevision !== result.revision.missionRevision ||
+        state.revision.lifecycleRevision !== result.revision.lifecycleRevision ||
         state.document.content !== input.document ||
         state.document.sha256 !== result.document.sha256) throw Error('readback mismatch');
     return { ...state, creationId: result.creationId,

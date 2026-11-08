@@ -229,4 +229,18 @@ describe('native completed-predecessor managed Goal creation', () => {
     await expect(createSupervisorGoal(service, threadId, request))
       .rejects.toMatchObject({ category: 'mutation_unconfirmed' });
   });
+
+  it('matches native readback by the four identity fields, independent of JSON key order', async () => {
+    const reordered = { lifecycleRevision: revision.lifecycleRevision,
+      missionRevision: revision.missionRevision, status: revision.status,
+      goalId: revision.goalId };
+    const service = {
+      createThreadGoalDocument: async () => ({ goal, document, previousRevision, revision,
+        creationId: request.creationId, replayed: false }),
+      getThreadGoalWithRevision: async () => ({ goal, revision: reordered }),
+      getThreadGoalDocument: async () => ({ goal, document, content: mission }),
+    } as never;
+    const created = await createSupervisorGoal(service, threadId, request);
+    expect(created.revision).toEqual(revision);
+  });
 });
