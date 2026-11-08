@@ -47,4 +47,21 @@ describe('bounded supervisor native reader', () => {
     reject(Error('native unavailable'));
     await expect(read).rejects.toThrow('native unavailable');
   });
+  it('never starts the second RPC after disconnect and rejects late results from the old generation', async () => {
+    let current = true;
+    let resolve!: (value: v2.ThreadReadResponse) => void;
+    let turnCalls = 0;
+    const first = new Promise<v2.ThreadReadResponse>(done => { resolve = done; });
+    const read = boundedSupervisorThread(id, () => first,
+      async () => { turnCalls++; return page; }, () => current);
+    current = false;
+    resolve({ thread: metadata });
+    await expect(read).rejects.toThrow('generation changed');
+    expect(turnCalls).toBe(0);
+
+    current = true;
+    const later = boundedSupervisorThread(id, async () => ({ thread: metadata }),
+      async () => { current = false; return page; }, () => current);
+    await expect(later).rejects.toThrow('generation changed');
+  });
 });

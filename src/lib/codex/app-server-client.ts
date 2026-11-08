@@ -20,6 +20,7 @@ import {
   isValidNotificationShape,
 } from "../validators/index";
 import type { v2 } from "../../../server/handlers/codex-generated-types/index";
+import { boundedSupervisorThread } from "../../../server/utils/boundedSupervisorThread";
 import type { JsonValue } from "../../../server/handlers/codex-generated-types/serde_json/JsonValue";
 import type {
   StreamImageAttachment,
@@ -2366,6 +2367,18 @@ export class CodexAppServerClient {
 
   async threadTurnsList(params: v2.ThreadTurnsListParams): Promise<v2.ThreadTurnsListResponse> {
     return this.rpcRequest(CLIENT_METHOD.threadTurnsList, params);
+  }
+
+  async threadSupervisorSnapshot(threadId: string): Promise<v2.Thread> {
+    const generation = await this.assertNativeTerminalStatusAvailable();
+    const thread = await boundedSupervisorThread(threadId,
+      params => this.rpcRequest(CLIENT_METHOD.threadRead, params, { skipEnsureConnected: true }),
+      params => this.rpcRequest(CLIENT_METHOD.threadTurnsList, params, { skipEnsureConnected: true }),
+      () => this.initialized && this.disconnectSequence === generation);
+    if (!this.initialized || this.disconnectSequence !== generation) {
+      throw new Error('Native supervisor observation crossed a runtime disconnect.');
+    }
+    return thread;
   }
 
   async threadQueueList(params: RequestMap[typeof CLIENT_METHOD.threadQueueList]['params']): Promise<RequestMap[typeof CLIENT_METHOD.threadQueueList]['result']> {
