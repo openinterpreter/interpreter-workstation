@@ -169,10 +169,13 @@ describe('native completed-predecessor managed Goal creation', () => {
     let finish!: (value: unknown) => void;
     let effects = 0;
     let calls = 0;
-    const native = (params: { creationId: string; precondition: unknown }) => {
+    const native = (params: { creationId: string; precondition: unknown; document: string }) => {
       calls++;
       expect(params.creationId).toBe(initialRequest.creationId);
       expect(params.precondition).toEqual(initialRequest.precondition);
+      if (params.document !== mission) {
+        throw new ManagedGoalDocumentError('stale_predecessor');
+      }
       if (calls === 1) {
         effects++;
         return new Promise(resolve => { finish = resolve; });
@@ -199,6 +202,11 @@ describe('native completed-predecessor managed Goal creation', () => {
     expect(recovered.document?.content).toBe(mission);
     expect(effects).toBe(1);
     expect(calls).toBe(2);
+    await expect(createSupervisorGoal(service(), threadId,
+      { ...initialRequest, document: `${mission}\nDifferent bytes` }))
+      .rejects.toMatchObject({ category: 'stale_predecessor' });
+    expect(effects).toBe(1);
+    expect(calls).toBe(3);
   });
 
   it('never acknowledges a wrong owner, predecessor, document, or post-create readback', async () => {
