@@ -1,5 +1,4 @@
 import { match } from "ts-pattern";
-import { boundedSupervisorThread } from '../../../server/utils/boundedSupervisorThread';
 import { nativeCommandSessionSnapshot, nativeTurnReceipt } from './native-turn-receipt';
 import { boundNativeTerminalStatus, validateNativeTerminalRequest, type NativeTerminalStatusRequest,
   type NativeTerminalStatusResponse } from './native-terminal-status';
@@ -403,6 +402,7 @@ export type CodexClient = {
   threadLoadedList(params?: v2.ThreadLoadedListParams): Promise<v2.ThreadLoadedListResponse>;
   threadRead(params: v2.ThreadReadParams): Promise<v2.ThreadReadResponse>;
   threadTurnsList(params: v2.ThreadTurnsListParams): Promise<v2.ThreadTurnsListResponse>;
+  threadSupervisorSnapshot(threadId: string): Promise<v2.Thread>;
   threadBackgroundTerminalsStatus?(params: Omit<NativeTerminalStatusRequest, 'terminalGeneration'>): Promise<NativeTerminalStatusResponse>;
   threadBackgroundTerminalsList?(params: { threadId: string; cursor?: string | null; limit?: number | null }): Promise<{
     data: Array<{ itemId: string; turnId?: string | null; nativeProcessId?: string | null;
@@ -1222,8 +1222,7 @@ export class CodexService {
   /** A bounded saved-turn shell for supervisor observation. Never hydrate the
    * full rollout or infer command/process liveness from an unloaded item view. */
   async readSupervisorThreadSnapshot(threadId: string): Promise<v2.Thread> {
-    return boundedSupervisorThread(threadId,
-      params => this.client.threadRead(params), params => this.client.threadTurnsList(params));
+    return this.client.threadSupervisorSnapshot(threadId);
   }
 
   async readNativeCustody(
