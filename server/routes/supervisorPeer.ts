@@ -1,4 +1,5 @@
 import { Router, type Request } from 'express';
+import { createHash } from 'node:crypto';
 import { goalCasExpectedParams, verifyThreadGoalRevision,
   type ThreadGoalRevision } from '../../src/lib/codex/goal-revision';
 import type { v2 } from '../handlers/codex-generated-types/index';
@@ -11,7 +12,8 @@ import { nativeSubmissionJournal } from '../utils/nativeSubmissionJournal';
 import { getCodexService } from '../../src/lib/codex/service';
 
 type Capability = SupervisorPeerTarget['capability'];
-type GoalState = { goal: v2.ThreadGoal | null; revision: ThreadGoalRevision | null };
+type GoalState = { goal: v2.ThreadGoal | null; revision: ThreadGoalRevision | null;
+  document: { content: string; sha256: string; byteLength: number; missionRevision: number } | null };
 
 /** Mount only behind a verifier of enrolled supervisor identity and machine scope.
  * HTTP headers, bodies, and an operator session are not a verifier. */
@@ -46,6 +48,12 @@ export function createSupervisorPeerRouter(options: Readonly<{
       const state = await options.readGoal(req.params.threadId);
       if (!state || (state.goal === null) !== (state.revision === null)) throw new Error('unavailable');
       verifyThreadGoalRevision(state.goal, state.revision, req.params.threadId);
+      if ((state.goal === null) !== (state.document === null) ||
+          state.document && (state.document.missionRevision !== state.revision?.missionRevision ||
+            Buffer.byteLength(state.document.content, 'utf8') !== state.document.byteLength ||
+            state.document.byteLength > 1_048_576 ||
+            createHash('sha256').update(state.document.content, 'utf8').digest('hex') !==
+              state.document.sha256)) throw new Error('unavailable');
       // Never return a partially observed mission or a revision from a different Goal.
       if (state.goal && JSON.stringify(state.goal).length > 256 * 1024) throw new Error('too large');
       return void res.json({ available: true, ...state });

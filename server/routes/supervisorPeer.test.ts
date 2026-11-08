@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
+import { createHash } from 'node:crypto';
 import express from 'express';
 import { createServer, type Server } from 'node:http';
 import { createSupervisorPeerRouter } from './supervisorPeer';
@@ -14,7 +15,7 @@ const grant: VerifiedSupervisorGrant = {
 let server: Server | undefined;
 afterEach(() => server?.close());
 
-async function fixture(verified: VerifiedSupervisorGrant | null = grant) {
+async function fixture(verified: VerifiedSupervisorGrant | null = grant, alteredDocument = false) {
   const calls = { goal: 0, resume: 0, terminal: 0, artifact: 0, submission: 0 };
   const app = express();
   app.use(express.json({ limit: '2kb' }));
@@ -23,7 +24,11 @@ async function fixture(verified: VerifiedSupervisorGrant | null = grant) {
     readGoal: async () => { calls.goal++; return { goal: {
       threadId, status: 'blocked', objective: 'retained',
     } as never, revision: { goalId: '00000000-0000-4000-8000-000000000004',
-      status: 'blocked', missionRevision: 4, lifecycleRevision: 7 } }; },
+      status: 'blocked', missionRevision: 4, lifecycleRevision: 7 }, document: {
+        content: '# retained mission', byteLength: Buffer.byteLength('# retained mission'),
+        sha256: createHash('sha256').update(alteredDocument ? '# other mission' : '# retained mission').digest('hex'),
+        missionRevision: 4,
+      } }; },
     resumeGoal: async (_thread, expected) => { calls.resume++; return { ...expected, status: 'active' }; },
     readTerminal: async () => { calls.terminal++; throw new Error('private command text'); },
     readJournal: async () => ({ requestId: 'request-1', threadId,
@@ -55,7 +60,11 @@ describe('enrolled supervisor peer route seam', () => {
     expect(await allowed.json()).toEqual({ available: true, goal: { threadId,
       status: 'blocked', objective: 'retained' }, revision: {
       goalId: '00000000-0000-4000-8000-000000000004', status: 'blocked',
-      missionRevision: 4, lifecycleRevision: 7 } });
+      missionRevision: 4, lifecycleRevision: 7 }, document: {
+      content: '# retained mission', byteLength: Buffer.byteLength('# retained mission'),
+      sha256: createHash('sha256').update('# retained mission').digest('hex'),
+      missionRevision: 4,
+    } });
     const denied = await fetch(`${base.replace(threadId, '00000000-0000-4000-8000-000000000002')}/goal`);
     expect(denied.status).toBe(403);
     expect(calls.goal).toBe(1);
@@ -65,6 +74,12 @@ describe('enrolled supervisor peer route seam', () => {
     expect((await fetch(`${base}/goal`)).status).toBe(403);
     expect((await fetch(`${base}/artifacts/receipt-1?content=true`)).status).toBe(403);
     expect(calls).toEqual({ goal: 0, resume: 0, terminal: 0, artifact: 0, submission: 0 });
+  });
+  it('rejects a mismatched managed mission rather than returning partial Goal custody', async () => {
+    const { base } = await fixture(grant, true);
+    const result = await fetch(`${base}/goal`);
+    expect(result.status).toBe(503);
+    expect(await result.json()).toEqual({ available: false, category: 'read_unavailable' });
   });
   it('keeps uncertain native terminal failures content-free and artifact export scoped', async () => {
     const { base, calls } = await fixture();
