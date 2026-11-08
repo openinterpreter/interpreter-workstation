@@ -33,6 +33,8 @@ describe('same-thread bounded current task tool', () => {
       startedAt: 100, completedAt: null });
     expect(body.latestMessage).toEqual({ turnId: 'older-turn', relation: 'historical' });
     expect(body.preview.relation).toBe('initial-thread-historical-non-authoritative');
+    expect(body.modelPhase).toEqual({ available: false,
+      category: 'native_model_phase_unavailable' });
     expect(body.command).toEqual({ itemId: 'command-item', status: 'completed',
       exitCode: 0, processId: 'opaque-process',
       observation: 'saved-command-item-not-os-process-custody' });

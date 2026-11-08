@@ -180,6 +180,8 @@ describe('interpreterCli handlers', () => {
       expect(observed.command).toMatchObject({ itemId: 'command-item', exitCode: 0,
         observation: 'saved-command-item-not-os-process-custody' });
       expect(observed.preview.relation).toBe('initial-thread-historical-non-authoritative');
+      expect(observed.modelPhase).toEqual({ available: false,
+        category: 'native_model_phase_unavailable' });
       expect(JSON.stringify(result)).not.toContain('PRIVATE');
       expect(calls).toEqual([threadId]);
       await expect(callInterpreterCliTool({ callerToken: 'agtok_other_owner', ...tool })).rejects.toThrow();
