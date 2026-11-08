@@ -167,6 +167,10 @@ export async function runCodexSubagent(options: RunCodexSubagentOptions): Promis
   console.log(`${timingTag} session=${ownsSession ? 'new' : 'reused'} hasCallerToken=true`);
 
   const runAbortController = new AbortController();
+  // A failed model turn may still have created a durable native thread and
+  // installed its shell caller. Keep only an observed, exact owner-bound
+  // caller; a turn failure is not permission to revoke that native carrier.
+  let observedThreadId = options.threadId ?? '';
   if (options.abortSignal) {
     options.abortSignal.addEventListener('abort', () => runAbortController.abort(), { once: true });
   }
@@ -230,6 +234,7 @@ export async function runCodexSubagent(options: RunCodexSubagentOptions): Promis
         options.onEvent?.(event);
         if (event.kind === 'thread') {
           threadId = event.threadId;
+          observedThreadId = event.threadId;
         } else if (event.kind === 'turn') {
           turnId = event.turnId;
         }
@@ -292,6 +297,10 @@ export async function runCodexSubagent(options: RunCodexSubagentOptions): Promis
     console.log(`${timingTag} end total=${Date.now() - subagentStart}ms`);
     if (timeoutId) {
       clearTimeout(timeoutId);
+    }
+    if (ownsSession && options.retainThreadCaller && observedThreadId &&
+        agentTabManager.getBindingForThread(observedThreadId)?.callerToken === session.callerToken) {
+      session.threadId = observedThreadId;
     }
     if (ownsSession && (!options.retainThreadCaller || !session.threadId)) {
       closeCodexSubagentSession(session);
