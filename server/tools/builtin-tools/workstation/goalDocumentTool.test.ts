@@ -5,6 +5,7 @@ import type { BuiltinToolContext } from '../../builtinTools';
 import { createGoalDocumentForCaller, readGoalDocumentForCaller,
   goalDocumentCreateTool, goalDocumentReadTool, goalDocumentUpdateTool,
   updateGoalDocumentForCaller } from './goalDocumentTool';
+import { readStableSupervisorGoal } from '../../../utils/supervisorGoalRead';
 
 const longMission = `# Full mission\n${'Keep the exact task and revision.\n'.repeat(160)}`;
 const id = (n: number) => `00000000-0000-4000-8000-${n.toString().padStart(12, '0')}`;
@@ -49,12 +50,33 @@ describe('same-thread managed Goal document caller', () => {
         previousRevision, revision: newRevision });
       expect(created.document.content).toBe(longMission);
       expect(calls).toEqual([{ ...createInput, threadId, status: 'active' }]);
-      expect(decode(await readGoalDocumentForCaller(context,
-        id => service.getThreadGoalDocument(id))).content).toBe(longMission);
+      const read = decode(await readGoalDocumentForCaller(context,
+        id => readStableSupervisorGoal(service, id)));
+      expect(read.document.content).toBe(longMission);
+      expect(read.revision).toEqual(newRevision);
     }
     expect(goalDocumentCreateTool.mainAgentOnly).toBe(true);
     expect(goalDocumentReadTool.mainAgentOnly).toBe(true);
     expect(goalDocumentCreateTool.inputSchema?.required).toContain('precondition');
+  });
+
+  test('own-thread full mission is unavailable when Goal identity changes during the read', async () => {
+    const threadId = id(9);
+    const context = { threadId, verifiedCallerThreadId: threadId };
+    let reads = 0;
+    const service = {
+      getThreadGoalWithRevision: async () => ({ goal: { threadId,
+        status: 'active', objective: createInput.objective }, revision: {
+        ...newRevision, lifecycleRevision: ++reads === 1 ? 1 : 2 } }),
+      getThreadGoalDocument: async () => ({ goal: { threadId,
+        status: 'active', objective: createInput.objective },
+        document: nativeDocument(threadId), content: longMission }),
+    } as never;
+    const result = await readGoalDocumentForCaller(context,
+      id => readStableSupervisorGoal(service, id));
+    expect(decode(result)).toEqual({ available: false, category: 'read_unavailable' });
+    expect(JSON.stringify(result)).not.toContain(longMission);
+    expect(reads).toBe(2);
   });
 
   test('five absent original Goals require explicit noGoal and return null predecessor', async () => {

@@ -4,6 +4,7 @@ import type { ThreadGoalDocumentGetResponse, ThreadGoalDocumentSetResponse } fro
 import { goalCasExpectedParams, type ThreadGoalRevision } from '../../../../src/lib/codex/goal-revision';
 import { createSupervisorGoal, SupervisorGoalCreateError,
   type SupervisorGoalCreateInput } from '../../../utils/supervisorGoalCreate';
+import { readStableSupervisorGoal } from '../../../utils/supervisorGoalRead';
 
 const THREAD = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const owner = (context: BuiltinToolContext | undefined) => {
@@ -32,7 +33,7 @@ async function bounded<T>(request: () => Promise<T>, maxWaitMs: number): Promise
 
 /** Read only the verified caller's native-owned full mission, never another thread's file. */
 export async function readGoalDocumentForCaller(context: BuiltinToolContext | undefined,
-  read: (threadId: string) => Promise<ThreadGoalDocumentGetResponse>,
+  read: (threadId: string) => ReturnType<typeof readStableSupervisorGoal>,
   maxWaitMs = GOAL_CALL_DEADLINE_MS) {
   const id = owner(context);
   if (!id) return response({ available: false, category: 'caller_unavailable' }, true);
@@ -103,7 +104,7 @@ export const goalDocumentReadTool: BuiltinToolDefinition = {
   inputSchema: { type: 'object', properties: {}, required: [] },
   mode: 'read', mainAgentOnly: true, annotations: { readOnlyHint: true },
   handler: (_args, context) => readGoalDocumentForCaller(context,
-    id => getCodexService().getThreadGoalDocument(id)),
+    id => readStableSupervisorGoal(getCodexService(), id)),
 };
 
 export const goalDocumentCreateTool: BuiltinToolDefinition = {
