@@ -82,6 +82,39 @@ host policy rejects `PUT` and `DELETE`, and the public relay does not forward
 these routes at all. The OIX app-server methods underneath them are
 `thread/goal/get`, `thread/goal/set`, and `thread/goal/clear`.
 
+### Conditional same-thread control
+
+When supported by the selected native runtime and included in the current
+thread's app-tool scope, the main agent can inspect the Goal's exact identity
+without retrieving its objective:
+
+```sh
+interpreter-app tools builtin-interpreter interpreter_goal_revision_get --json '{}'
+```
+
+The result contains `goalPresent` and, when a Goal exists, a `revision` with
+`goalId`, `status`, `missionRevision`, and `lifecycleRevision`. A missing native
+revision is `read_unavailable`, not an absent Goal. For a paused or blocked
+Goal, supply the **same** observed revision to
+`interpreter_goal_resume` as `{"expected":{"goalId":"…","status":"paused","missionRevision":1,"lifecycleRevision":2}}`.
+Native OIX atomically compares all four expected fields and resumes only the
+same Goal; a lost response is `mutation_unconfirmed`. Re-read to reconcile it,
+never blindly resubmit. These app tools require the verified original thread
+and its allowed tool scope. A caller on another thread or a delegated agent
+cannot use them. A GET followed by the legacy HTTP PUT is **not** a Goal CAS.
+
+For actual native background terminal observation on a supported OIX runtime,
+`interpreter_native_terminal_list` returns bounded, paginated owner identifiers
+for the calling thread. Pass one exact `turnId`, `itemId`, `nativeProcessId`, and
+`terminalGeneration` to `interpreter_native_terminal_status` (optional
+`maxWaitMs` from 0 to 1000). It returns `running`, `exited`, or `unknown`,
+output byte count/digest/cap and exit code, **never output text**. The command
+and OS PID are not exposed. The selected OIX runtime must support the native
+`thread/backgroundTerminals/list` and `/status` methods (0.0.59 or newer);
+older runtimes and disconnected or mismatched owners fail closed. `unknown`
+does not establish that a process has exited. Saved `commandSessionSnapshot`
+and the last conversation message remain separate historical observations.
+
 ## Programmatic task receipts
 
 For an authenticated saved-thread task, assign one stable
