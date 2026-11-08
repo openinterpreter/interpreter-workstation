@@ -36,6 +36,16 @@ export class GoalRevisionUnavailableError extends Error {
   }
 }
 
+/** A failed CAS RPC may have reached native state; callers must reconcile, not retry. */
+export class GoalMutationUnconfirmedError extends Error {
+  readonly category = 'mutation_unconfirmed';
+
+  constructor() {
+    super('Native Goal mutation outcome is unconfirmed.');
+    this.name = 'GoalMutationUnconfirmedError';
+  }
+}
+
 /** An old native runtime can return a Goal without the CAS identity: fail closed. */
 export function verifyThreadGoalRevision(
   goal: v2.ThreadGoal | null,

@@ -2395,6 +2395,17 @@ export class CodexAppServerClient {
     return result;
   }
 
+  /** A CAS mutation must never be retried or reconnect a torn-down native owner. */
+  async threadGoalRevisionSet(params: v2.ThreadGoalSetParams): Promise<v2.ThreadGoalSetResponse> {
+    if (!this.initialized) throw new Error('Native Goal CAS is unavailable.');
+    const generation = this.disconnectSequence;
+    const result = await this.rpcRequest(CLIENT_METHOD.threadGoalSet, params, { skipEnsureConnected: true });
+    if (!this.initialized || this.disconnectSequence !== generation) {
+      throw new Error('Native Goal CAS result crossed a runtime disconnect.');
+    }
+    return result;
+  }
+
   async threadGoalDocumentGet(params: RequestMap[typeof CLIENT_METHOD.threadGoalDocumentGet]['params']) {
     return this.rpcRequest(CLIENT_METHOD.threadGoalDocumentGet, params);
   }

@@ -380,6 +380,31 @@ describe("CodexAppServerClient", () => {
     client.shutdown();
   });
 
+  test('Goal revision CAS never connects, reconnects or replays after a disconnect', async () => {
+    const transport = new FakeTransport();
+    const client = new CodexAppServerClient(transport, null);
+    const threadId = '00000000-0000-4000-8000-000000000077';
+    const params = { threadId, status: 'paused' as const,
+      expectedGoalId: '00000000-0000-4000-8000-000000000088', expectedStatus: 'active' as const,
+      expectedMissionRevision: 2, expectedLifecycleRevision: 3 };
+    await assert.rejects(client.threadGoalRevisionSet(params), /unavailable/);
+    assert.equal(transport.sent.length, 0);
+    const connecting = client.ensureConnected();
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await connecting;
+    const before = transport.sent.length;
+    const pending = client.threadGoalRevisionSet(params);
+    await waitFor(() => transport.sent.length === before + 1);
+    const request = assertSentRequest(transport, before, CLIENT_METHOD.threadGoalSet);
+    assert.deepEqual(request.params, params);
+    transport.close(new Error('disconnected'));
+    transport.respond(request, { goal: null });
+    await assert.rejects(pending);
+    assert.equal(transport.sent.length, before + 1);
+    client.shutdown();
+  });
+
   test('owner-bound terminal list and status traverse the real client and service without exposing native text', async () => {
     const transport = new FakeTransport();
     let version = '0.0.58';

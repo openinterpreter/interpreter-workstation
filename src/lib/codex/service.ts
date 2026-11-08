@@ -4,7 +4,8 @@ import { boundNativeTerminalStatus, validateNativeTerminalRequest, type NativeTe
   type NativeTerminalStatusResponse } from './native-terminal-status';
 import { ManagedGoalDocumentError, validateGoalDocumentInput, verifyGoalDocument, type ThreadGoalDocumentGetResponse,
   type ThreadGoalDocumentSetParams, type ThreadGoalDocumentSetResponse } from './goal-document';
-import { GoalRevisionUnavailableError, verifyThreadGoalRevision, type ThreadGoalRevision } from './goal-revision';
+import { GoalMutationUnconfirmedError, GoalRevisionUnavailableError, goalCasExpectedParams,
+  verifyThreadGoalRevision, type ThreadGoalRevision } from './goal-revision';
 import { JSONRPCErrorException } from "json-rpc-2.0";
 import type { v2 } from "../../../server/handlers/codex-generated-types/index";
 import type { JsonValue } from "../../../server/handlers/codex-generated-types/serde_json/JsonValue";
@@ -414,6 +415,7 @@ export type CodexClient = {
   threadGoalSet(params: v2.ThreadGoalSetParams): Promise<v2.ThreadGoalSetResponse>;
   threadGoalGet(params: v2.ThreadGoalGetParams): Promise<v2.ThreadGoalGetResponse>;
   threadGoalRevisionGet?(params: v2.ThreadGoalGetParams): Promise<v2.ThreadGoalGetResponse>;
+  threadGoalRevisionSet?(params: v2.ThreadGoalSetParams): Promise<v2.ThreadGoalSetResponse>;
   threadGoalDocumentGet?(params: { threadId: string }): Promise<ThreadGoalDocumentGetResponse>;
   threadGoalDocumentSet?(params: ThreadGoalDocumentSetParams): Promise<ThreadGoalDocumentSetResponse>;
   threadGoalClear(params: v2.ThreadGoalClearParams): Promise<v2.ThreadGoalClearResponse>;
@@ -1424,6 +1426,39 @@ export class CodexService {
       throw new GoalRevisionUnavailableError();
     } finally {
       if (deadline) clearTimeout(deadline);
+    }
+  }
+
+  /** The native runtime, not a preceding GET, atomically enforces this expected state. */
+  async setThreadGoalWithRevision(
+    threadId: string,
+    expected: ThreadGoalRevision,
+    change: { objective?: string; status?: v2.ThreadGoalStatus; tokenBudget?: number | null },
+  ): Promise<{ goal: v2.ThreadGoal; revision: ThreadGoalRevision }> {
+    if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId) ||
+        !this.client.threadGoalRevisionSet || !change ||
+        !Object.entries(change).some(([key, value]) =>
+          ['objective', 'status', 'tokenBudget'].includes(key) && value !== undefined) ||
+        Object.keys(change).some(key => !['objective', 'status', 'tokenBudget'].includes(key)) ||
+        (change.objective !== undefined && (typeof change.objective !== 'string' || !change.objective.trim())) ||
+        (change.status !== undefined && !['active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'].includes(change.status)) ||
+        (change.tokenBudget !== undefined && change.tokenBudget !== null &&
+          (!Number.isSafeInteger(change.tokenBudget) || change.tokenBudget <= 0))) {
+      throw new GoalRevisionUnavailableError();
+    }
+    const params = { threadId, ...change, ...goalCasExpectedParams(expected) };
+    // A rejected/unknown native mutation is never reissued here. No read-then-write fallback.
+    try {
+      const result = await this.client.threadGoalRevisionSet(params as v2.ThreadGoalSetParams);
+      const revision = verifyThreadGoalRevision(result.goal,
+        (result as { revision?: unknown }).revision, threadId);
+      if (!revision || revision.goalId !== expected.goalId ||
+          revision.lifecycleRevision <= expected.lifecycleRevision) {
+        throw new GoalRevisionUnavailableError();
+      }
+      return { goal: result.goal, revision };
+    } catch {
+      throw new GoalMutationUnconfirmedError();
     }
   }
 

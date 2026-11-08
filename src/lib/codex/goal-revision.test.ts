@@ -64,6 +64,67 @@ describe('exact native Goal revision read', () => {
       GoalRevisionUnavailableError);
   });
 
+  test('native CAS sends all four preconditions once and accepts only refreshed owner revision', async () => {
+    let received: unknown;
+    let calls = 0;
+    const client = { subscribe: () => () => {}, threadGoalRevisionSet: async (params: unknown) => {
+      calls++;
+      received = params;
+      return { goal: { ...goal, status: 'paused' }, revision: {
+        ...revision, status: 'paused', lifecycleRevision: 4,
+      } };
+    } } as unknown as CodexClient;
+    assert.deepEqual(await new CodexService(client).setThreadGoalWithRevision(threadId, revision,
+      { status: 'paused' }), { goal: { ...goal, status: 'paused' },
+      revision: { ...revision, status: 'paused', lifecycleRevision: 4 } });
+    assert.deepEqual(received, { threadId, status: 'paused',
+      expectedGoalId: goalId, expectedStatus: 'active',
+      expectedMissionRevision: 2, expectedLifecycleRevision: 3 });
+    assert.equal(calls, 1);
+  });
+
+  test('invalid owner, incomplete preconditions and unsafe changes never reach native', async () => {
+    let calls = 0;
+    const client = { subscribe: () => () => {}, threadGoalRevisionSet: async () => {
+      calls++;
+      return { goal, revision };
+    } } as unknown as CodexClient;
+    const service = new CodexService(client);
+    for (const [owner, expected, change] of [
+      ['wrong-owner', revision, { status: 'paused' }],
+      [threadId, { ...revision, lifecycleRevision: 0 }, { status: 'paused' }],
+      [threadId, revision, {}],
+      [threadId, revision, { status: undefined }],
+      [threadId, revision, { tokenBudget: -1 }],
+      [threadId, revision, { status: 'invalid' }],
+    ] as const) {
+      await assert.rejects(service.setThreadGoalWithRevision(owner, expected,
+        change as { status?: 'paused'; tokenBudget?: number }),
+      { category: 'read_unavailable' });
+    }
+    assert.equal(calls, 0);
+  });
+
+  test('ambiguous error or stale result is never replayed and cannot claim confirmed CAS', async () => {
+    let calls = 0;
+    const client = { subscribe: () => () => {}, threadGoalRevisionSet: async () => {
+      calls++;
+      throw new Error('PRIVATE native mutation might have committed');
+    } } as unknown as CodexClient;
+    await assert.rejects(new CodexService(client).setThreadGoalWithRevision(threadId, revision,
+      { status: 'paused' }), (error: unknown) =>
+      (error as { category?: string }).category === 'mutation_unconfirmed' &&
+      !(error as Error).message.includes('PRIVATE'));
+    assert.equal(calls, 1);
+    const stale = { subscribe: () => () => {}, threadGoalRevisionSet: async () => {
+      calls++;
+      return { goal, revision };
+    } } as unknown as CodexClient;
+    await assert.rejects(new CodexService(stale).setThreadGoalWithRevision(threadId, revision,
+      { status: 'paused' }), { category: 'mutation_unconfirmed' });
+    assert.equal(calls, 2);
+  });
+
   test('invalid exact-thread caller is denied before native read', async () => {
     let calls = 0;
     const client = { subscribe: () => () => {}, threadGoalRevisionGet: async () => {
