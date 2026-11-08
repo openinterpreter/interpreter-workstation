@@ -1071,6 +1071,10 @@ export class ToolManager {
           callerTabId,
           threadId: toolContext?.threadId ?? getToolCallMetadata(externalToolCallId)?.threadId,
           verifiedCallerThreadId,
+          // Delegated caller tokens are never persisted across a restart. A live
+          // delegated binding must retain its parent identity at the tool gate.
+          isSubagent: Boolean(callerTabId &&
+            agentTabManager.getBindingForAgentId(callerTabId)?.parentOwner),
           modelConfig,
           agentId: effectiveAgentId,
           toolCallId,

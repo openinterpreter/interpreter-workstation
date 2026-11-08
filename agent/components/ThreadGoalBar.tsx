@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, Loader2, Trash2, X } from 'lucide-react';
 import { getApiUrl } from '../../src/ipc';
 import type { v2 } from '../../server/handlers/codex-generated-types';
@@ -19,14 +19,24 @@ function isThreadGoal(value: unknown): value is v2.ThreadGoal {
 }
 
 export function ThreadGoalBar({ threadId, readOnly = false }: ThreadGoalBarProps) {
+  return <ThreadGoalBarForThread key={threadId} threadId={threadId} readOnly={readOnly} />;
+}
+
+function ThreadGoalBarForThread({ threadId, readOnly = false }: ThreadGoalBarProps) {
+  const selectedThreadId = useRef(threadId);
+  const readSequence = useRef(0);
+  selectedThreadId.current = threadId;
   const [goal, setGoal] = useState<v2.ThreadGoal | null>(null);
   const [draft, setDraft] = useState('');
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [available, setAvailable] = useState(true);
 
   const refresh = useCallback(async (quiet = false) => {
+    const sequence = ++readSequence.current;
+    const isCurrent = () => selectedThreadId.current === threadId && readSequence.current === sequence;
     if (!quiet) setLoading(true);
     try {
       const response = await fetch(
@@ -35,18 +45,29 @@ export function ThreadGoalBar({ threadId, readOnly = false }: ThreadGoalBarProps
       );
       if (!response.ok) throw new Error(`Goal request failed (${response.status})`);
       const payload: unknown = await response.json();
+      if (!isCurrent()) return;
       const nextGoal = typeof payload === 'object' && payload !== null
         ? (payload as { goal?: unknown }).goal
         : null;
-      setGoal(isThreadGoal(nextGoal) ? nextGoal : null);
-      if (isThreadGoal(nextGoal)) setDraft(nextGoal.objective);
-      setError(null);
-    } catch (loadError) {
-      if (!quiet) {
-        setError(loadError instanceof Error ? loadError.message : 'Could not load goal');
+      const nextAvailable = !(typeof payload === 'object' && payload !== null
+        && (payload as { available?: unknown }).available === false);
+      if (nextAvailable && nextGoal != null && (!isThreadGoal(nextGoal) || nextGoal.threadId !== threadId)) {
+        throw new Error('Invalid native Goal owner');
       }
+      setAvailable(nextAvailable);
+      setGoal(nextAvailable && isThreadGoal(nextGoal) ? nextGoal : null);
+      if (!nextAvailable) setEditing(false);
+      if (nextAvailable && isThreadGoal(nextGoal)) setDraft(nextGoal.objective);
+      setError(null);
+    } catch {
+      if (!isCurrent()) return;
+      // A failed native read is not evidence that the thread has no Goal.
+      setAvailable(false);
+      setGoal(null);
+      setEditing(false);
+      setError('Native Goal controls are unavailable on this host.');
     } finally {
-      if (!quiet) setLoading(false);
+      if (!quiet && isCurrent()) setLoading(false);
     }
   }, [threadId]);
 
@@ -82,11 +103,12 @@ export function ThreadGoalBar({ threadId, readOnly = false }: ThreadGoalBarProps
         },
       );
       if (!response.ok) {
-        const payload = await response.json().catch(() => null) as { error?: string } | null;
-        throw new Error(payload?.error ?? `Goal update failed (${response.status})`);
+        throw new Error('Native Goal update was not accepted. The previous Goal may still be active.');
       }
       const payload = await response.json() as { goal?: unknown };
-      if (!isThreadGoal(payload.goal)) throw new Error('Invalid goal response');
+      if (!isThreadGoal(payload.goal) || payload.goal.threadId !== threadId) {
+        throw new Error('Invalid goal response');
+      }
       setGoal(payload.goal);
       setDraft(payload.goal.objective);
       setEditing(false);
@@ -188,6 +210,17 @@ export function ThreadGoalBar({ threadId, readOnly = false }: ThreadGoalBarProps
               </button>
             </div>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!available) {
+    return (
+      <div className="mx-auto w-full max-w-[48rem] px-2 sm:px-[var(--unit-padding-medium)]">
+        <div role="status" className="oa-composer-surface px-3 py-2 text-ui-xs text-[var(--oa-text-faint)]"
+          style={{ borderRadius: 'var(--oa-radius-22)' }}>
+          {error ?? 'Native Goal controls are unavailable on this host.'}
         </div>
       </div>
     );

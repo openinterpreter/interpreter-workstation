@@ -37,6 +37,13 @@ describe('ToolManager hidden builtin discovery', () => {
     expect(server!.tools.map((tool) => tool.name).sort()).toEqual([
       'interpreter_whole_computer_state_get',
       'interpreter_wake_schedule',
+      'interpreter_goal_revision_get',
+      'interpreter_goal_resume',
+      'interpreter_goal_document_get',
+      'interpreter_goal_document_create',
+      'interpreter_goal_document_update',
+      'interpreter_native_terminal_status',
+      'interpreter_native_terminal_list',
       'interpreter_browser_tab_activate',
       'interpreter_browser_page_inspect',
       'interpreter_browser_page_trace',

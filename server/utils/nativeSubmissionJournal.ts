@@ -59,6 +59,23 @@ export class NativeSubmissionJournal {
       if (entries[0].phase !== 'received' || entries.some(entry => entry.requestId !== entries[0].requestId)) {
         throw new Error('Invalid submission receipt claim');
       }
+      let observedTurnId: string | null = null;
+      let terminal = false;
+      for (const [index, entry] of entries.entries()) {
+        if (index === 0) {
+          if (entry.turnId !== null) throw new Error('Invalid initial submission receipt');
+          continue;
+        }
+        if (terminal || entry.phase === 'received' ||
+            (entry.phase === 'turn_started' && (observedTurnId !== null || entry.turnId === null)) ||
+            (entry.phase === 'terminal_no_turn' && (observedTurnId !== null || entry.turnId !== null)) ||
+            (entry.phase !== 'terminal_no_turn' && entry.turnId === null) ||
+            (observedTurnId !== null && entry.turnId !== observedTurnId)) {
+          throw new Error('Invalid submission receipt transition');
+        }
+        if (entry.turnId !== null) observedTurnId = entry.turnId;
+        if (entry.phase.startsWith('terminal_')) terminal = true;
+      }
       return entries;
     } finally { await file.close(); }
   }
@@ -89,6 +106,14 @@ export class NativeSubmissionJournal {
     const filename = this.filename(entry.threadId, entry.clientUserMessageId);
     const prior = await this.read(entry.threadId, entry.clientUserMessageId);
     if (!prior?.length || prior[0].requestId !== entry.requestId) throw new Error('Submission claim changed');
+    const last = prior[prior.length - 1];
+    if (last.phase.startsWith('terminal_') || phase === 'turn_started' &&
+        (last.phase !== 'received' || turnId === null) ||
+        phase === 'terminal_no_turn' && (last.phase !== 'received' || turnId !== null) ||
+        phase !== 'turn_started' && phase !== 'terminal_no_turn' && turnId === null ||
+        last.phase === 'turn_started' && turnId !== last.turnId) {
+      throw new Error('Invalid submission receipt transition');
+    }
     const file = await open(filename, constants.O_APPEND | constants.O_WRONLY | constants.O_NOFOLLOW);
     try {
       const stat = await file.stat();
