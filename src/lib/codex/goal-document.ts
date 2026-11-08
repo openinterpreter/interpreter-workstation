@@ -14,11 +14,15 @@ export type ThreadGoalDocumentSetParams = {
   document: string;
   status?: v2.ThreadGoalStatus | null;
   expectedMissionRevision?: number | null;
+  expectedGoalId?: string;
+  expectedStatus?: v2.ThreadGoalStatus;
+  expectedLifecycleRevision?: number;
 };
 
 export type ThreadGoalDocumentSetResponse = {
   goal: v2.ThreadGoal;
   document: ThreadGoalDocument;
+  revision?: unknown;
 };
 
 export type ThreadGoalDocumentGetResponse = {

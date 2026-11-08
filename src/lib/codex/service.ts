@@ -418,6 +418,7 @@ export type CodexClient = {
   threadGoalRevisionSet?(params: v2.ThreadGoalSetParams): Promise<v2.ThreadGoalSetResponse>;
   threadGoalDocumentGet?(params: { threadId: string }): Promise<ThreadGoalDocumentGetResponse>;
   threadGoalDocumentSet?(params: ThreadGoalDocumentSetParams): Promise<ThreadGoalDocumentSetResponse>;
+  threadGoalDocumentRevisionSet?(params: ThreadGoalDocumentSetParams): Promise<ThreadGoalDocumentSetResponse>;
   threadGoalClear(params: v2.ThreadGoalClearParams): Promise<v2.ThreadGoalClearResponse>;
   threadArchive(params: v2.ThreadArchiveParams): Promise<v2.ThreadArchiveResponse>;
   threadUnarchive(params: v2.ThreadUnarchiveParams): Promise<v2.ThreadUnarchiveResponse>;
@@ -1493,6 +1494,34 @@ export class CodexService {
       }
       return result;
     } catch {
+      throw new ManagedGoalDocumentError('update_unconfirmed');
+    }
+  }
+
+  /** One native transaction updates the file pointer and Goal only if all expected state matches. */
+  async setThreadGoalDocumentWithRevision(
+    input: Omit<ThreadGoalDocumentSetParams, 'expectedMissionRevision' | 'expectedGoalId' |
+      'expectedStatus' | 'expectedLifecycleRevision'>,
+    expected: ThreadGoalRevision,
+  ): Promise<{ goal: v2.ThreadGoal; document: ThreadGoalDocumentSetResponse['document'];
+    revision: ThreadGoalRevision }> {
+    validateGoalDocumentInput(input);
+    if (!this.client.threadGoalDocumentRevisionSet) throw new ManagedGoalDocumentError('update_unconfirmed');
+    const params = { ...input, ...goalCasExpectedParams(expected) };
+    try {
+      const result = await this.client.threadGoalDocumentRevisionSet(params);
+      verifyGoalDocument(input.threadId, result.document, input.document);
+      const revision = verifyThreadGoalRevision(result.goal, result.revision, input.threadId);
+      if (!revision || revision.goalId !== expected.goalId ||
+          revision.missionRevision !== expected.missionRevision + 1 ||
+          revision.lifecycleRevision !== expected.lifecycleRevision + 1 ||
+          result.document.missionRevision !== revision.missionRevision ||
+          result.goal.status !== (input.status ?? expected.status)) {
+        throw new ManagedGoalDocumentError('update_unconfirmed');
+      }
+      return { goal: result.goal, document: result.document, revision };
+    } catch {
+      // A transport loss does not prove native rejected this write. Reconcile; never replay.
       throw new ManagedGoalDocumentError('update_unconfirmed');
     }
   }

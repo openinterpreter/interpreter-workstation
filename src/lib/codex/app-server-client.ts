@@ -2414,6 +2414,18 @@ export class CodexAppServerClient {
     return this.rpcRequest(CLIENT_METHOD.threadGoalDocumentSet, params);
   }
 
+  /** Full document CAS must not start or reconnect a native runtime after owner teardown. */
+  async threadGoalDocumentRevisionSet(params: RequestMap[typeof CLIENT_METHOD.threadGoalDocumentSet]['params']) {
+    if (!this.initialized) throw new Error('Native Goal document CAS is unavailable.');
+    const generation = this.disconnectSequence;
+    const result = await this.rpcRequest(CLIENT_METHOD.threadGoalDocumentSet, params,
+      { skipEnsureConnected: true });
+    if (!this.initialized || generation !== this.disconnectSequence) {
+      throw new Error('Native Goal document CAS crossed a runtime disconnect.');
+    }
+    return result;
+  }
+
   async threadGoalClear(params: v2.ThreadGoalClearParams): Promise<v2.ThreadGoalClearResponse> {
     return this.rpcRequest(CLIENT_METHOD.threadGoalClear, params);
   }

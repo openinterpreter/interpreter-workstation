@@ -405,6 +405,31 @@ describe("CodexAppServerClient", () => {
     client.shutdown();
   });
 
+  test('managed document CAS preserves full expected state and never reconnects after lost receipt', async () => {
+    const transport = new FakeTransport();
+    const client = new CodexAppServerClient(transport, null);
+    const params = { threadId: '00000000-0000-4000-8000-000000000077',
+      document: '# Supervised mission', expectedGoalId: '00000000-0000-4000-8000-000000000088',
+      expectedStatus: 'active' as const, expectedMissionRevision: 2,
+      expectedLifecycleRevision: 5 };
+    await assert.rejects(client.threadGoalDocumentRevisionSet(params), /unavailable/);
+    assert.equal(transport.sent.length, 0);
+    const connecting = client.ensureConnected();
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await connecting;
+    const before = transport.sent.length;
+    const pending = client.threadGoalDocumentRevisionSet(params);
+    await waitFor(() => transport.sent.length === before + 1);
+    const request = assertSentRequest(transport, before, CLIENT_METHOD.threadGoalDocumentSet);
+    assert.deepEqual(request.params, params);
+    transport.close(new Error('unacknowledged write'));
+    transport.respond(request, { goal: null });
+    await assert.rejects(pending);
+    assert.equal(transport.sent.length, before + 1);
+    client.shutdown();
+  });
+
   test('owner-bound terminal list and status traverse the real client and service without exposing native text', async () => {
     const transport = new FakeTransport();
     let version = '0.0.58';

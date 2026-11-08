@@ -46,6 +46,60 @@ describe('Workstation consumer for OIX-owned managed Goal documents', () => {
     assert.equal((await service.getThreadGoalDocument(threadId)).content, edited);
   });
 
+  test('full native CAS binds existing file, Goal status and both revisions in one write', async () => {
+    const edited = `${documentText}\n# New supervised instructions`;
+    const expected = { goalId: '00000000-0000-4000-8000-000000000088',
+      status: 'active' as const, missionRevision: 1, lifecycleRevision: 4 };
+    let writes = 0;
+    const client = { subscribe: () => () => {}, threadGoalDocumentRevisionSet: async (params: unknown) => {
+      writes++;
+      assert.deepEqual(params, { threadId, document: edited, status: 'paused',
+        expectedGoalId: expected.goalId, expectedStatus: 'active',
+        expectedMissionRevision: 1, expectedLifecycleRevision: 4 });
+      return { goal: { ...goal, status: 'paused' }, document: metadata(edited, 2),
+        revision: { ...expected, status: 'paused', missionRevision: 2, lifecycleRevision: 5 } };
+    } } as unknown as CodexClient;
+    const result = await new CodexService(client).setThreadGoalDocumentWithRevision({
+      threadId, document: edited, status: 'paused',
+    }, expected);
+    assert.equal(result.document.sha256, sha256(edited));
+    assert.equal(result.revision.lifecycleRevision, 5);
+    assert.equal(writes, 1);
+  });
+
+  test('stale status and ambiguous document CAS never retry or manufacture a successful readback', async () => {
+    const expected = { goalId: '00000000-0000-4000-8000-000000000088',
+      status: 'active' as const, missionRevision: 1, lifecycleRevision: 4 };
+    let writes = 0;
+    const client = { subscribe: () => () => {}, threadGoalDocumentRevisionSet: async () => {
+      writes++;
+      throw new Error('PRIVATE stale status or transport failure');
+    } } as unknown as CodexClient;
+    const service = new CodexService(client);
+    await assert.rejects(service.setThreadGoalDocumentWithRevision({
+      threadId, document: documentText, status: 'active',
+    }, expected), { category: 'update_unconfirmed' });
+    assert.equal(writes, 1);
+    client.threadGoalDocumentRevisionSet = async () => {
+      writes++;
+      return { goal, document: metadata(documentText, 2),
+        revision: { ...expected, missionRevision: 2, lifecycleRevision: 4 } };
+    };
+    await assert.rejects(service.setThreadGoalDocumentWithRevision({
+      threadId, document: documentText,
+    }, expected), { category: 'update_unconfirmed' });
+    assert.equal(writes, 2);
+    client.threadGoalDocumentRevisionSet = async () => {
+      writes++;
+      return { goal: { ...goal, status: 'paused' }, document: metadata(documentText, 2),
+        revision: { ...expected, status: 'paused', missionRevision: 2, lifecycleRevision: 5 } };
+    };
+    await assert.rejects(service.setThreadGoalDocumentWithRevision({
+      threadId, document: documentText,
+    }, expected), { category: 'update_unconfirmed' });
+    assert.equal(writes, 3);
+  });
+
   test('denies invalid input before native mutation and unsupported native capability', async () => {
     let calls = 0;
     const service = new CodexService({ subscribe: () => () => {},
