@@ -1,0 +1,110 @@
+import { afterEach, describe, expect, it } from 'bun:test';
+import express from 'express';
+import { createServer, type Server } from 'node:http';
+import { createSupervisorPeerRouter } from './supervisorPeer';
+import type { VerifiedSupervisorGrant } from '../utils/supervisorPeerScope';
+
+const threadId = '00000000-0000-4000-8000-000000000001';
+const grant: VerifiedSupervisorGrant = {
+  issuer: 'enrolled-issuer', subject: 'supervisor-1', sourceComputer: 'source-1',
+  targetComputer: 'target-1', threadId,
+  capabilities: ['goal:read', 'goal:resume', 'task:read', 'command:read', 'artifact:read'],
+  expiresAt: Date.now() + 60_000,
+};
+let server: Server | undefined;
+afterEach(() => server?.close());
+
+async function fixture(verified: VerifiedSupervisorGrant | null = grant) {
+  const calls = { goal: 0, resume: 0, terminal: 0, artifact: 0, submission: 0 };
+  const app = express();
+  app.use(express.json({ limit: '2kb' }));
+  app.use('/peer', createSupervisorPeerRouter({
+    targetComputer: 'target-1', verify: async () => verified,
+    readGoal: async () => { calls.goal++; return { goal: {
+      threadId, status: 'blocked', objective: 'retained',
+    } as never, revision: { goalId: '00000000-0000-4000-8000-000000000004',
+      status: 'blocked', missionRevision: 4, lifecycleRevision: 7 } }; },
+    resumeGoal: async (_thread, expected) => { calls.resume++; return { ...expected, status: 'active' }; },
+    readTerminal: async () => { calls.terminal++; throw new Error('private command text'); },
+    readJournal: async () => ({ requestId: 'request-1', threadId,
+      clientUserMessageId: 'client-1', phase: 'turn_started', turnId: 'turn-1', at: 'now' }),
+    readSubmission: async (_thread, clientUserMessageId) => { calls.submission++;
+      return { threadId, clientUserMessageId, linkage: 'native_user_item',
+        nativeMatch: { turnId: 'turn-1', userItemId: 'item-1', status: 'completed', commandSessions: [] },
+        queuedSubmissionIds: [], custodyVerified: true,
+        commandSessionScope: 'saved-native-turn-only-not-live-process-custody' as const };
+    },
+    readArtifact: async (_thread, receipt, content) => { calls.artifact++;
+      return { threadId, receiptId: receipt, sha256: 'a'.repeat(64), size: 5,
+        path: '/private/storage/never-return-this',
+        ...(content ? { content: 'owned' } : {}) };
+    },
+  }));
+  server = createServer(app);
+  await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('No listener');
+  return { base: `http://127.0.0.1:${address.port}/peer/threads/${threadId}`, calls };
+}
+
+describe('enrolled supervisor peer route seam', () => {
+  it('permits only exact verified scope and retains a full Goal plus revision', async () => {
+    const { base, calls } = await fixture();
+    const allowed = await fetch(`${base}/goal`);
+    expect(allowed.status).toBe(200);
+    expect(await allowed.json()).toEqual({ available: true, goal: { threadId,
+      status: 'blocked', objective: 'retained' }, revision: {
+      goalId: '00000000-0000-4000-8000-000000000004', status: 'blocked',
+      missionRevision: 4, lifecycleRevision: 7 } });
+    const denied = await fetch(`${base.replace(threadId, '00000000-0000-4000-8000-000000000002')}/goal`);
+    expect(denied.status).toBe(403);
+    expect(calls.goal).toBe(1);
+  });
+  it('denies missing identity without invoking any dependency', async () => {
+    const { base, calls } = await fixture(null);
+    expect((await fetch(`${base}/goal`)).status).toBe(403);
+    expect((await fetch(`${base}/artifacts/receipt-1?content=true`)).status).toBe(403);
+    expect(calls).toEqual({ goal: 0, resume: 0, terminal: 0, artifact: 0, submission: 0 });
+  });
+  it('keeps uncertain native terminal failures content-free and artifact export scoped', async () => {
+    const { base, calls } = await fixture();
+    const terminal = await fetch(`${base}/terminals/status`, { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+        turnId: '00000000-0000-4000-8000-000000000003',
+        itemId: 'item-1', nativeProcessId: 'process-1', terminalGeneration: 1,
+      }) });
+    expect(terminal.status).toBe(503);
+    expect(JSON.stringify(await terminal.json())).not.toContain('private command text');
+    const metadata = await (await fetch(`${base}/artifacts/receipt-1`)).json() as Record<string, unknown>;
+    expect(metadata.content).toBeUndefined();
+    expect(metadata.path).toBeUndefined();
+    const content = await (await fetch(`${base}/artifacts/receipt-1?content=true`)).json() as Record<string, unknown>;
+    expect(content.content).toBe('owned');
+    expect(content.path).toBeUndefined();
+    expect(calls.artifact).toBe(2);
+  });
+  it('uses the exact native Goal revision for a conditional resume, never a read-then-write', async () => {
+    const { base, calls } = await fixture();
+    const expected = { goalId: '00000000-0000-4000-8000-000000000004',
+      status: 'blocked', missionRevision: 4, lifecycleRevision: 7 };
+    const request = (value: unknown) => fetch(`${base}/goal/resume`, { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify({ expected: value }) });
+    expect((await request({ ...expected, lifecycleRevision: -1 })).status).toBe(503);
+    expect(calls.resume).toBe(0);
+    const accepted = await request(expected);
+    expect(accepted.status).toBe(200);
+    expect(await accepted.json()).toEqual({ available: true,
+      revision: { ...expected, status: 'active' } });
+    expect(calls.resume).toBe(1);
+  });
+  it('joins an exact client ID to content-free saved native custody, not live OS status', async () => {
+    const { base, calls } = await fixture();
+    const response = await fetch(`${base}/submissions/client-1`);
+    expect(response.status).toBe(200);
+    const body = await response.json() as Record<string, unknown>;
+    expect(body.observation).toBe('native-thread-read-not-live-process-custody');
+    expect((body.journal as Record<string, unknown>).phase).toBe('turn_started');
+    expect(JSON.stringify(body)).not.toContain('private command text');
+    expect(calls.submission).toBe(1);
+  });
+});

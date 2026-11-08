@@ -44,6 +44,8 @@ describe('ToolManager hidden builtin discovery', () => {
       'interpreter_goal_document_update',
       'interpreter_native_terminal_status',
       'interpreter_native_terminal_list',
+      'interpreter_thread_artifact_create',
+      'interpreter_thread_artifact_read',
       'interpreter_browser_tab_activate',
       'interpreter_browser_page_inspect',
       'interpreter_browser_page_trace',

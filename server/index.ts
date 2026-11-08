@@ -14,6 +14,9 @@ import * as configStore from "./configStore";
 import fs from 'node:fs';
 import os from 'node:os';
 import agentRouter from "./routes/agent";
+import { createSupervisorPeerRouter } from './routes/supervisorPeer';
+import { createSupervisorPeerVerifier } from './utils/supervisorPeerVerifier';
+import { getCodexService } from '../src/lib/codex/service';
 import mcpRouter from "./routes/mcp";
 import interpreterCliRouter from "./routes/interpreterCli";
 import { initializeSandbox, cleanupSandbox } from "./utils/sandboxManager";
@@ -161,6 +164,25 @@ app.post("/api/settings/reset", async (_req, res) => {
 
 // AGENT ROUTES
 app.use("/api/agent", agentRouter);
+// Optional enrolled-machine peer transport. Without an exact operator-owned
+// verifier configuration, no peer authority is mounted.
+if (process.env.INTERPRETER_SUPERVISOR_VERIFY_URL &&
+    process.env.INTERPRETER_SUPERVISOR_VERIFY_AUDIENCE &&
+    process.env.INTERPRETER_SUPERVISOR_TARGET_COMPUTER) {
+  const targetComputer = process.env.INTERPRETER_SUPERVISOR_TARGET_COMPUTER;
+  app.use('/api/interpreter-peer', createSupervisorPeerRouter({
+    targetComputer,
+    verify: createSupervisorPeerVerifier({
+      verifyUrl: process.env.INTERPRETER_SUPERVISOR_VERIFY_URL,
+      audience: process.env.INTERPRETER_SUPERVISOR_VERIFY_AUDIENCE,
+      targetComputer,
+    }),
+    readGoal: (id) => getCodexService().getThreadGoalWithRevision(id),
+    resumeGoal: async (id, expected) =>
+      (await getCodexService().setThreadGoalWithRevision(id, expected, { status: 'active' })).revision,
+    readTerminal: (request) => getCodexService().readNativeTerminalStatus(request),
+  }));
+}
 app.use("/api/interpreter-cli", interpreterCliRouter);
 
 // Initialize WhatsApp bridge listeners once at server startup.
