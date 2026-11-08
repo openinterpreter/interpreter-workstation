@@ -156,6 +156,26 @@ describe('exact native Goal revision read', () => {
     assert.equal(calls, 4);
   });
 
+  test('bounded CAS timeout leaves native RPC alive and denies a late success as unconfirmed', async () => {
+    let finish!: (result: { goal: typeof goal; revision: typeof revision }) => void;
+    let calls = 0;
+    const client = { subscribe: () => () => {}, threadGoalRevisionSet: () => {
+      calls++;
+      return new Promise<{ goal: typeof goal; revision: typeof revision }>(resolve => {
+        finish = resolve;
+      });
+    } } as unknown as CodexClient;
+    const service = new CodexService(client);
+    await assert.rejects(service.setThreadGoalWithRevision(threadId, revision,
+      { status: 'paused' }, 10), { category: 'mutation_unconfirmed' });
+    finish({ goal, revision });
+    await Promise.resolve();
+    assert.equal(calls, 1);
+    await assert.rejects(service.setThreadGoalWithRevision(threadId, revision,
+      { status: 'paused' }, 0), { category: 'read_unavailable' });
+    assert.equal(calls, 1);
+  });
+
   test('invalid exact-thread caller is denied before native read', async () => {
     let calls = 0;
     const client = { subscribe: () => () => {}, threadGoalRevisionGet: async () => {

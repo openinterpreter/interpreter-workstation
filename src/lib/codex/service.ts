@@ -1435,9 +1435,11 @@ export class CodexService {
     threadId: string,
     expected: ThreadGoalRevision,
     change: { objective?: string; status?: v2.ThreadGoalStatus; tokenBudget?: number | null },
+    maxWaitMs = 3_000,
   ): Promise<{ goal: v2.ThreadGoal; revision: ThreadGoalRevision }> {
     if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId) ||
         !this.client.threadGoalRevisionSet || !change ||
+        !Number.isSafeInteger(maxWaitMs) || maxWaitMs < 1 || maxWaitMs > 3_000 ||
         !Object.entries(change).some(([key, value]) =>
           ['objective', 'status', 'tokenBudget'].includes(key) && value !== undefined) ||
         Object.keys(change).some(key => !['objective', 'status', 'tokenBudget'].includes(key)) ||
@@ -1449,8 +1451,14 @@ export class CodexService {
     }
     const params = { threadId, ...change, ...goalCasExpectedParams(expected) };
     // A rejected/unknown native mutation is never reissued here. No read-then-write fallback.
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     try {
-      const result = await this.client.threadGoalRevisionSet(params as v2.ThreadGoalSetParams);
+      const result = await Promise.race([
+        this.client.threadGoalRevisionSet(params as v2.ThreadGoalSetParams),
+        new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => reject(new GoalMutationUnconfirmedError()), maxWaitMs);
+        }),
+      ]);
       const revision = verifyThreadGoalRevision(result.goal,
         (result as { revision?: unknown }).revision, threadId);
       if (!revision || revision.goalId !== expected.goalId ||
@@ -1464,6 +1472,8 @@ export class CodexService {
       return { goal: result.goal, revision };
     } catch {
       throw new GoalMutationUnconfirmedError();
+    } finally {
+      if (deadline) clearTimeout(deadline);
     }
   }
 
@@ -1507,13 +1517,24 @@ export class CodexService {
     input: Omit<ThreadGoalDocumentSetParams, 'expectedMissionRevision' | 'expectedGoalId' |
       'expectedStatus' | 'expectedLifecycleRevision'>,
     expected: ThreadGoalRevision,
+    maxWaitMs = 3_000,
   ): Promise<{ goal: v2.ThreadGoal; document: ThreadGoalDocumentSetResponse['document'];
     revision: ThreadGoalRevision }> {
     validateGoalDocumentInput(input);
-    if (!this.client.threadGoalDocumentRevisionSet) throw new ManagedGoalDocumentError('update_unconfirmed');
+    if (!this.client.threadGoalDocumentRevisionSet || !Number.isSafeInteger(maxWaitMs) ||
+        maxWaitMs < 1 || maxWaitMs > 3_000) {
+      throw new ManagedGoalDocumentError('update_unconfirmed');
+    }
     const params = { ...input, ...goalCasExpectedParams(expected) };
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     try {
-      const result = await this.client.threadGoalDocumentRevisionSet(params);
+      const result = await Promise.race([
+        this.client.threadGoalDocumentRevisionSet(params),
+        new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => reject(new ManagedGoalDocumentError('update_unconfirmed')),
+            maxWaitMs);
+        }),
+      ]);
       verifyGoalDocument(input.threadId, result.document, input.document);
       const revision = verifyThreadGoalRevision(result.goal, result.revision, input.threadId);
       if (!revision || revision.goalId !== expected.goalId ||
@@ -1527,6 +1548,8 @@ export class CodexService {
     } catch {
       // A transport loss does not prove native rejected this write. Reconcile; never replay.
       throw new ManagedGoalDocumentError('update_unconfirmed');
+    } finally {
+      if (deadline) clearTimeout(deadline);
     }
   }
 

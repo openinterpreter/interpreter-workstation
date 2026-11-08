@@ -100,6 +100,30 @@ describe('Workstation consumer for OIX-owned managed Goal documents', () => {
     assert.equal(writes, 3);
   });
 
+  test('bounded document CAS timeout does not cancel native or replay a late receipt', async () => {
+    const expected = { goalId: '00000000-0000-4000-8000-000000000088',
+      status: 'active' as const, missionRevision: 1, lifecycleRevision: 4 };
+    let finish!: (result: { goal: typeof goal; document: ReturnType<typeof metadata> }) => void;
+    let writes = 0;
+    const client = { subscribe: () => () => {}, threadGoalDocumentRevisionSet: () => {
+      writes++;
+      return new Promise<{ goal: typeof goal; document: ReturnType<typeof metadata> }>(resolve => {
+        finish = resolve;
+      });
+    } } as unknown as CodexClient;
+    const service = new CodexService(client);
+    await assert.rejects(service.setThreadGoalDocumentWithRevision({
+      threadId, document: documentText,
+    }, expected, 10), { category: 'update_unconfirmed' });
+    finish({ goal, document: metadata(documentText, 2) });
+    await Promise.resolve();
+    assert.equal(writes, 1);
+    await assert.rejects(service.setThreadGoalDocumentWithRevision({
+      threadId, document: documentText,
+    }, expected, 0), { category: 'update_unconfirmed' });
+    assert.equal(writes, 1);
+  });
+
   test('denies invalid input before native mutation and unsupported native capability', async () => {
     let calls = 0;
     const service = new CodexService({ subscribe: () => () => {},
