@@ -135,6 +135,52 @@ describe('interpreterCli handlers', () => {
     }
   });
 
+  test('current-task CLI reads only the selected same-thread native snapshot, not stale preview or command text', async () => {
+    const threadId = '00000000-0000-4000-8000-000000000077';
+    const otherThread = '00000000-0000-4000-8000-000000000078';
+    const service = getCodexService();
+    const originalRead = service.readSupervisorThreadSnapshot;
+    const calls: string[] = [];
+    setConfigOverride({ agents: {}, mcpServers: {} } as any);
+    setToolManager(new ToolManager());
+    agentTabManager.bindThread({ agentId: 'current-owner', threadId,
+      callerToken: 'agtok_current_owner', allowedToolNames: [
+        'builtin-interpreter__interpreter_task_current',
+      ] });
+    agentTabManager.bindThread({ agentId: 'other-owner', threadId: otherThread,
+      callerToken: 'agtok_other_owner', allowedToolNames: ['builtin-utility__calculate'] });
+    service.readSupervisorThreadSnapshot = async id => {
+      calls.push(id);
+      return { id, turns: [
+        { id: 'previous-turn', status: 'completed', itemsView: 'full', items: [
+          { type: 'agentMessage', id: 'previous-message', text: 'PRIVATE previous answer' },
+        ] },
+        { id: 'current-turn', status: 'inProgress', itemsView: 'full', items: [
+          { type: 'commandExecution', id: 'command-item', status: 'completed', exitCode: 0,
+            processId: 'opaque-process', command: 'PRIVATE command', aggregatedOutput: 'PRIVATE output' },
+        ] },
+      ] } as any;
+    };
+    try {
+      const tool = { serverId: 'builtin-interpreter', toolName: 'interpreter_task_current', args: {} };
+      const result = await callInterpreterCliTool({ callerToken: 'agtok_current_owner', ...tool }) as {
+        content: Array<{ text: string }>; isError?: boolean;
+      };
+      expect(result.isError).toBeUndefined();
+      const observed = JSON.parse(result.content[0]!.text);
+      expect(observed.turn).toMatchObject({ id: 'current-turn', status: 'inProgress' });
+      expect(observed.latestMessage).toEqual({ turnId: 'previous-turn', relation: 'historical' });
+      expect(observed.command).toMatchObject({ itemId: 'command-item', exitCode: 0,
+        observation: 'saved-command-item-not-os-process-custody' });
+      expect(observed.preview.relation).toBe('initial-thread-historical-non-authoritative');
+      expect(JSON.stringify(result)).not.toContain('PRIVATE');
+      expect(calls).toEqual([threadId]);
+      await expect(callInterpreterCliTool({ callerToken: 'agtok_other_owner', ...tool })).rejects.toThrow();
+      await expect(callInterpreterCliTool({ callerToken: 'unknown-caller', ...tool })).rejects.toThrow();
+      expect(calls).toEqual([threadId]);
+    } finally { service.readSupervisorThreadSnapshot = originalRead; }
+  });
+
   test('Goal document CLI creates and reads only the bound thread; an unrelated blocked Goal is untouched', async () => {
     const threadId = '00000000-0000-4000-8000-000000000077';
     const blockedId = '00000000-0000-4000-8000-000000000078';
