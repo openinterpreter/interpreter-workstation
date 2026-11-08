@@ -103,6 +103,20 @@ never blindly resubmit. These app tools require the verified original thread
 and its allowed tool scope. A caller on another thread or a delegated agent
 cannot use them. A GET followed by the legacy HTTP PUT is **not** a Goal CAS.
 
+For a full mission longer than the native objective limit, the verified main
+agent can use `interpreter_goal_document_create` with `{"document":"…"}` only
+after an authoritative native read finds **no Goal** on its own thread. OIX
+owns the managed file and atomically refuses a competing Goal insertion.
+`interpreter_goal_document_get` reads the full native-managed mission back on
+the same thread. A blocked Goal without a managed document is still an
+existing Goal: create rejects it rather than replacing it. An ambiguous create
+result is `mutation_unconfirmed`; read back before deciding what to do and
+never automatically repeat the write. To edit an existing Goal, use the
+native four-field expected identity/revision CAS, not create or legacy PUT.
+These caller tools require both a selected runtime supporting managed Goal
+documents and the verified original thread's normal tool binding; source
+registration alone does not make them available in an installed session.
+
 For actual native background terminal observation on a supported OIX runtime,
 `interpreter_native_terminal_list` returns bounded, paginated owner identifiers
 for the calling thread. Pass one exact `turnId`, `itemId`, `nativeProcessId`, and

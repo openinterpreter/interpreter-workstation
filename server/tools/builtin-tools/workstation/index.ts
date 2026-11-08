@@ -14,6 +14,7 @@ import { closeTabTool } from './closeTabTool';
 import { refreshFileTool } from './refreshFileTool';
 import { wakeScheduleTool } from './wakeScheduleTool';
 import { goalResumeTool, goalRevisionTool } from './goalRevisionTool';
+import { goalDocumentCreateTool, goalDocumentReadTool } from './goalDocumentTool';
 import { nativeTerminalListTool, nativeTerminalStatusTool } from './nativeTerminalStatusTool';
 import { settingsGetTool } from './settingsGetTool';
 import { settingsSetTool } from './settingsSetTool';
@@ -50,6 +51,8 @@ export const interpreterServerDefinition: BuiltinServerDefinition = {
     wakeScheduleTool,
     goalRevisionTool,
     goalResumeTool,
+    goalDocumentReadTool,
+    goalDocumentCreateTool,
     nativeTerminalStatusTool,
     nativeTerminalListTool,
     showInFolderTool,
