@@ -48,6 +48,13 @@ app.use((req, res, next) => {
   next();
 });
 
+// Parse the managed-document transport before the global JSON limit. Only the
+// opt-in peer route can carry a full native-managed mission (up to 1 MiB).
+if (process.env.INTERPRETER_SUPERVISOR_VERIFY_URL &&
+    process.env.INTERPRETER_SUPERVISOR_VERIFY_AUDIENCE &&
+    process.env.INTERPRETER_SUPERVISOR_TARGET_COMPUTER) {
+  app.use('/api/interpreter-peer', express.json({ limit: '1050000b' }));
+}
 app.use(express.json());
 
 // ============================================================================

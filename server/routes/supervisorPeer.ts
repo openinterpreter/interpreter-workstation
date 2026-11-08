@@ -11,6 +11,7 @@ import { threadArtifactReceipts } from '../utils/threadArtifactReceipts';
 import { nativeSubmissionJournal } from '../utils/nativeSubmissionJournal';
 import { getCodexService } from '../../src/lib/codex/service';
 import { createSupervisorGoal, SupervisorGoalCreateError } from '../utils/supervisorGoalCreate';
+import { projectSupervisorTurn } from '../utils/supervisorTurnObservation';
 
 type Capability = SupervisorPeerTarget['capability'];
 type GoalState = { goal: v2.ThreadGoal | null; revision: ThreadGoalRevision | null;
@@ -29,6 +30,7 @@ export function createSupervisorPeerRouter(options: Readonly<{
     ReturnType<ReturnType<typeof getCodexService>['readNativeSubmissionCustody']>;
   readJournal?: typeof nativeSubmissionJournal.lookup;
   readArtifact?: typeof threadArtifactReceipts.get;
+  readThread?: (threadId: string) => Promise<v2.Thread>;
 }>): Router {
   const router = Router();
   async function authorize(request: Request, capability: Capability) {
@@ -42,6 +44,20 @@ export function createSupervisorPeerRouter(options: Readonly<{
     });
   }
   const denied = (category: string) => ({ available: false, category });
+  router.get('/threads/:threadId/turns/current', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const scope = await authorize(req, 'task:read');
+      if (scope !== 'allowed') return void res.status(403).json(denied(scope));
+      const read = options.readThread ?? ((id: string) => getCodexService().readThread(id));
+      // A deadline does not cancel the native RPC or establish an empty queue.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const thread = await Promise.race([read(req.params.threadId),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Error('deadline')), 3_000); })])
+        .finally(() => { if (timer) clearTimeout(timer); });
+      return void res.json({ available: true, ...projectSupervisorTurn(thread, req.params.threadId) });
+    } catch { return void res.status(503).json(denied('observation_unavailable')); }
+  });
   router.get('/threads/:threadId/goal', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     try {

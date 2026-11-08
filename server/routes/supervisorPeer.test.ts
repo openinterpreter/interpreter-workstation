@@ -88,6 +88,63 @@ describe('enrolled supervisor peer route seam', () => {
     expect(await uncertain.json()).toEqual({ available: false, category: 'mutation_unconfirmed' });
     expect(calls.create).toBe(1);
   });
+  it('accepts a large managed mission only on the scoped peer JSON transport', async () => {
+    const app = express();
+    app.use('/peer', express.json({ limit: '1050000b' }));
+    app.use(express.json());
+    const mission = '# Mission\n' + 'A retained requirement.\n'.repeat(7_000);
+    const digest = createHash('sha256').update(mission).digest('hex');
+    let received = '';
+    app.use('/peer', createSupervisorPeerRouter({ targetComputer: 'target-1',
+      verify: async () => grant,
+      readGoal: async () => ({ goal: null, revision: null, document: null }),
+      createGoal: async (_id, document) => { received = document; return {
+        goal: { threadId, status: 'active', objective: 'managed' } as never,
+        revision: { goalId: '00000000-0000-4000-8000-000000000004',
+          status: 'active', missionRevision: 1, lifecycleRevision: 1 },
+        document: { content: document, sha256: digest, byteLength: Buffer.byteLength(document),
+          missionRevision: 1 },
+      }; },
+      resumeGoal: async () => { throw Error('unused'); },
+      readTerminal: async () => { throw Error('unused'); },
+    }));
+    server = createServer(app);
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw Error('No listener');
+    const response = await fetch(`http://127.0.0.1:${address.port}/peer/threads/${threadId}/goal/create`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ document: mission }),
+    });
+    expect(mission.length).toBeGreaterThan(100_000);
+    expect(response.status).toBe(200);
+    expect(received).toBe(mission);
+  });
+  it('authorizes exact task scope before projecting a saved current turn and denies cross-thread reads', async () => {
+    const app = express();
+    let calls = 0;
+    app.use('/peer', createSupervisorPeerRouter({ targetComputer: 'target-1', verify: async () => grant,
+      readGoal: async () => ({ goal: null, revision: null, document: null }),
+      resumeGoal: async () => { throw Error('unused'); },
+      readTerminal: async () => { throw Error('unused'); },
+      readThread: async () => { calls++; return { id: threadId, preview: 'private obsolete wait',
+        turns: [{ id: 'current', status: 'inProgress', items: [],
+          startedAt: 1, completedAt: null }] } as never; },
+    }));
+    server = createServer(app);
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw Error('No listener');
+    const base = `http://127.0.0.1:${address.port}/peer/threads/${threadId}/turns/current`;
+    expect((await fetch(base.replace(threadId, '00000000-0000-4000-8000-000000000002'))).status).toBe(403);
+    const response = await fetch(base);
+    expect(response.status).toBe(200);
+    const result = await response.json() as Record<string, unknown>;
+    expect(result.preview).toEqual({ relation: 'initial-thread-historical-non-authoritative' });
+    expect(result.turn).toEqual({ id: 'current', status: 'inProgress', startedAt: 1, completedAt: null });
+    expect(JSON.stringify(result)).not.toContain('private obsolete wait');
+    expect(calls).toBe(1);
+  });
   it('rejects a mismatched managed mission rather than returning partial Goal custody', async () => {
     const { base } = await fixture(grant, true);
     const result = await fetch(`${base}/goal`);

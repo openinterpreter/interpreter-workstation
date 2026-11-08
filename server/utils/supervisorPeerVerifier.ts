@@ -44,6 +44,7 @@ export function createSupervisorPeerVerifier(config: SupervisorVerifierConfig,
       request.path.endsWith('/goal/resume') ? 'goal:resume' :
       request.path.endsWith('/goal') ? 'goal:read' :
       request.path.endsWith('/terminals/status') ? 'command:read' :
+      request.path.endsWith('/turns/current') ? 'task:read' :
       request.path.includes('/submissions/') ? 'task:read' :
       request.path.includes('/artifacts/') ? 'artifact:read' : undefined;
     if (!capability) return null;
