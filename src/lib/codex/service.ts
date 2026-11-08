@@ -629,7 +629,7 @@ export class CodexService {
     if (options.coldShellPolicy) {
       const custody = await this.readNativeCustody(options.threadId);
       const global = await this.readGlobalNativeCustody();
-      if (custody.status !== 'idle' || custody.queuedSubmissionCount !== 0 ||
+      if (!['idle', 'notLoaded'].includes(custody.status) || custody.queuedSubmissionCount !== 0 ||
           global.queuedSubmissionCount !== 0 || global.loadedThreadIds.includes(options.threadId) ||
           !global.threads.some(row => row.threadId === options.threadId) ||
           !options.config?.shell_environment_policy) {

@@ -1695,15 +1695,28 @@ describe("CodexService", () => {
     assert.equal(await service.resumeThread({ threadId: id, model: null, cwd: '/workspace',
       config: { mcp_servers: {}, shell_environment_policy: policy }, coldShellPolicy: true }), id);
     assert.deepEqual(fake.calls.resumeThreadConfig[0]?.shell_environment_policy, policy);
+    fake.client.threadRead = async () => ({ thread: {
+      id, cwd: '/workspace', status: { type: 'notLoaded' }, turns: [],
+    } as v2.Thread });
+    assert.equal(await service.resumeThread({ threadId: id, model: null, cwd: '/workspace',
+      config: { mcp_servers: {}, shell_environment_policy: policy }, coldShellPolicy: true }), id);
+    assert.equal(fake.calls.resumeThread, 2);
     fake.client.threadLoadedList = async () => ({ data: [id], nextCursor: null });
     await assert.rejects(service.resumeThread({ threadId: id, model: null, cwd: '/workspace',
       config: { shell_environment_policy: policy }, coldShellPolicy: true }), /Cold caller bind requires/);
-    assert.equal(fake.calls.resumeThread, 1);
+    assert.equal(fake.calls.resumeThread, 2);
     fake.client.threadLoadedList = async () => ({ data: [], nextCursor: null });
     fake.client.threadQueueList = async () => ({ data: [{ id: 'queue_1', clientUserMessageId: 'pending_1', input: [] }], nextCursor: null });
     await assert.rejects(service.resumeThread({ threadId: id, model: null, cwd: '/workspace',
       config: { shell_environment_policy: policy }, coldShellPolicy: true }), /Cold caller bind requires/);
-    assert.equal(fake.calls.resumeThread, 1);
+    assert.equal(fake.calls.resumeThread, 2);
+    fake.client.threadQueueList = async () => ({ data: [], nextCursor: null });
+    fake.client.threadRead = async () => ({ thread: {
+      id, cwd: '/workspace', status: { type: 'systemError' }, turns: [],
+    } as v2.Thread });
+    await assert.rejects(service.resumeThread({ threadId: id, model: null, cwd: '/workspace',
+      config: { shell_environment_policy: policy }, coldShellPolicy: true }), /Cold caller bind requires/);
+    assert.equal(fake.calls.resumeThread, 2);
   });
 
   test("ordinary stream, idle durable wake and active input share native scope and input IDs", async () => {
