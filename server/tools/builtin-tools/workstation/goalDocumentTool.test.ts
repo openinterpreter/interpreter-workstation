@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, test } from 'bun:test';
+import { ManagedGoalDocumentError } from '../../../../src/lib/codex/goal-document';
 import type { BuiltinToolContext } from '../../builtinTools';
 import { createGoalDocumentForCaller, readGoalDocumentForCaller,
   goalDocumentCreateTool, goalDocumentReadTool, goalDocumentUpdateTool,
@@ -7,89 +9,104 @@ import { createGoalDocumentForCaller, readGoalDocumentForCaller,
 const longMission = `# Full mission\n${'Keep the exact task and revision.\n'.repeat(160)}`;
 const id = (n: number) => `00000000-0000-4000-8000-${n.toString().padStart(12, '0')}`;
 const decode = (result: { content: Array<{ text: string }> }) => JSON.parse(result.content[0]!.text);
+const digest = createHash('sha256').update(longMission).digest('hex');
+const createInput = { creationId: 'distinct-mission-01', objective: 'New mission pointer',
+  document: longMission, expectedGoalId: id(20), expectedStatus: 'complete' as const,
+  expectedMissionRevision: 5, expectedLifecycleRevision: 9 };
+const previousRevision = { goalId: id(20), status: 'complete',
+  missionRevision: 5, lifecycleRevision: 9 };
+const newRevision = { goalId: id(21), status: 'active',
+  missionRevision: 1, lifecycleRevision: 1 };
+const nativeDocument = (threadId: string) => ({
+  path: `managed-goals/${threadId}/mission-1-${digest}.md`, sha256: digest,
+  byteLength: Buffer.byteLength(longMission), missionRevision: 1,
+});
+const successfulService = (threadId: string, creation: (input: unknown) => void = () => {}) => {
+  const goal = { threadId, status: 'active', objective: createInput.objective };
+  const document = nativeDocument(threadId);
+  return {
+    createThreadGoalDocument: async (input: unknown) => {
+      creation(input);
+      return { creationId: createInput.creationId, goal, document,
+        revision: newRevision, previousRevision, replayed: false };
+    },
+    getThreadGoalWithRevision: async () => ({ goal, revision: newRevision }),
+    getThreadGoalDocument: async () => ({ goal, document, content: longMission }),
+  } as never;
+};
 
 describe('same-thread managed Goal document caller', () => {
-  test('five independent absent missions create once and read back full >4,000-character content', async () => {
+  test('five independent completed predecessors create a distinct full >4,000-character mission with exact CAS', async () => {
     expect(longMission.length).toBeGreaterThan(4_000);
     for (let n = 1; n <= 5; n++) {
       const threadId = id(n);
       const context: BuiltinToolContext = { threadId, verifiedCallerThreadId: threadId };
-      let current: any = { goal: null, document: null, content: null };
-      let writes = 0;
-      const read = async () => current;
-      const create = async (owner: string, document: string) => {
-        writes++;
-        expect(owner).toBe(threadId);
-        expect(document).toBe(longMission);
-        current = { goal: { threadId, status: 'active' },
-          document: { sha256: 'digest', missionRevision: 1 }, content: document };
-        return current;
-      };
-      const presence = async () => ({ goal: current.goal });
-      expect(decode(await createGoalDocumentForCaller(context, longMission, presence, read, create)).created)
-        .toBe(true);
-      expect(decode(await readGoalDocumentForCaller(context, read)).content).toBe(longMission);
-      expect(decode(await createGoalDocumentForCaller(context, longMission, presence, read, create)))
-        .toEqual({ created: false, category: 'goal_exists' });
-      expect(writes).toBe(1);
+      const calls: unknown[] = [];
+      const service = successfulService(threadId, input => calls.push(input));
+      const created = decode(await createGoalDocumentForCaller(context, createInput, service));
+      expect(created).toMatchObject({ created: true, creationId: createInput.creationId,
+        previousRevision, revision: newRevision });
+      expect(created.document.content).toBe(longMission);
+      expect(calls).toEqual([{ ...createInput, threadId, status: 'active' }]);
+      expect(decode(await readGoalDocumentForCaller(context,
+        id => service.getThreadGoalDocument(id))).content).toBe(longMission);
     }
     expect(goalDocumentCreateTool.mainAgentOnly).toBe(true);
     expect(goalDocumentReadTool.mainAgentOnly).toBe(true);
+    expect(goalDocumentCreateTool.inputSchema?.required).toContain('expectedLifecycleRevision');
   });
 
-  test('unrelated blocked Goal cannot be replaced or resumed by a document creator', async () => {
+  test('unrelated blocked or absent Goal cannot be promoted by a document creator', async () => {
     const threadId = id(6);
     let writes = 0;
+    const service = { createThreadGoalDocument: async () => { writes++;
+      throw new ManagedGoalDocumentError('stale_predecessor'); } } as never;
     const result = await createGoalDocumentForCaller({ threadId, verifiedCallerThreadId: threadId },
-      longMission, async () => ({ goal: { threadId, status: 'blocked' } }),
-      async () => { throw Error('A Goal without a document cannot be read as absence'); },
-      async () => { writes++; throw Error('must not write'); });
-    expect(decode(result)).toEqual({ created: false, category: 'goal_exists' });
-    expect(writes).toBe(0);
+      createInput, service);
+    expect(decode(result)).toEqual({ created: false, category: 'stale_predecessor' });
+    expect(writes).toBe(1);
   });
 
-  test('wrong caller, unavailable read and ambiguous write fail without replacement or leak', async () => {
-    let reads = 0, writes = 0;
+  test('wrong caller, unsupported native method and ambiguous write fail without leak or retry', async () => {
+    let writes = 0;
     const threadId = id(1);
-    const read = async () => { reads++; return { goal: null, document: null, content: null }; };
-    const create = async () => { writes++; throw Error('PRIVATE transport details'); };
+    const service = { createThreadGoalDocument: async () => { writes++;
+      throw Error('PRIVATE transport details'); } } as never;
     const denied = await createGoalDocumentForCaller({ threadId, verifiedCallerThreadId: id(2) },
-      longMission, async () => ({ goal: null }), read, create);
+      createInput, service);
     expect(decode(denied).category).toBe('caller_unavailable');
-    expect(reads).toBe(0);
+    expect(writes).toBe(0);
     const uncertain = await createGoalDocumentForCaller({ threadId,
-      verifiedCallerThreadId: threadId }, longMission, async () => ({ goal: null }), read, create);
+      verifiedCallerThreadId: threadId }, createInput, service);
     expect(decode(uncertain)).toEqual({ created: false, category: 'mutation_unconfirmed' });
     expect(JSON.stringify(uncertain)).not.toContain('PRIVATE');
     expect(writes).toBe(1);
     const unavailable = await createGoalDocumentForCaller({ threadId,
-      verifiedCallerThreadId: threadId }, longMission,
-      async () => { throw Error('PRIVATE read'); }, read, create);
-    expect(decode(unavailable).category).toBe('read_unavailable');
+      verifiedCallerThreadId: threadId }, createInput,
+    { createThreadGoalDocument: async () => {
+      throw new ManagedGoalDocumentError('create_unavailable'); } } as never);
+    expect(decode(unavailable).category).toBe('create_unavailable');
     expect(writes).toBe(1);
   });
 
-  test('a competing native Goal insertion after absent read is not overwritten or retried', async () => {
+  test('a competing native Goal transition after predecessor read is not overwritten or retried', async () => {
     const threadId = id(7);
     let writes = 0;
     const result = await createGoalDocumentForCaller({ threadId,
-      verifiedCallerThreadId: threadId }, longMission,
-    async () => ({ goal: null }),
-    async () => { throw Error('must not attempt readback'); },
-    async () => { writes++; throw Error('native unique insert refused competing Goal'); });
-    expect(decode(result)).toEqual({ created: false, category: 'mutation_unconfirmed' });
+      verifiedCallerThreadId: threadId }, createInput,
+    { createThreadGoalDocument: async () => { writes++;
+      throw new ManagedGoalDocumentError('stale_predecessor'); } } as never);
+    expect(decode(result)).toEqual({ created: false, category: 'stale_predecessor' });
     expect(writes).toBe(1);
   });
 
-  test('contradictory native absence and revision cannot authorize a new Goal', async () => {
+  test('missing predecessor fields cannot authorize a new Goal', async () => {
     const threadId = id(8);
     let writes = 0;
     const result = await createGoalDocumentForCaller({ threadId,
-      verifiedCallerThreadId: threadId }, longMission,
-    async () => ({ goal: null, revision: { goalId: 'older-owner' } }),
-    async () => { throw Error('must not read'); },
-    async () => { writes++; throw Error('must not write'); });
-    expect(decode(result)).toEqual({ created: false, category: 'read_unavailable' });
+      verifiedCallerThreadId: threadId }, { ...createInput, expectedLifecycleRevision: undefined } as never,
+    { createThreadGoalDocument: async () => { writes++; throw Error('must not write'); } } as never);
+    expect(decode(result)).toEqual({ created: false, category: 'invalid_request' });
     expect(writes).toBe(0);
   });
 
@@ -135,17 +152,17 @@ describe('same-thread managed Goal document caller', () => {
     expect(writes).toBe(1);
   });
 
-  test('stalled native read is bounded without interpreting silence as an absent Goal', async () => {
+  test('stalled native read is bounded without interpreting silence as permission to create', async () => {
     const threadId = id(13);
     let writes = 0;
     const hung = async () => new Promise<never>(() => {});
     const context = { threadId, verifiedCallerThreadId: threadId };
     const read = await readGoalDocumentForCaller(context, hung, 5);
     expect(decode(read)).toEqual({ available: false, category: 'read_unavailable' });
-    const create = await createGoalDocumentForCaller(context, longMission, hung,
-      hung, async () => { writes++; throw Error('must not write'); }, 5);
-    expect(decode(create)).toEqual({ created: false, category: 'read_unavailable' });
-    expect(writes).toBe(0);
+    const create = await createGoalDocumentForCaller(context, createInput,
+      { createThreadGoalDocument: async () => { writes++; return hung(); } } as never, 5);
+    expect(decode(create)).toEqual({ created: false, category: 'mutation_unconfirmed' });
+    expect(writes).toBe(1);
   });
 
   test('a timed-out create remains uncertain after native later accepts it, without a second write', async () => {
@@ -154,14 +171,15 @@ describe('same-thread managed Goal document caller', () => {
     let finish!: (value: any) => void;
     let writes = 0;
     let readbacks = 0;
-    const pending = createGoalDocumentForCaller(context, longMission,
-      async () => ({ goal: null }),
-      async () => { readbacks++; return { goal: null, document: null, content: null }; },
-      async () => { writes++; return new Promise(resolve => { finish = resolve; }); }, 5);
+    const pending = createGoalDocumentForCaller(context, createInput,
+      { createThreadGoalDocument: () => { writes++; return new Promise(resolve => { finish = resolve; }); },
+        getThreadGoalWithRevision: async () => { readbacks++; throw Error('late read'); },
+        getThreadGoalDocument: async () => { readbacks++; throw Error('late read'); },
+      } as never, 5);
     const result = await pending;
     expect(decode(result)).toEqual({ created: false, category: 'mutation_unconfirmed' });
     expect(writes).toBe(1);
-    finish({ goal: { threadId }, document: { sha256: 'native-late', missionRevision: 1 } });
+    finish({ goal: { threadId }, document: nativeDocument(threadId) });
     await Promise.resolve();
     expect(writes).toBe(1);
     expect(readbacks).toBe(0);
