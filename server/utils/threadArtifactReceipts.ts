@@ -59,6 +59,10 @@ export class ThreadArtifactReceipts {
         created = false;
       }
       finally { await unlink(temporary); }
+      // The data file was synced before the exclusive link. Sync the directory
+      // before acknowledging a newly claimed ID so a crash cannot lose the
+      // name while the caller believes the receipt is durable.
+      if (created) await directory.sync();
       const saved = await open(destination, constants.O_RDONLY | constants.O_NOFOLLOW);
       try {
         const stat = await saved.stat();
