@@ -52,6 +52,47 @@ describe('main-agent Goal CAS read', () => {
     expect(JSON.parse(result.content[0]!.text)).toEqual({ available: true,
       goalPresent: false, revision: null });
   });
+
+  test('contradictory Goal presence/revision and malformed CAS identity fail closed', async () => {
+    const context = { threadId, verifiedCallerThreadId: threadId };
+    for (const native of [
+      { goal: { threadId }, revision: null },
+      { goal: null, revision },
+      { goal: { threadId }, revision: { ...revision, goalId: 'bad' } },
+    ]) {
+      const result = await readGoalRevisionForCaller(context, async () => native);
+      expect(result.isError).toBe(true);
+      expect(JSON.parse(result.content[0]!.text)).toEqual({ available: false,
+        category: 'read_unavailable' });
+    }
+  });
+
+  test('a late native Goal read remains unavailable without cancellation, false absence or retry', async () => {
+    let finish!: (value: { goal: unknown; revision: unknown }) => void;
+    let reads = 0;
+    const result = await readGoalRevisionForCaller({ threadId,
+      verifiedCallerThreadId: threadId }, () => {
+      reads++;
+      return new Promise(resolve => { finish = resolve; });
+    }, 5);
+    expect(JSON.parse(result.content[0]!.text)).toEqual({ available: false,
+      category: 'read_unavailable' });
+    finish({ goal: { threadId }, revision });
+    await Promise.resolve();
+    expect(reads).toBe(1);
+    expect(JSON.parse(result.content[0]!.text).available).toBe(false);
+  });
+
+  test('invalid observation deadline cannot reach native', async () => {
+    let reads = 0;
+    const result = await readGoalRevisionForCaller({ threadId,
+      verifiedCallerThreadId: threadId }, async () => {
+      reads++;
+      return { goal: null, revision: null };
+    }, 3_001);
+    expect(JSON.parse(result.content[0]!.text).category).toBe('read_unavailable');
+    expect(reads).toBe(0);
+  });
 });
 
 describe('exact same-Goal conditional resume', () => {

@@ -8,6 +8,7 @@ const THREAD = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 export async function readGoalRevisionForCaller(
   context: BuiltinToolContext | undefined,
   read: (threadId: string) => Promise<{ goal: unknown; revision: unknown }>,
+  maxWaitMs = 3_000,
 ) {
   const threadId = context?.verifiedCallerThreadId;
   if (!threadId || !THREAD.test(threadId) || context?.threadId !== threadId ||
@@ -15,13 +16,28 @@ export async function readGoalRevisionForCaller(
     return { content: [{ type: 'text', text: JSON.stringify({ available: false,
       category: 'caller_unavailable' }) }], isError: true };
   }
+  if (!Number.isSafeInteger(maxWaitMs) || maxWaitMs < 1 || maxWaitMs > 3_000) {
+    return { content: [{ type: 'text', text: JSON.stringify({ available: false,
+      category: 'read_unavailable' }) }], isError: true };
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const { goal, revision } = await read(threadId);
+    // Expiring this observation never cancels, retries or interprets the native RPC.
+    const { goal, revision } = await Promise.race([read(threadId),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Goal read deadline exceeded')), maxWaitMs);
+      })]);
+    // A present Goal without its native CAS identity (or an absent Goal with
+    // a revision) cannot authorize same-Goal control or a new Goal insertion.
+    if ((goal === null) !== (revision === null)) throw new Error('Inconsistent Goal revision');
+    if (goal !== null) goalCasExpectedParams(revision as ThreadGoalRevision);
     return { content: [{ type: 'text', text: JSON.stringify({ available: true,
       goalPresent: goal !== null, revision }) }] };
   } catch {
     return { content: [{ type: 'text', text: JSON.stringify({ available: false,
       category: 'read_unavailable' }) }], isError: true };
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
