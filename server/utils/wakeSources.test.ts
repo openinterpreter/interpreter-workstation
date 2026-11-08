@@ -1082,6 +1082,61 @@ setTimeout(()=>process.stdout.write(b.subarray(i+2)),30);`;
     } finally { await first.stop(); await rm(root, { recursive: true, force: true }); }
   });
 
+  test('offered daily event remains fenced across a timed-out inspection and reconciles its late receipt', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-offered-inspect-timeout-'));
+    let resolveInspection!: (value: { messages: string[]; clientIds: string[] }) => void;
+    let inspections = 0;
+    let starts = 0;
+    let nativeReceipt = false;
+    let originalClientId = '';
+    const native: WakeNative = {
+      inspect: async () => {
+        inspections++;
+        if (inspections === 1) return { messages: [], clientIds: [] };
+        if (inspections === 2) return new Promise(resolve => { resolveInspection = resolve; });
+        return { messages: [], clientIds: nativeReceipt ? [originalClientId] : [] };
+      },
+      start: async (_thread, _message, clientId) => {
+        starts++;
+        originalClientId = clientId!;
+        throw new WakeAdmissionFailure('start', Error('native outcome unknown'));
+      },
+      steer: async () => { throw Error('unexpected steer'); },
+    };
+    const first = new WakeSources(native, root, 5);
+    try {
+      await first.initialize();
+      await first.put({ id: 'daily', threadId: 'thread-1', kind: 'schedule',
+        message: 'synthetic maintenance', at: new Date(Date.now() - 1_000).toISOString(),
+        everyMs: 86_400_000 });
+      await first.tick();
+      const event = first.list('thread-1').events[0]!;
+      expect(event.status).toBe('offered');
+      expect(originalClientId).toBe(wakeClientId(event));
+      await first.stop();
+      const resumed = new WakeSources(native, root, 5);
+      try {
+        await resumed.initialize();
+        const retry = Date.parse(event.nextAttemptAt!) + 1;
+        await resumed.tick(retry);
+        expect(resumed.list('thread-1').events[0]?.failure?.phase).toBe('inspect');
+        expect(resumed.list('thread-1').events[0]?.failure?.category).toBe('timeout');
+        expect(resumed.list('thread-1').events[0]?.status).toBe('offered');
+        await resumed.tick(Date.parse(resumed.list('thread-1').events[0]!.nextAttemptAt!) + 1);
+        expect(inspections).toBe(2); // A timed-out native RPC is still in flight.
+        expect(starts).toBe(1);
+        nativeReceipt = true;
+        resolveInspection({ messages: [], clientIds: [originalClientId] });
+        await Promise.resolve();
+        await resumed.tick(Date.parse(resumed.list('thread-1').events[0]!.nextAttemptAt!) + 1);
+        expect(resumed.list('thread-1').events[0]?.status).toBe('admitted');
+        expect(resumed.list('thread-1').events[0]?.failure).toBeUndefined();
+        expect(resumed.list('thread-1').sources[0]?.status).toBe('waiting');
+        expect(starts).toBe(1);
+      } finally { await resumed.stop(); }
+    } finally { await first.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
   test('due schedule survives a pre-start rejection and re-arms only after a native receipt', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'wake-schedule-rejection-'));
     const receipts: string[] = [];
