@@ -213,6 +213,9 @@ describe('native completed-predecessor managed Goal creation', () => {
     for (const override of [
       { creationId: 'another-id' }, { previousRevision: { ...previousRevision, goalId: newId } },
       { goal: { ...goal, threadId: newId } }, { document: { ...document, sha256: '0'.repeat(64) } },
+      { document: { ...document, missionRevision: revision.missionRevision + 1,
+        path: document.path.replace(`mission-${document.missionRevision}-`,
+          `mission-${revision.missionRevision + 1}-`) } },
     ]) {
       const service = { createThreadGoalDocument: async () => ({ goal, document,
         previousRevision, revision, creationId: request.creationId, replayed: false, ...override }),

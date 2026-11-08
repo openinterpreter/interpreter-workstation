@@ -96,6 +96,9 @@ export async function createSupervisorGoal(service: Service, threadId: string,
             result.revision.goalId === precondition.expectedGoalId)) throw Error('receipt mismatch');
     verifyThreadGoalRevision(result.goal, result.revision, threadId);
     verifyGoalDocument(threadId, result.document, input.document);
+    if (result.document.missionRevision !== result.revision.missionRevision) {
+      throw Error('creation receipt revision mismatch');
+    }
     const state = await readStableSupervisorGoal(service, threadId, maxWaitMs);
     if (!state.goal || !state.revision || !state.document ||
         state.revision.goalId !== result.revision.goalId ||
@@ -103,7 +106,8 @@ export async function createSupervisorGoal(service: Service, threadId: string,
         state.revision.missionRevision !== result.revision.missionRevision ||
         state.revision.lifecycleRevision !== result.revision.lifecycleRevision ||
         state.document.content !== input.document ||
-        state.document.sha256 !== result.document.sha256) throw Error('readback mismatch');
+        state.document.sha256 !== result.document.sha256 ||
+        state.document.byteLength !== result.document.byteLength) throw Error('readback mismatch');
     return { ...state, creationId: result.creationId,
       previousRevision: result.previousRevision, replayed: result.replayed };
   } catch { throw new SupervisorGoalCreateError('mutation_unconfirmed'); }
