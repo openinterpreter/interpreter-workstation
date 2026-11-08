@@ -10,6 +10,7 @@ import { authorizeSupervisorPeer, type VerifiedSupervisorGrant,
 import { threadArtifactReceipts } from '../utils/threadArtifactReceipts';
 import { nativeSubmissionJournal } from '../utils/nativeSubmissionJournal';
 import { getCodexService } from '../../src/lib/codex/service';
+import { createSupervisorGoal, SupervisorGoalCreateError } from '../utils/supervisorGoalCreate';
 
 type Capability = SupervisorPeerTarget['capability'];
 type GoalState = { goal: v2.ThreadGoal | null; revision: ThreadGoalRevision | null;
@@ -21,6 +22,7 @@ export function createSupervisorPeerRouter(options: Readonly<{
   targetComputer: string;
   verify: (request: Request) => Promise<VerifiedSupervisorGrant | null>;
   readGoal: (threadId: string) => Promise<GoalState>;
+  createGoal?: (threadId: string, document: string) => Promise<GoalState>;
   resumeGoal: (threadId: string, expected: ThreadGoalRevision) => Promise<ThreadGoalRevision>;
   readTerminal: (request: NativeTerminalStatusRequest) => Promise<NativeTerminalStatusResponse>;
   readSubmission?: (threadId: string, clientUserMessageId: string) =>
@@ -58,6 +60,21 @@ export function createSupervisorPeerRouter(options: Readonly<{
       if (state.goal && JSON.stringify(state.goal).length > 256 * 1024) throw new Error('too large');
       return void res.json({ available: true, ...state });
     } catch { return void res.status(503).json(denied('read_unavailable')); }
+  });
+  router.post('/threads/:threadId/goal/create', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const scope = await authorize(req, 'goal:create');
+      if (scope !== 'allowed') return void res.status(403).json(denied(scope));
+      const create = options.createGoal ?? ((id: string, document: string) =>
+        createSupervisorGoal(getCodexService(), id, document));
+      const state = await create(req.params.threadId, req.body?.document);
+      return void res.json({ available: true, ...state });
+    } catch (error) {
+      const category = error instanceof SupervisorGoalCreateError ? error.category : 'mutation_unconfirmed';
+      return void res.status(category === 'invalid_document' ? 400 : category === 'goal_exists' ? 409 : 503)
+        .json(denied(category));
+    }
   });
   router.post('/threads/:threadId/goal/resume', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');

@@ -9,14 +9,14 @@ const threadId = '00000000-0000-4000-8000-000000000001';
 const grant: VerifiedSupervisorGrant = {
   issuer: 'enrolled-issuer', subject: 'supervisor-1', sourceComputer: 'source-1',
   targetComputer: 'target-1', threadId,
-  capabilities: ['goal:read', 'goal:resume', 'task:read', 'command:read', 'artifact:read'],
+  capabilities: ['goal:read', 'goal:create', 'goal:resume', 'task:read', 'command:read', 'artifact:read'],
   expiresAt: Date.now() + 60_000,
 };
 let server: Server | undefined;
 afterEach(() => server?.close());
 
 async function fixture(verified: VerifiedSupervisorGrant | null = grant, alteredDocument = false) {
-  const calls = { goal: 0, resume: 0, terminal: 0, artifact: 0, submission: 0 };
+  const calls = { goal: 0, create: 0, resume: 0, terminal: 0, artifact: 0, submission: 0 };
   const app = express();
   app.use(express.json({ limit: '2kb' }));
   app.use('/peer', createSupervisorPeerRouter({
@@ -29,6 +29,7 @@ async function fixture(verified: VerifiedSupervisorGrant | null = grant, altered
         sha256: createHash('sha256').update(alteredDocument ? '# other mission' : '# retained mission').digest('hex'),
         missionRevision: 4,
       } }; },
+    createGoal: async () => { calls.create++; throw new Error('creation outcome unknown'); },
     resumeGoal: async (_thread, expected) => { calls.resume++; return { ...expected, status: 'active' }; },
     readTerminal: async () => { calls.terminal++; throw new Error('private command text'); },
     readJournal: async () => ({ requestId: 'request-1', threadId,
@@ -73,7 +74,19 @@ describe('enrolled supervisor peer route seam', () => {
     const { base, calls } = await fixture(null);
     expect((await fetch(`${base}/goal`)).status).toBe(403);
     expect((await fetch(`${base}/artifacts/receipt-1?content=true`)).status).toBe(403);
-    expect(calls).toEqual({ goal: 0, resume: 0, terminal: 0, artifact: 0, submission: 0 });
+    expect(calls).toEqual({ goal: 0, create: 0, resume: 0, terminal: 0, artifact: 0, submission: 0 });
+  });
+  it('denies cross-thread creation before a native call and keeps uncertain creation typed', async () => {
+    const { base, calls } = await fixture();
+    const create = (url: string) => fetch(`${url}/goal/create`, { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify({ document: 'mission' }) });
+    const denied = await create(base.replace(threadId, '00000000-0000-4000-8000-000000000002'));
+    expect(denied.status).toBe(403);
+    expect(calls.create).toBe(0);
+    const uncertain = await create(base);
+    expect(uncertain.status).toBe(503);
+    expect(await uncertain.json()).toEqual({ available: false, category: 'mutation_unconfirmed' });
+    expect(calls.create).toBe(1);
   });
   it('rejects a mismatched managed mission rather than returning partial Goal custody', async () => {
     const { base } = await fixture(grant, true);

@@ -30,8 +30,9 @@ describe('optional enrolled target peer verifier', () => {
     expect(JSON.parse(calls[0])).toEqual({ action: 'verify', assertion: 'owned.assertion',
       targetComputer: 'target-1', threadId, capability: 'goal:read' });
     expect(await verify(req(`/threads/${threadId}/goal/resume`))).toBeNull();
+    expect(await verify(req(`/threads/${threadId}/goal/create`))).toBeNull();
     expect(await verify(req(`/threads/${threadId}/goal`, 'bad assertion'))).toBeNull();
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
   });
   it('denies wrong owner, stale grant, errors and late response without accepting supplied assertion', async () => {
     for (const response of [{ ...grant, threadId: '00000000-0000-4000-8000-000000000002' },
