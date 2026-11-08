@@ -154,6 +154,27 @@ describe('Workstation consumer for OIX-owned managed Goal documents', () => {
     assert.equal(writes, 3);
   });
 
+  test('only the fixed native document CAS conflict is stale; transport errors remain uncertain', async () => {
+    const expected = { goalId: '00000000-0000-4000-8000-000000000088',
+      status: 'active' as const, missionRevision: 1, lifecycleRevision: 4 };
+    let writes = 0;
+    const client = { subscribe: () => () => {}, threadGoalDocumentRevisionSet: async () => {
+      writes++;
+      throw { code: -32009, message: 'PRIVATE predecessor text' };
+    } } as unknown as CodexClient;
+    const service = new CodexService(client);
+    await assert.rejects(service.setThreadGoalDocumentWithRevision({ threadId,
+      document: documentText }, expected), error =>
+      error instanceof ManagedGoalDocumentError && error.category === 'stale_revision' &&
+      !error.message.includes('PRIVATE'));
+    assert.equal(writes, 1);
+    client.threadGoalDocumentRevisionSet = async () => { writes++;
+      throw { code: -32010, message: 'PRIVATE unknown outcome' }; };
+    await assert.rejects(service.setThreadGoalDocumentWithRevision({ threadId,
+      document: documentText }, expected), { category: 'update_unconfirmed' });
+    assert.equal(writes, 2);
+  });
+
   test('bounded document CAS timeout does not cancel native or replay a late receipt', async () => {
     const expected = { goalId: '00000000-0000-4000-8000-000000000088',
       status: 'active' as const, missionRevision: 1, lifecycleRevision: 4 };

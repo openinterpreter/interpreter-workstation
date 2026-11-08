@@ -1,6 +1,7 @@
 import type { BuiltinToolContext, BuiltinToolDefinition } from '../../builtinTools';
 import { getCodexService } from '../../../../src/lib/codex/service';
-import type { ThreadGoalDocumentGetResponse, ThreadGoalDocumentSetResponse } from '../../../../src/lib/codex/goal-document';
+import { ManagedGoalDocumentError,
+  type ThreadGoalDocumentGetResponse, type ThreadGoalDocumentSetResponse } from '../../../../src/lib/codex/goal-document';
 import { goalCasExpectedParams, type ThreadGoalRevision } from '../../../../src/lib/codex/goal-revision';
 import { createSupervisorGoal, SupervisorGoalCreateError,
   type SupervisorGoalCreateInput } from '../../../utils/supervisorGoalCreate';
@@ -93,8 +94,10 @@ export async function updateGoalDocumentForCaller(context: BuiltinToolContext | 
       throw new Error('Unconfirmed native readback');
     }
     return response({ updated: true, document: confirmed.document, revision: result.revision });
-  } catch {
-    return response({ updated: false, category: 'mutation_unconfirmed' }, true);
+  } catch (error) {
+    return response({ updated: false, category:
+      error instanceof ManagedGoalDocumentError && error.category === 'stale_revision'
+        ? 'stale_revision' : 'mutation_unconfirmed' }, true);
   }
 }
 

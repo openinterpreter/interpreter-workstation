@@ -205,6 +205,21 @@ describe('same-thread managed Goal document caller', () => {
     expect(writes).toBe(1);
   });
 
+  test('exact native document CAS conflict is typed stale without reading or replaying a write', async () => {
+    const threadId = id(16);
+    const expected = { goalId: id(17), status: 'blocked' as const,
+      missionRevision: 1, lifecycleRevision: 1 };
+    let writes = 0;
+    let reads = 0;
+    const result = await updateGoalDocumentForCaller({ threadId,
+      verifiedCallerThreadId: threadId }, longMission, expected,
+    async () => { writes++; throw new ManagedGoalDocumentError('stale_revision'); },
+    async () => { reads++; throw Error('unreachable'); });
+    expect(decode(result)).toEqual({ updated: false, category: 'stale_revision' });
+    expect(writes).toBe(1);
+    expect(reads).toBe(0);
+  });
+
   test('stalled native read is bounded without interpreting silence as permission to create', async () => {
     const threadId = id(13);
     let writes = 0;

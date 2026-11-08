@@ -1590,8 +1590,12 @@ export class CodexService {
         throw new ManagedGoalDocumentError('update_unconfirmed');
       }
       return { goal: result.goal, document: result.document, revision };
-    } catch {
-      // A transport loss does not prove native rejected this write. Reconcile; never replay.
+    } catch (error) {
+      // Only native's fixed conflict code proves this CAS was rejected. A
+      // transport loss can mean the write committed; reconcile, never replay.
+      if (error && typeof error === 'object' && 'code' in error && error.code === -32009) {
+        throw new ManagedGoalDocumentError('stale_revision');
+      }
       throw new ManagedGoalDocumentError('update_unconfirmed');
     } finally {
       if (deadline) clearTimeout(deadline);

@@ -65,13 +65,15 @@ const threadIdPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 /** An unacknowledged write may have taken effect; never blindly submit it again. */
 export class ManagedGoalDocumentError extends Error {
   constructor(readonly category: 'read_unavailable' | 'create_unavailable' |
-    'stale_predecessor' | 'update_unconfirmed') {
+    'stale_predecessor' | 'stale_revision' | 'update_unconfirmed') {
     super(category === 'read_unavailable'
       ? 'Managed Goal document read unavailable.'
       : category === 'create_unavailable'
         ? 'Native managed Goal creation is unavailable.'
         : category === 'stale_predecessor'
           ? 'Goal creation precondition changed; reread before a distinct creation.'
+          : category === 'stale_revision'
+            ? 'Native Goal document revision changed; obtain a fresh revision.'
           : 'Managed Goal document update unconfirmed; reread before retry.');
     this.name = 'ManagedGoalDocumentError';
   }
