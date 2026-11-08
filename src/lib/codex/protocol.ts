@@ -57,6 +57,7 @@ export const CLIENT_METHOD = {
   mcpResourceRead: "mcpServer/resource/read",
   threadList: "thread/list",
   threadRead: "thread/read",
+  threadTurnsList: "thread/turns/list",
   threadQueueList: "thread/queue/list",
   threadLoadedList: "thread/loaded/list",
   modelList: "model/list",
@@ -277,6 +278,10 @@ export type RequestMap = {
   [CLIENT_METHOD.threadRead]: {
     params: v2.ThreadReadParams;
     result: v2.ThreadReadResponse;
+  };
+  [CLIENT_METHOD.threadTurnsList]: {
+    params: v2.ThreadTurnsListParams;
+    result: v2.ThreadTurnsListResponse;
   };
   [CLIENT_METHOD.threadQueueList]: {
     params: { threadId: string; cursor?: string | null; limit?: number | null };

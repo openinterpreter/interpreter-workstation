@@ -49,7 +49,7 @@ export function createSupervisorPeerRouter(options: Readonly<{
     try {
       const scope = await authorize(req, 'task:read');
       if (scope !== 'allowed') return void res.status(403).json(denied(scope));
-      const read = options.readThread ?? ((id: string) => getCodexService().readThread(id));
+      const read = options.readThread ?? ((id: string) => getCodexService().readSupervisorThreadSnapshot(id));
       // A deadline does not cancel the native RPC or establish an empty queue.
       let timer: ReturnType<typeof setTimeout> | undefined;
       const thread = await Promise.race([read(req.params.threadId),
