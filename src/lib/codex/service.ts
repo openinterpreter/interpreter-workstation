@@ -4,6 +4,7 @@ import { boundNativeTerminalStatus, validateNativeTerminalRequest, type NativeTe
   type NativeTerminalStatusResponse } from './native-terminal-status';
 import { ManagedGoalDocumentError, validateGoalDocumentInput, verifyGoalDocument, type ThreadGoalDocumentGetResponse,
   type ThreadGoalDocumentSetParams, type ThreadGoalDocumentSetResponse } from './goal-document';
+import { GoalRevisionUnavailableError, verifyThreadGoalRevision, type ThreadGoalRevision } from './goal-revision';
 import { JSONRPCErrorException } from "json-rpc-2.0";
 import type { v2 } from "../../../server/handlers/codex-generated-types/index";
 import type { JsonValue } from "../../../server/handlers/codex-generated-types/serde_json/JsonValue";
@@ -1395,6 +1396,24 @@ export class CodexService {
   async getThreadGoal(threadId: string): Promise<v2.ThreadGoal | null> {
     const result = await this.client.threadGoalGet({ threadId });
     return result.goal;
+  }
+
+  /** Read exact native CAS identity; an old runtime or contradictory receipt is unavailable. */
+  async getThreadGoalWithRevision(threadId: string): Promise<{
+    goal: v2.ThreadGoal | null;
+    revision: ThreadGoalRevision | null;
+  }> {
+    try {
+      if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId)) {
+        throw new GoalRevisionUnavailableError();
+      }
+      const result = await this.client.threadGoalGet({ threadId });
+      const revision = verifyThreadGoalRevision(result.goal, (result as { revision?: unknown }).revision,
+        threadId);
+      return { goal: result.goal, revision };
+    } catch {
+      throw new GoalRevisionUnavailableError();
+    }
   }
 
   /** Full mission bytes remain in OIX's owned state directory, not an app file. */
