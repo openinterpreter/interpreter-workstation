@@ -120,6 +120,9 @@ write.
 These caller tools require both a selected runtime supporting managed Goal
 documents and the verified original thread's normal tool binding; source
 registration alone does not make them available in an installed session.
+Read, create, and conditional edit do not cold-start or reconnect OIX; after
+a disconnect they return unavailable or an unconfirmed mutation instead of
+issuing another native write.
 
 For actual native background terminal observation on a supported OIX runtime,
 `interpreter_native_terminal_list` returns bounded, paginated owner identifiers

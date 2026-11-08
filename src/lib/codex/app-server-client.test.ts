@@ -430,6 +430,34 @@ describe("CodexAppServerClient", () => {
     client.shutdown();
   });
 
+  test('managed-document read and create neither start OIX nor reconnect after a lost receipt', async () => {
+    const threadId = '00000000-0000-4000-8000-000000000077';
+    for (const mode of ['read', 'create'] as const) {
+      const transport = new FakeTransport();
+      const client = new CodexAppServerClient(transport, null);
+      const request = () => mode === 'read'
+        ? client.threadGoalDocumentGet({ threadId })
+        : client.threadGoalDocumentSet({ threadId, document: '# New full mission', status: 'active' });
+      await assert.rejects(request(), /unavailable/);
+      assert.equal(transport.sent.length, 0, 'a bound caller cannot cold-start OIX');
+      const connecting = client.ensureConnected();
+      await waitFor(() => transport.sent.length >= 1);
+      completeInitHandshake(transport);
+      await connecting;
+      const before = transport.sent.length;
+      const pending = request();
+      await waitFor(() => transport.sent.length === before + 1);
+      const sent = assertSentRequest(transport, before, mode === 'read'
+        ? CLIENT_METHOD.threadGoalDocumentGet : CLIENT_METHOD.threadGoalDocumentSet);
+      transport.close(new Error('PRIVATE lost connection'));
+      transport.respond(sent, { goal: null, document: null, content: null });
+      await assert.rejects(pending);
+      assert.equal(transport.sent.length, before + 1,
+        'a late result never creates a second request or reconnect');
+      client.shutdown();
+    }
+  });
+
   test('owner-bound terminal list and status traverse the real client and service without exposing native text', async () => {
     const transport = new FakeTransport();
     let version = '0.0.58';
