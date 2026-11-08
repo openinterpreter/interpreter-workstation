@@ -134,4 +134,36 @@ describe('same-thread managed Goal document caller', () => {
     expect(JSON.stringify(stale)).not.toContain('PRIVATE');
     expect(writes).toBe(1);
   });
+
+  test('stalled native read is bounded without interpreting silence as an absent Goal', async () => {
+    const threadId = id(13);
+    let writes = 0;
+    const hung = async () => new Promise<never>(() => {});
+    const context = { threadId, verifiedCallerThreadId: threadId };
+    const read = await readGoalDocumentForCaller(context, hung, 5);
+    expect(decode(read)).toEqual({ available: false, category: 'read_unavailable' });
+    const create = await createGoalDocumentForCaller(context, longMission, hung,
+      hung, async () => { writes++; throw Error('must not write'); }, 5);
+    expect(decode(create)).toEqual({ created: false, category: 'read_unavailable' });
+    expect(writes).toBe(0);
+  });
+
+  test('a timed-out create remains uncertain after native later accepts it, without a second write', async () => {
+    const threadId = id(14);
+    const context = { threadId, verifiedCallerThreadId: threadId };
+    let finish!: (value: any) => void;
+    let writes = 0;
+    let readbacks = 0;
+    const pending = createGoalDocumentForCaller(context, longMission,
+      async () => ({ goal: null }),
+      async () => { readbacks++; return { goal: null, document: null, content: null }; },
+      async () => { writes++; return new Promise(resolve => { finish = resolve; }); }, 5);
+    const result = await pending;
+    expect(decode(result)).toEqual({ created: false, category: 'mutation_unconfirmed' });
+    expect(writes).toBe(1);
+    finish({ goal: { threadId }, document: { sha256: 'native-late', missionRevision: 1 } });
+    await Promise.resolve();
+    expect(writes).toBe(1);
+    expect(readbacks).toBe(0);
+  });
 });

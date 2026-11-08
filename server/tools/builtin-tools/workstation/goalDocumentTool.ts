@@ -12,14 +12,30 @@ const owner = (context: BuiltinToolContext | undefined) => {
 const response = (value: unknown, isError = false) => ({
   content: [{ type: 'text' as const, text: JSON.stringify(value) }], ...(isError ? { isError: true } : {}),
 });
+const GOAL_CALL_DEADLINE_MS = 3_000;
+
+/** Expiry only stops waiting; it never cancels or resubmits the native RPC. */
+async function bounded<T>(request: () => Promise<T>, maxWaitMs: number): Promise<T> {
+  if (!Number.isSafeInteger(maxWaitMs) || maxWaitMs < 1 || maxWaitMs > GOAL_CALL_DEADLINE_MS) {
+    throw new Error('Invalid native Goal deadline.');
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([request(), new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Native Goal response deadline exceeded.')),
+        maxWaitMs);
+    })]);
+  } finally { if (timer) clearTimeout(timer); }
+}
 
 /** Read only the verified caller's native-owned full mission, never another thread's file. */
 export async function readGoalDocumentForCaller(context: BuiltinToolContext | undefined,
-  read: (threadId: string) => Promise<ThreadGoalDocumentGetResponse>) {
+  read: (threadId: string) => Promise<ThreadGoalDocumentGetResponse>,
+  maxWaitMs = GOAL_CALL_DEADLINE_MS) {
   const id = owner(context);
   if (!id) return response({ available: false, category: 'caller_unavailable' }, true);
   try {
-    const result = await read(id);
+    const result = await bounded(() => read(id), maxWaitMs);
     return response({ available: true, ...result });
   } catch {
     return response({ available: false, category: 'read_unavailable' }, true);
@@ -31,7 +47,8 @@ export async function createGoalDocumentForCaller(context: BuiltinToolContext | 
   document: unknown,
   goalPresence: (threadId: string) => Promise<{ goal: unknown; revision?: unknown }>,
   read: (threadId: string) => Promise<ThreadGoalDocumentGetResponse>,
-  create: (threadId: string, document: string) => Promise<ThreadGoalDocumentSetResponse>) {
+  create: (threadId: string, document: string) => Promise<ThreadGoalDocumentSetResponse>,
+  maxWaitMs = GOAL_CALL_DEADLINE_MS) {
   const id = owner(context);
   if (!id) return response({ created: false, category: 'caller_unavailable' }, true);
   if (typeof document !== 'string' || !document.trim() ||
@@ -39,7 +56,7 @@ export async function createGoalDocumentForCaller(context: BuiltinToolContext | 
     return response({ created: false, category: 'invalid_document' }, true);
   }
   let present: { goal: unknown; revision?: unknown };
-  try { present = await goalPresence(id); } catch {
+  try { present = await bounded(() => goalPresence(id), maxWaitMs); } catch {
     return response({ created: false, category: 'read_unavailable' }, true);
   }
   if (present.goal !== null) {
@@ -49,8 +66,8 @@ export async function createGoalDocumentForCaller(context: BuiltinToolContext | 
     return response({ created: false, category: 'read_unavailable' }, true);
   }
   try {
-    const created = await create(id, document);
-    const confirmed = await read(id);
+    const created = await bounded(() => create(id, document), maxWaitMs);
+    const confirmed = await bounded(() => read(id), maxWaitMs);
     if (confirmed.goal?.threadId !== id || confirmed.content !== document ||
         confirmed.document?.sha256 !== created.document.sha256 ||
         confirmed.document?.missionRevision !== created.document.missionRevision) {
@@ -70,7 +87,8 @@ export async function updateGoalDocumentForCaller(context: BuiltinToolContext | 
     goal: { threadId: string }; document: ThreadGoalDocumentSetResponse['document'];
     revision: ThreadGoalRevision;
   }>,
-  read: (threadId: string) => Promise<ThreadGoalDocumentGetResponse>) {
+  read: (threadId: string) => Promise<ThreadGoalDocumentGetResponse>,
+  maxWaitMs = GOAL_CALL_DEADLINE_MS) {
   const id = owner(context);
   if (!id) return response({ updated: false, category: 'caller_unavailable' }, true);
   if (typeof document !== 'string' || !document.trim() ||
@@ -85,8 +103,8 @@ export async function updateGoalDocumentForCaller(context: BuiltinToolContext | 
     return response({ updated: false, category: 'invalid_revision' }, true);
   }
   try {
-    const result = await update(id, document, revision);
-    const confirmed = await read(id);
+    const result = await bounded(() => update(id, document, revision), maxWaitMs);
+    const confirmed = await bounded(() => read(id), maxWaitMs);
     if (confirmed.goal?.threadId !== id || confirmed.content !== document ||
         confirmed.document?.sha256 !== result.document.sha256 ||
         confirmed.document?.missionRevision !== result.revision.missionRevision) {

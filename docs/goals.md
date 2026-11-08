@@ -122,7 +122,9 @@ documents and the verified original thread's normal tool binding; source
 registration alone does not make them available in an installed session.
 Read, create, and conditional edit do not cold-start or reconnect OIX; after
 a disconnect they return unavailable or an unconfirmed mutation instead of
-issuing another native write.
+issuing another native write. Caller reads and writes have a bounded wait;
+expiry does not cancel the underlying native call. After a timed-out create
+or edit, reconcile by a separate fresh read rather than submitting it again.
 
 For actual native background terminal observation on a supported OIX runtime,
 `interpreter_native_terminal_list` returns bounded, paginated owner identifiers
