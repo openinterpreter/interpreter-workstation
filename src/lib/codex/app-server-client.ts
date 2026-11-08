@@ -3184,7 +3184,8 @@ export class CodexAppServerClient {
       return typedResult;
     } catch (error) {
       if (
-        remainingReconnectAttempts <= 0
+        skipEnsureConnected
+        || remainingReconnectAttempts <= 0
         || !RETRYABLE_RPC_METHODS.has(method)
         || disconnectSequence === this.disconnectSequence
       ) {
