@@ -159,6 +159,7 @@ const TOOL_DISPLAY_INTERNAL = {
   interpreter_goal_resume: { category: 'workstation', verb: { active: 'Resuming Goal', past: 'Resumed Goal' } },
   interpreter_goal_document_get: { category: 'workstation', verb: { active: 'Reading Goal document', past: 'Read Goal document' } },
   interpreter_goal_document_create: { category: 'workstation', verb: { active: 'Creating Goal document', past: 'Created Goal document' } },
+  interpreter_goal_document_update: { category: 'workstation', verb: { active: 'Updating Goal document', past: 'Updated Goal document' } },
   interpreter_native_terminal_status: { category: 'workstation', verb: { active: 'Inspecting native terminal', past: 'Inspected native terminal' } },
   interpreter_native_terminal_list: { category: 'workstation', verb: { active: 'Listing native terminals', past: 'Listed native terminals' } },
   interpreter_show_in_folder: { category: 'workstation', verb: { active: 'Revealing path', past: 'Revealed path' } },

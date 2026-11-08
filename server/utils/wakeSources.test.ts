@@ -1038,6 +1038,50 @@ setTimeout(()=>process.stdout.write(b.subarray(i+2)),30);`;
     } finally { await first.stop(); await rm(root, { recursive: true, force: true }); }
   });
 
+  test('persisted errored daily offer fences later input across restart until its exact native receipt', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-daily-offer-fence-'));
+    const clientIds: string[] = [];
+    const starts: string[] = [];
+    const native: WakeNative = {
+      inspect: async () => ({ messages: [], clientIds }),
+      steer: async () => { throw Error('unexpected steer'); },
+      start: async (_thread, _message, clientId) => {
+        starts.push(clientId!);
+        if (starts.length === 1) throw new WakeAdmissionFailure('start', Error('timed out'));
+        clientIds.push(clientId!);
+        return 'later-turn';
+      },
+    };
+    const first = new WakeSources(native, root);
+    try {
+      await first.initialize();
+      await first.put({ id: 'daily', threadId: 'thread-1', kind: 'schedule',
+        message: 'synthetic maintenance', at: new Date(Date.now() - 1_000).toISOString(),
+        everyMs: 86_400_000 });
+      await first.tick();
+      const offered = first.list('thread-1').events[0]!;
+      expect(offered.status).toBe('offered');
+      expect(offered.failure?.phase).toBe('start');
+      await first.ingest('thread-1', 'peer', 'later-input', 'synthetic peer input');
+      await first.stop();
+      const resumed = new WakeSources(native, root);
+      try {
+        await resumed.initialize();
+        const later = Date.now() + 70_000;
+        await resumed.tick(later);
+        expect(resumed.list('thread-1').events.map(e => e.status)).toEqual(['offered', 'pending']);
+        expect(starts).toHaveLength(1);
+        clientIds.push(wakeClientId(offered));
+        await resumed.tick(later + 1);
+        expect(resumed.list('thread-1').events.map(e => e.status)).toEqual(['admitted', 'pending']);
+        expect(starts).toHaveLength(1);
+        await resumed.tick(later + 2);
+        expect(resumed.list('thread-1').events.map(e => e.status)).toEqual(['admitted', 'offered']);
+        expect(starts).toHaveLength(2);
+      } finally { await resumed.stop(); }
+    } finally { await first.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
   test('due schedule survives a pre-start rejection and re-arms only after a native receipt', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'wake-schedule-rejection-'));
     const receipts: string[] = [];

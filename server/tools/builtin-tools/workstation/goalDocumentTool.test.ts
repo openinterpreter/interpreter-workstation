@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import type { BuiltinToolContext } from '../../builtinTools';
 import { createGoalDocumentForCaller, readGoalDocumentForCaller,
-  goalDocumentCreateTool, goalDocumentReadTool } from './goalDocumentTool';
+  goalDocumentCreateTool, goalDocumentReadTool, goalDocumentUpdateTool,
+  updateGoalDocumentForCaller } from './goalDocumentTool';
 
 const longMission = `# Full mission\n${'Keep the exact task and revision.\n'.repeat(160)}`;
 const id = (n: number) => `00000000-0000-4000-8000-${n.toString().padStart(12, '0')}`;
@@ -90,5 +91,47 @@ describe('same-thread managed Goal document caller', () => {
     async () => { writes++; throw Error('must not write'); });
     expect(decode(result)).toEqual({ created: false, category: 'read_unavailable' });
     expect(writes).toBe(0);
+  });
+
+  test('existing full mission edits only under exact identity/status/revision and verifies readback', async () => {
+    const threadId = id(9);
+    const expected = { goalId: id(10), status: 'active' as const,
+      missionRevision: 1, lifecycleRevision: 3 };
+    const edited = `${longMission}\n# Verified edit`;
+    let writes = 0;
+    const result = await updateGoalDocumentForCaller({ threadId,
+      verifiedCallerThreadId: threadId }, edited, expected,
+    async (owner, content, revision) => {
+      expect([owner, content, revision]).toEqual([threadId, edited, expected]);
+      writes++;
+      return { goal: { threadId }, document: { sha256: 'updated', missionRevision: 2,
+        path: 'native', byteLength: Buffer.byteLength(edited) },
+      revision: { ...expected, missionRevision: 2, lifecycleRevision: 4 } };
+    }, async () => ({ goal: { threadId } as any, content: edited,
+      document: { sha256: 'updated', missionRevision: 2, path: 'native',
+        byteLength: Buffer.byteLength(edited) } }));
+    expect(decode(result)).toMatchObject({ updated: true,
+      revision: { goalId: expected.goalId, missionRevision: 2, lifecycleRevision: 4 } });
+    expect(goalDocumentUpdateTool.mainAgentOnly).toBe(true);
+    expect(writes).toBe(1);
+  });
+
+  test('stale or unverified update fails without replacement, private text, or replay', async () => {
+    const threadId = id(11);
+    let writes = 0;
+    const update = async () => { writes++; throw Error('PRIVATE stale Goal identity'); };
+    const read = async () => { throw Error('PRIVATE read'); };
+    const bad = await updateGoalDocumentForCaller({ threadId,
+      verifiedCallerThreadId: threadId }, longMission,
+    { goalId: 'invalid', status: 'blocked', missionRevision: 1, lifecycleRevision: 1 }, update, read);
+    expect(decode(bad)).toEqual({ updated: false, category: 'invalid_revision' });
+    expect(writes).toBe(0);
+    const valid = { goalId: id(12), status: 'blocked' as const,
+      missionRevision: 1, lifecycleRevision: 1 };
+    const stale = await updateGoalDocumentForCaller({ threadId,
+      verifiedCallerThreadId: threadId }, longMission, valid, update, read);
+    expect(decode(stale)).toEqual({ updated: false, category: 'mutation_unconfirmed' });
+    expect(JSON.stringify(stale)).not.toContain('PRIVATE');
+    expect(writes).toBe(1);
   });
 });

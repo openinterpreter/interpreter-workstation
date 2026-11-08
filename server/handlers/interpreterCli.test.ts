@@ -195,6 +195,44 @@ describe('interpreterCli handlers', () => {
     }
   });
 
+  test('Goal document edit CLI carries the exact bound thread and native revision once', async () => {
+    const threadId = '00000000-0000-4000-8000-000000000077';
+    const expected = { goalId: '00000000-0000-4000-8000-000000000088',
+      status: 'active' as const, missionRevision: 1, lifecycleRevision: 2 };
+    const document = `# Edited mission\n${'Preserve the full existing task.\n'.repeat(150)}`;
+    const digest = createHash('sha256').update(document).digest('hex');
+    const metadata = { path: `managed-goals/${threadId}/mission-2-${digest}.md`,
+      sha256: digest, byteLength: Buffer.byteLength(document), missionRevision: 2 };
+    const service = getCodexService();
+    const previousUpdate = service.setThreadGoalDocumentWithRevision;
+    const previousRead = service.getThreadGoalDocument;
+    const calls: unknown[] = [];
+    setConfigOverride({ agents: {}, mcpServers: {} } as any);
+    setToolManager(new ToolManager());
+    agentTabManager.bindThread({ agentId: 'goal-document-editor', threadId,
+      callerToken: 'agtok_goal_document_editor', allowedToolNames: [
+        'builtin-interpreter__interpreter_goal_document_update',
+      ] });
+    service.setThreadGoalDocumentWithRevision = async (input, revision) => {
+      calls.push([input, revision]);
+      return { goal: { threadId, status: 'active' } as any, document: metadata,
+        revision: { ...expected, missionRevision: 2, lifecycleRevision: 3 } };
+    };
+    service.getThreadGoalDocument = async () => ({ goal: { threadId } as any,
+      document: metadata, content: document });
+    try {
+      const result = await callInterpreterCliTool({ callerToken: 'agtok_goal_document_editor',
+        serverId: 'builtin-interpreter', toolName: 'interpreter_goal_document_update',
+        args: { document, expected } }) as { content: Array<{ text: string }> };
+      expect(JSON.parse(result.content[0]!.text)).toMatchObject({ updated: true,
+        revision: { goalId: expected.goalId, missionRevision: 2 } });
+      expect(calls).toEqual([[{ threadId, document }, expected]]);
+    } finally {
+      service.setThreadGoalDocumentWithRevision = previousUpdate;
+      service.getThreadGoalDocument = previousRead;
+    }
+  });
+
   test('Goal resume CLI delegates one exact expected-state write to native without retry', async () => {
     const threadId = '00000000-0000-4000-8000-000000000077';
     const expected = { goalId: '00000000-0000-4000-8000-000000000088',

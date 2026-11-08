@@ -199,6 +199,7 @@ const HEADLESS_BROWSER_TOOL_NAMES = new Set([
   'interpreter_goal_resume',
   'interpreter_goal_document_get',
   'interpreter_goal_document_create',
+  'interpreter_goal_document_update',
   'interpreter_native_terminal_status',
   'interpreter_native_terminal_list',
   'interpreter_whole_computer_state_get',

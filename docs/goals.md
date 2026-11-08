@@ -112,7 +112,11 @@ the same thread. A blocked Goal without a managed document is still an
 existing Goal: create rejects it rather than replacing it. An ambiguous create
 result is `mutation_unconfirmed`; read back before deciding what to do and
 never automatically repeat the write. To edit an existing Goal, use the
-native four-field expected identity/revision CAS, not create or legacy PUT.
+native four-field expected identity/revision CAS via
+`interpreter_goal_document_update` with `{"document":"…","expected":{"goalId":"…","status":"active","missionRevision":1,"lifecycleRevision":1}}`,
+not create or legacy PUT. A conflict or lost response is
+`mutation_unconfirmed`, and a subsequent read is required before any other
+write.
 These caller tools require both a selected runtime supporting managed Goal
 documents and the verified original thread's normal tool binding; source
 registration alone does not make them available in an installed session.

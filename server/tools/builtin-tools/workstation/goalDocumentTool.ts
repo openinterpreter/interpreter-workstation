@@ -1,6 +1,7 @@
 import type { BuiltinToolContext, BuiltinToolDefinition } from '../../builtinTools';
 import { getCodexService } from '../../../../src/lib/codex/service';
 import type { ThreadGoalDocumentGetResponse, ThreadGoalDocumentSetResponse } from '../../../../src/lib/codex/goal-document';
+import { goalCasExpectedParams, type ThreadGoalRevision } from '../../../../src/lib/codex/goal-revision';
 
 const THREAD = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const owner = (context: BuiltinToolContext | undefined) => {
@@ -62,6 +63,41 @@ export async function createGoalDocumentForCaller(context: BuiltinToolContext | 
   }
 }
 
+/** Existing missions can change only under the native four-field identity CAS. */
+export async function updateGoalDocumentForCaller(context: BuiltinToolContext | undefined,
+  document: unknown, expected: unknown,
+  update: (threadId: string, document: string, revision: ThreadGoalRevision) => Promise<{
+    goal: { threadId: string }; document: ThreadGoalDocumentSetResponse['document'];
+    revision: ThreadGoalRevision;
+  }>,
+  read: (threadId: string) => Promise<ThreadGoalDocumentGetResponse>) {
+  const id = owner(context);
+  if (!id) return response({ updated: false, category: 'caller_unavailable' }, true);
+  if (typeof document !== 'string' || !document.trim() ||
+      Buffer.byteLength(document, 'utf8') > 1_048_576) {
+    return response({ updated: false, category: 'invalid_document' }, true);
+  }
+  let revision: ThreadGoalRevision;
+  try {
+    revision = expected as ThreadGoalRevision;
+    goalCasExpectedParams(revision);
+  } catch {
+    return response({ updated: false, category: 'invalid_revision' }, true);
+  }
+  try {
+    const result = await update(id, document, revision);
+    const confirmed = await read(id);
+    if (confirmed.goal?.threadId !== id || confirmed.content !== document ||
+        confirmed.document?.sha256 !== result.document.sha256 ||
+        confirmed.document?.missionRevision !== result.revision.missionRevision) {
+      throw new Error('Unconfirmed native readback');
+    }
+    return response({ updated: true, document: confirmed.document, revision: result.revision });
+  } catch {
+    return response({ updated: false, category: 'mutation_unconfirmed' }, true);
+  }
+}
+
 export const goalDocumentReadTool: BuiltinToolDefinition = {
   name: 'interpreter_goal_document_get',
   description: 'Read the full native-managed mission of this verified conversation.',
@@ -82,4 +118,21 @@ export const goalDocumentCreateTool: BuiltinToolDefinition = {
     id => getCodexService().getThreadGoalDocument(id),
     (id, document) => getCodexService().setThreadGoalDocument({ threadId: id, document,
       status: 'active' })),
+};
+
+export const goalDocumentUpdateTool: BuiltinToolDefinition = {
+  name: 'interpreter_goal_document_update',
+  description: 'Conditionally edit this conversation’s existing managed mission under its exact native Goal identity and revision.',
+  inputSchema: { type: 'object', properties: {
+    document: { type: 'string' },
+    expected: { type: 'object', properties: {
+      goalId: { type: 'string' }, status: { type: 'string' },
+      missionRevision: { type: 'integer' }, lifecycleRevision: { type: 'integer' },
+    }, required: ['goalId', 'status', 'missionRevision', 'lifecycleRevision'] },
+  }, required: ['document', 'expected'] },
+  mode: 'write', mainAgentOnly: true,
+  handler: (args, context) => updateGoalDocumentForCaller(context, args.document, args.expected,
+    (id, document, expected) => getCodexService().setThreadGoalDocumentWithRevision({
+      threadId: id, document,
+    }, expected), id => getCodexService().getThreadGoalDocument(id)),
 };
