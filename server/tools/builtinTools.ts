@@ -203,6 +203,7 @@ const HEADLESS_BROWSER_TOOL_NAMES = new Set([
   'interpreter_native_terminal_status',
   'interpreter_native_terminal_list',
   'interpreter_thread_artifact_create',
+  'interpreter_thread_artifact_read',
   'interpreter_whole_computer_state_get',
   'interpreter_browser_tab_activate',
   'interpreter_browser_page_inspect',

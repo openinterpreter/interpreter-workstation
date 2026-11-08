@@ -28,6 +28,27 @@ export async function createThreadArtifactForCaller(
   }
 }
 
+export async function readThreadArtifactForCaller(
+  args: Record<string, unknown>, context?: BuiltinToolContext,
+  store: typeof threadArtifactReceipts = threadArtifactReceipts,
+) {
+  const threadId = context?.verifiedCallerThreadId;
+  if (!threadId || !THREAD.test(threadId) || context?.threadId !== threadId ||
+      context?.isSubagent || (context?.toolCallPath?.length ?? 0) !== 0) {
+    return response({ available: false, category: 'caller_unavailable' }, true);
+  }
+  if (typeof args.receiptId !== 'string') {
+    return response({ available: false, category: 'invalid_artifact_request' }, true);
+  }
+  try {
+    const receipt = await store.get(threadId, args.receiptId, true);
+    return response({ available: true, ...receipt });
+  } catch (error) {
+    return response({ available: false, category: error instanceof ArtifactReceiptError
+      ? `artifact_${error.code}` : 'artifact_unavailable' }, true);
+  }
+}
+
 export const threadArtifactCreateTool: BuiltinToolDefinition = {
   name: 'interpreter_thread_artifact_create',
   description: 'Create a private, exact-thread UTF-8 artifact with an idempotent digest-bound receipt.',
@@ -36,4 +57,12 @@ export const threadArtifactCreateTool: BuiltinToolDefinition = {
   }, required: ['receiptId', 'sha256', 'content'] },
   mode: 'write', mainAgentOnly: true, annotations: { idempotentHint: true },
   handler: (args, context) => createThreadArtifactForCaller(args, context),
+};
+
+export const threadArtifactReadTool: BuiltinToolDefinition = {
+  name: 'interpreter_thread_artifact_read',
+  description: 'Read a private, exact-thread UTF-8 artifact by its stable receipt ID.',
+  inputSchema: { type: 'object', properties: { receiptId: { type: 'string' } }, required: ['receiptId'] },
+  mode: 'read', mainAgentOnly: true,
+  handler: (args, context) => readThreadArtifactForCaller(args, context),
 };

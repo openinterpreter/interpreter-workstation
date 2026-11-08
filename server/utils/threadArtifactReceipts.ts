@@ -77,7 +77,7 @@ export class ThreadArtifactReceipts {
     } finally { await directory.close(); }
   }
 
-  async get(threadId: string, receiptId: string) {
+  async get(threadId: string, receiptId: string, includeContent = false) {
     if (!THREAD.test(threadId) || !ID.test(receiptId)) {
       throw new ArtifactReceiptError('invalid', 'Invalid thread artifact receipt request.');
     }
@@ -99,8 +99,17 @@ export class ThreadArtifactReceipts {
         throw new ArtifactReceiptError('unavailable', 'Artifact receipt unavailable.');
       }
       const bytes = await file.readFile();
+      if (bytes.length !== stat.size) {
+        throw new ArtifactReceiptError('unavailable', 'Artifact receipt changed during read.');
+      }
+      let content: string | undefined;
+      if (includeContent) {
+        try { content = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+        catch { throw new ArtifactReceiptError('unavailable', 'Artifact text unavailable.'); }
+      }
       return { threadId, receiptId, sha256: createHash('sha256').update(bytes).digest('hex'),
-        size: bytes.length, path: path.join(this.root, threadId, receiptId) };
+        size: bytes.length, path: path.join(this.root, threadId, receiptId),
+        ...(includeContent ? { content } : {}) };
     } finally { await file.close(); }
   }
 }
