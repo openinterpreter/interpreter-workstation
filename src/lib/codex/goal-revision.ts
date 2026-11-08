@@ -8,6 +8,25 @@ export type ThreadGoalRevision = {
   lifecycleRevision: number;
 };
 
+export type GoalCasExpectedParams = {
+  expectedGoalId: string;
+  expectedStatus: v2.ThreadGoalStatus;
+  expectedMissionRevision: number;
+  expectedLifecycleRevision: number;
+};
+
+const GOAL_STATUSES: readonly string[] = [
+  'active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete',
+];
+const GOAL_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+
+function validRevision(value: Partial<ThreadGoalRevision>): value is ThreadGoalRevision {
+  return typeof value.goalId === 'string' && GOAL_ID.test(value.goalId) &&
+    typeof value.status === 'string' && GOAL_STATUSES.includes(value.status) &&
+    Number.isSafeInteger(value.missionRevision) && (value.missionRevision ?? 0) >= 1 &&
+    Number.isSafeInteger(value.lifecycleRevision) && (value.lifecycleRevision ?? 0) >= 1;
+}
+
 export class GoalRevisionUnavailableError extends Error {
   readonly category = 'read_unavailable';
 
@@ -23,7 +42,7 @@ export function verifyThreadGoalRevision(
   revision: unknown,
   threadId: string,
 ): ThreadGoalRevision | null {
-  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId)) {
+  if (!GOAL_ID.test(threadId)) {
     throw new GoalRevisionUnavailableError();
   }
   if (goal === null && revision === null) return null;
@@ -31,12 +50,19 @@ export function verifyThreadGoalRevision(
     throw new GoalRevisionUnavailableError();
   }
   const value = revision as Partial<ThreadGoalRevision>;
-  if (typeof value.goalId !== 'string' ||
-      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(value.goalId) ||
-      value.status !== goal.status ||
-      !Number.isSafeInteger(value.missionRevision) || (value.missionRevision ?? 0) < 1 ||
-      !Number.isSafeInteger(value.lifecycleRevision) || (value.lifecycleRevision ?? 0) < 1) {
+  if (!validRevision(value) || value.status !== goal.status) {
     throw new GoalRevisionUnavailableError();
   }
   return value as ThreadGoalRevision;
+}
+
+/** A full native precondition, never a read-then-write approximation of CAS. */
+export function goalCasExpectedParams(revision: ThreadGoalRevision): GoalCasExpectedParams {
+  if (!revision || !validRevision(revision)) throw new GoalRevisionUnavailableError();
+  return {
+    expectedGoalId: revision.goalId,
+    expectedStatus: revision.status,
+    expectedMissionRevision: revision.missionRevision,
+    expectedLifecycleRevision: revision.lifecycleRevision,
+  };
 }

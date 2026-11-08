@@ -1,7 +1,7 @@
 import { describe, test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { CodexService, type CodexClient } from './service';
-import { GoalRevisionUnavailableError, verifyThreadGoalRevision } from './goal-revision';
+import { GoalRevisionUnavailableError, goalCasExpectedParams, verifyThreadGoalRevision } from './goal-revision';
 
 const threadId = '00000000-0000-4000-8000-000000000077';
 const goalId = '00000000-0000-4000-8000-000000000088';
@@ -31,7 +31,8 @@ describe('exact native Goal revision read', () => {
 
   test('old runtime and contradictory owner, status, or revisions fail closed', async () => {
     const cases = [undefined, { ...revision, goalId: 'not-an-id' },
-      { ...revision, status: 'paused' }, { ...revision, missionRevision: 0 },
+      { ...revision, status: 'paused' }, { ...revision, status: 'invalid' },
+      { ...revision, missionRevision: 0 },
       { ...revision, lifecycleRevision: Number.MAX_SAFE_INTEGER + 1 }];
     for (const value of cases) {
       const client = { subscribe: () => () => {}, threadGoalGet: async () =>
@@ -40,6 +41,15 @@ describe('exact native Goal revision read', () => {
         { category: 'read_unavailable' });
     }
     assert.throws(() => verifyThreadGoalRevision({ ...goal, threadId: goalId }, revision, threadId),
+      GoalRevisionUnavailableError);
+  });
+
+  test('a future native mutation receives every expected-state field together', () => {
+    assert.deepEqual(goalCasExpectedParams(revision), {
+      expectedGoalId: goalId, expectedStatus: 'active', expectedMissionRevision: 2,
+      expectedLifecycleRevision: 3,
+    });
+    assert.throws(() => goalCasExpectedParams({ ...revision, lifecycleRevision: -1 }),
       GoalRevisionUnavailableError);
   });
 
