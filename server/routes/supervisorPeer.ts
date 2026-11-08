@@ -1,6 +1,6 @@
 import { Router, type Request } from 'express';
 import { createHash } from 'node:crypto';
-import { goalCasExpectedParams, verifyThreadGoalRevision,
+import { GoalRevisionConflictError, goalCasExpectedParams, verifyThreadGoalRevision,
   type ThreadGoalRevision } from '../../src/lib/codex/goal-revision';
 import type { v2 } from '../handlers/codex-generated-types/index';
 import { type NativeTerminalStatusRequest, validateNativeTerminalRequest,
@@ -110,7 +110,12 @@ export function createSupervisorPeerRouter(options: Readonly<{
       // Native CAS owns the mutation. A transport failure is UNKNOWN, never a retry authorization.
       const revision = await options.resumeGoal(req.params.threadId, expected);
       return void res.json({ available: true, revision });
-    } catch { return void res.status(503).json(denied('mutation_unconfirmed')); }
+    } catch (error) {
+      if (error instanceof GoalRevisionConflictError) {
+        return void res.status(409).json(denied('stale_revision'));
+      }
+      return void res.status(503).json(denied('mutation_unconfirmed'));
+    }
   });
   router.post('/threads/:threadId/terminals/status', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');

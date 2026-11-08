@@ -4,6 +4,7 @@ import express from 'express';
 import { createServer, type Server } from 'node:http';
 import { createSupervisorPeerRouter } from './supervisorPeer';
 import { createSupervisorGoal, SupervisorGoalCreateError } from '../utils/supervisorGoalCreate';
+import { GoalRevisionConflictError } from '../../src/lib/codex/goal-revision';
 import type { VerifiedSupervisorGrant } from '../utils/supervisorPeerScope';
 
 const threadId = '00000000-0000-4000-8000-000000000001';
@@ -21,7 +22,8 @@ const grant: VerifiedSupervisorGrant = {
 let server: Server | undefined;
 afterEach(() => server?.close());
 
-async function fixture(verified: VerifiedSupervisorGrant | null = grant, alteredDocument = false) {
+async function fixture(verified: VerifiedSupervisorGrant | null = grant, alteredDocument = false,
+  resumeError?: Error) {
   const calls = { goal: 0, create: 0, resume: 0, terminal: 0, terminalList: 0,
     artifact: 0, submission: 0 };
   const app = express();
@@ -37,7 +39,9 @@ async function fixture(verified: VerifiedSupervisorGrant | null = grant, altered
         missionRevision: 4,
       } }; },
     createGoal: async () => { calls.create++; throw new Error('creation outcome unknown'); },
-    resumeGoal: async (_thread, expected) => { calls.resume++; return { ...expected, status: 'active' }; },
+    resumeGoal: async (_thread, expected) => { calls.resume++;
+      if (resumeError) throw resumeError;
+      return { ...expected, status: 'active' }; },
     readTerminal: async () => { calls.terminal++; throw new Error('private command text'); },
     listTerminalOwners: async () => { calls.terminalList++; return { data: [{ threadId,
       turnId: '00000000-0000-4000-8000-000000000003', itemId: 'item-1',
@@ -308,6 +312,25 @@ describe('enrolled supervisor peer route seam', () => {
     expect(await accepted.json()).toEqual({ available: true,
       revision: { ...expected, status: 'active' } });
     expect(calls.resume).toBe(1);
+  });
+  it('reports only an authoritative native CAS conflict as stale, never private text or a successful resume', async () => {
+    const expected = { goalId: '00000000-0000-4000-8000-000000000004',
+      status: 'blocked', missionRevision: 4, lifecycleRevision: 7 };
+    const send = async (error: Error) => {
+      const { base, calls } = await fixture(grant, false, error);
+      const result = await fetch(`${base}/goal/resume`, { method: 'POST',
+        headers: { 'content-type': 'application/json' }, body: JSON.stringify({ expected }) });
+      expect(calls.resume).toBe(1);
+      return result;
+    };
+    const conflict = await send(new GoalRevisionConflictError());
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toEqual({ available: false, category: 'stale_revision' });
+    await new Promise<void>(resolve => server!.close(() => resolve()));
+    server = undefined;
+    const unknown = await send(Error('PRIVATE transport outcome'));
+    expect(unknown.status).toBe(503);
+    expect(await unknown.json()).toEqual({ available: false, category: 'mutation_unconfirmed' });
   });
   it('joins an exact client ID to content-free saved native custody, not live OS status', async () => {
     const { base, calls } = await fixture();

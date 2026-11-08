@@ -1,6 +1,7 @@
 import type { BuiltinToolContext, BuiltinToolDefinition } from '../../builtinTools';
 import { getCodexService } from '../../../../src/lib/codex/service';
-import { goalCasExpectedParams, type ThreadGoalRevision } from '../../../../src/lib/codex/goal-revision';
+import { GoalRevisionConflictError, goalCasExpectedParams,
+  type ThreadGoalRevision } from '../../../../src/lib/codex/goal-revision';
 
 const THREAD = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 
@@ -79,10 +80,11 @@ export async function resumeGoalForCaller(
     const result = await resume(threadId, revision);
     return { content: [{ type: 'text', text: JSON.stringify({ resumed: true,
       revision: result.revision }) }] };
-  } catch {
+  } catch (error) {
     // Transport loss can mean the write committed. Never retry or claim rejection.
     return { content: [{ type: 'text', text: JSON.stringify({ resumed: false,
-      category: 'mutation_unconfirmed' }) }], isError: true };
+      category: error instanceof GoalRevisionConflictError ? 'stale_revision' :
+        'mutation_unconfirmed' }) }], isError: true };
   }
 }
 

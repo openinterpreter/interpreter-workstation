@@ -46,6 +46,17 @@ export class GoalMutationUnconfirmedError extends Error {
   }
 }
 
+/** Only native's fixed CAS-conflict code establishes that the old revision was
+ * rejected. Transport failure or a late response never establishes this. */
+export class GoalRevisionConflictError extends Error {
+  readonly category = 'stale_revision';
+
+  constructor() {
+    super('Native Goal revision changed; obtain a fresh revision.');
+    this.name = 'GoalRevisionConflictError';
+  }
+}
+
 /** An old native runtime can return a Goal without the CAS identity: fail closed. */
 export function verifyThreadGoalRevision(
   goal: v2.ThreadGoal | null,

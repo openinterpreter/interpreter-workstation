@@ -6,7 +6,7 @@ import { boundNativeTerminalStatus, validateNativeTerminalRequest, type NativeTe
 import { ManagedGoalDocumentError, validateGoalDocumentInput, verifyGoalDocument, type ThreadGoalDocumentGetResponse,
   type ThreadGoalDocumentCreateParams, type ThreadGoalDocumentCreateResponse,
   type ThreadGoalDocumentSetParams, type ThreadGoalDocumentSetResponse } from './goal-document';
-import { GoalMutationUnconfirmedError, GoalRevisionUnavailableError, goalCasExpectedParams,
+import { GoalMutationUnconfirmedError, GoalRevisionConflictError, GoalRevisionUnavailableError, goalCasExpectedParams,
   verifyThreadGoalRevision, type ThreadGoalRevision } from './goal-revision';
 import { JSONRPCErrorException } from "json-rpc-2.0";
 import type { v2 } from "../../../server/handlers/codex-generated-types/index";
@@ -1478,7 +1478,10 @@ export class CodexService {
         throw new GoalRevisionUnavailableError();
       }
       return { goal: result.goal, revision };
-    } catch {
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === -32009) {
+        throw new GoalRevisionConflictError();
+      }
       throw new GoalMutationUnconfirmedError();
     } finally {
       if (deadline) clearTimeout(deadline);
