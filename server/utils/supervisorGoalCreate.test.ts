@@ -70,6 +70,8 @@ describe('exact-thread managed Goal creation', () => {
       .rejects.toMatchObject({ category: 'goal_exists' });
     await expect(createSupervisorGoal(service, threadId, ' '))
       .rejects.toMatchObject({ category: 'invalid_document' });
+    await expect(createSupervisorGoal(service, threadId, 'x'.repeat(1_048_577)))
+      .rejects.toMatchObject({ category: 'invalid_document' });
     expect(writes).toBe(0);
     expect(SupervisorGoalCreateError.name).toBe('SupervisorGoalCreateError');
   });

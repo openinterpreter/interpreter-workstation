@@ -90,9 +90,9 @@ describe('enrolled supervisor peer route seam', () => {
   });
   it('accepts a large managed mission only on the scoped peer JSON transport', async () => {
     const app = express();
-    app.use('/peer', express.json({ limit: '1050000b' }));
+    app.use('/peer/threads/:threadId/goal/create', express.json({ limit: '6292000b' }));
     app.use(express.json());
-    const mission = '# Mission\n' + 'A retained requirement.\n'.repeat(7_000);
+    const mission = '# Mission\n' + 'A retained requirement.\n'.repeat(7_000) + '\n'.repeat(600_000);
     const digest = createHash('sha256').update(mission).digest('hex');
     let received = '';
     app.use('/peer', createSupervisorPeerRouter({ targetComputer: 'target-1',
@@ -117,8 +117,21 @@ describe('enrolled supervisor peer route seam', () => {
       body: JSON.stringify({ document: mission }),
     });
     expect(mission.length).toBeGreaterThan(100_000);
+    expect(Buffer.byteLength(mission)).toBeLessThan(1_048_576);
+    expect(Buffer.byteLength(JSON.stringify({ document: mission }))).toBeGreaterThan(1_050_000);
     expect(response.status).toBe(200);
     expect(received).toBe(mission);
+    const oversized = await fetch(`http://127.0.0.1:${address.port}/peer/threads/${threadId}/goal/create`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ document: '\n'.repeat(3_200_000) }),
+    });
+    expect(oversized.status).toBe(413);
+    expect(received).toBe(mission);
+    const unrelated = await fetch(`http://127.0.0.1:${address.port}/peer/threads/${threadId}/goal/resume`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expected: '\n'.repeat(60_000) }),
+    });
+    expect(unrelated.status).toBe(413);
   });
   it('authorizes exact task scope before projecting a saved current turn and denies cross-thread reads', async () => {
     const app = express();
