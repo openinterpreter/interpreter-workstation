@@ -21,6 +21,7 @@ mock.module('../utils/mcpServiceBridge', () => ({
 import JSZip from 'jszip';
 import { agentTabManager } from '../agentTabManager';
 import { getCodexService } from '../../src/lib/codex/service';
+import { ManagedGoalDocumentError } from '../../src/lib/codex/goal-document';
 import { approvalManager } from '../approvalManager';
 import { clearConfigCache, setConfigOverride } from '../configStore';
 import { calculatorTool } from '../tools/builtin-tools/utility/calculatorTool';
@@ -191,14 +192,19 @@ describe('interpreterCli handlers', () => {
     const threadId = '00000000-0000-4000-8000-000000000077';
     const blockedId = '00000000-0000-4000-8000-000000000078';
     const document = `# Full mission\n${'Retain the entire instruction.\n'.repeat(170)}`;
+    const objective = 'A distinct full mission';
+    const creationId = 'stable_creation_1';
+    const precondition = { kind: 'absent' as const, admissionState: 'noGoal' as const };
     const digest = createHash('sha256').update(document).digest('hex');
     const stored = { path: `managed-goals/${threadId}/mission-1-${digest}.md`,
       sha256: digest, byteLength: Buffer.byteLength(document), missionRevision: 1 };
-    const activeGoal = { threadId, status: 'active' as const };
+    const activeGoal = { threadId, status: 'active' as const, objective };
+    const revision = { goalId: '00000000-0000-4000-8000-000000000088',
+      status: 'active' as const, missionRevision: 1, lifecycleRevision: 1 };
     const service = getCodexService();
     const originalRead = service.getThreadGoalDocument;
     const originalGoal = service.getThreadGoalWithRevision;
-    const originalCreate = service.setThreadGoalDocument;
+    const originalCreate = service.createThreadGoalDocument;
     let writes = 0;
     let created = false;
     setConfigOverride({ agents: {}, mcpServers: {} } as any);
@@ -213,37 +219,43 @@ describe('interpreterCli handlers', () => {
     }
     service.getThreadGoalWithRevision = async id => ({ goal: id === blockedId
       ? { threadId: blockedId, status: 'blocked' } as any
-      : created ? activeGoal as any : null, revision: null });
+      : created ? activeGoal as any : null, revision: created ? revision : null });
     service.getThreadGoalDocument = async id => ({ goal: created && id === threadId
       ? activeGoal as any : null, document: created && id === threadId ? stored : null,
     content: created && id === threadId ? document : null });
-    service.setThreadGoalDocument = async input => {
-      expect(input).toEqual({ threadId, document, status: 'active' });
+    service.createThreadGoalDocument = async input => {
+      if (input.threadId === blockedId) throw new ManagedGoalDocumentError('stale_predecessor');
+      expect(input).toEqual({ threadId, creationId, objective, document,
+        status: 'active', precondition });
       writes++;
       created = true;
-      return { goal: activeGoal as any, document: stored };
+      return { creationId, goal: activeGoal as any, document: stored,
+        previousRevision: null, revision, replayed: false };
     };
     try {
       const call = (token: string, toolName: string, args: unknown) =>
         callInterpreterCliTool({ callerToken: token, serverId: 'builtin-interpreter',
           toolName, args }) as Promise<{ content: Array<{ text: string }>; isError?: boolean }>;
       const denied = await call('agtok_blocked-owner', 'interpreter_goal_document_create',
-        { document });
-      expect(JSON.parse(denied.content[0]!.text).category).toBe('goal_exists');
+        { creationId, objective, document, precondition });
+      expect(JSON.parse(denied.content[0]!.text).category).toBe('stale_predecessor');
       expect(writes).toBe(0);
       const success = await call('agtok_document-owner', 'interpreter_goal_document_create',
-        { document });
-      expect(JSON.parse(success.content[0]!.text)).toMatchObject({ created: true,
-        document: stored });
+        { creationId, objective, document, precondition });
+      const created = JSON.parse(success.content[0]!.text);
+      expect(created).toMatchObject({ created: true, creationId, replayed: false,
+        previousRevision: null, revision });
+      expect(created.document).toEqual({ content: document, sha256: digest,
+        byteLength: stored.byteLength, missionRevision: 1 });
       const full = await call('agtok_document-owner', 'interpreter_goal_document_get', {});
-      expect(JSON.parse(full.content[0]!.text).content).toBe(document);
+      expect(JSON.parse(full.content[0]!.text).document.content).toBe(document);
       expect(writes).toBe(1);
       await expect(call('unbound-caller', 'interpreter_goal_document_get', {})).rejects.toThrow();
       expect(writes).toBe(1);
     } finally {
       service.getThreadGoalDocument = originalRead;
       service.getThreadGoalWithRevision = originalGoal;
-      service.setThreadGoalDocument = originalCreate;
+      service.createThreadGoalDocument = originalCreate;
     }
   });
 
