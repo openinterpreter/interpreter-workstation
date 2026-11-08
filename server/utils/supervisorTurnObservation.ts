@@ -4,7 +4,7 @@ import type { v2 } from '../handlers/codex-generated-types/index';
 export function projectSupervisorTurn(thread: v2.Thread, expectedThreadId: string) {
   if (thread.id !== expectedThreadId || !Array.isArray(thread.turns)) throw new Error('thread unavailable');
   const turns = thread.turns;
-  const current = turns.at(-1);
+  const current = turns[turns.length - 1];
   if (!current) return { threadId: expectedThreadId, turn: null,
     latestMessage: null, command: null, observation: 'saved-native-thread-only' };
   if (!['inProgress', 'completed', 'interrupted', 'failed'].includes(current.status) ||
@@ -17,7 +17,8 @@ export function projectSupervisorTurn(thread: v2.Thread, expectedThreadId: strin
       break;
     }
   }
-  const command = current.items.filter(item => item.type === 'commandExecution').at(-1);
+  const commands = current.items.filter(item => item.type === 'commandExecution');
+  const command = commands[commands.length - 1];
   return { threadId: expectedThreadId,
     turn: { id: current.id, status: current.status, startedAt: current.startedAt,
       completedAt: current.completedAt },
