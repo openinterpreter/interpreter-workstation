@@ -26,6 +26,8 @@ export function createSupervisorPeerRouter(options: Readonly<{
   createGoal?: (threadId: string, document: string) => Promise<GoalState>;
   resumeGoal: (threadId: string, expected: ThreadGoalRevision) => Promise<ThreadGoalRevision>;
   readTerminal: (request: NativeTerminalStatusRequest) => Promise<NativeTerminalStatusResponse>;
+  listTerminalOwners?: (threadId: string, cursor?: string | null) =>
+    ReturnType<ReturnType<typeof getCodexService>['listNativeTerminalOwners']>;
   readSubmission?: (threadId: string, clientUserMessageId: string) =>
     ReturnType<ReturnType<typeof getCodexService>['readNativeSubmissionCustody']>;
   readJournal?: typeof nativeSubmissionJournal.lookup;
@@ -49,7 +51,7 @@ export function createSupervisorPeerRouter(options: Readonly<{
     try {
       const scope = await authorize(req, 'task:read');
       if (scope !== 'allowed') return void res.status(403).json(denied(scope));
-      const read = options.readThread ?? ((id: string) => getCodexService().readThread(id));
+      const read = options.readThread ?? ((id: string) => getCodexService().readSupervisorThreadSnapshot(id));
       // A deadline does not cancel the native RPC or establish an empty queue.
       let timer: ReturnType<typeof setTimeout> | undefined;
       const thread = await Promise.race([read(req.params.threadId),
@@ -116,6 +118,27 @@ export function createSupervisorPeerRouter(options: Readonly<{
       validateNativeTerminalRequest(input);
       const status = boundNativeTerminalStatus(await options.readTerminal(input), input.terminalGeneration);
       return void res.json({ available: true, ...status });
+    } catch { return void res.status(503).json(denied('observation_unavailable')); }
+  });
+  router.get('/threads/:threadId/terminals', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const scope = await authorize(req, 'command:read');
+      if (scope !== 'allowed') return void res.status(403).json(denied(scope));
+      const cursor = req.query.cursor;
+      if (cursor !== undefined && (typeof cursor !== 'string' ||
+          !/^[A-Za-z0-9_-]{1,160}$/.test(cursor))) {
+        return void res.status(400).json(denied('invalid_cursor'));
+      }
+      const list = options.listTerminalOwners ?? ((id: string, after?: string | null) =>
+        getCodexService().listNativeTerminalOwners(id, after));
+      const result = await list(req.params.threadId, cursor);
+      if (result.data.length > 100 || result.data.some(owner => owner.threadId !== req.params.threadId)) {
+        throw new Error('wrong owner');
+      }
+      return void res.json({ available: true, threadId: req.params.threadId,
+        data: result.data, nextCursor: result.nextCursor,
+        observation: 'native-terminal-owners-only-not-process-status' });
     } catch { return void res.status(503).json(denied('observation_unavailable')); }
   });
   router.get('/threads/:threadId/submissions/:clientUserMessageId', async (req, res) => {
