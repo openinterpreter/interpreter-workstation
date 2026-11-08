@@ -187,6 +187,28 @@ describe('VideoViewer timestamped voice notes', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
+  test('does not carry a manual draft or old review state across a pending new sidecar read', async () => {
+    let finishRead!: (result: { content: string }) => void;
+    mock.readFile.mockImplementation((path: string) => path.includes('new.mp4')
+      ? new Promise(resolve => { finishRead = resolve; }) : Promise.resolve({ content: JSON.stringify({
+        version: 1, notes: [{ id: 'old-1', atSeconds: 2.5, text: 'Old caption.' }],
+      }) }));
+    const view = render(<VideoViewer filePath="/private/old.mp4" />);
+    await waitFor(() => expect(screen.getByText('Old caption.')).toBeInTheDocument());
+    fireEvent.change(screen.getByRole('textbox', { name: 'Review note' }), {
+      target: { value: 'Old draft.' },
+    });
+    view.rerender(<VideoViewer filePath="/private/new.mp4" />);
+    const submit = screen.getByRole('button', { name: 'Save note' });
+    expect(submit).toBeDisabled();
+    fireEvent.submit(submit.closest('form')!);
+    expect(mock.writeFile).not.toHaveBeenCalled();
+    await act(async () => finishRead({ content: JSON.stringify({ version: 1, notes: [] }) }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Speak a note' })).toBeEnabled());
+    expect(screen.queryByText('Old caption.')).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Review note' })).toHaveValue('');
+  });
+
   test('a failed sidecar save does not resume playback or pretend a voice note was stored', async () => {
     mock.writeFile.mockResolvedValue({ success: false, error: 'Could not persist review' });
     const { container } = render(<VideoViewer filePath="/private/review.mp4" />);

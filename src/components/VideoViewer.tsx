@@ -26,6 +26,7 @@ export function VideoViewer({ filePath }: VideoViewerProps) {
   const captureRef = useRef<VoiceCaptureSession | null>(null);
   const reviewRef = useRef(review);
   const activePathRef = useRef(filePath);
+  const reviewReadyPathRef = useRef<string | null>(null);
   const savingRef = useRef(false);
   const pendingVoiceRef = useRef(false);
   const voiceGenerationRef = useRef(0);
@@ -33,6 +34,7 @@ export function VideoViewer({ filePath }: VideoViewerProps) {
 
   if (activePathRef.current !== filePath) {
     activePathRef.current = filePath;
+    reviewReadyPathRef.current = null;
     voiceGenerationRef.current++;
   }
 
@@ -47,27 +49,40 @@ export function VideoViewer({ filePath }: VideoViewerProps) {
 
   useEffect(() => {
     voiceGenerationRef.current++;
+    reviewReadyPathRef.current = null;
     captureRef.current?.stop();
     captureRef.current = null;
     setListening(false);
+    setDraft('');
     setReviewReady(false);
     setReviewError(null);
-    setReview({ version: 1, notes: [] });
+    const emptyReview: VideoReviewNotes = { version: 1, notes: [] };
+    reviewRef.current = emptyReview;
+    setReview(emptyReview);
     let mounted = true;
     void readFile(`${filePath}.review.json`).then(result => {
-      if (mounted) setReview(parseVideoReviewNotes(result.content));
+      if (mounted) {
+        const parsed = parseVideoReviewNotes(result.content);
+        reviewRef.current = parsed;
+        setReview(parsed);
+      }
     }).catch((reason: unknown) => {
       if (!mounted) return;
       const message = reason instanceof Error ? reason.message : String(reason);
       // A missing sidecar is normal. All other read/parse failures forbid an
       // overwrite so existing review comments cannot be silently lost.
       if (!/\b(ENOENT|not found|404)\b/i.test(message)) setReviewError(message);
-    }).finally(() => { if (mounted) setReviewReady(true); });
+    }).finally(() => {
+      if (mounted) {
+        reviewReadyPathRef.current = filePath;
+        setReviewReady(true);
+      }
+    });
     return () => { mounted = false; captureRef.current?.stop(); captureRef.current = null; };
   }, [filePath]);
 
   async function saveNote(text: string, atSeconds: number): Promise<void> {
-    if (!reviewReady || reviewError || isWorkstationReadOnly()) {
+    if (!reviewReady || reviewReadyPathRef.current !== filePath || reviewError || isWorkstationReadOnly()) {
       throw new Error('Review is not writable.');
     }
     if (savingRef.current) throw new Error('Wait for the preceding note to finish saving.');
@@ -189,19 +204,20 @@ export function VideoViewer({ filePath }: VideoViewerProps) {
       <section aria-label="Video review" className="border-t border-border p-3 max-h-[38svh] overflow-y-auto text-sm">
         <div className="flex flex-wrap items-center gap-2">
           <strong>Review at the playhead</strong>
-          <button type="button" className="rounded border px-3 py-2" disabled={!reviewReady || !!reviewError || processingVoice || isWorkstationReadOnly()}
+          <button type="button" className="rounded border px-3 py-2" disabled={!reviewReady || reviewReadyPathRef.current !== filePath || !!reviewError || processingVoice || isWorkstationReadOnly()}
             onClick={() => listening ? (captureRef.current?.stop(), captureRef.current = null, setListening(false)) : void startVoiceNote()}>
             {listening ? 'Cancel voice note' : 'Speak a note'}
           </button>
         </div>
         <form className="flex gap-2 mt-2" onSubmit={event => {
           event.preventDefault();
+          if (reviewReadyPathRef.current !== filePath) return;
           const at = videoRef.current?.currentTime ?? 0;
           void saveNote(draft, at).then(() => setDraft('')).catch(reason => setReviewError(String(reason)));
         }}>
           <input aria-label="Review note" className="min-w-0 flex-1 rounded border bg-background px-2" value={draft}
             onChange={event => setDraft(event.target.value)} placeholder="Note at current video time" maxLength={4000} />
-          <button type="submit" className="rounded border px-3 py-2" disabled={!draft.trim() || !reviewReady || saving || !!reviewError || isWorkstationReadOnly()}>Save note</button>
+          <button type="submit" className="rounded border px-3 py-2" disabled={!draft.trim() || !reviewReady || reviewReadyPathRef.current !== filePath || saving || !!reviewError || isWorkstationReadOnly()}>Save note</button>
         </form>
         {reviewError && <p role="alert" className="mt-2 text-destructive">{reviewError}</p>}
         <ol className="mt-2 space-y-1" aria-label="Timestamped review notes">
