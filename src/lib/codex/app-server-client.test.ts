@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, test } from "bun:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, lstatSync, readlinkSync } from "node:fs";
@@ -324,6 +325,39 @@ function completeInitHandshake(transport: FakeTransport) {
 }
 
 describe("CodexAppServerClient", () => {
+  test('managed Goal document get/set preserve full bytes and mission-revision precondition', async () => {
+    const transport = new FakeTransport();
+    const client = new CodexAppServerClient(transport, null);
+    const connected = client.ensureConnected();
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await connected;
+    const service = new CodexService(client);
+    const threadId = '00000000-0000-4000-8000-000000000077';
+    const content = `# Mission\n${'full mission detail\n'.repeat(300)}`;
+    const sha256 = createHash('sha256').update(content).digest('hex');
+    const metadata = { path: `managed-goals/${threadId}/mission-2-${sha256}.md`,
+      sha256, byteLength: Buffer.byteLength(content), missionRevision: 2 };
+    const goal = { threadId, objective: 'managed mission pointer', status: 'active' as const,
+      tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1 };
+    const before = transport.sent.length;
+    const writing = service.setThreadGoalDocument({ threadId, document: content,
+      expectedMissionRevision: 1, status: 'active' });
+    await waitFor(() => transport.sent.length === before + 1);
+    const setRpc = assertSentRequest(transport, before, CLIENT_METHOD.threadGoalDocumentSet);
+    assert.deepEqual(setRpc.params, { threadId, document: content,
+      expectedMissionRevision: 1, status: 'active' });
+    transport.respond(setRpc, { goal, document: metadata });
+    assert.equal((await writing).document.missionRevision, 2);
+    const reading = service.getThreadGoalDocument(threadId);
+    await waitFor(() => transport.sent.length === before + 2);
+    const getRpc = assertSentRequest(transport, before + 1, CLIENT_METHOD.threadGoalDocumentGet);
+    assert.deepEqual(getRpc.params, { threadId });
+    transport.respond(getRpc, { goal, document: metadata, content });
+    assert.equal((await reading).content, content);
+    client.shutdown();
+  });
+
   test('owner-bound terminal list and status traverse the real client and service without exposing native text', async () => {
     const transport = new FakeTransport();
     let version = '0.0.58';
