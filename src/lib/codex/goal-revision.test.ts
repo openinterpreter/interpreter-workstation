@@ -43,6 +43,17 @@ describe('exact native Goal revision read', () => {
       GoalRevisionUnavailableError);
   });
 
+  test('invalid exact-thread caller is denied before native read', async () => {
+    let calls = 0;
+    const client = { subscribe: () => () => {}, threadGoalGet: async () => {
+      calls++;
+      return { goal, revision };
+    } } as unknown as CodexClient;
+    await assert.rejects(new CodexService(client).getThreadGoalWithRevision('wrong-owner'),
+      { category: 'read_unavailable' });
+    assert.equal(calls, 0);
+  });
+
   test('native errors remain typed and suppress private backend text', async () => {
     const client = { subscribe: () => () => {}, threadGoalGet: async () => {
       throw new Error('PRIVATE native backend text');
