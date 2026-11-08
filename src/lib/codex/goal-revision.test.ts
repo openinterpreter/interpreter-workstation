@@ -72,4 +72,23 @@ describe('exact native Goal revision read', () => {
       (error: unknown) => error instanceof GoalRevisionUnavailableError &&
         !error.message.includes('PRIVATE'));
   });
+
+  test('deadline is content-free and a late native result cannot turn it into success or cause retry', async () => {
+    let complete!: (result: { goal: typeof goal; revision: typeof revision }) => void;
+    let calls = 0;
+    const client = { subscribe: () => () => {}, threadGoalGet: () => {
+      calls++;
+      return new Promise<{ goal: typeof goal; revision: typeof revision }>((resolve) => {
+        complete = resolve;
+      });
+    } } as unknown as CodexClient;
+    const read = new CodexService(client).getThreadGoalWithRevision(threadId, 10);
+    await assert.rejects(read, { category: 'read_unavailable' });
+    complete({ goal, revision });
+    await Promise.resolve();
+    assert.equal(calls, 1);
+    await assert.rejects(new CodexService(client).getThreadGoalWithRevision(threadId, 0),
+      { category: 'read_unavailable' });
+    assert.equal(calls, 1);
+  });
 });

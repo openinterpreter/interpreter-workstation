@@ -1399,20 +1399,29 @@ export class CodexService {
   }
 
   /** Read exact native CAS identity; an old runtime or contradictory receipt is unavailable. */
-  async getThreadGoalWithRevision(threadId: string): Promise<{
+  async getThreadGoalWithRevision(threadId: string, maxWaitMs = 3_000): Promise<{
     goal: v2.ThreadGoal | null;
     revision: ThreadGoalRevision | null;
   }> {
+    let deadline: ReturnType<typeof setTimeout> | undefined;
     try {
-      if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId)) {
+      if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId) ||
+          !Number.isSafeInteger(maxWaitMs) || maxWaitMs < 1 || maxWaitMs > 3_000) {
         throw new GoalRevisionUnavailableError();
       }
-      const result = await this.client.threadGoalGet({ threadId });
+      const result = await Promise.race([
+        this.client.threadGoalGet({ threadId }),
+        new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => reject(new GoalRevisionUnavailableError()), maxWaitMs);
+        }),
+      ]);
       const revision = verifyThreadGoalRevision(result.goal, (result as { revision?: unknown }).revision,
         threadId);
       return { goal: result.goal, revision };
     } catch {
       throw new GoalRevisionUnavailableError();
+    } finally {
+      if (deadline) clearTimeout(deadline);
     }
   }
 
