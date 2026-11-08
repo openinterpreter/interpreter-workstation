@@ -28,7 +28,12 @@ window.fetch = async (input, init) => {
     audit: { eventCount: events.length, latestAt: events.at(-1)?.at ?? null },
     identity: { issuer: 'https://fixture.invalid/issuer', status: 'synthetic fixture session' },
     controls: { policy: 'not enforced', provisioning: 'not configured', modelRegistry: 'not configured' } };
-  else if (init?.method === 'POST' && (suffix === 'deactivate' || suffix === 'revoke-sessions')) {
+  else if (init?.method === 'POST' && suffix === 'revoke-all' && url.endsWith('/sessions/revoke-all')) {
+    events.push({ organizationId, subject: 'alice', action: 'organization.sessions.revoke-all', outcome: 'allowed', at: new Date().toISOString() });
+    denied = true;
+    sessionStorage.setItem('enterprise-fixture-denied', '1');
+    return new Response(null, { status: 204 });
+  } else if (init?.method === 'POST' && (suffix === 'deactivate' || suffix === 'revoke-sessions')) {
     const subject = decodeURIComponent(url.split('/').slice(-2)[0]!);
     const member = members.find((item) => item.subject === subject);
     if (!member || member.role !== 'member') return new Response(null, { status: 403 });
