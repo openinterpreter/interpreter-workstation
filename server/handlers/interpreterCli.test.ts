@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -131,6 +132,66 @@ describe('interpreterCli handlers', () => {
       expect(calls).toEqual([threadId]);
     } finally {
       service.getThreadGoalWithRevision = original;
+    }
+  });
+
+  test('Goal document CLI creates and reads only the bound thread; an unrelated blocked Goal is untouched', async () => {
+    const threadId = '00000000-0000-4000-8000-000000000077';
+    const blockedId = '00000000-0000-4000-8000-000000000078';
+    const document = `# Full mission\n${'Retain the entire instruction.\n'.repeat(170)}`;
+    const digest = createHash('sha256').update(document).digest('hex');
+    const stored = { path: `managed-goals/${threadId}/mission-1-${digest}.md`,
+      sha256: digest, byteLength: Buffer.byteLength(document), missionRevision: 1 };
+    const activeGoal = { threadId, status: 'active' as const };
+    const service = getCodexService();
+    const originalRead = service.getThreadGoalDocument;
+    const originalGoal = service.getThreadGoalWithRevision;
+    const originalCreate = service.setThreadGoalDocument;
+    let writes = 0;
+    let created = false;
+    setConfigOverride({ agents: {}, mcpServers: {} } as any);
+    setToolManager(new ToolManager());
+    for (const [agentId, owner] of [['document-owner', threadId],
+      ['blocked-owner', blockedId]]) {
+      agentTabManager.bindThread({ agentId, threadId: owner,
+        callerToken: `agtok_${agentId}`, allowedToolNames: [
+          'builtin-interpreter__interpreter_goal_document_get',
+          'builtin-interpreter__interpreter_goal_document_create',
+        ] });
+    }
+    service.getThreadGoalWithRevision = async id => ({ goal: id === blockedId
+      ? { threadId: blockedId, status: 'blocked' } as any
+      : created ? activeGoal as any : null, revision: null });
+    service.getThreadGoalDocument = async id => ({ goal: created && id === threadId
+      ? activeGoal as any : null, document: created && id === threadId ? stored : null,
+    content: created && id === threadId ? document : null });
+    service.setThreadGoalDocument = async input => {
+      expect(input).toEqual({ threadId, document, status: 'active' });
+      writes++;
+      created = true;
+      return { goal: activeGoal as any, document: stored };
+    };
+    try {
+      const call = (token: string, toolName: string, args: unknown) =>
+        callInterpreterCliTool({ callerToken: token, serverId: 'builtin-interpreter',
+          toolName, args }) as Promise<{ content: Array<{ text: string }>; isError?: boolean }>;
+      const denied = await call('agtok_blocked-owner', 'interpreter_goal_document_create',
+        { document });
+      expect(JSON.parse(denied.content[0]!.text).category).toBe('goal_exists');
+      expect(writes).toBe(0);
+      const success = await call('agtok_document-owner', 'interpreter_goal_document_create',
+        { document });
+      expect(JSON.parse(success.content[0]!.text)).toMatchObject({ created: true,
+        document: stored });
+      const full = await call('agtok_document-owner', 'interpreter_goal_document_get', {});
+      expect(JSON.parse(full.content[0]!.text).content).toBe(document);
+      expect(writes).toBe(1);
+      await expect(call('unbound-caller', 'interpreter_goal_document_get', {})).rejects.toThrow();
+      expect(writes).toBe(1);
+    } finally {
+      service.getThreadGoalDocument = originalRead;
+      service.getThreadGoalWithRevision = originalGoal;
+      service.setThreadGoalDocument = originalCreate;
     }
   });
 

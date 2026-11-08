@@ -79,4 +79,16 @@ describe('same-thread managed Goal document caller', () => {
     expect(decode(result)).toEqual({ created: false, category: 'mutation_unconfirmed' });
     expect(writes).toBe(1);
   });
+
+  test('contradictory native absence and revision cannot authorize a new Goal', async () => {
+    const threadId = id(8);
+    let writes = 0;
+    const result = await createGoalDocumentForCaller({ threadId,
+      verifiedCallerThreadId: threadId }, longMission,
+    async () => ({ goal: null, revision: { goalId: 'older-owner' } }),
+    async () => { throw Error('must not read'); },
+    async () => { writes++; throw Error('must not write'); });
+    expect(decode(result)).toEqual({ created: false, category: 'read_unavailable' });
+    expect(writes).toBe(0);
+  });
 });

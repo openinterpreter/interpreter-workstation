@@ -28,7 +28,7 @@ export async function readGoalDocumentForCaller(context: BuiltinToolContext | un
 /** Create once only after a confirmed absence; the native insert is unique across races. */
 export async function createGoalDocumentForCaller(context: BuiltinToolContext | undefined,
   document: unknown,
-  goalPresence: (threadId: string) => Promise<{ goal: unknown }>,
+  goalPresence: (threadId: string) => Promise<{ goal: unknown; revision?: unknown }>,
   read: (threadId: string) => Promise<ThreadGoalDocumentGetResponse>,
   create: (threadId: string, document: string) => Promise<ThreadGoalDocumentSetResponse>) {
   const id = owner(context);
@@ -37,12 +37,15 @@ export async function createGoalDocumentForCaller(context: BuiltinToolContext | 
       Buffer.byteLength(document, 'utf8') > 1_048_576) {
     return response({ created: false, category: 'invalid_document' }, true);
   }
-  let present: { goal: unknown };
+  let present: { goal: unknown; revision?: unknown };
   try { present = await goalPresence(id); } catch {
     return response({ created: false, category: 'read_unavailable' }, true);
   }
   if (present.goal !== null) {
     return response({ created: false, category: 'goal_exists' }, true);
+  }
+  if (present.revision !== undefined && present.revision !== null) {
+    return response({ created: false, category: 'read_unavailable' }, true);
   }
   try {
     const created = await create(id, document);
