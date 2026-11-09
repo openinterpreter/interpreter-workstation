@@ -6,7 +6,9 @@ export function projectSupervisorTurn(thread: v2.Thread, expectedThreadId: strin
   const turns = thread.turns;
   const current = turns[turns.length - 1];
   if (!current) return { threadId: expectedThreadId, turn: null,
-    latestMessage: null, command: null, observation: 'saved-native-thread-only' };
+    latestMessage: null, command: null,
+    modelPhase: { available: false, category: 'native_model_phase_unavailable' },
+    observation: 'saved-native-thread-only' };
   if (!['inProgress', 'completed', 'interrupted', 'failed'].includes(current.status) ||
       !Array.isArray(current.items)) throw new Error('turn unavailable');
   let latestMessageTurnId: string | null = null;
@@ -35,5 +37,7 @@ export function projectSupervisorTurn(thread: v2.Thread, expectedThreadId: strin
       itemId: command.id, status: command.status,
       exitCode: command.exitCode, processId: command.processId,
       observation: 'saved-command-item-not-os-process-custody' } : null,
+    // A turn's saved status and model configuration are not a live model call.
+    modelPhase: { available: false, category: 'native_model_phase_unavailable' },
     observation: 'saved-native-thread-only' };
 }

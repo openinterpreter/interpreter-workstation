@@ -196,6 +196,7 @@ const HEADLESS_BROWSER_TOOL_NAMES = new Set([
   // Thread-scoped durable schedules are hosted by the sidecar, not Electron.
   'interpreter_wake_schedule',
   'interpreter_goal_revision_get',
+  'interpreter_task_current',
   'interpreter_goal_resume',
   'interpreter_goal_document_get',
   'interpreter_goal_document_create',

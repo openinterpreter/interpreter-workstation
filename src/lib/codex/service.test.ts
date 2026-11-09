@@ -1802,6 +1802,42 @@ describe("CodexService", () => {
     assert.equal(fake.calls.startThread, 0);
   });
 
+  test('ordinary and wake inputs cannot double-admit while shared existing-thread resume is unresolved', async () => {
+    let releaseResume!: () => void;
+    const resumeGate = new Promise<void>(resolve => { releaseResume = resolve; });
+    let firstResume = true;
+    const admitted: Array<string | undefined> = [];
+    const fake = createFakeClient({
+      async resumeThread(id) {
+        if (firstResume) {
+          firstResume = false;
+          await resumeGate;
+        }
+        return id;
+      },
+      async startTurn(params) {
+        admitted.push(params.clientUserMessageId);
+        return createTurn(`turn_${admitted.length}`);
+      },
+    });
+    const service = new CodexService(fake.client);
+    const ordinary = service.runTurn({ threadId: 'thr_existing', message: 'user input',
+      clientUserMessageId: 'user_once', model: 'test-model', onEvent: () => {} });
+    await waitFor(() => fake.calls.resumeThread === 1);
+    await assert.rejects(service.startExistingThreadTurn('thr_existing', 'timer input',
+      '/workspace', { mcp_servers: {} }, 'timer_once'), /already responding/);
+    assert.equal(fake.calls.startTurn, 0);
+    releaseResume();
+    await waitFor(() => fake.calls.startTurn === 1);
+    fake.emit({ method: SERVER_METHOD.turnCompleted,
+      params: { threadId: 'thr_existing', turn: createTurn('turn_1', 'completed') } });
+    assert.equal((await ordinary).turnId, 'turn_1');
+    assert.equal(await service.startExistingThreadTurn('thr_existing', 'timer input',
+      '/workspace', { mcp_servers: {} }, 'timer_once'), 'turn_2');
+    assert.deepEqual(admitted, ['user_once', 'timer_once']);
+    assert.equal(fake.calls.startThread, 0);
+  });
+
   test("wake admission never replaces a missing thread", async () => {
     const fake = createFakeClient();
     const service = new CodexService(fake.client);

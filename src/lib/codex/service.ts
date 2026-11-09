@@ -4,8 +4,9 @@ import { nativeCommandSessionSnapshot, nativeTurnReceipt } from './native-turn-r
 import { boundNativeTerminalStatus, validateNativeTerminalRequest, type NativeTerminalStatusRequest,
   type NativeTerminalStatusResponse } from './native-terminal-status';
 import { ManagedGoalDocumentError, validateGoalDocumentInput, verifyGoalDocument, type ThreadGoalDocumentGetResponse,
+  type ThreadGoalDocumentCreateParams, type ThreadGoalDocumentCreateResponse,
   type ThreadGoalDocumentSetParams, type ThreadGoalDocumentSetResponse } from './goal-document';
-import { GoalMutationUnconfirmedError, GoalRevisionUnavailableError, goalCasExpectedParams,
+import { GoalMutationUnconfirmedError, GoalRevisionConflictError, GoalRevisionUnavailableError, goalCasExpectedParams,
   verifyThreadGoalRevision, type ThreadGoalRevision } from './goal-revision';
 import { JSONRPCErrorException } from "json-rpc-2.0";
 import type { v2 } from "../../../server/handlers/codex-generated-types/index";
@@ -420,6 +421,7 @@ export type CodexClient = {
   threadGoalRevisionGet?(params: v2.ThreadGoalGetParams): Promise<v2.ThreadGoalGetResponse>;
   threadGoalRevisionSet?(params: v2.ThreadGoalSetParams): Promise<v2.ThreadGoalSetResponse>;
   threadGoalDocumentGet?(params: { threadId: string }): Promise<ThreadGoalDocumentGetResponse>;
+  threadGoalDocumentCreate?(params: ThreadGoalDocumentCreateParams): Promise<ThreadGoalDocumentCreateResponse>;
   threadGoalDocumentSet?(params: ThreadGoalDocumentSetParams): Promise<ThreadGoalDocumentSetResponse>;
   threadGoalDocumentRevisionSet?(params: ThreadGoalDocumentSetParams): Promise<ThreadGoalDocumentSetResponse>;
   threadGoalClear(params: v2.ThreadGoalClearParams): Promise<v2.ThreadGoalClearResponse>;
@@ -584,21 +586,37 @@ export class CodexService {
   private async submitNativeInput(
     input: { kind: 'start'; params: Parameters<CodexClient['startTurn']>[0];
       existingThread?: { config?: Record<string, JsonValue>;
+        model?: string | null; modelProvider?: string | null;
+        baseInstructions?: string; developerInstructions?: string;
+        additionalWritableRoots?: string[];
+        /** UI observers already own the null reservation before turn/start. */
+        preReserved?: boolean;
         onPhase?: (phase: 'resume' | 'start') => void } }
       | { kind: 'steer'; params: Parameters<CodexClient['steerTurn']>[0] },
   ): Promise<{ turnId: string; status?: v2.TurnStatus }> {
     if (input.kind === 'start') {
       const { threadId } = input.params;
       if (input.existingThread) {
-        await this.reconcileTerminalTurn(threadId);
-        this.assertNoActiveTurn(threadId);
-        this.activeTurns.set(threadId, null);
+        if (input.existingThread.preReserved) {
+          if (!this.activeTurns.has(threadId) || this.activeTurns.get(threadId) !== null) {
+            throw new Error('Existing input reservation changed before admission');
+          }
+        } else {
+          await this.reconcileTerminalTurn(threadId);
+          this.assertNoActiveTurn(threadId);
+          this.activeTurns.set(threadId, null);
+        }
       }
       try {
         if (input.existingThread) {
           input.existingThread.onPhase?.('resume');
-          await this.resumeExistingInputThread({ threadId, modelProvider: null, model: null,
-            cwd: input.params.cwd, config: input.existingThread.config });
+          await this.resumeExistingInputThread({ threadId,
+            modelProvider: input.existingThread.modelProvider ?? null,
+            model: input.existingThread.model ?? null,
+            cwd: input.params.cwd, config: input.existingThread.config,
+            baseInstructions: input.existingThread.baseInstructions,
+            developerInstructions: input.existingThread.developerInstructions,
+            additionalWritableRoots: input.existingThread.additionalWritableRoots });
           input.existingThread.onPhase?.('start');
         }
         const turn = await this.client.startTurn(input.params);
@@ -846,8 +864,7 @@ export class CodexService {
       };
     }
 
-    const threadId = await this.resolveThread(
-      options.threadId,
+    const threadId = options.threadId ?? await this.resolveThread(
       options.model,
       options.modelProvider,
       options.cwd,
@@ -1095,7 +1112,13 @@ export class CodexService {
         effort: options.effort,
         summary: options.summary,
         additionalWritableRoots: options.additionalWritableRoots,
-      } });
+      }, ...(options.threadId ? { existingThread: {
+        preReserved: true, config: runConfig,
+        model: options.model, modelProvider: options.modelProvider,
+        baseInstructions: options.baseInstructions,
+        developerInstructions: options.developerInstructions,
+        additionalWritableRoots: options.additionalWritableRoots,
+      } } : {}) });
 
       turnId = turn.turnId;
       turnStarted = true;
@@ -1476,7 +1499,10 @@ export class CodexService {
         throw new GoalRevisionUnavailableError();
       }
       return { goal: result.goal, revision };
-    } catch {
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === -32009) {
+        throw new GoalRevisionConflictError();
+      }
       throw new GoalMutationUnconfirmedError();
     } finally {
       if (deadline) clearTimeout(deadline);
@@ -1498,6 +1524,40 @@ export class CodexService {
     } catch {
       throw new ManagedGoalDocumentError('read_unavailable');
     }
+  }
+
+  /** One exact predecessor and stable creation ID, atomically enforced by OIX.
+   * Never fall back to document/set when this experimental method is absent. */
+  async createThreadGoalDocument(
+    input: ThreadGoalDocumentCreateParams,
+    maxWaitMs = 3_000,
+  ): Promise<ThreadGoalDocumentCreateResponse> {
+    validateGoalDocumentInput(input);
+    if (!this.client.threadGoalDocumentCreate || !Number.isSafeInteger(maxWaitMs) ||
+        maxWaitMs < 1 || maxWaitMs > 3_000) {
+      throw new ManagedGoalDocumentError('create_unavailable');
+    }
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        this.client.threadGoalDocumentCreate(input),
+        new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => reject(new ManagedGoalDocumentError('update_unconfirmed')),
+            maxWaitMs);
+        }),
+      ]);
+      return result;
+    } catch (error) {
+      // This fixed native error code is the only authoritative CAS conflict.
+      // All transport/timeout failures remain unknown, never replay permission.
+      if (error && typeof error === 'object' && 'code' in error && error.code === -32009) {
+        throw new ManagedGoalDocumentError('stale_predecessor');
+      }
+      if (error && typeof error === 'object' && 'code' in error && error.code === -32601) {
+        throw new ManagedGoalDocumentError('create_unavailable');
+      }
+      throw new ManagedGoalDocumentError('update_unconfirmed');
+    } finally { if (deadline) clearTimeout(deadline); }
   }
 
   async setThreadGoalDocument(input: ThreadGoalDocumentSetParams): Promise<ThreadGoalDocumentSetResponse> {
@@ -1551,8 +1611,12 @@ export class CodexService {
         throw new ManagedGoalDocumentError('update_unconfirmed');
       }
       return { goal: result.goal, document: result.document, revision };
-    } catch {
-      // A transport loss does not prove native rejected this write. Reconcile; never replay.
+    } catch (error) {
+      // Only native's fixed conflict code proves this CAS was rejected. A
+      // transport loss can mean the write committed; reconcile, never replay.
+      if (error && typeof error === 'object' && 'code' in error && error.code === -32009) {
+        throw new ManagedGoalDocumentError('stale_revision');
+      }
       throw new ManagedGoalDocumentError('update_unconfirmed');
     } finally {
       if (deadline) clearTimeout(deadline);
@@ -1672,7 +1736,6 @@ export class CodexService {
   }
 
   private async resolveThread(
-    threadId: string | undefined,
     model: string,
     modelProvider?: string | null,
     cwd?: string,
@@ -1682,26 +1745,11 @@ export class CodexService {
     dynamicTools?: v2.DynamicToolSpec[] | null,
     additionalWritableRoots?: string[],
   ) {
-    const nextConfig = threadId ? config : withElectronRunAsNodeConfig(config);
-
-    if (!threadId) {
-      return this.client.startThreadWithConfig(
-        model,
-        modelProvider,
-        baseInstructions,
-        cwd,
-        nextConfig,
-        developerInstructions,
-        dynamicTools,
-        additionalWritableRoots,
-      );
-    }
-
-    // An input addressed to a retained thread must not silently create a
-    // different conversation if OIX cannot resume it. The caller can surface
-    // the native failure and preserve its own durable event for recovery.
-    return this.resumeExistingInputThread({ threadId, modelProvider, model, cwd,
-      config: nextConfig, baseInstructions, developerInstructions, additionalWritableRoots });
+    return this.client.startThreadWithConfig(
+      model, modelProvider, baseInstructions, cwd,
+      withElectronRunAsNodeConfig(config), developerInstructions,
+      dynamicTools, additionalWritableRoots,
+    );
   }
 }
 

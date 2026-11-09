@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { JSONRPCErrorException } from 'json-rpc-2.0';
 import { CodexService, type CodexClient } from './service';
 import { ManagedGoalDocumentError, validateGoalDocumentInput, verifyGoalDocument } from './goal-document';
 
@@ -153,6 +154,27 @@ describe('Workstation consumer for OIX-owned managed Goal documents', () => {
     assert.equal(writes, 3);
   });
 
+  test('only the fixed native document CAS conflict is stale; transport errors remain uncertain', async () => {
+    const expected = { goalId: '00000000-0000-4000-8000-000000000088',
+      status: 'active' as const, missionRevision: 1, lifecycleRevision: 4 };
+    let writes = 0;
+    const client = { subscribe: () => () => {}, threadGoalDocumentRevisionSet: async () => {
+      writes++;
+      throw { code: -32009, message: 'PRIVATE predecessor text' };
+    } } as unknown as CodexClient;
+    const service = new CodexService(client);
+    await assert.rejects(service.setThreadGoalDocumentWithRevision({ threadId,
+      document: documentText }, expected), error =>
+      error instanceof ManagedGoalDocumentError && error.category === 'stale_revision' &&
+      !error.message.includes('PRIVATE'));
+    assert.equal(writes, 1);
+    client.threadGoalDocumentRevisionSet = async () => { writes++;
+      throw { code: -32010, message: 'PRIVATE unknown outcome' }; };
+    await assert.rejects(service.setThreadGoalDocumentWithRevision({ threadId,
+      document: documentText }, expected), { category: 'update_unconfirmed' });
+    assert.equal(writes, 2);
+  });
+
   test('bounded document CAS timeout does not cancel native or replay a late receipt', async () => {
     const expected = { goalId: '00000000-0000-4000-8000-000000000088',
       status: 'active' as const, missionRevision: 1, lifecycleRevision: 4 };
@@ -276,5 +298,56 @@ describe('Workstation consumer for OIX-owned managed Goal documents', () => {
     await assert.rejects(service.setThreadGoalDocument({ threadId, document: documentText,
       expectedMissionRevision: 1, status: 'paused' }), { category: 'update_unconfirmed' });
     assert.equal(writes, 2);
+  });
+
+  test('create-after-complete fails closed when the pinned native method is unavailable', async () => {
+    const params = { threadId, creationId: 'new-job-unique', objective: 'new mission pointer',
+      document: documentText, status: 'active' as const,
+      precondition: { kind: 'completed' as const,
+        expectedGoalId: '00000000-0000-4000-8000-000000000088',
+        expectedStatus: 'complete' as const, expectedMissionRevision: 2,
+        expectedLifecycleRevision: 3 } };
+    const unavailable = new CodexService({ subscribe: () => () => {} } as unknown as CodexClient);
+    await assert.rejects(unavailable.createThreadGoalDocument(params),
+      { category: 'create_unavailable' });
+    let calls = 0;
+    const client = { subscribe: () => () => {}, threadGoalDocumentCreate: async () => {
+      calls++;
+      throw new JSONRPCErrorException('private stale predecessor', -32009);
+    } } as unknown as CodexClient;
+    const service = new CodexService(client);
+    await assert.rejects(service.createThreadGoalDocument(params),
+      { category: 'stale_predecessor' });
+    await assert.rejects(service.createThreadGoalDocument({ ...params,
+      precondition: { kind: 'absent', admissionState: 'noGoal' } }),
+    { category: 'stale_predecessor',
+      message: 'Goal creation precondition changed; reread before a distinct creation.' });
+    client.threadGoalDocumentCreate = async () => {
+      calls++;
+      throw new JSONRPCErrorException('private unsupported native method', -32601);
+    };
+    await assert.rejects(service.createThreadGoalDocument(params),
+      { category: 'create_unavailable' });
+    assert.equal(calls, 3);
+  });
+
+  test('a late native create reply cannot trigger another CAS or become an acknowledged mutation', async () => {
+    const params = { threadId, creationId: 'new-job-unique', objective: 'new mission pointer',
+      document: documentText, status: 'active' as const,
+      precondition: { kind: 'completed' as const,
+        expectedGoalId: '00000000-0000-4000-8000-000000000088',
+        expectedStatus: 'complete' as const, expectedMissionRevision: 2,
+        expectedLifecycleRevision: 3 } };
+    let resolve!: (receipt: unknown) => void;
+    let calls = 0;
+    const client = { subscribe: () => () => {}, threadGoalDocumentCreate: () => {
+      calls++;
+      return new Promise(done => { resolve = done; });
+    } } as unknown as CodexClient;
+    await assert.rejects(new CodexService(client).createThreadGoalDocument(params, 10),
+      { category: 'update_unconfirmed' });
+    resolve({ creationId: params.creationId });
+    await Promise.resolve();
+    assert.equal(calls, 1);
   });
 });
