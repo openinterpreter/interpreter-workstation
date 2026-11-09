@@ -44,7 +44,14 @@ export function VideoViewer({ filePath }: VideoViewerProps) {
 
   useEffect(() => {
     setError(false);
-    void getFileUrl(filePath).then(setVideoUrl).catch(() => setError(true));
+    setVideoUrl(null);
+    let current = true;
+    void getFileUrl(filePath).then(url => {
+      if (current) setVideoUrl(url);
+    }).catch(() => {
+      if (current) setError(true);
+    });
+    return () => { current = false; };
   }, [filePath, reloadTrigger]);
 
   useEffect(() => {
@@ -212,8 +219,16 @@ export function VideoViewer({ filePath }: VideoViewerProps) {
         <form className="flex gap-2 mt-2" onSubmit={event => {
           event.preventDefault();
           if (reviewReadyPathRef.current !== filePath) return;
+          const sourcePath = filePath;
+          const generation = voiceGenerationRef.current;
           const at = videoRef.current?.currentTime ?? 0;
-          void saveNote(draft, at).then(() => setDraft('')).catch(reason => setReviewError(String(reason)));
+          void saveNote(draft, at).then(() => {
+            if (generation === voiceGenerationRef.current && activePathRef.current === sourcePath) setDraft('');
+          }).catch(reason => {
+            if (generation === voiceGenerationRef.current && activePathRef.current === sourcePath) {
+              setReviewError(reason instanceof Error ? reason.message : String(reason));
+            }
+          });
         }}>
           <input aria-label="Review note" className="min-w-0 flex-1 rounded border bg-background px-2" value={draft}
             onChange={event => setDraft(event.target.value)} placeholder="Note at current video time" maxLength={4000} />
