@@ -380,6 +380,61 @@ describe("CodexAppServerClient", () => {
     client.shutdown();
   });
 
+  test('completed-predecessor creation uses its exact ID and cannot reconnect after a late reply', async () => {
+    const transport = new FakeTransport();
+    const client = new CodexAppServerClient(transport, null);
+    const params = { threadId: '00000000-0000-4000-8000-000000000077',
+      creationId: 'new-job-unique', objective: 'new mission pointer', document: '# Full mission',
+      status: 'active' as const, precondition: { kind: 'completed' as const,
+        expectedGoalId: '00000000-0000-4000-8000-000000000088',
+        expectedStatus: 'complete' as const, expectedMissionRevision: 2,
+        expectedLifecycleRevision: 3 } };
+    await assert.rejects(client.threadGoalDocumentCreate(params), /unavailable/);
+    assert.equal(transport.sent.length, 0);
+    const connected = client.ensureConnected();
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await connected;
+    const before = transport.sent.length;
+    const pending = client.threadGoalDocumentCreate(params);
+    await waitFor(() => transport.sent.length === before + 1);
+    const request = assertSentRequest(transport, before, CLIENT_METHOD.threadGoalDocumentCreate);
+    assert.deepEqual(request.params, params);
+    transport.close(new Error('disconnected'));
+    transport.respond(request, { creationId: params.creationId, replayed: false });
+    await assert.rejects(pending);
+    assert.equal(transport.sent.length, before + 1,
+      'no second native request or runtime start follows late creation');
+    client.shutdown();
+  });
+
+  test('initial creation sends only the explicit tagged noGoal wire claim on the live connection', async () => {
+    const transport = new FakeTransport();
+    const client = new CodexAppServerClient(transport, null);
+    const params = { threadId: '00000000-0000-4000-8000-000000000077',
+      creationId: 'first-job-unique', objective: 'initial mission pointer',
+      document: '# Full initial mission', status: 'active' as const,
+      precondition: { kind: 'absent' as const, admissionState: 'noGoal' as const } };
+    const connected = client.ensureConnected();
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await connected;
+    const before = transport.sent.length;
+    const pending = client.threadGoalDocumentCreate(params);
+    await waitFor(() => transport.sent.length === before + 1);
+    const request = assertSentRequest(transport, before, CLIENT_METHOD.threadGoalDocumentCreate);
+    assert.deepEqual(request.params, params);
+    assert.deepEqual(JSON.parse(JSON.stringify(request.params)).precondition,
+      { kind: 'absent', admissionState: 'noGoal' });
+    transport.close(new Error('disconnected'));
+    transport.respond(request, { creationId: params.creationId, previousRevision: null,
+      replayed: false });
+    await assert.rejects(pending);
+    assert.equal(transport.sent.length, before + 1,
+      'a late initial-create reply cannot reconnect or claim a second request');
+    client.shutdown();
+  });
+
   test('Goal revision CAS never connects, reconnects or replays after a disconnect', async () => {
     const transport = new FakeTransport();
     const client = new CodexAppServerClient(transport, null);

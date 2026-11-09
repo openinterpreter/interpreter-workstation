@@ -35,6 +35,24 @@ describe('stable managed supervisor Goal read', () => {
     await expect(readStableSupervisorGoal(reader({ getThreadGoalDocument: async () => ({ goal,
       document: managed, content: content + 'late mutation' }) }), threadId)).rejects.toThrow();
   });
+  it('accepts semantically identical native readbacks with reordered JSON fields', async () => {
+    let reads = 0;
+    const reorderedGoal = { objective, status: goal.status, threadId };
+    const reorderedRevision = { lifecycleRevision: revision.lifecycleRevision,
+      missionRevision: revision.missionRevision, status: revision.status,
+      goalId: revision.goalId };
+    const stable = reader({
+      getThreadGoalWithRevision: async () => ++reads === 1
+        ? { goal, revision } : { revision: reorderedRevision, goal: reorderedGoal },
+      getThreadGoalDocument: async () => ({ goal: reorderedGoal, document: managed, content }),
+    });
+    expect((await readStableSupervisorGoal(stable, threadId)).revision).toEqual(revision);
+    expect(reads).toBe(2);
+    await expect(readStableSupervisorGoal(reader({
+      getThreadGoalDocument: async () => ({ goal: { ...goal, objective: 'different mission' },
+        document: managed, content }),
+    }), threadId)).rejects.toThrow('unavailable');
+  });
   it('times out without claiming an absent or cancelled native read; late result is not returned', async () => {
     let finish!: (value: unknown) => void;
     let reads = 0;
