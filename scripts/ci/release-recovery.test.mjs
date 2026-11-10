@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { draftPlan, findDraft } from './reconcile-release-draft.mjs';
+import { draftPlan, findDraft, observeCreatedDraft } from './reconcile-release-draft.mjs';
 import { objectState } from './reconcile-immutable-uploads.mjs';
 
 const digest = (bytes) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
@@ -103,6 +103,36 @@ test('draft custody preserves exact assets and fails closed on any mismatch', ()
   assert.throws(() => findDraft([{ ...draft, draft: false }], draft.tag_name, draft.target_commitish), /published/);
   assert.throws(() => findDraft([draft], draft.tag_name, 'b'.repeat(40)), /another commit/);
   assert.equal(objectState([], 'releases/one', expected.get('one')), 'missing');
+});
+
+test('new draft becomes visible only after bounded exact-identity reads', async () => {
+  const commit = 'a'.repeat(40);
+  const draft = { tag_name: 'v0.2.217', draft: true, target_commitish: commit, assets: [] };
+  let reads = 0;
+  const waits = [];
+  const observed = await observeCreatedDraft(() => (++reads < 4 ? [] : [draft]), draft.tag_name, commit,
+    { attempts: 5, intervalMs: 10, wait: async (ms) => { waits.push(ms); } });
+  assert.equal(observed, draft);
+  assert.equal(reads, 4);
+  assert.deepEqual(waits, [10, 10, 10]);
+});
+
+test('draft visibility exhaustion never treats absence as permission to create again', async () => {
+  let reads = 0;
+  await assert.rejects(observeCreatedDraft(() => { reads++; return []; }, 'v0.2.217', 'a'.repeat(40),
+    { attempts: 3, wait: async () => {} }), /not observable after 3 bounded reads/);
+  assert.equal(reads, 3);
+});
+
+test('draft identity conflict and read failure abort without another observation', async () => {
+  const commit = 'a'.repeat(40);
+  let reads = 0;
+  const wrong = { tag_name: 'v0.2.217', draft: true, target_commitish: 'b'.repeat(40), assets: [] };
+  await assert.rejects(observeCreatedDraft(() => { reads++; return [wrong]; }, wrong.tag_name, commit,
+    { wait: async () => { throw new Error('must not wait'); } }), /another commit/);
+  assert.equal(reads, 1);
+  await assert.rejects(observeCreatedDraft(() => { throw new Error('read failed'); }, wrong.tag_name, commit,
+    { wait: async () => { throw new Error('must not wait'); } }), /read failed/);
 });
 
 test('draft integration preserves matching assets, aborts a mismatch, and resumes an interrupted upload', async (t) => {

@@ -2,6 +2,7 @@
 // A release draft is immutable by identity: only absent assets may be added.
 import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { reconcile, releaseIdentity } from './release-identity.mjs';
@@ -33,6 +34,19 @@ export function draftPlan(expected, release) {
   return [...expected.values()].filter((item) => reconcile(item, assets.get(item.name), item.name) === 'missing');
 }
 
+// GitHub can accept draft creation before its release list reflects the draft.
+// Never create it again on an absent read; only re-observe the exact identity.
+export async function observeCreatedDraft(readReleases, tag, commit, {
+  attempts = 8, intervalMs = 1500, wait = sleep,
+} = {}) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const draft = findDraft(readReleases(), tag, commit);
+    if (draft) return draft;
+    if (attempt + 1 < attempts) await wait(intervalMs);
+  }
+  throw new Error(`Created release draft was not observable after ${attempts} bounded reads`);
+}
+
 function releases(repo) {
   // GitHub's /releases/tags endpoint omits draft releases. Paginate the
   // authenticated release list instead; a failed read must never look absent.
@@ -59,8 +73,7 @@ export async function main(directory) {
   if (!draft) {
     gh(['release', 'create', tag, '--repo', repo, '--target', commit,
       '--title', `Interpreter Workstation v${version}`, '--notes-file', path.join(directory, 'RELEASE_NOTES.md'), '--draft']);
-    draft = findDraft(releases(repo), tag, commit);
-    if (!draft) throw new Error('Created release draft was not observable');
+    draft = await observeCreatedDraft(() => releases(repo), tag, commit);
   }
   // Check *all* existing assets before adding any missing one.
   const missing = draftPlan(expected, draft);
