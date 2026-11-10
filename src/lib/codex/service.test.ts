@@ -1284,6 +1284,33 @@ describe("CodexService", () => {
     assert.equal(fake.calls.startTurn, 1); // Resume never creates a user turn.
   });
 
+  test("starts an ordinary turn on the same thread after an older retained owner and newer turn are terminal", async () => {
+    let startCount = 0;
+    const fake = createFakeClient({
+      startTurn: async () => createTurn(`turn_${++startCount}`),
+      threadRead: async () => ({ thread: { id: "thr_existing", status: { type: "idle" },
+        turns: [] } } as v2.ThreadReadResponse),
+      threadTurnsList: terminalPage([createTurn("turn_1", "completed"),
+        createTurn("turn_goal", "completed")]),
+    });
+    const service = new CodexService(fake.client);
+    void service.runTurn({ threadId: "thr_existing", message: "first",
+      model: "test-model", onEvent: () => {} });
+    await waitFor(() => fake.calls.startTurn === 1);
+
+    const received: StreamEvent[] = [];
+    const next = service.runTurn({ threadId: "thr_existing", message: "ordinary input",
+      model: "test-model", onEvent: event => received.push(event) });
+    await waitFor(() => fake.calls.startTurn === 2);
+    assert.equal(fake.calls.startTurn, 2);
+    assert.equal(fake.calls.steerTurn.length, 0);
+    assert.ok(received.some(event => event.kind === "turn" && event.turnId === "turn_2"));
+    fake.emit({ method: SERVER_METHOD.turnCompleted, params: {
+      threadId: "thr_existing", turn: createTurn("turn_2", "completed"),
+    } });
+    assert.equal((await next).turnId, "turn_2");
+  });
+
   test("does not release an older owner if its exact native turn is missing or still active", async () => {
     for (const turns of [
       [createTurn("other_turn", "completed")],
