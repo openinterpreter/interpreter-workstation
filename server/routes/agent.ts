@@ -64,6 +64,7 @@ import {
 } from '../../src/lib/codex/lmStudioErrors';
 import {
   NativeCustodyPhaseError,
+  NativeGlobalInventoryError,
   NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS,
   NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS,
   getCodexService,
@@ -170,18 +171,23 @@ router.get('/custody/native-global', async (req: Request, res: Response) => {
     console.info(JSON.stringify({ event: 'native_global_custody_inspection', inspectionId, phase, status }));
   };
   recordPhase('request', 'received');
+  let nativeReadComplete = false;
   try {
     const native = await getCodexService().readGlobalNativeCustody(
       NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS, recordPhase);
+    nativeReadComplete = true;
     const cua = readCuaProcessLockCustody();
     recordPhase('inspection', 'completed');
     return res.json({ native, cua, inspectionId });
   } catch (error) {
-    recordPhase(error instanceof NativeCustodyPhaseError ? error.phase : 'unknown',
-      error instanceof NativeCustodyPhaseError ? error.category : 'native_unavailable');
+    const phase = error instanceof NativeCustodyPhaseError ? error.phase
+      : error instanceof NativeGlobalInventoryError ? 'inventory'
+      : nativeReadComplete ? 'cua_lock' : 'unknown';
+    const category = error instanceof NativeCustodyPhaseError || error instanceof NativeGlobalInventoryError
+      ? error.category : 'native_unavailable';
+    recordPhase(phase, category);
     return res.status(503).json({ error: 'Native or Computer Use custody inspection unavailable.',
-      phase: error instanceof NativeCustodyPhaseError ? error.phase : 'unknown',
-      category: error instanceof NativeCustodyPhaseError ? error.category : 'native_unavailable',
+      phase, category,
       custodyVerified: false, inspectionId });
   }
 });
