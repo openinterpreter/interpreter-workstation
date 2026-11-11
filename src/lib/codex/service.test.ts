@@ -177,13 +177,26 @@ describe('native custody metadata', () => {
     let calls = 0;
     client.threadQueueList = async () => ({ data: calls++ === 0
       ? [] : [{ id: 'queue_2', clientUserMessageId: 'opaque_2', input: [] }], nextCursor: null });
-    await assert.rejects(new CodexService(client).readGlobalNativeCustody(), /changed/);
+    await assert.rejects(new CodexService(client).readGlobalNativeCustody(),
+      { name: 'NativeGlobalInventoryError', category: 'queue_changed' });
   });
 
   test('rejects a loaded native thread omitted by persisted inventory', async () => {
     const client = createFakeClient({}).client;
     client.threadLoadedList = async () => ({ data: ['00000000-0000-4000-8000-000000000123'], nextCursor: null });
-    await assert.rejects(new CodexService(client).readGlobalNativeCustody(), /missing/);
+    await assert.rejects(new CodexService(client).readGlobalNativeCustody(),
+      { name: 'NativeGlobalInventoryError', category: 'loaded_missing' });
+  });
+
+  test('classifies a changed loaded inventory without returning a partial snapshot', async () => {
+    const id = '00000000-0000-4000-8000-000000000123';
+    const client = createFakeClient({}).client;
+    let calls = 0;
+    client.threadLoadedList = async () => ({ data: calls++ ? [id] : [], nextCursor: null });
+    client.threadList = async () => ({ data: [{ id } as v2.Thread], nextCursor: null, backwardsCursor: null });
+    client.threadQueueList = async () => ({ data: [], nextCursor: null });
+    await assert.rejects(new CodexService(client).readGlobalNativeCustody(),
+      { name: 'NativeGlobalInventoryError', category: 'inventory_changed' });
   });
 
   test('does not report an empty global queue when native listing is unsupported', async () => {
