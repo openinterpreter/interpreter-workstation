@@ -95,6 +95,7 @@ jobs:
         run: bun scripts/ci/set-version.ts --version "${{ needs.authorize.outputs.version }}"
       - run: pnpm typecheck
       - run: node --test scripts/ci/release-workflow.test.mjs
+      - run: node --test scripts/ci/recover-published-aliases.test.mjs
       - run: node --test scripts/ci/select-ubuntu-apt-mirror.test.mjs
       - run: node --test scripts/ci/release-platform-mode.test.mjs
       - run: node --test scripts/ci/release-platform-selection.test.mjs
