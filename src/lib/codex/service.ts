@@ -66,6 +66,18 @@ export class NativeCustodyPhaseError extends Error {
   }
 }
 
+/** Fixed, content-free categories for failures after a native RPC returned. */
+export class NativeGlobalInventoryError extends Error {
+  constructor(
+    readonly category: 'invalid_page' | 'invalid_identifiers' | 'invalid_cursor'
+      | 'loaded_missing' | 'inventory_changed' | 'queue_changed',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'NativeGlobalInventoryError';
+  }
+}
+
 async function nativeCustodyPhase<T>(
   phase: NativeCustodyPhase,
   operation: () => Promise<T>,
@@ -1191,15 +1203,16 @@ export class CodexService {
             () => this.client.threadLoadedList({ cursor, limit: 100 }))
           : await read(verify ? 'verify_thread_list' : 'thread_list',
             () => this.client.threadList({ sourceKinds, modelProviders: [], archived: false, cursor, limit: 100 }));
-        if (!Array.isArray(page.data) || page.data.length > 100) throw new Error('Invalid native inventory page');
+        if (!Array.isArray(page.data) || page.data.length > 100)
+          throw new NativeGlobalInventoryError('invalid_page', 'Invalid native inventory page');
         ids.push(...page.data.map((item) => loaded ? item as string : (item as v2.Thread).id));
         if (ids.length > 500 || new Set(ids).size !== ids.length ||
             ids.some((id) => !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id))) {
-          throw new Error('Native inventory bound or identifiers invalid');
+          throw new NativeGlobalInventoryError('invalid_identifiers', 'Native inventory bound or identifiers invalid');
         }
         cursor = page.nextCursor;
         if (cursor !== null && (typeof cursor !== 'string' || seenCursors.has(cursor))) {
-          throw new Error('Invalid native inventory cursor');
+          throw new NativeGlobalInventoryError('invalid_cursor', 'Invalid native inventory cursor');
         }
         if (cursor) seenCursors.add(cursor);
       } while (cursor);
@@ -1207,7 +1220,8 @@ export class CodexService {
     };
     const loadedBefore = await collect(true);
     const threadIds = await collect(false);
-    if (loadedBefore.some((id) => !threadIds.includes(id))) throw new Error('Loaded native thread missing from inventory');
+    if (loadedBefore.some((id) => !threadIds.includes(id)))
+      throw new NativeGlobalInventoryError('loaded_missing', 'Loaded native thread missing from inventory');
     const rows = [];
     for (const threadId of threadIds) {
       const queuedSubmissions = await read('global_queue_read', () => this.readNativeQueuedSubmissions(threadId));
@@ -1216,12 +1230,12 @@ export class CodexService {
     const [loadedAfter, threadIdsAfter] = await Promise.all([collect(true, true), collect(false, true)]);
     if (JSON.stringify(loadedBefore) !== JSON.stringify(loadedAfter) ||
         JSON.stringify(threadIds) !== JSON.stringify(threadIdsAfter)) {
-      throw new Error('Native inventory changed during inspection');
+      throw new NativeGlobalInventoryError('inventory_changed', 'Native inventory changed during inspection');
     }
     for (const row of rows) {
       if (JSON.stringify(row.queuedSubmissions) !==
           JSON.stringify(await read('verify_queue_read', () => this.readNativeQueuedSubmissions(row.threadId)))) {
-        throw new Error('Native queue changed during inspection');
+        throw new NativeGlobalInventoryError('queue_changed', 'Native queue changed during inspection');
       }
     }
     // This is an enumerated snapshot, not an atomic freeze: the operator must
