@@ -42,6 +42,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: node --test scripts/ci/release-workflow.test.mjs
+      - run: node --test scripts/ci/select-ubuntu-apt-mirror.test.mjs
       - run: node --test scripts/ci/windows-install-path.test.mjs
       - run: node --test scripts/ci/retry-transient-download.test.mjs
       - run: node scripts/ci/retry-transient-download.mjs node_modules/electron/install.js
