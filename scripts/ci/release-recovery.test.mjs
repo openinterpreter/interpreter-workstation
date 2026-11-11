@@ -1,17 +1,19 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { draftPlan, findDraft, observeCreatedDraft } from './reconcile-release-draft.mjs';
 import { objectState } from './reconcile-immutable-uploads.mjs';
+import { snapshotId, verifyRestored } from './reconcile-release-metadata.mjs';
 
 const digest = (bytes) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 const script = path.resolve('scripts/ci/reconcile-immutable-uploads.mjs');
 const draftScript = path.resolve('scripts/ci/reconcile-release-draft.mjs');
 const metadataScript = path.resolve('scripts/ci/write-release-metadata.mjs');
+const reconcileMetadataScript = path.resolve('scripts/ci/reconcile-release-metadata.mjs');
 const mockAws = `#!/usr/bin/env node
 const fs=require('fs'),path=require('path');
 const a=process.argv.slice(2), root=process.env.MOCK_BUCKET_ROOT;
@@ -19,6 +21,9 @@ const value=(key)=>a[a.indexOf(key)+1];
 const record=(line)=>fs.appendFileSync(path.join(root,'calls'),line+'\\n');
 if(a[0]==='s3api'&&a[1]==='list-objects-v2'){
   const key=value('--prefix'), file=path.join(root,key);
+  const once=path.join(root,'incomplete-listing-once');
+  if(fs.existsSync(once)){fs.unlinkSync(once);console.log('{}');process.exit(0)}
+  if(fs.existsSync(path.join(root,'incomplete-listing-always'))){console.log('{}');process.exit(0)}
   const contents=fs.existsSync(file)?[{Key:key,Size:fs.statSync(file).size}]:[];
   console.log(JSON.stringify({KeyCount:contents.length,IsTruncated:false,Contents:contents}));
 }else if(a[0]==='s3'&&a[1]==='cp'){
@@ -36,6 +41,67 @@ if(a[0]==='s3api'&&a[1]==='list-objects-v2'){
   }
 }else process.exit(2);
 `;
+
+test('metadata snapshot is unique, live, and bound to the same run', () => {
+  const artifact = { id: 123, name: 'official-release-metadata', expired: false, workflow_run: { id: 42 } };
+  assert.equal(snapshotId([], '42'), null);
+  assert.equal(snapshotId([artifact], '42'), 123);
+  assert.throws(() => snapshotId([artifact, artifact], '42'), /Duplicate/);
+  assert.throws(() => snapshotId([{ ...artifact, expired: true }], '42'), /custody mismatch/);
+  assert.throws(() => snapshotId([artifact], '43'), /custody mismatch/);
+});
+
+test('restored release metadata requires all original bytes and exact source/run custody', async (t) => {
+  const f = await fixture(t);
+  const repository = 'openinterpreter/interpreter-workstation';
+  const commit = 'a'.repeat(40);
+  await writeFile(path.join(f.directory, 'SBOM.spdx.json'), '{"packages":[]}');
+  const manifest = JSON.stringify({ version: '0.2.219', source: { repository, commit }, build: { runId: '42' } });
+  await writeFile(path.join(f.directory, 'RELEASE-MANIFEST.json'), manifest);
+  const entries = [...f.files.keys(), 'SBOM.spdx.json', 'RELEASE-MANIFEST.json'];
+  await writeFile(path.join(f.directory, 'SHA256SUMS'),
+    `${(await Promise.all(entries.map(async (name) =>
+      `${digest(await readFile(path.join(f.directory, name))).slice(7)}  ${name}`))).join('\n')}\n`);
+  await verifyRestored(f.directory, '42', repository, commit, '0.2.219');
+  await assert.rejects(verifyRestored(f.directory, '43', repository, commit, '0.2.219'), /identity mismatch/);
+  await writeFile(path.join(f.directory, 'SBOM.spdx.json'), '{"packages":[1]}');
+  await assert.rejects(verifyRestored(f.directory, '42', repository, commit, '0.2.219'), /checksum mismatch/);
+});
+
+test('publish retry restores first-attempt metadata and rejects changed installer bytes', async (t) => {
+  const f = await fixture(t);
+  const snapshot = path.join(f.root, 'snapshot');
+  await mkdir(snapshot);
+  const gh = `#!/usr/bin/env node
+const fs=require('fs'),path=require('path');
+const a=process.argv.slice(2), root=process.env.MOCK_META_SNAPSHOT;
+if(a[0]==='api'){
+  const exists=fs.existsSync(path.join(root,'SHA256SUMS'));
+  console.log(JSON.stringify({total_count:exists?1:0,artifacts:exists?[{id:123,name:'official-release-metadata',expired:false,workflow_run:{id:42}}]:[]}));
+}else if(a[0]==='run'&&a[1]==='download'){
+  const destination=a[a.indexOf('-D')+1];
+  for(const name of ['SBOM.spdx.json','RELEASE-MANIFEST.json','SHA256SUMS'])fs.copyFileSync(path.join(root,name),path.join(destination,name));
+}else process.exit(2);
+`;
+  await writeFile(path.join(f.root, 'bin/gh'), gh, { mode: 0o755 });
+  await writeFile(path.join(f.directory, 'SBOM.spdx.json'), '{"created":"first"}');
+  const output = path.join(f.root, 'output');
+  const env = { ...process.env, PATH: `${f.root}/bin:${process.env.PATH}`, MOCK_META_SNAPSHOT: snapshot,
+    GITHUB_REPOSITORY: 'openinterpreter/interpreter-workstation', GITHUB_SHA: 'a'.repeat(40),
+    GITHUB_RUN_ID: '42', RELEASE_VERSION: '0.2.219', GITHUB_REF: 'refs/heads/main', GITHUB_OUTPUT: output };
+  const invoke = () => spawnSync(process.execPath, [reconcileMetadataScript, f.directory], { env, encoding: 'utf8' });
+  assert.equal(invoke().status, 0);
+  assert.match(await readFile(output, 'utf8'), /created=true/);
+  for (const name of ['SBOM.spdx.json', 'RELEASE-MANIFEST.json', 'SHA256SUMS']) {
+    await copyFile(path.join(f.directory, name), path.join(snapshot, name));
+  }
+  await writeFile(path.join(f.directory, 'SBOM.spdx.json'), '{"created":"retry"}');
+  assert.equal(invoke().status, 0);
+  assert.equal(await readFile(path.join(f.directory, 'SBOM.spdx.json'), 'utf8'), '{"created":"first"}');
+  assert.match(await readFile(output, 'utf8'), /created=false/);
+  await writeFile(path.join(f.directory, 'second.dmg'), 'changed installer');
+  assert.match(invoke().stderr, /checksum mismatch/);
+});
 
 async function fixture(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'release-reconcile-'));
@@ -74,6 +140,18 @@ test('partial success preserves matching immutable bytes and uploads only absent
   assert.deepEqual((await f.calls()).filter((call) => call.startsWith('PUT')), ['PUT releases/second.dmg']);
   assert.equal(f.invoke().status, 0);
   assert.deepEqual((await f.calls()).filter((call) => call.startsWith('PUT')), ['PUT releases/second.dmg']);
+});
+
+test('transient incomplete listing retries reads; persistent incomplete listing never uploads', async (t) => {
+  const f = await fixture(t);
+  await writeFile(path.join(f.bucket, 'incomplete-listing-once'), '1');
+  assert.equal(f.invoke().status, 0);
+  const before = (await f.calls()).filter((call) => call.startsWith('PUT')).length;
+  await writeFile(path.join(f.bucket, 'incomplete-listing-always'), '1');
+  const result = f.invoke();
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Incomplete immutable object listing/);
+  assert.equal((await f.calls()).filter((call) => call.startsWith('PUT')).length, before);
 });
 
 test('preflight mismatch fails before any PUT even with another missing payload', async (t) => {

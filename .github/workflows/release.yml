@@ -363,8 +363,22 @@ jobs:
             fs.writeFileSync(file, compact);
             console.log(`Validated ${sbom.packages.length} dependency packages in ${size} bytes`);
           '
-      - name: Write checksums and reproducibility manifest
-        run: node scripts/ci/write-release-metadata.mjs release
+      - name: Reuse exact release metadata from this run or write it once
+        id: metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/reconcile-release-metadata.mjs release
+      - name: Preserve first-attempt release metadata for an exact-run retry
+        if: steps.metadata.outputs.created == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: official-release-metadata
+          path: |
+            release/SBOM.spdx.json
+            release/RELEASE-MANIFEST.json
+            release/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
       - name: Attest build provenance
         uses: actions/attest@v4.2.2
         with:
