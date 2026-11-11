@@ -54,6 +54,29 @@ test('unknown alias or newer release fails before a write', async () => {
   assert.ok(!f.calls.some((call) => /^(copy|promote) /.test(call)));
 });
 
+test('immutable source mismatch aborts before aliases and updater change', async () => {
+  const f = fixture();
+  f.helpers.verifySource = async (name) => {
+    if (name === 'artifact-b') throw new Error('Immutable source object mismatch');
+  };
+  await assert.rejects(reconcilePointers(f.helpers), /Immutable source object mismatch/);
+  assert.ok(!f.calls.some((call) => /^(copy|promote) /.test(call)));
+  assert.equal(f.existing.get('latest.yml'), 'old');
+});
+
+test('updater promotion lost response reconciles exact bytes on retry', async () => {
+  const f = fixture();
+  f.helpers.promote = async (name) => {
+    f.calls.push(`promote ${name}`);
+    f.existing.set(name, 'new');
+    throw new Error('response lost');
+  };
+  await reconcilePointers(f.helpers);
+  const count = f.calls.filter((call) => call === 'promote latest.yml').length;
+  await reconcilePointers(f.helpers);
+  assert.equal(f.calls.filter((call) => call === 'promote latest.yml').length, count);
+});
+
 test('committed copy whose response is lost is reconciled; interrupted retry does not promote early', async () => {
   const f = fixture();
   f.helpers.copy = async (_, name) => {
