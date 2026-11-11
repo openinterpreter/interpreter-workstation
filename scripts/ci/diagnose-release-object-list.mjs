@@ -22,6 +22,15 @@ function run(args) {
   catch { return { ok: false, code: 'invalid_json' }; }
 }
 const pages = [];
+const automatic = run(['s3api', 'list-objects-v2', '--bucket', bucket, '--prefix', key]);
+const automaticSummary = automatic.ok ? {
+  isTruncatedPresent: Object.hasOwn(automatic.value, 'IsTruncated'),
+  keyCountPresent: Object.hasOwn(automatic.value, 'KeyCount'),
+  contentsPresent: Object.hasOwn(automatic.value, 'Contents'),
+  exactMatches: (Array.isArray(automatic.value.Contents) ? automatic.value.Contents : [])
+    .filter((item) => item?.Key === key).length,
+  returnedFields: Object.keys(automatic.value).sort(),
+} : { error: automatic.code, exitStatus: automatic.exitStatus };
 let continuation;
 for (let index = 0; index < 3; index++) {
   const args = ['s3api', 'list-objects-v2', '--no-paginate', '--bucket', bucket,
@@ -55,8 +64,8 @@ const headSummary = head.ok ? {
   versionIdPresent: typeof head.value.VersionId === 'string',
   checksumSha256Present: typeof head.value.ChecksumSHA256 === 'string',
 } : { status: 'unavailable', error: head.code, exitStatus: head.exitStatus };
-console.log(JSON.stringify({ key, pages, head: headSummary }));
-if (pages.some((page) => page.error && page.error !== 'NoSuchKey') ||
+console.log(JSON.stringify({ key, automatic: automaticSummary, pages, head: headSummary }));
+if (automaticSummary.error || pages.some((page) => page.error && page.error !== 'NoSuchKey') ||
     (headSummary.status === 'unavailable' && !['404', 'NotFound', 'NoSuchKey'].includes(headSummary.error))) {
   process.exitCode = 1;
 }

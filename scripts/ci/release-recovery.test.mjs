@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { draftPlan, findDraft, observeCreatedDraft } from './reconcile-release-draft.mjs';
-import { objectState } from './reconcile-immutable-uploads.mjs';
+import { listAllPages, objectState } from './reconcile-immutable-uploads.mjs';
 import { snapshotId, verifyRestored } from './reconcile-release-metadata.mjs';
 
 const digest = (bytes) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
@@ -21,6 +21,7 @@ const value=(key)=>a[a.indexOf(key)+1];
 const record=(line)=>fs.appendFileSync(path.join(root,'calls'),line+'\\n');
 if(a[0]==='s3api'&&a[1]==='list-objects-v2'){
   const key=value('--prefix'), file=path.join(root,key);
+  if(!a.includes('--no-paginate')){console.log(JSON.stringify({Contents:[]}));process.exit(0)}
   const once=path.join(root,'incomplete-listing-once');
   if(fs.existsSync(once)){fs.unlinkSync(once);console.log('{}');process.exit(0)}
   if(fs.existsSync(path.join(root,'incomplete-listing-always'))){console.log('{}');process.exit(0)}
@@ -152,6 +153,31 @@ test('transient incomplete listing retries reads; persistent incomplete listing 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /Incomplete immutable object listing/);
   assert.equal((await f.calls()).filter((call) => call.startsWith('PUT')).length, before);
+});
+
+test('raw listing follows bounded continuation and rejects incomplete or duplicate pages', async () => {
+  const key = 'releases/Interpreter-arm64-0.2.220.dmg';
+  const opts = { bucket: 'fixture', 'endpoint-url': 'https://fixture.invalid', region: 'fixture' };
+  const queried = [];
+  const execute = async (args) => {
+    queried.push(args);
+    const next = args.includes('--continuation-token');
+    return { code: 0, output: JSON.stringify(next
+      ? { IsTruncated: false, KeyCount: 1, Contents: [{ Key: key, Size: 3 }] }
+      : { IsTruncated: true, KeyCount: 1, Contents: [{ Key: `${key}.blockmap`, Size: 2 }],
+        NextContinuationToken: 'opaque' }) };
+  };
+  assert.equal((await listAllPages(opts, key, execute)).length, 2);
+  assert.equal(queried.length, 2);
+  assert.ok(queried.every((args) => args.includes('--no-paginate')));
+  assert.ok(queried[1].includes('--continuation-token'));
+  await assert.rejects(listAllPages(opts, key, async () =>
+    ({ code: 0, output: JSON.stringify({ IsTruncated: true, KeyCount: 0 }) })), /Incomplete/);
+  await assert.rejects(listAllPages(opts, key, async () =>
+    ({ code: 0, output: JSON.stringify({ IsTruncated: false, KeyCount: 1, Contents: [] }) })), /Incomplete/);
+  await assert.rejects(listAllPages(opts, key, async () =>
+    ({ code: 0, output: JSON.stringify({ IsTruncated: true, KeyCount: 0,
+      NextContinuationToken: 'same' }) })), /Incomplete/);
 });
 
 test('preflight mismatch fails before any PUT even with another missing payload', async (t) => {
