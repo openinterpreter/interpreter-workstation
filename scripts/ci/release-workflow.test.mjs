@@ -112,8 +112,16 @@ test('publishing authority is not exposed at job scope', () => {
 
   assert.equal((publish.match(/AWS_ACCESS_KEY_ID:/g) ?? []).length, 4);
   assert.equal((publish.match(/AWS_SECRET_ACCESS_KEY:/g) ?? []).length, 4);
-  assert.equal((publish.match(/GH_TOKEN:/g) ?? []).length, 4);
+  assert.equal((publish.match(/GH_TOKEN:/g) ?? []).length, 5);
   assert.equal((publish.match(/GITHUB_TOKEN:/g) ?? []).length, 1);
+});
+
+test('failed publish retries reuse the first exact-run metadata, never regenerate a different draft identity', () => {
+  const publish = section('  publish:');
+  assert.match(publish, /id: metadata[\s\S]*?reconcile-release-metadata\.mjs release/);
+  assert.match(publish, /reconcile-release-metadata\.mjs release/);
+  assert.match(publish, /if: steps\.metadata\.outputs\.created == 'true'[\s\S]*?name: official-release-metadata/);
+  assert.ok(publish.indexOf('Preserve first-attempt release metadata') < publish.indexOf('Attest build provenance'));
 });
 
 test('passwordless Apple certificate is protected before electron-builder imports it', () => {

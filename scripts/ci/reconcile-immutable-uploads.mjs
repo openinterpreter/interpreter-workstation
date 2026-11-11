@@ -58,13 +58,19 @@ export function objectState(contents, key, expected) {
 
 async function inspect(opts, asset) {
   const key = `${opts.prefix.replace(/\/$/, '')}/${asset.name}`;
-  const listed = await run(['s3api', 'list-objects-v2', '--bucket', opts.bucket, '--prefix', key,
-    '--output', 'json', ...awsArgs(opts)]);
-  if (listed.code !== 0) throw new Error(`Cannot list immutable object ${key}: ${listed.error}`);
-  const listing = JSON.parse(listed.output);
-  if (listing.IsTruncated !== false || !Number.isSafeInteger(listing.KeyCount) ||
-      !Array.isArray(listing.Contents) && listing.KeyCount !== 0) {
-    throw new Error(`Incomplete immutable object listing: ${key}`);
+  let listing;
+  // Storage can return a transient incomplete listing. Never interpret that
+  // response as absence, but allow bounded read-only re-observation.
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const listed = await run(['s3api', 'list-objects-v2', '--bucket', opts.bucket, '--prefix', key,
+      '--output', 'json', ...awsArgs(opts)]);
+    if (listed.code !== 0) throw new Error(`Cannot list immutable object ${key}: ${listed.error}`);
+    try { listing = JSON.parse(listed.output); }
+    catch { listing = null; }
+    if (listing?.IsTruncated === false && Number.isSafeInteger(listing.KeyCount) &&
+        (Array.isArray(listing.Contents) || listing.KeyCount === 0)) break;
+    if (attempt === 4) throw new Error(`Incomplete immutable object listing: ${key}`);
+    await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
   }
   const state = objectState(listing.Contents ?? [], key, asset);
   if (state === 'missing') return { key, state };
