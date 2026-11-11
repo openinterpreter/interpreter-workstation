@@ -25,6 +25,7 @@ const a=process.argv.slice(2), fs=require('fs');
 fs.appendFileSync(process.env.MOCK_CALLS,a.join(' ')+'\\n');
 if(a[1]==='head-object'){console.error('An error occurred (404) when calling the HeadObject operation: Not Found');process.exit(254)}
 if(a[1]==='list-objects-v2'){
+  if(!a.includes('--no-paginate')){console.log(JSON.stringify({Contents:[]}));process.exit(0)}
   const next=a.includes('--continuation-token');
   console.log(JSON.stringify(next?{IsTruncated:false,KeyCount:0,Contents:[]}:
     {IsTruncated:true,KeyCount:0,NextContinuationToken:'opaque'}));
@@ -40,10 +41,11 @@ if(a[1]==='list-objects-v2'){
   assert.equal(result.status, 0, result.stderr);
   const summary = JSON.parse(result.stdout);
   assert.equal(summary.pages.length, 2);
+  assert.equal(summary.automatic.keyCountPresent, false);
   assert.equal(summary.pages[0].continuationPresent, true);
   assert.equal(summary.pages[1].keyCount, 0);
   assert.equal(summary.head.error, '404');
   const requests = (await readFile(calls, 'utf8')).trim().split('\n');
-  assert.equal(requests.length, 3);
+  assert.equal(requests.length, 4);
   assert.ok(requests.every((request) => !/put-object|delete-object|s3 cp/.test(request)));
 });

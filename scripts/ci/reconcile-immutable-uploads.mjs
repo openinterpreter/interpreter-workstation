@@ -58,27 +58,53 @@ export function objectState(contents, key, expected) {
 
 async function inspect(opts, asset) {
   const key = `${opts.prefix.replace(/\/$/, '')}/${asset.name}`;
-  let listing;
-  // Storage can return a transient incomplete listing. Never interpret that
-  // response as absence, but allow bounded read-only re-observation.
+  let contents;
+  // The AWS CLI paginator aggregates Contents but does not preserve the
+  // per-page completeness fields from this S3-compatible provider. Read each
+  // raw page explicitly and require a complete, coherent continuation chain.
   for (let attempt = 1; attempt <= 4; attempt++) {
-    const listed = await run(['s3api', 'list-objects-v2', '--bucket', opts.bucket, '--prefix', key,
-      '--output', 'json', ...awsArgs(opts)]);
-    if (listed.code !== 0) throw new Error(`Cannot list immutable object ${key}: ${listed.error}`);
-    try { listing = JSON.parse(listed.output); }
-    catch { listing = null; }
-    if (listing?.IsTruncated === false && Number.isSafeInteger(listing.KeyCount) &&
-        (Array.isArray(listing.Contents) || listing.KeyCount === 0)) break;
-    if (attempt === 4) throw new Error(`Incomplete immutable object listing: ${key}`);
+    try { contents = await listAllPages(opts, key); break; }
+    catch (error) {
+      if (!String(error.message).startsWith('Incomplete immutable object listing:') || attempt === 4) throw error;
+    }
     await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
   }
-  const state = objectState(listing.Contents ?? [], key, asset);
+  const state = objectState(contents, key, asset);
   if (state === 'missing') return { key, state };
   const read = await run(['s3', 'cp', `s3://${opts.bucket}/${key}`, '-', '--no-progress', ...awsArgs(opts)], true);
   if (read.code !== 0 || read.size !== asset.size || read.digest !== asset.digest) {
     throw new Error(`Immutable object digest/custody mismatch: ${key}`);
   }
   return { key, state: 'matching' };
+}
+
+export async function listAllPages(opts, key, execute = run) {
+  const contents = [];
+  const seen = new Set();
+  let token;
+  for (let page = 0; page < 16; page++) {
+    const args = ['s3api', 'list-objects-v2', '--no-paginate', '--bucket', opts.bucket,
+      '--prefix', key, '--max-keys', '1000', '--output', 'json', ...awsArgs(opts)];
+    if (token) args.push('--continuation-token', token);
+    const listed = await execute(args);
+    if (listed.code !== 0) throw new Error(`Cannot list immutable object ${key}: ${listed.error}`);
+    let listing;
+    try { listing = JSON.parse(listed.output); }
+    catch { throw new Error(`Incomplete immutable object listing: ${key}`); }
+    const items = listing?.KeyCount === 0 && listing.Contents === undefined ? [] : listing?.Contents;
+    if (typeof listing?.IsTruncated !== 'boolean' || !Number.isSafeInteger(listing.KeyCount) ||
+        listing.KeyCount < 0 || !Array.isArray(items) || listing.KeyCount !== items.length ||
+        (listing.IsTruncated && (typeof listing.NextContinuationToken !== 'string' ||
+          !listing.NextContinuationToken || seen.has(listing.NextContinuationToken))) ||
+        (!listing.IsTruncated && listing.NextContinuationToken !== undefined)) {
+      throw new Error(`Incomplete immutable object listing: ${key}`);
+    }
+    contents.push(...items);
+    if (!listing.IsTruncated) return contents;
+    token = listing.NextContinuationToken;
+    seen.add(token);
+  }
+  throw new Error(`Incomplete immutable object listing: ${key}`);
 }
 
 export async function main(args) {
