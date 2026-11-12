@@ -1748,6 +1748,49 @@ describe("CodexService", () => {
     assert.equal(fake.calls.startTurn, 1);
   });
 
+  test('saved input delegates idle and active admission to native turn/start with the same client ID', async () => {
+    const id = '00000000-0000-4000-8000-000000000123';
+    let status: 'idle' | 'active' = 'idle';
+    const ids: Array<string | undefined> = [];
+    const fake = createFakeClient({
+      async threadRead() { return { thread: { id, cwd: '/workspace', status: { type: status },
+        turns: [] } as v2.Thread }; },
+      async startTurn(params) {
+        ids.push(params.clientUserMessageId);
+        return createTurn(status === 'active' ? 'turn_active' : 'turn_idle');
+      },
+    });
+    const service = new CodexService(fake.client);
+    assert.equal(await service.submitSavedThreadInput(id, 'first', '/workspace', 'stable_1'), 'turn_idle');
+    status = 'active';
+    assert.equal(await service.submitSavedThreadInput(id, 'second', '/workspace', 'stable_2'), 'turn_active');
+    assert.deepEqual(ids, ['stable_1', 'stable_2']);
+    assert.equal(fake.calls.resumeThread, 0);
+    assert.deepEqual(fake.calls.threadReadParams, [
+      { threadId: id, includeTurns: false }, { threadId: id, includeTurns: false },
+    ]);
+    assert.equal(fake.calls.startTurn, 2);
+    assert.equal(fake.calls.steerTurn.length, 0);
+  });
+
+  test('saved unloaded thread resumes without changing identity, and unknown scope fails closed', async () => {
+    const id = '00000000-0000-4000-8000-000000000123';
+    let cwd = '/workspace';
+    let status = 'notLoaded';
+    const fake = createFakeClient({ async threadRead() { return { thread: {
+      id, cwd, status: { type: status }, turns: [],
+    } as v2.Thread }; } });
+    const service = new CodexService(fake.client);
+    assert.equal(await service.submitSavedThreadInput(id, 'message', '/workspace', 'stable_3'), 'turn_1');
+    assert.equal(fake.calls.resumeThread, 1);
+    assert.deepEqual(fake.calls.resumeThreadConfig[0], { mcp_servers: {} });
+    cwd = '/other';
+    await assert.rejects(service.submitSavedThreadInput(id, 'message', '/workspace', 'stable_4'), /identity or state unavailable/);
+    cwd = '/workspace'; status = 'systemError';
+    await assert.rejects(service.submitSavedThreadInput(id, 'message', '/workspace', 'stable_5'), /identity or state unavailable/);
+    assert.equal(fake.calls.startTurn, 1);
+  });
+
   test("loaded native wake preserves its original shell keys and stable client ID", async () => {
     let nativeClientId: string | undefined;
     const fake = createFakeClient({
