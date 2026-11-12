@@ -777,12 +777,12 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
     const savedBinding = threadId && !model && !reasoningEffort && !modelConfig &&
       !runtimeConfig && !system && !timeoutMs && !idleTimeoutMs
       ? agentTabManager.getBindingForThread(threadId) : undefined;
-    if (savedBinding && savedBinding.workspacePath === workspace &&
+    if (savedBinding?.workspacePath && savedBinding.workspacePath === workspace &&
         !savedBinding.windowSessionKey && !savedBinding.parentOwner) {
       admissionPhase = 'task_start';
       admissionEvent('started');
       const native = getCodexService();
-      const turnId = await native.submitSavedThreadInput(threadId!, message, workspace,
+      const turnId = await native.submitSavedThreadInput(threadId!, message, savedBinding.workspacePath,
         receipt?.clientUserMessageId ?? clientUserMessageId!);
       observedTurn = true;
       observedTurnId = turnId;
