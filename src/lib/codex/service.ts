@@ -1435,6 +1435,26 @@ export class CodexService {
     return turn.turnId;
   }
 
+  /** Ordinary saved-thread input: native turn/start owns start-versus-steer.
+   * App state is not an admission lock; the caller must reserve a durable
+   * client ID and verify its original scoped binding before invoking this.
+   */
+  async submitSavedThreadInput(threadId: string, message: string, cwd: string,
+    clientUserMessageId: string): Promise<string> {
+    const thread = await this.readThread(threadId);
+    if (thread.id !== threadId || thread.cwd !== cwd ||
+        !['idle', 'active', 'notLoaded'].includes(thread.status.type))
+      throw new Error('Saved native thread identity or state unavailable');
+    if (thread.status.type === 'notLoaded') {
+      await this.resumeExistingInputThread({ threadId, cwd, config: { mcp_servers: {} } });
+    }
+    // OIX turn/start calls start_or_steer_turn. Never speculate about active
+    // ownership here or turn a stale app observation into a second queue.
+    const turn = await this.client.startTurn({ threadId, message, cwd, clientUserMessageId });
+    this.activeTurns.set(threadId, turn.id);
+    return turn.id;
+  }
+
   async setThreadName(threadId: string, name: string): Promise<void> {
     await this.client.threadSetName({ threadId, name });
   }

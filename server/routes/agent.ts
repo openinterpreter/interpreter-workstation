@@ -782,11 +782,8 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
       admissionPhase = 'task_start';
       admissionEvent('started');
       const native = getCodexService();
-      const saved = await native.readThread(threadId!);
-      if (saved.id !== threadId || saved.cwd !== workspace || saved.status.type !== 'idle')
-        throw new Error('Saved native thread owner or state changed');
-      const turnId = await native.startExistingThreadTurn(threadId!, message, workspace,
-        { mcp_servers: {} }, receipt?.clientUserMessageId ?? clientUserMessageId);
+      const turnId = await native.submitSavedThreadInput(threadId!, message, workspace,
+        receipt?.clientUserMessageId ?? clientUserMessageId!);
       observedTurn = true;
       observedTurnId = turnId;
       if (receipt) await nativeSubmissionJournal.advance(receipt, 'turn_started', turnId);
@@ -852,10 +849,10 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
     res.end();
   } catch (error) {
     admissionEvent('failed');
-    if (receipt) {
+    if (receipt && observedTurn) {
       try {
         await receiptProgress;
-        await nativeSubmissionJournal.advance(receipt, submissionTerminalPhase(false, observedTurn), observedTurnId);
+        await nativeSubmissionJournal.advance(receipt, 'terminal_failure', observedTurnId);
       } catch { /* Unknown receipt state: never imply absent native admission. */ }
     }
     const message = error instanceof Error ? error.message : String(error);

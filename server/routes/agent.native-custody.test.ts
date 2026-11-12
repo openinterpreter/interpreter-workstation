@@ -24,8 +24,7 @@ describe('native custody diagnostic authentication', () => {
     const binding = agentTabManager.getBindingForThread;
     const begin = nativeSubmissionJournal.begin;
     const advance = nativeSubmissionJournal.advance;
-    const read = service.readThread;
-    const start = service.startExistingThreadTurn;
+    const start = service.submitSavedThreadInput;
     const events: Array<string> = [];
     const info = console.info;
     agentTabManager.getBindingForThread = () => ({ agentId: 'agent_1', callerToken: 'agtok_fixture',
@@ -33,10 +32,7 @@ describe('native custody diagnostic authentication', () => {
     nativeSubmissionJournal.begin = async () => ({ requestId: 'request_1', threadId: id,
       clientUserMessageId: 'saved_1', phase: 'received', turnId: null, at: '2026-11-12T00:00:00Z' });
     nativeSubmissionJournal.advance = async (_entry, phase) => { events.push(phase); return {} as any; };
-    service.readThread = async () => ({ id, cwd: '/workspace/projects/interpreter',
-      status: { type: 'idle' }, turns: [] }) as any;
-    service.startExistingThreadTurn = async (_id, _message, _cwd, config, clientId) => {
-      expect(config).toEqual({ mcp_servers: {} });
+    service.submitSavedThreadInput = async (_id, _message, _cwd, clientId) => {
       expect(clientId).toBe('saved_1');
       return 'turn_1';
     };
@@ -53,8 +49,7 @@ describe('native custody diagnostic authentication', () => {
       agentTabManager.getBindingForThread = binding;
       nativeSubmissionJournal.begin = begin;
       nativeSubmissionJournal.advance = advance;
-      service.readThread = read;
-      service.startExistingThreadTurn = start;
+      service.submitSavedThreadInput = start;
       console.info = info;
     }
   });
