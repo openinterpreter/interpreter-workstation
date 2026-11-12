@@ -53,6 +53,42 @@ describe('native custody diagnostic authentication', () => {
       console.info = info;
     }
   });
+  test('slow native preflight reserves the stable ID before a duplicate request', async () => {
+    const service = getCodexService();
+    const binding = agentTabManager.getBindingForThread;
+    const begin = nativeSubmissionJournal.begin;
+    const advance = nativeSubmissionJournal.advance;
+    const start = service.submitSavedThreadInput;
+    let submitted = 0;
+    let release!: (turnId: string) => void;
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const pending = new Promise<string>((resolve) => { release = resolve; });
+    agentTabManager.getBindingForThread = () => ({ agentId: 'agent_1', callerToken: 'agtok_fixture',
+      workspacePath: '/workspace/projects/interpreter', threadId: id }) as any;
+    nativeSubmissionJournal.begin = async () => ++submitted === 1 ? ({ requestId: 'slow_1', threadId: id,
+      clientUserMessageId: 'slow_1', phase: 'received', turnId: null, at: '2026-11-12T00:00:00Z' }) : null;
+    nativeSubmissionJournal.advance = async () => ({} as any);
+    service.submitSavedThreadInput = async () => { entered(); return pending; };
+    try {
+      const body = { mode: 'headless', threadId: id, clientUserMessageId: 'slow_1',
+        message: 'single input', workspace: '/workspace/projects/interpreter' };
+      const first = request(app).post('/api/agent/tasks/stream').send(body);
+      const firstResult = first.then((response) => response);
+      await started;
+      const repeated = await request(app).post('/api/agent/tasks/stream').send(body);
+      expect(repeated.status).toBe(409);
+      release('turn_1');
+      expect((await firstResult).text).toContain('turn_1');
+      expect(submitted).toBe(2);
+    } finally {
+      release('turn_1');
+      agentTabManager.getBindingForThread = binding;
+      nativeSubmissionJournal.begin = begin;
+      nativeSubmissionJournal.advance = advance;
+      service.submitSavedThreadInput = start;
+    }
+  });
   test('active steer reserves its stable client ID before native submission and rejects repeat', async () => {
     const service = getCodexService();
     const begin = nativeSubmissionJournal.begin;
