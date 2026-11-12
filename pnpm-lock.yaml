@@ -62,6 +62,9 @@ importers:
       '@base-ui/react':
         specifier: 1.8.0
         version: 1.8.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@exodus/bytes':
+        specifier: 1.15.0
+        version: 1.15.0(@noble/hashes@2.4.0)
       '@file-viewer/react':
         specifier: 3.1.1
         version: 3.1.1(react@19.3.0)
