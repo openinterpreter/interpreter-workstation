@@ -763,12 +763,51 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
   if (receipt) emit('submission', { requestId: receipt.requestId,
     threadId: receipt.threadId, clientUserMessageId: receipt.clientUserMessageId, phase: receipt.phase });
 
+  // Fixed, content-free milestones make a lost pre-turn receipt diagnosable.
+  // The forward receipt remains authoritative; these are not admission claims.
+  let admissionPhase: 'runtime_config' | 'model_config' | 'task_start' | 'native_turn' = 'runtime_config';
+  const admissionEvent = (status: 'started' | 'completed' | 'failed') => {
+    if (receipt) console.info(JSON.stringify({ event: 'programmatic_task_admission',
+      requestId: receipt.requestId, phase: admissionPhase, status }));
+  };
   try {
+    // An established saved caller already has a scoped OIX shell and model.
+    // Do not rediscover its profile, auth, tools and launcher before native
+    // admission. Unknown or changed ownership falls back to the full path.
+    const savedBinding = threadId && !model && !reasoningEffort && !modelConfig &&
+      !runtimeConfig && !system && !timeoutMs && !idleTimeoutMs
+      ? agentTabManager.getBindingForThread(threadId) : undefined;
+    if (savedBinding && savedBinding.workspacePath === workspace &&
+        !savedBinding.windowSessionKey && !savedBinding.parentOwner) {
+      admissionPhase = 'task_start';
+      admissionEvent('started');
+      const native = getCodexService();
+      const saved = await native.readThread(threadId!);
+      if (saved.id !== threadId || saved.cwd !== workspace || saved.status.type !== 'idle')
+        throw new Error('Saved native thread owner or state changed');
+      const turnId = await native.startExistingThreadTurn(threadId!, message, workspace,
+        { mcp_servers: {} }, receipt?.clientUserMessageId ?? clientUserMessageId);
+      observedTurn = true;
+      observedTurnId = turnId;
+      if (receipt) await nativeSubmissionJournal.advance(receipt, 'turn_started', turnId);
+      admissionEvent('completed');
+      emit('thread', { threadId });
+      emit('turn', { threadId, turnId, status: 'inProgress' });
+      emit('admitted', { threadId, turnId, clientUserMessageId: receipt?.clientUserMessageId ?? clientUserMessageId });
+      return res.end(); // The native turn continues after the observer disconnects.
+    }
+    admissionEvent('started');
     await applyProgrammaticTaskRuntimeConfigFromBody(runtimeConfig);
+    admissionEvent('completed');
+    admissionPhase = 'model_config';
+    admissionEvent('started');
     const resolvedModelConfig = await resolveAgentModelConfig(modelConfig, {
       modelId: model,
       reasoningEffort,
     });
+    admissionEvent('completed');
+    admissionPhase = 'task_start';
+    admissionEvent('started');
 
     const result = await startAgentTask({
       mode: 'headless',
@@ -783,6 +822,9 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
       notifyStarted: true,
       onProgress: (progress) => {
         if (progress.kind === 'turn') {
+          admissionEvent('completed');
+          admissionPhase = 'native_turn';
+          admissionEvent('started');
           observedTurn = true;
           observedTurnId = progress.turnId;
           if (receipt) {
@@ -800,6 +842,8 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
     });
 
     await receiptProgress;
+    if (!observedTurn) admissionEvent('failed');
+    else admissionEvent('completed');
     if (receipt) await nativeSubmissionJournal.advance(receipt,
       submissionTerminalPhase(result.completed, observedTurn), observedTurnId);
     emit('result', result);
@@ -807,6 +851,7 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
     if (unacknowledged) emit('error', unacknowledged);
     res.end();
   } catch (error) {
+    admissionEvent('failed');
     if (receipt) {
       try {
         await receiptProgress;
@@ -832,12 +877,14 @@ router.get('/threads/:threadId/submissions/:clientUserMessageId/custody', async 
   const inspectionId = randomUUID();
   try {
     receipt = await nativeSubmissionJournal.lookup(threadId, clientUserMessageId);
-    if (!receipt) return res.status(404).json({ error: 'Submission receipt not recorded.' });
     const native = await getCodexService().readNativeSubmissionCustody(threadId, clientUserMessageId,
       undefined, (phase, status) => console.info(JSON.stringify({
         event: 'native_submission_inspection', inspectionId, phase, status,
       })));
-    return res.json({ ...receipt, native, inspectionId });
+    if (native.custodyVerified !== true || native.threadId !== threadId ||
+        native.clientUserMessageId !== clientUserMessageId) throw new Error('Native custody mismatch');
+    return res.json({ ...(receipt ?? { requestId: null, threadId, clientUserMessageId,
+      phase: null, turnId: null }), native, inspectionId });
   } catch (error) {
     return res.status(503).json({ error: 'Native submission custody unavailable.',
       ...(receipt ? { requestId: receipt.requestId, clientUserMessageId: receipt.clientUserMessageId,
@@ -1644,6 +1691,16 @@ router.post('/chat/steer', async (req: Request, res: Response) => {
   }
   body = req.body;
 
+  // A client ID is a durable reservation even when the HTTP response drops
+  // before native queue/user-item observation. Never retry an uncertain steer.
+  let receipt: Awaited<ReturnType<typeof nativeSubmissionJournal.begin>> = null;
+  if (body.clientUserMessageId) {
+    try {
+      receipt = await nativeSubmissionJournal.begin(body.threadId as string, body.clientUserMessageId);
+      if (!receipt) return res.status(409).json({ code: 'submission_already_recorded' });
+    } catch { return res.status(503).json({ code: 'submission_receipt_unavailable' }); }
+  }
+
   try {
     const turnId = await getCodexService().steer(body.threadId as string, {
       turnId: body.turnId,
@@ -1652,8 +1709,11 @@ router.post('/chat/steer', async (req: Request, res: Response) => {
       attachments: body.attachments,
       skills: body.skills,
     });
+    if (receipt) await nativeSubmissionJournal.advance(receipt, 'turn_started', turnId);
     res.json({ ok: true, turnId });
   } catch (error) {
+    // A native transport error can follow acceptance. Keep the durable
+    // reservation in received state until exact native custody resolves it.
     const code = getSteerErrorCode(error);
     const status = code === 'other' ? 500 : 409;
     res.status(status).json({

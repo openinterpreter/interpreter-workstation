@@ -5,6 +5,7 @@ import { getCodexService, NativeCustodyPhaseError,
   NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS,
   NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS } from '../../src/lib/codex/service';
 import { nativeSubmissionJournal } from '../utils/nativeSubmissionJournal';
+import { agentTabManager } from '../agentTabManager';
 import agentRouter from './agent';
 
 const app = express();
@@ -18,6 +19,71 @@ afterEach(() => {
 });
 
 describe('native custody diagnostic authentication', () => {
+  test('bound saved idle input admits directly with its existing scoped native shell', async () => {
+    const service = getCodexService();
+    const binding = agentTabManager.getBindingForThread;
+    const begin = nativeSubmissionJournal.begin;
+    const advance = nativeSubmissionJournal.advance;
+    const read = service.readThread;
+    const start = service.startExistingThreadTurn;
+    const events: Array<string> = [];
+    const info = console.info;
+    agentTabManager.getBindingForThread = () => ({ agentId: 'agent_1', callerToken: 'agtok_fixture',
+      workspacePath: '/workspace/projects/interpreter', threadId: id }) as any;
+    nativeSubmissionJournal.begin = async () => ({ requestId: 'request_1', threadId: id,
+      clientUserMessageId: 'saved_1', phase: 'received', turnId: null, at: '2026-11-12T00:00:00Z' });
+    nativeSubmissionJournal.advance = async (_entry, phase) => { events.push(phase); return {} as any; };
+    service.readThread = async () => ({ id, cwd: '/workspace/projects/interpreter',
+      status: { type: 'idle' }, turns: [] }) as any;
+    service.startExistingThreadTurn = async (_id, _message, _cwd, config, clientId) => {
+      expect(config).toEqual({ mcp_servers: {} });
+      expect(clientId).toBe('saved_1');
+      return 'turn_1';
+    };
+    console.info = (value) => { if (String(value).includes('programmatic_task_admission')) events.push(String(value)); };
+    try {
+      const response = await request(app).post('/api/agent/tasks/stream').send({ mode: 'headless',
+        threadId: id, clientUserMessageId: 'saved_1', message: 'new input',
+        workspace: '/workspace/projects/interpreter' });
+      expect(response.status).toBe(200);
+      expect(response.text).toContain('event: turn');
+      expect(response.text).toContain('turn_1');
+      expect(events).toContain('turn_started');
+    } finally {
+      agentTabManager.getBindingForThread = binding;
+      nativeSubmissionJournal.begin = begin;
+      nativeSubmissionJournal.advance = advance;
+      service.readThread = read;
+      service.startExistingThreadTurn = start;
+      console.info = info;
+    }
+  });
+  test('active steer reserves its stable client ID before native submission and rejects repeat', async () => {
+    const service = getCodexService();
+    const begin = nativeSubmissionJournal.begin;
+    const advance = nativeSubmissionJournal.advance;
+    const steer = service.steer;
+    let claims = 0;
+    let submissions = 0;
+    nativeSubmissionJournal.begin = async () => ++claims === 1 ? ({ requestId: 'request_2',
+      threadId: id, clientUserMessageId: 'steer_1', phase: 'received', turnId: null,
+      at: '2026-11-12T00:00:00Z' }) : null;
+    nativeSubmissionJournal.advance = async () => ({} as any);
+    service.steer = async () => { submissions++; return 'turn_1'; };
+    try {
+      const body = { threadId: id, turnId: 'turn_1', message: 'new steer',
+        clientUserMessageId: 'steer_1', attachments: [], skills: [] };
+      expect((await request(app).post('/api/agent/chat/steer').send(body)).status).toBe(200);
+      const repeated = await request(app).post('/api/agent/chat/steer').send(body);
+      expect(repeated.status).toBe(409);
+      expect(repeated.body.code).toBe('submission_already_recorded');
+      expect(submissions).toBe(1);
+    } finally {
+      nativeSubmissionJournal.begin = begin;
+      nativeSubmissionJournal.advance = advance;
+      service.steer = steer;
+    }
+  });
   test('global native operator route rejects missing bearer and emits only fixed failure metadata', async () => {
     process.env.WORKSTATION_WAKE_TOKEN = 'test-private-token';
     const route = '/api/agent/custody/native-global';
@@ -77,6 +143,28 @@ describe('native custody diagnostic authentication', () => {
           commandSessionScope: 'saved-native-turn-only-not-live-process-custody' } });
       expect(result.body.inspectionId).toMatch(/^[0-9a-f-]{36}$/);
       expect(JSON.stringify(result.body)).not.toContain('test-private-token');
+    } finally {
+      service.readNativeSubmissionCustody = originalRead;
+      nativeSubmissionJournal.lookup = originalLookup;
+    }
+  });
+  test('exact native-only client ID is observable without inventing a journal claim', async () => {
+    process.env.WORKSTATION_WAKE_TOKEN = 'test-private-token';
+    const service = getCodexService();
+    const originalRead = service.readNativeSubmissionCustody;
+    const originalLookup = nativeSubmissionJournal.lookup;
+    nativeSubmissionJournal.lookup = async () => null;
+    service.readNativeSubmissionCustody = async () => ({ threadId: id,
+      clientUserMessageId: 'owned_2', linkage: 'native_user_item',
+      nativeMatch: { turnId: 'turn_1', userItemId: 'item_1', status: 'inProgress', commandSessions: [] },
+      queuedSubmissionIds: [], custodyVerified: true,
+      commandSessionScope: 'saved-native-turn-only-not-live-process-custody' });
+    try {
+      const result = await request(app).get(`/api/agent/threads/${id}/submissions/owned_2/custody`)
+        .set('Authorization', 'Bearer test-private-token');
+      expect(result.status).toBe(200);
+      expect(result.body).toMatchObject({ requestId: null, phase: null, turnId: null,
+        native: { linkage: 'native_user_item', custodyVerified: true } });
     } finally {
       service.readNativeSubmissionCustody = originalRead;
       nativeSubmissionJournal.lookup = originalLookup;
