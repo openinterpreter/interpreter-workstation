@@ -1441,7 +1441,9 @@ export class CodexService {
    */
   async submitSavedThreadInput(threadId: string, message: string, cwd: string,
     clientUserMessageId: string): Promise<string> {
-    const thread = await this.readThread(threadId);
+    // Do not hydrate a long saved conversation merely to check its native
+    // identity and loaded state before submitting the next input.
+    const { thread } = await this.client.threadRead({ threadId, includeTurns: false });
     if (thread.id !== threadId || thread.cwd !== cwd ||
         !['idle', 'active', 'notLoaded'].includes(thread.status.type))
       throw new Error('Saved native thread identity or state unavailable');

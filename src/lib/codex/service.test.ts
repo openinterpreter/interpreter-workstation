@@ -1766,6 +1766,9 @@ describe("CodexService", () => {
     assert.equal(await service.submitSavedThreadInput(id, 'second', '/workspace', 'stable_2'), 'turn_active');
     assert.deepEqual(ids, ['stable_1', 'stable_2']);
     assert.equal(fake.calls.resumeThread, 0);
+    assert.deepEqual(fake.calls.threadReadParams, [
+      { threadId: id, includeTurns: false }, { threadId: id, includeTurns: false },
+    ]);
     assert.equal(fake.calls.startTurn, 2);
     assert.equal(fake.calls.steerTurn.length, 0);
   });
