@@ -1,5 +1,7 @@
 ## What's new
 
+- Fixed a Windows launch failure caused by an omitted packaged URL dependency.
+- Windows installers and updates no longer reopen the app from an elevated installer; open Interpreter from Start after installing the update.
 - Raw Markdown edits in Simple interfaces now persist when the interface refreshes or you leave the editor.
 
 ## Distribution
