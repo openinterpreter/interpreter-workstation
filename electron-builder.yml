@@ -258,6 +258,9 @@ win:
 
 nsis:
   perMachine: true
+  # Installing under UAC must not launch the app in the elevated installer
+  # context and create userData storage with Administrator ownership.
+  runAfterFinish: false
 
 linux:
   icon: ./resources/icons/app.png
