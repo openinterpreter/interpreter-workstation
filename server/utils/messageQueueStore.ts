@@ -42,6 +42,12 @@ class MessageQueueStore {
   hasQueue(agentId: string): boolean {
     return this.queues.has(agentId);
   }
+
+  /** Metadata-only, unscoped inventory for an authenticated local custody check. */
+  getCustodyInventory(): { count: number; agentIds: string[] } {
+    const agentIds = Array.from(this.queues.keys()).sort();
+    return { count: agentIds.length, agentIds };
+  }
 }
 
 export const messageQueueStore = new MessageQueueStore();

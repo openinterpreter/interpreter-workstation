@@ -1,6 +1,7 @@
 import { Router, Request, Response, raw } from 'express';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { nativeSubmissionJournal, submissionTerminalPhase, SUBMISSION_ID } from '../utils/nativeSubmissionJournal';
 import { wakeTokenValid } from '../utils/wakeSources';
 import { readyWakeSources, wakeSources } from '../utils/wakeSourcesRuntime';
 import { stat } from 'node:fs/promises';
@@ -8,6 +9,7 @@ import { getCustomInstructions } from '../configStore';
 import { getServerJWT } from '../lib/jwtStore';
 import { AgentModelConfig } from '../../shared/types/model';
 import { messageQueueStore } from '../utils/messageQueueStore';
+import { readCuaProcessLockCustody } from '../utils/cuaProcessLockMetadata';
 import { cleanupACPProvider } from '../utils/acpProvider';
 import { getCurrentWorkspace, requireExistingWorkspacePath } from '../utils/workspace';
 import { setCurrentTurnMessageId } from '../utils/turnMessageIdRegistry';
@@ -33,11 +35,13 @@ import { taskStore } from '../tools/builtin-tools/tasks/taskStore';
 import { buildAgentTurnErrorTrace } from '../utils/agentTurnErrorTrace';
 import {
   forkAgentTaskThread,
+  coldBindAgentTaskThread,
   resumeAgentTaskThread,
   startAgentTask,
   resolveAgentModelConfig,
   type AgentTaskMode,
   type AgentTaskProgressEvent,
+  type AgentTaskResult,
 } from '../agentTaskService';
 import {
   applyProgrammaticTaskRuntimeConfig,
@@ -59,6 +63,10 @@ import {
   isLmStudioPromptTemplateFailure,
 } from '../../src/lib/codex/lmStudioErrors';
 import {
+  NativeCustodyPhaseError,
+  NativeGlobalInventoryError,
+  NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS,
+  NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS,
   getCodexService,
   getSteerErrorCode,
   THREAD_LIST_DEFAULTS,
@@ -99,12 +107,13 @@ import {
   startQwenAsrStreamSession,
 } from '../utils/qwenAsrStream';
 import { inferSmartTurn } from '../utils/smartTurnService';
-import { isThreadUnavailableError, requiresFreshThread } from '../utils/codexThreadRecovery';
+import { requiresFreshThread } from '../utils/codexThreadRecovery';
 import {
   getMainAgentBaseInstructions,
   getMainAgentDeveloperPrompt,
 } from '../utils/mainAgentPrompt';
 import { agentTabManager } from '../agentTabManager';
+import { approvalManager } from '../approvalManager';
 import {
   buildInterpreterCliShellEnvironmentPolicy,
   ensureInterpreterCliLauncher,
@@ -126,6 +135,115 @@ import {
 } from '../utils/threadHistoryPagination';
 
 const router = Router();
+
+// This is intentionally separate from renderer-scoped lists: an empty result
+// here means every in-process queue was checked, not merely the current tab.
+router.get('/custody/global', (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  try {
+    const appQueues = messageQueueStore.getCustodyInventory();
+    const tabs = agentTabManager.getGlobalCustodyInventory();
+    const approvalIds = approvalManager.getGlobalPendingRequestIds();
+    return res.json({
+      scope: 'all-in-process',
+      appQueues,
+      pendingTabRequests: { count: tabs.pendingRequestIds.length, requestIds: tabs.pendingRequestIds },
+      pendingTabStartups: { count: tabs.pendingStartupIds.length, requestIds: tabs.pendingStartupIds },
+      createdTabRequests: { count: tabs.createdRequestIds.length, requestIds: tabs.createdRequestIds },
+      pendingApprovals: { count: approvalIds.length, requestIds: approvalIds },
+      nativeQueueScope: 'thread-only',
+    });
+  } catch {
+    return res.status(503).json({ error: 'Global custody inspection unavailable.' });
+  }
+});
+
+router.get('/custody/native-global', async (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  const inspectionId = randomUUID();
+  const recordPhase = (phase: string, status: string) => {
+    console.info(JSON.stringify({ event: 'native_global_custody_inspection', inspectionId, phase, status }));
+  };
+  recordPhase('request', 'received');
+  let nativeReadComplete = false;
+  try {
+    const native = await getCodexService().readGlobalNativeCustody(
+      NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS, recordPhase);
+    nativeReadComplete = true;
+    const cua = readCuaProcessLockCustody();
+    recordPhase('inspection', 'completed');
+    return res.json({ native, cua, inspectionId });
+  } catch (error) {
+    const phase = error instanceof NativeCustodyPhaseError ? error.phase
+      : error instanceof NativeGlobalInventoryError ? 'inventory'
+      : nativeReadComplete ? 'cua_lock' : 'unknown';
+    const category = error instanceof NativeCustodyPhaseError || error instanceof NativeGlobalInventoryError
+      ? error.category : 'native_unavailable';
+    recordPhase(phase, category);
+    return res.status(503).json({ error: 'Native or Computer Use custody inspection unavailable.',
+      phase, category,
+      custodyVerified: false, inspectionId });
+  }
+});
+
+// An exact opaque ID is required. The thread must match its captured owner;
+// a CLI request with no thread binding needs an explicit unbound query instead.
+router.get('/custody/approvals/:approvalId', (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  const { approvalId } = req.params;
+  const threadId = req.query.threadId;
+  const cliUnbound = req.query.cliUnbound;
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(approvalId) ||
+      (threadId === undefined && cliUnbound !== '1') ||
+      (threadId !== undefined && cliUnbound !== undefined) ||
+      (threadId !== undefined && (typeof threadId !== 'string' ||
+        !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId)))) {
+    return res.status(400).json({ error: 'Exact approval and owner scope required.' });
+  }
+  try {
+    const scope = threadId === undefined ? { cliUnbound: true as const } : { threadId: threadId as string };
+    const metadata = approvalManager.getPendingApprovalCustody(approvalId, scope);
+    if (!metadata) return res.status(404).json({ error: 'Pending approval not found in scope.' });
+    return res.json(metadata);
+  } catch {
+    return res.status(503).json({ error: 'Approval custody inspection unavailable.' });
+  }
+});
+
+// Operator-only exact-card disposition. This never grants a policy or resolves
+// another tool's card; the ordinary approval manager resumes the original waiter.
+router.post('/custody/approvals/:approvalId/decide', (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  const { approvalId } = req.params;
+  const { threadId, toolName, decision, decisionRef } = req.body ?? {};
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(approvalId) ||
+      typeof threadId !== 'string' || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId) ||
+      typeof toolName !== 'string' || !/^cua_driver:[A-Za-z0-9_.:-]{1,100}$/.test(toolName) ||
+      !['approve', 'deny'].includes(decision) ||
+      typeof decisionRef !== 'string' || !/^[A-Za-z0-9_.:-]{8,120}$/.test(decisionRef)) {
+    return res.status(400).json({ error: 'Exact scoped Computer Use decision required.' });
+  }
+  if (!approvalManager.decideOwnedCuaApproval({ id: approvalId, threadId, toolName, decision })) {
+    return res.status(409).json({ error: 'Pending card or original owner changed.' });
+  }
+  console.info('[CUA approval disposition]', JSON.stringify({
+    approvalId, threadId, toolName, decision, decisionRef, status: 'resolved',
+  }));
+  return res.json({ approvalId, threadId, toolName, decision, decisionRef, status: 'resolved',
+    continuationStatus: 'not-verified' });
+});
 
 function wakeMutationAllowed(req: Request): boolean {
   const address = req.socket.remoteAddress;
@@ -165,10 +283,116 @@ router.get('/threads/:threadId/native-custody', async (req: Request, res: Respon
   if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(req.params.threadId)) {
     return res.status(400).json({ error: 'Invalid thread ID.' });
   }
+  // A response can be lost on transport; fixed, content-free phases distinguish
+  // an absent request from a native read that has not yet returned.
+  const inspectionId = randomUUID();
+  const recordPhase = (phase: string, status: string) => {
+    console.info(JSON.stringify({ event: 'native_custody_inspection', inspectionId, phase, status }));
+  };
+  recordPhase('request', 'received');
   try {
-    res.json(await getCodexService().readNativeCustody(req.params.threadId));
+    const custody = await getCodexService().readNativeCustody(req.params.threadId,
+      NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS, recordPhase);
+    recordPhase('inspection', 'completed');
+    res.json({ ...custody, inspectionId });
+  } catch (error) {
+    // Failure remains unknown custody; expose only the fixed phase/category.
+    recordPhase(error instanceof NativeCustodyPhaseError ? error.phase : 'unknown',
+      error instanceof NativeCustodyPhaseError ? error.category : 'native_unavailable');
+    res.status(503).json(error instanceof NativeCustodyPhaseError
+      ? { error: 'Native custody inspection unavailable.', phase: error.phase,
+          category: error.category, custodyVerified: false, inspectionId }
+      : { error: 'Native custody inspection unavailable.',
+          phase: 'unknown', category: 'native_unavailable', custodyVerified: false, inspectionId });
+  }
+});
+
+// Authenticated, exact-owner read. A POST keeps opaque native identity out of
+// URL/access logs; it never sends a process action or exposes output text.
+router.post('/threads/:threadId/native-terminal-status', async (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  const body = req.body;
+  if (!body || typeof body !== 'object' || Array.isArray(body) ||
+      body.threadId !== undefined && body.threadId !== req.params.threadId) {
+    return res.status(400).json({ error: 'Exact native terminal owner required.' });
+  }
+  const request = { threadId: req.params.threadId, turnId: body.turnId,
+    itemId: body.itemId, nativeProcessId: body.nativeProcessId,
+    terminalGeneration: body.terminalGeneration, maxWaitMs: body.maxWaitMs };
+  try {
+    const { validateNativeTerminalRequest } = await import('../../src/lib/codex/native-terminal-status');
+    validateNativeTerminalRequest(request);
   } catch {
-    res.status(503).json({ error: 'Native custody inspection unavailable.' });
+    return res.status(400).json({ error: 'Exact native terminal owner required.' });
+  }
+  const inspectionId = randomUUID();
+  const recordPhase = (phase: string, status: string) => {
+    console.info(JSON.stringify({ event: 'native_terminal_status_inspection', inspectionId, phase, status }));
+  };
+  recordPhase('request', 'received');
+  try {
+    const observation = await getCodexService().readNativeTerminalStatus(request,
+      NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS, recordPhase);
+    recordPhase('inspection', 'completed');
+    return res.json({ ...observation, inspectionId,
+      custodyVerified: observation.phase !== 'unknown' });
+  } catch (error) {
+    recordPhase(error instanceof NativeCustodyPhaseError ? error.phase : 'terminal_status',
+      error instanceof NativeCustodyPhaseError ? error.category : 'native_unavailable');
+    return res.status(503).json({ error: 'Native terminal observation unavailable.',
+      phase: 'terminal_status', category: error instanceof NativeCustodyPhaseError ? error.category : 'native_unavailable',
+      custodyVerified: false, inspectionId });
+  }
+});
+
+router.get('/threads/:threadId/native-terminal-owners', async (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(req.params.threadId) ||
+      req.query.cursor !== undefined && (typeof req.query.cursor !== 'string' ||
+        !/^[A-Za-z0-9_-]{1,160}$/.test(req.query.cursor))) {
+    return res.status(400).json({ error: 'Exact thread and bounded cursor required.' });
+  }
+  try {
+    const owners = await getCodexService().listNativeTerminalOwners(req.params.threadId,
+      typeof req.query.cursor === 'string' ? req.query.cursor : undefined);
+    return res.json(owners);
+  } catch {
+    return res.status(503).json({ error: 'Native terminal owners unavailable.', custodyVerified: false });
+  }
+});
+
+router.get('/threads/:threadId/native-turn-receipt/:turnId', async (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  const uuid = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+  if (!uuid.test(req.params.threadId) || !uuid.test(req.params.turnId)) {
+    return res.status(400).json({ error: 'Exact native thread and turn required.' });
+  }
+  const inspectionId = randomUUID();
+  const recordPhase = (phase: string, status: string) => {
+    console.info(JSON.stringify({ event: 'native_turn_receipt_inspection', inspectionId, phase, status }));
+  };
+  recordPhase('request', 'received');
+  try {
+    const receipt = await getCodexService().readNativeTurnReceipt(req.params.threadId, req.params.turnId,
+      NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS, recordPhase);
+    recordPhase('inspection', 'completed');
+    return receipt ? res.json({ ...receipt, inspectionId }) : res.status(404).json({ error: 'Native turn not found.', inspectionId });
+  } catch (error) {
+    recordPhase(error instanceof NativeCustodyPhaseError ? error.phase : 'unknown',
+      error instanceof NativeCustodyPhaseError ? error.category : 'native_unavailable');
+    return res.status(503).json({ error: 'Native turn receipt unavailable.',
+      phase: error instanceof NativeCustodyPhaseError ? error.phase : 'unknown',
+      category: error instanceof NativeCustodyPhaseError ? error.category : 'native_unavailable',
+      custodyVerified: false, inspectionId });
   }
 });
 
@@ -188,6 +412,28 @@ router.post('/threads/:threadId/wake-events/:sourceId/:eventId/hold', async (req
     return res.json({ eventId: event.eventId, status: event.status, turnId: event.turnId });
   } catch {
     return res.status(409).json({ error: 'Native custody cannot establish a terminal ambiguous offer.' });
+  }
+});
+
+// An old unbound offer may predate later native turns. The operator must make
+// an explicit no-replay decision against a fresh exact client ID and latest
+// terminal native turn; no time-based automatic skipping or admission claim.
+router.post('/threads/:threadId/wake-events/:sourceId/:eventId/hold-historical', async (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  if (req.body?.confirmedNoReplay !== true || typeof req.body?.expectedClientId !== 'string' ||
+      typeof req.body?.expectedLatestTurnId !== 'string' || typeof req.body?.decisionRef !== 'string') {
+    return res.status(400).json({ error: 'Exact native custody and audited no-replay decision required.' });
+  }
+  try {
+    await readyWakeSources();
+    const event = await wakeSources.holdHistoricalOffered(req.params.threadId, req.params.sourceId,
+      req.params.eventId, req.body.expectedClientId, req.body.expectedLatestTurnId, req.body.decisionRef);
+    return res.json({ eventId: event.eventId, status: event.status, turnId: event.turnId });
+  } catch {
+    return res.status(409).json({ error: 'Historical native custody cannot support a no-replay hold.' });
   }
 });
 
@@ -212,9 +458,14 @@ for (const action of ['pause', 'resume'] as const) {
     try {
       await readyWakeSources();
       await getCodexService().readThread(req.params.threadId);
-      const source = await wakeSources[action](req.params.threadId, req.params.sourceId);
-      res.json({ source });
-    } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid source.' }); }
+      if (action === 'pause') {
+        return res.json(await wakeSources.pause(req.params.threadId, req.params.sourceId));
+      }
+      return res.json({ source: await wakeSources.resume(req.params.threadId, req.params.sourceId) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Invalid source.';
+      res.status(message.startsWith('Wake source drain') ? 409 : 400).json({ error: message });
+    }
   });
 }
 
@@ -429,6 +680,9 @@ router.post('/tasks', async (req: Request, res: Response) => {
 });
 
 router.post('/tasks/stream', async (req: Request, res: Response) => {
+  if (getProgrammaticClientIdError((req.body ?? {}).clientUserMessageId)) {
+    return res.status(400).json({ error: 'Invalid clientUserMessageId.' });
+  }
   const {
     message,
     system,
@@ -436,6 +690,7 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
     idleTimeoutMs,
     workspace,
     threadId,
+    clientUserMessageId,
     mode,
     modelConfig,
     model,
@@ -472,12 +727,27 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
     });
   }
 
+  // Persist a stable exact-thread receipt before acknowledging a saved task.
+  // A retry of its client ID never submits a second native input.
+  let receipt: Awaited<ReturnType<typeof nativeSubmissionJournal.begin>> = null;
+  try {
+    if (threadId) {
+      receipt = await nativeSubmissionJournal.begin(threadId, clientUserMessageId);
+      if (!receipt) return res.status(409).json({ error: 'Submission client ID already recorded; inspect exact custody.' });
+    }
+  } catch {
+    return res.status(503).json({ error: 'Submission receipt unavailable; native input not started.' });
+  }
+
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
 
   let streamClosed = false;
+  let observedTurn = false;
+  let observedTurnId: string | null = null;
+  let receiptProgress = Promise.resolve();
   res.on('close', () => {
     streamClosed = true;
   });
@@ -490,12 +760,51 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
     }
   };
 
+  if (receipt) emit('submission', { requestId: receipt.requestId,
+    threadId: receipt.threadId, clientUserMessageId: receipt.clientUserMessageId, phase: receipt.phase });
+
+  // Fixed, content-free milestones make a lost pre-turn receipt diagnosable.
+  // The forward receipt remains authoritative; these are not admission claims.
+  let admissionPhase: 'runtime_config' | 'model_config' | 'task_start' | 'native_turn' = 'runtime_config';
+  const admissionEvent = (status: 'started' | 'completed' | 'failed') => {
+    if (receipt) console.info(JSON.stringify({ event: 'programmatic_task_admission',
+      requestId: receipt.requestId, phase: admissionPhase, status }));
+  };
   try {
+    // An established saved caller already has a scoped OIX shell and model.
+    // Do not rediscover its profile, auth, tools and launcher before native
+    // admission. Unknown or changed ownership falls back to the full path.
+    const savedBinding = threadId && !model && !reasoningEffort && !modelConfig &&
+      !runtimeConfig && !system && !timeoutMs && !idleTimeoutMs
+      ? agentTabManager.getBindingForThread(threadId) : undefined;
+    if (savedBinding?.workspacePath && savedBinding.workspacePath === workspace &&
+        !savedBinding.windowSessionKey && !savedBinding.parentOwner) {
+      admissionPhase = 'task_start';
+      admissionEvent('started');
+      const native = getCodexService();
+      const turnId = await native.submitSavedThreadInput(threadId!, message, savedBinding.workspacePath,
+        receipt?.clientUserMessageId ?? clientUserMessageId!);
+      observedTurn = true;
+      observedTurnId = turnId;
+      if (receipt) await nativeSubmissionJournal.advance(receipt, 'turn_started', turnId);
+      admissionEvent('completed');
+      emit('thread', { threadId });
+      emit('turn', { threadId, turnId, status: 'inProgress' });
+      emit('admitted', { threadId, turnId, clientUserMessageId: receipt?.clientUserMessageId ?? clientUserMessageId });
+      return res.end(); // The native turn continues after the observer disconnects.
+    }
+    admissionEvent('started');
     await applyProgrammaticTaskRuntimeConfigFromBody(runtimeConfig);
+    admissionEvent('completed');
+    admissionPhase = 'model_config';
+    admissionEvent('started');
     const resolvedModelConfig = await resolveAgentModelConfig(modelConfig, {
       modelId: model,
       reasoningEffort,
     });
+    admissionEvent('completed');
+    admissionPhase = 'task_start';
+    admissionEvent('started');
 
     const result = await startAgentTask({
       mode: 'headless',
@@ -506,22 +815,94 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
       workspace,
       modelConfig: resolvedModelConfig,
       threadId,
+      clientUserMessageId: receipt?.clientUserMessageId ?? clientUserMessageId,
       notifyStarted: true,
       onProgress: (progress) => {
+        if (progress.kind === 'turn') {
+          admissionEvent('completed');
+          admissionPhase = 'native_turn';
+          admissionEvent('started');
+          observedTurn = true;
+          observedTurnId = progress.turnId;
+          if (receipt) {
+            receiptProgress = receiptProgress.then(async () => {
+              await nativeSubmissionJournal.advance(receipt!, 'turn_started', progress.turnId);
+              for (const event of toProgrammaticTaskProgressSseEvents(progress)) emit(event.event, event.payload);
+            });
+            return;
+          }
+        }
         for (const event of toProgrammaticTaskProgressSseEvents(progress)) {
           emit(event.event, event.payload);
         }
       },
     });
 
+    await receiptProgress;
+    if (!observedTurn) admissionEvent('failed');
+    else admissionEvent('completed');
+    if (receipt) await nativeSubmissionJournal.advance(receipt,
+      submissionTerminalPhase(result.completed, observedTurn), observedTurnId);
     emit('result', result);
+    const unacknowledged = getUnacknowledgedTaskError(result, observedTurn);
+    if (unacknowledged) emit('error', unacknowledged);
     res.end();
   } catch (error) {
+    admissionEvent('failed');
+    if (receipt && observedTurn) {
+      try {
+        await receiptProgress;
+        await nativeSubmissionJournal.advance(receipt, 'terminal_failure', observedTurnId);
+      } catch { /* Unknown receipt state: never imply absent native admission. */ }
+    }
     const message = error instanceof Error ? error.message : String(error);
     emit('error', { message });
     res.end();
   }
 });
+
+// Operator-only forward receipt: no task prose, browser token, or source body.
+router.get('/threads/:threadId/submissions/:clientUserMessageId/custody', async (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  const { threadId, clientUserMessageId } = req.params;
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId) ||
+      !SUBMISSION_ID.test(clientUserMessageId)) return res.status(400).json({ error: 'Invalid submission scope.' });
+  let receipt: Awaited<ReturnType<typeof nativeSubmissionJournal.lookup>> | null = null;
+  const inspectionId = randomUUID();
+  try {
+    receipt = await nativeSubmissionJournal.lookup(threadId, clientUserMessageId);
+    const native = await getCodexService().readNativeSubmissionCustody(threadId, clientUserMessageId,
+      undefined, (phase, status) => console.info(JSON.stringify({
+        event: 'native_submission_inspection', inspectionId, phase, status,
+      })));
+    if (native.custodyVerified !== true || native.threadId !== threadId ||
+        native.clientUserMessageId !== clientUserMessageId) throw new Error('Native custody mismatch');
+    return res.json({ ...(receipt ?? { requestId: null, threadId, clientUserMessageId,
+      phase: null, turnId: null }), native, inspectionId });
+  } catch (error) {
+    return res.status(503).json({ error: 'Native submission custody unavailable.',
+      ...(receipt ? { requestId: receipt.requestId, clientUserMessageId: receipt.clientUserMessageId,
+        recordedPhase: receipt.phase, recordedTurnId: receipt.turnId } : {}), inspectionId,
+      phase: error instanceof NativeCustodyPhaseError ? error.phase : 'unknown',
+      category: error instanceof NativeCustodyPhaseError ? error.category : 'native_unavailable',
+      custodyVerified: false });
+  }
+});
+
+/** A terminal result is not an admission receipt unless a native turn was observed. */
+export function getUnacknowledgedTaskError(
+  result: AgentTaskResult,
+  observedTurn: boolean,
+): { code: 'turn_not_acknowledged'; message: string } | null {
+  if (observedTurn) return null;
+  return {
+    code: 'turn_not_acknowledged',
+    message: result.error?.trim() || 'Agent task ended without a native turn acknowledgement.',
+  };
+}
 
 // Get queue status (for UI display)
 router.get("/queue/:agentId", (req: Request, res: Response) => {
@@ -682,6 +1063,8 @@ export function parseProgrammaticTaskBody(body: Record<string, unknown>) {
   const threadId = typeof body.threadId === 'string' && body.threadId.trim()
     ? body.threadId.trim()
     : undefined;
+  const clientUserMessageId = typeof body.clientUserMessageId === 'string'
+    ? body.clientUserMessageId : undefined;
   const mode = body.mode === undefined ? 'headless' : body.mode;
   const modelConfig = body.modelConfig && typeof body.modelConfig === 'object'
     ? body.modelConfig as AgentModelConfig
@@ -703,12 +1086,17 @@ export function parseProgrammaticTaskBody(body: Record<string, unknown>) {
     idleTimeoutMs,
     workspace,
     threadId,
+    clientUserMessageId,
     mode,
     modelConfig,
     model,
     reasoningEffort,
     runtimeConfig,
   };
+}
+
+export function getProgrammaticClientIdError(value: unknown): boolean {
+  return value !== undefined && (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(value));
 }
 function toGroqProxyBaseUrl(): string {
   return `http://localhost:${getServerPort()}/api/agent/groq-proxy`;
@@ -792,6 +1180,33 @@ router.post('/threads/:threadId/resume', async (req: Request, res: Response) => 
     return res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to resume thread.',
     });
+  }
+});
+
+// A saved native thread may acquire a new CLI carrier only while cold. This
+// does not start a user turn or dispose any durable wake event.
+router.post('/threads/:threadId/caller/cold-bind', async (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req) ||
+      !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  const threadId = req.params.threadId;
+  const workspace = req.body?.workspace;
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId) ||
+      typeof workspace !== 'string') return res.status(400).json({ error: 'Exact thread and workspace required.' });
+  try {
+    await readyWakeSources();
+    const appQueues = messageQueueStore.getCustodyInventory();
+    const tabs = agentTabManager.getGlobalCustodyInventory();
+    const events = wakeSources.list(threadId).events;
+    if (appQueues.count || tabs.pendingRequestIds.length || tabs.pendingStartupIds.length ||
+        tabs.createdRequestIds.length || approvalManager.getGlobalPendingRequestIds().length ||
+        events.some(event => event.status === 'pending' || event.status === 'offered')) {
+      return res.status(409).json({ error: 'In-process or durable input custody is not idle.' });
+    }
+    return res.json(await coldBindAgentTaskThread({ threadId, workspace }));
+  } catch {
+    return res.status(409).json({ error: 'Cold caller custody or native resume failed; no turn was submitted.' });
   }
 });
 
@@ -1110,18 +1525,11 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
         if (error instanceof Error && error.message === FRESH_THREAD_REQUIRED_MESSAGE) {
           throw error;
         }
-        if (isThreadUnavailableError(error)) {
-          console.warn('[Agent API] Starting fresh Codex thread after stale thread id.', {
-            staleThreadId: targetThreadId,
-          });
-          targetThreadId = undefined;
-          // Continue with a fresh thread for this turn.
-        } else {
-          console.warn(
-            '[Agent API] Failed to inspect Codex thread before send; continuing with normal resume flow.',
-            error instanceof Error ? error.message : error,
-          );
-        }
+        // The next native resume reports the precise failure. Never replace a
+        // supplied saved-thread ID with a new chat merely because preflight
+        // could not read it; durable inputs belong to that same thread.
+        console.warn('[Agent API] Existing thread preflight unavailable; retaining thread identity.',
+          error instanceof Error ? error.message : error);
       }
     }
 
@@ -1149,6 +1557,7 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
       attachments,
       skills: explicitSkills,
       threadId: targetThreadId,
+      clientUserMessageId: request.clientUserMessageId,
       binding: request.agentId
         ? {
           agentId: request.agentId,
@@ -1279,15 +1688,29 @@ router.post('/chat/steer', async (req: Request, res: Response) => {
   }
   body = req.body;
 
+  // A client ID is a durable reservation even when the HTTP response drops
+  // before native queue/user-item observation. Never retry an uncertain steer.
+  let receipt: Awaited<ReturnType<typeof nativeSubmissionJournal.begin>> = null;
+  if (body.clientUserMessageId) {
+    try {
+      receipt = await nativeSubmissionJournal.begin(body.threadId as string, body.clientUserMessageId);
+      if (!receipt) return res.status(409).json({ code: 'submission_already_recorded' });
+    } catch { return res.status(503).json({ code: 'submission_receipt_unavailable' }); }
+  }
+
   try {
     const turnId = await getCodexService().steer(body.threadId as string, {
       turnId: body.turnId,
+      clientUserMessageId: body.clientUserMessageId,
       message: body.message,
       attachments: body.attachments,
       skills: body.skills,
     });
+    if (receipt) await nativeSubmissionJournal.advance(receipt, 'turn_started', turnId);
     res.json({ ok: true, turnId });
   } catch (error) {
+    // A native transport error can follow acceptance. Keep the durable
+    // reservation in received state until exact native custody resolves it.
     const code = getSteerErrorCode(error);
     const status = code === 'other' ? 500 : 409;
     res.status(status).json({

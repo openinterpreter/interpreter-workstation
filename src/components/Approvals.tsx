@@ -9,7 +9,7 @@ import { AlertTriangle } from 'lucide-react';
 import { useLayout } from '../hooks/useLayout';
 import { useAgentActivityMap } from '../hooks/useAgentActivityMap';
 import { getApprovalsSnapshot, refreshApprovals, subscribeApprovals } from '../stores/approvalsStore';
-import { buildApprovalQueueItems, filterApprovalQueueItems } from '../lib/approvals/approvalQueue';
+import { buildApprovalQueueItems, filterApprovalQueueItems, filterWindowCliApprovals } from '../lib/approvals/approvalQueue';
 import { useToast } from '../contexts/ToastContext';
 import { ApprovalQueueCard } from './approvals/ApprovalQueueCard';
 import {
@@ -47,9 +47,11 @@ function useRelativeTime() {
 export function Approvals({
   ownerAgentId,
   ownerThreadId,
+  unboundCliWindowSessionKey,
 }: {
   ownerAgentId?: string;
   ownerThreadId?: string | null;
+  unboundCliWindowSessionKey?: string | null;
 }) {
   const { state } = useLayout();
   const { showToast, dismissToast } = useToast();
@@ -251,8 +253,10 @@ export function Approvals({
     [approvals, state.tabs],
   );
   const visibleItems = useMemo(
-    () => filterApprovalQueueItems(approvalQueueItems, ownerAgentId, ownerThreadId),
-    [approvalQueueItems, ownerAgentId, ownerThreadId],
+    () => unboundCliWindowSessionKey !== undefined
+      ? filterWindowCliApprovals(approvalQueueItems, unboundCliWindowSessionKey)
+      : filterApprovalQueueItems(approvalQueueItems, ownerAgentId, ownerThreadId),
+    [approvalQueueItems, ownerAgentId, ownerThreadId, unboundCliWindowSessionKey],
   );
   const visibleApprovals = visibleItems.map((item) => item.approval);
   const isEmpty = visibleApprovals.length === 0;

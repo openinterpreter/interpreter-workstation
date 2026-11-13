@@ -55,6 +55,14 @@ extraResources:
     to: browser-extension-relay/node_modules
     filter:
       - "**/*"
+  - from: resources/simple-interface-runtime
+    to: simple-interface-runtime
+    filter:
+      - "**/*"
+  - from: resources/simple-interface-runtime/node_modules
+    to: simple-interface-runtime/node_modules
+    filter:
+      - "**/*"
   - from: resources/codex-skills
     to: codex-skills
     filter:
@@ -97,6 +105,7 @@ files:
   - "!resources/codex-skills/**"
   - "!resources/browser-extension-relay/**"
   - "!resources/browser-extension-relay.zip"
+  - "!resources/simple-interface-runtime/**"
   - "!resources/qwen-asr/**"
   - "!resources/*.qcow2"
   - build/**
@@ -249,6 +258,9 @@ win:
 
 nsis:
   perMachine: true
+  # Installing under UAC must not launch the app in the elevated installer
+  # context and create userData storage with Administrator ownership.
+  runAfterFinish: false
 
 linux:
   icon: ./resources/icons/app.png

@@ -370,6 +370,7 @@ export interface RunCodexAgentTurnOptions {
   attachments?: StreamImageAttachment[];
   skills?: StreamSkillReference[];
   threadId?: string;
+  clientUserMessageId?: string;
   binding: AgentRuntimeBindingOptions;
   sandboxPolicy?: v2.SandboxPolicy;
   additionalWritableRoots?: string[];
@@ -2145,6 +2146,8 @@ export async function runCodexAgentTurn(
         completion = await options.service.runTurn({
           threadId,
           message: nextMessage,
+          clientUserMessageId: continuationAttempt === 0 && idleRecoveryAttempt === 0
+            ? options.clientUserMessageId : undefined,
           attachments: nextAttachments,
           skills: nextSkills,
           sandboxPolicy: options.sandboxPolicy,

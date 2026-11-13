@@ -117,7 +117,7 @@ function seedProject(projectPath: string, metadata: SimpleProjectMetadata): void
       '@interpreter/interface': 'file:.interpreter/packages/interface',
       '@interpreter/motion': 'file:.interpreter/packages/motion',
       motion: '12.23.26',
-      next: '16.4.0',
+      next: '16.4.3',
       react: '19.3.0',
       'react-dom': '19.3.0',
       'react-markdown': '10.1.0',

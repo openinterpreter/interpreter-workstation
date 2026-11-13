@@ -23,6 +23,7 @@ describe('agent stream request normalization', () => {
       callerToken: undefined,
       message: 'hello',
       threadId: undefined,
+      clientUserMessageId: undefined,
       workspacePath: undefined,
       reasoningEffort: 'high',
       attachments: [],
@@ -52,6 +53,7 @@ describe('agent stream request normalization', () => {
       callerToken: undefined,
       message: 'hello',
       threadId: undefined,
+      clientUserMessageId: undefined,
       workspacePath: undefined,
       reasoningEffort: 'low',
       attachments: [],
@@ -62,6 +64,12 @@ describe('agent stream request normalization', () => {
       customEndpoint: 'https://api.example.com/v1',
       customApiKey: 'secret',
     });
+  });
+
+  test('preserves caller-owned native input identity without inventing one', () => {
+    const request = normalizeStreamRequestBody({ message: 'saved input', threadId: 'thr_existing',
+      clientUserMessageId: 'ui_event_1' });
+    expect(request.clientUserMessageId).toBe('ui_event_1');
   });
 
   test('profile-backed requests use explicit model overrides when present', () => {

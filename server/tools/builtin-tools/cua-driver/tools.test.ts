@@ -21,6 +21,7 @@ import {
   macToolMayRequireForegroundFocusForTest,
   nativeLaunchAppArgsForTest,
   parseComputerUseUiElementsForTest,
+  parseNativeWindowStateResponseForTest,
   resolveMacSelectOptionFromElementsForTest,
   requireWindowTargetIdentityForBoundsForTest,
   requestApprovalForTest,
@@ -36,6 +37,7 @@ import {
 import type { BrowserControlStatus } from '../../../../shared/types/browserControl';
 import type { BrowserAccessPolicy, BrowserAccessPolicyMode, BrowserAccessProfilePolicy } from '../../../../shared/browserAccessPolicy';
 import { approvalManager } from '../../../approvalManager';
+import { setConfigOverride } from '../../../configStore';
 import { isCuaDriverSupportedPlatform } from './index';
 
 function windowsToolResponse(data: unknown): { content: [{ type: 'text'; text: string }] } {
@@ -46,6 +48,37 @@ function windowsToolResponse(data: unknown): { content: [{ type: 'text'; text: s
     }],
   };
 }
+
+describe('native CUA window-state response', () => {
+  test('returns a fixed capture failure rather than parsing plain driver error as JSON', () => {
+    const result = parseNativeWindowStateResponseForTest({
+      content: [{ type: 'text', text: 'Capture error: window screenshot failed for window 17: backend unavailable' }],
+    });
+    expect(result).toEqual({
+      error: {
+        content: [{ type: 'text', text: 'Computer Use could not capture this window; no screenshot was acquired.' }],
+        isError: true,
+      },
+    });
+  });
+
+  test('preserves structured native window state', () => {
+    const result = parseNativeWindowStateResponseForTest({
+      content: [{ type: 'text', text: JSON.stringify({ pid: 9, tree_markdown: 'Window' }) }],
+    });
+    expect(result).toEqual({ state: { pid: 9, tree_markdown: 'Window' } });
+  });
+
+  test('does not echo arbitrary invalid driver output', () => {
+    const result = parseNativeWindowStateResponseForTest({
+      content: [{ type: 'text', text: 'untrusted screen text' }],
+    });
+    expect(result.error?.isError).toBe(true);
+    expect(result.error?.content[0]).toEqual({
+      type: 'text', text: 'Computer Use returned an invalid window-state response; no screenshot was acquired.',
+    });
+  });
+});
 
 async function withPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T> {
   const originalPlatform = process.platform;
@@ -501,6 +534,62 @@ describe('macOS Computer Use wrapper behavior', () => {
     fs.rmSync(lockRoot, { recursive: true, force: true });
   });
 
+  test.skipIf(process.platform !== 'linux')('reclaims PID reuse without evicting a live legacy owner', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cua-driver-reuse-test-'));
+    const lock = path.join(root, 'driver.lock');
+    fs.mkdirSync(lock);
+    fs.writeFileSync(path.join(lock, 'owner'), JSON.stringify({ pid: process.pid, acquiredAt: 123 }));
+    await expect(withMacCuaDriverProcessLockForTest(lock, async () => 'unsafe'))
+      .rejects.toThrow('Another Computer Use action is already in progress.');
+    fs.writeFileSync(path.join(lock, 'owner'), JSON.stringify({
+      pid: process.pid, acquiredAt: 123, processStartTicks: '0', action: 'get_app_state',
+    }));
+    await expect(withMacCuaDriverProcessLockForTest(lock, async () => 'reclaimed'))
+      .resolves.toBe('reclaimed');
+    expect(fs.existsSync(lock)).toBe(false);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  test('denied foreground or discovery approval never acquires the desktop lock', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cua-denied-lock-test-'));
+    const lock = path.join(root, 'driver.lock');
+    await expect(withMacCuaDriverApprovalAndProcessLock(
+      async () => { throw new Error('permission denied'); },
+      async () => 'must-not-run', lock,
+    )).rejects.toThrow('permission denied');
+    expect(fs.existsSync(lock)).toBe(false);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  test('serializes approved calls in-process without locking the queued call', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cua-fifo-lock-test-'));
+    const lock = path.join(root, 'driver.lock');
+    const steps: string[] = [];
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => { enter = resolve; });
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    const first = withMacCuaDriverApprovalAndProcessLock(async () => {}, async () => {
+      steps.push('first'); enter(); await hold; steps.push('first-done');
+    }, lock, 'list_apps');
+    await entered;
+    const second = withMacCuaDriverApprovalAndProcessLock(async () => {}, async () => {
+      steps.push('second');
+    }, lock, 'get_app_state');
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(steps).toEqual(['first']);
+      release();
+      await Promise.all([first, second]);
+      expect(steps).toEqual(['first', 'first-done', 'second']);
+      expect(fs.existsSync(lock)).toBe(false);
+    } finally {
+      release();
+      await Promise.allSettled([first, second]);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('pending discovery approval never holds the desktop process lock', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cua-driver-approval-lock-test-'));
     const lockDir = path.join(root, 'driver.lock');
@@ -728,6 +817,100 @@ describe('macOS Computer Use wrapper behavior', () => {
         } finally {
           setCuaAccessPolicyProviderForCuaDriverTest(null);
         }
+      }
+    });
+  });
+
+  test('headless ask denies discovery and control before creating an invisible approval', async () => {
+    await withPlatform('linux', async () => {
+      setConfigOverride({ agents: {}, headlessToolApprovalMode: 'fail-closed' } as any);
+      setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+        permissions: { inspect: { mode: 'ask' }, control: { mode: 'ask' } },
+        appPolicies: [],
+      }));
+      try {
+        await expect(requestApprovalForTest('list_apps', {})).rejects.toThrow('unattended approval was denied before acquiring the desktop lock');
+        await expect(requestApprovalForTest('click', { app: 'LocalApp' })).rejects.toThrow('unattended approval was denied before acquiring the desktop lock');
+        setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+          permissions: { inspect: { mode: 'all' }, control: { mode: 'all' } },
+          appPolicies: [],
+        }));
+        await expect(requestApprovalForTest('list_apps', {})).resolves.toBeUndefined();
+        await expect(requestApprovalForTest('get_app_state', { app: 'LocalApp' })).resolves.toBeUndefined();
+      } finally {
+        setCuaAccessPolicyProviderForCuaDriverTest(null);
+        setConfigOverride(null);
+      }
+    });
+  });
+
+  test('one operator headless mode permits ordinary CUA discovery, inspect and control but not Settings deny', async () => {
+    await withPlatform('linux', async () => {
+      setConfigOverride({ agents: {}, codexApprovalPolicy: 'never', headlessToolApprovalMode: 'ordinary-auto' } as any);
+      setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+        permissions: { inspect: { mode: 'ask' }, control: { mode: 'ask' } }, appPolicies: [],
+      }));
+      try {
+        const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+        const verified = { threadId, verifiedCallerThreadId: threadId };
+        for (const [tool, args] of [
+          ['list_apps', {}], ['get_app_state', { app: 'Google Chrome' }],
+          ['click', { app: 'Google Chrome', element_index: 3 }],
+        ] as const) await expect(requestApprovalForTest(tool, args, verified)).resolves.toBeUndefined();
+        await expect(requestApprovalForTest('list_apps', {})).rejects.toThrow('unattended approval was denied');
+        await expect(requestApprovalForTest('click', { app: 'Google Chrome' }, {
+          threadId, verifiedCallerThreadId: '00000000-0000-0000-0000-000000000000',
+        })).rejects.toThrow('unattended approval was denied');
+        setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+          permissions: { inspect: { mode: 'deny' }, control: { mode: 'deny' } }, appPolicies: [],
+        }));
+        await expect(requestApprovalForTest('list_apps', {}, verified)).rejects.toThrow('denied by Settings');
+        await expect(requestApprovalForTest('click', { app: 'Google Chrome' }, verified)).rejects.toThrow('denied by Settings');
+        setConfigOverride({ agents: {}, codexApprovalPolicy: 'on-request', headlessToolApprovalMode: 'ordinary-auto' } as any);
+        setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+          permissions: { inspect: { mode: 'ask' }, control: { mode: 'ask' } }, appPolicies: [],
+        }));
+        await expect(requestApprovalForTest('list_apps', {})).rejects.toThrow('unattended approval was denied');
+      } finally {
+        setCuaAccessPolicyProviderForCuaDriverTest(null);
+        setConfigOverride(null);
+      }
+    });
+  });
+
+  test('operator exact-thread app-list grant never broadens inspect, control or other threads', async () => {
+    await withPlatform('linux', async () => {
+      const owner = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+      const other = '01a0d435-bb2b-7047-afe7-0a639be8e5d5';
+      setConfigOverride({ agents: {}, headlessToolApprovalMode: 'fail-closed',
+        nativeCuaDiscoveryGrants: [{ threadId: owner, toolName: 'list_apps' }] } as any);
+      setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+        permissions: { inspect: { mode: 'ask' }, control: { mode: 'ask' } }, appPolicies: [],
+      }));
+      try {
+        await expect(requestApprovalForTest('list_apps', {}, { threadId: owner, verifiedCallerThreadId: owner })).resolves.toBeUndefined();
+        await expect(requestApprovalForTest('list_apps', {}, { threadId: owner }))
+          .rejects.toThrow('unattended approval was denied');
+        for (const context of [{ threadId: other }, {}, undefined]) {
+          await expect(requestApprovalForTest('list_apps', {}, context))
+            .rejects.toThrow('unattended approval was denied');
+        }
+        await expect(requestApprovalForTest('list_apps', { extra: true }, { threadId: owner, verifiedCallerThreadId: owner }))
+          .rejects.toThrow('unattended approval was denied');
+        await expect(requestApprovalForTest('list_windows', {}, { threadId: owner, verifiedCallerThreadId: owner }))
+          .rejects.toThrow('unattended approval was denied');
+        await expect(requestApprovalForTest('get_app_state', { app: 'LocalApp' }, { threadId: owner }))
+          .rejects.toThrow('unattended approval was denied');
+        await expect(requestApprovalForTest('click', { app: 'LocalApp' }, { threadId: owner }))
+          .rejects.toThrow('unattended approval was denied');
+        setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+          permissions: { inspect: { mode: 'deny' }, control: { mode: 'ask' } }, appPolicies: [],
+        }));
+        await expect(requestApprovalForTest('list_apps', {}, { threadId: owner }))
+          .rejects.toThrow('denied by Settings');
+      } finally {
+        setCuaAccessPolicyProviderForCuaDriverTest(null);
+        setConfigOverride(null);
       }
     });
   });

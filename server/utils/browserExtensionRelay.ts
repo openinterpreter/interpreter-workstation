@@ -105,7 +105,28 @@ export type RelayRuntimeServer = {
   close: () => void;
   on: (event: string, listener: (...args: unknown[]) => void) => void;
   off: (event: string, listener: (...args: unknown[]) => void) => void;
+  listTabCaptures?: () => Array<{ captureId: string; tabId: number; title: string; offerSdp: string; createdAt: number }>;
+  answerTabCapture?: (captureId: string, answerSdp: string) => boolean;
+  stopTabCapture?: (captureId: string) => boolean;
 };
+
+export async function listBrowserTabCaptures(): Promise<Array<{ captureId: string; tabId: number; title: string; offerSdp: string; createdAt: number }>> {
+  await ensureBrowserExtensionRelayRunning();
+  if (!relayServer?.listTabCaptures) throw new Error('This Chrome relay does not support tab capture yet.');
+  return relayServer.listTabCaptures();
+}
+
+export async function answerBrowserTabCapture(captureId: string, answerSdp: string): Promise<boolean> {
+  await ensureBrowserExtensionRelayRunning();
+  if (!relayServer?.answerTabCapture) throw new Error('This Chrome relay does not support tab capture yet.');
+  return relayServer.answerTabCapture(captureId, answerSdp);
+}
+
+export async function stopBrowserTabCapture(captureId: string): Promise<boolean> {
+  await ensureBrowserExtensionRelayRunning();
+  if (!relayServer?.stopTabCapture) throw new Error('This Chrome relay does not support tab capture yet.');
+  return relayServer.stopTabCapture(captureId);
+}
 
 export type RelayListenAddressInUseError = Error & NodeJS.ErrnoException & {
   code: 'EADDRINUSE';

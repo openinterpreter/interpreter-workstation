@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { approvalManager } from '../../../approvalManager';
 import { waitForComputerUseSetupReady } from '../../../computerUseSetupGate';
 import { thumbnailService } from '../../../thumbnailService';
-import { getBrowserAccessPolicy, getCuaAccessPolicy } from '../../../configStore';
+import { autoApproveOrdinaryHeadlessToolsSync, failClosedOnHeadlessToolApprovalSync, getBrowserAccessPolicy, getCuaAccessPolicy, hasNativeCuaDiscoveryGrant } from '../../../configStore';
 import { getBrowserControlStatus } from '../../../utils/browserExtensionRelay';
 import {
   checkFileAccessPermission,
@@ -18,6 +18,7 @@ import type { BuiltinToolContext, BuiltinToolDefinition } from '../../builtinToo
 import type { ToolCallResponse } from '../../toolTypes';
 import { callWindowsCuaDriverTool } from './windowsUia';
 import type { BrowserControlStatus } from '../../../../shared/types/browserControl';
+import { CUA_PROCESS_LOCK_DIR, cuaLockOwnerDefinitelyGone, cuaLockOwnerForNewCall } from '../../../utils/cuaProcessLockMetadata';
 import {
   resolveCuaAccessPolicyMode,
   type CuaAccessPermissionKind,
@@ -51,8 +52,7 @@ const MAC_CUA_DRIVER_DAEMON_STARTUP_TIMEOUT_MS = 20_000;
 const MAC_CUA_DRIVER_TOOL_TIMEOUT_MS = 60_000;
 const MAC_CUA_DRIVER_ACTIVITY_TIMEOUT_MS = 5_000;
 const MAC_CUA_DRIVER_ACTIVITY_MAX_BUFFER = 10 * 1024 * 1024;
-const MAC_CUA_DRIVER_CALL_LOCK_DIR = path.join(os.tmpdir(), 'interpreter-desktop-driver-call.lock');
-const MAC_CUA_DRIVER_CALL_LOCK_STALE_MS = 3 * MAC_CUA_DRIVER_TOOL_TIMEOUT_MS;
+const MAC_CUA_DRIVER_CALL_LOCK_DIR = CUA_PROCESS_LOCK_DIR;
 const MAC_SELECT_OPTION_MENU_WAIT_MS = 3_000;
 const MAC_SELECT_OPTION_MENU_POLL_MS = 120;
 const MAC_CUA_DRIVER_CALL_BUSY_MESSAGE = [
@@ -362,6 +362,29 @@ function parseJsonText(text: string): unknown {
   const trimmed = text.trim();
   if (!trimmed) throw new Error('Tool returned empty output.');
   return JSON.parse(trimmed);
+}
+
+function parseNativeWindowStateResponse(response: ToolCallResponse):
+  | { state: MacCuaWindowState; error?: never }
+  | { state?: never; error: ToolCallResponse } {
+  const output = toolText(response).trim();
+  try {
+    const value = parseJsonText(output);
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return { state: value as MacCuaWindowState };
+    }
+  } catch {
+    // The driver may exit successfully while returning a plain-text ToolResult
+    // error (not structuredContent), notably Linux window-capture failures.
+  }
+  const message = output.startsWith('Capture error:')
+    ? 'Computer Use could not capture this window; no screenshot was acquired.'
+    : 'Computer Use returned an invalid window-state response; no screenshot was acquired.';
+  return { error: { content: [{ type: 'text', text: message }], isError: true } };
+}
+
+export function parseNativeWindowStateResponseForTest(response: ToolCallResponse) {
+  return parseNativeWindowStateResponse(response);
 }
 
 type MacCuaWindowRecord = {
@@ -1747,7 +1770,9 @@ async function callMacComputerUseTool(
         lastTarget = target;
         continue;
       }
-      const parsed = parseJsonText(toolText(response)) as MacCuaWindowState;
+      const decoded = parseNativeWindowStateResponse(response);
+      if (decoded.error) return decoded.error;
+      const parsed = decoded.state;
       lastResponse = response;
       lastTarget = target;
       lastParsed = parsed;
@@ -1796,7 +1821,9 @@ async function callMacComputerUseTool(
         lastTarget = target;
         continue;
       }
-      const parsed = parseJsonText(toolText(response)) as MacCuaWindowState;
+      const decoded = parseNativeWindowStateResponse(response);
+      if (decoded.error) return decoded.error;
+      const parsed = decoded.state;
       lastResponse = response;
       lastTarget = target;
       lastParsed = parsed;
@@ -3032,23 +3059,27 @@ async function withMacCuaDriverSerialized<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-async function acquireMacCuaDriverProcessLock(lockDir = MAC_CUA_DRIVER_CALL_LOCK_DIR): Promise<() => void> {
+async function acquireMacCuaDriverProcessLock(lockDir = MAC_CUA_DRIVER_CALL_LOCK_DIR, action = 'unknown', threadId?: string): Promise<() => void> {
   while (true) {
     try {
-      fs.mkdirSync(lockDir);
+      fs.mkdirSync(lockDir, { mode: 0o700 });
+      const directory = fs.lstatSync(lockDir);
+      const owner = cuaLockOwnerForNewCall(action, threadId);
       try {
-        fs.writeFileSync(path.join(lockDir, 'owner'), JSON.stringify({
-          pid: process.pid,
-          acquiredAt: Date.now(),
-        }));
+        fs.writeFileSync(path.join(lockDir, 'owner'), JSON.stringify(owner), { flag: 'wx', mode: 0o600 });
       } catch {
-        // The directory itself is the atomic lock; owner metadata is best-effort.
+        fs.rmdirSync(lockDir);
+        throw new Error('Computer Use lock owner metadata could not be written.');
       }
       return () => {
         try {
+          const currentDirectory = fs.lstatSync(lockDir);
+          const current = JSON.parse(fs.readFileSync(path.join(lockDir, 'owner'), 'utf8')) as { nonce?: unknown };
+          if (currentDirectory.ino !== directory.ino || currentDirectory.dev !== directory.dev
+            || current.nonce !== owner.nonce) return;
           fs.rmSync(lockDir, { recursive: true, force: true });
         } catch {
-          // Nothing actionable for a best-effort unlock during process teardown.
+          // Never remove a lock whose owner cannot be verified.
         }
       };
     } catch (error) {
@@ -3056,8 +3087,7 @@ async function acquireMacCuaDriverProcessLock(lockDir = MAC_CUA_DRIVER_CALL_LOCK
       if (err.code !== 'EEXIST') {
         throw error;
       }
-      if (macCuaDriverProcessLockIsStale(lockDir)) {
-        fs.rmSync(lockDir, { recursive: true, force: true });
+      if (reclaimDefinitelyDeadCuaLock(lockDir)) {
         continue;
       }
       throw new Error(MAC_CUA_DRIVER_CALL_BUSY_MESSAGE);
@@ -3065,33 +3095,23 @@ async function acquireMacCuaDriverProcessLock(lockDir = MAC_CUA_DRIVER_CALL_LOCK
   }
 }
 
-function macCuaDriverProcessLockIsStale(lockDir: string): boolean {
+function reclaimDefinitelyDeadCuaLock(lockDir: string): boolean {
+  // Only one reaper may inspect/remove a dead owner's directory. An owner with
+  // a live matching process identity cannot release while a reaper owns this
+  // guard; an abandoned reaper guard deliberately fails closed.
+  const guard = `${lockDir}.reaper`;
   try {
-    const owner = JSON.parse(fs.readFileSync(path.join(lockDir, 'owner'), 'utf8')) as { pid?: unknown };
-    if (typeof owner.pid === 'number' && Number.isInteger(owner.pid) && owner.pid > 0) {
-      try {
-        process.kill(owner.pid, 0);
-        return false;
-      } catch (error) {
-        const err = error as NodeJS.ErrnoException;
-        if (err.code === 'ESRCH') {
-          return true;
-        }
-      }
-    }
-  } catch {
-    // Fall through to age-based stale detection for old or corrupt lock dirs.
-  }
-
-  try {
-    const stat = fs.statSync(lockDir);
-    return Date.now() - stat.mtimeMs > MAC_CUA_DRIVER_CALL_LOCK_STALE_MS;
+    fs.mkdirSync(guard, { mode: 0o700 });
   } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') {
-      return false;
-    }
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
     throw error;
+  }
+  try {
+    if (!cuaLockOwnerDefinitelyGone(lockDir)) return false;
+    fs.rmSync(lockDir, { recursive: true, force: true });
+    return true;
+  } finally {
+    fs.rmdirSync(guard);
   }
 }
 
@@ -3114,14 +3134,17 @@ export async function withMacCuaDriverApprovalAndProcessLock<T>(
   approve: () => Promise<void>,
   invoke: () => Promise<T>,
   lockDir = MAC_CUA_DRIVER_CALL_LOCK_DIR,
+  action = 'unknown',
+  threadId?: string,
 ): Promise<T> {
   await approve();
-  const release = await acquireMacCuaDriverProcessLock(lockDir);
-  try {
-    return await withMacCuaDriverSerialized(invoke);
-  } finally {
-    release();
-  }
+  // FIFO within this process. No call holds the cross-process lock while it
+  // waits for another approved call (or any permission/daemon prompt).
+  return withMacCuaDriverSerialized(async () => {
+    const release = await acquireMacCuaDriverProcessLock(lockDir, action, threadId);
+    try { return await invoke(); }
+    finally { release(); }
+  });
 }
 
 async function getMacComputerUsePermissionStatus(): Promise<MacComputerUsePermissionStatus | null> {
@@ -3323,6 +3346,16 @@ async function requestApproval(
     if (discoveryMode === 'deny') {
       throw new Error('Computer Use inspect access to the desktop is denied by Settings > Permissions.');
     }
+    if (autoApproveOrdinaryHeadlessToolsSync() && context?.threadId &&
+        context.verifiedCallerThreadId === context.threadId) return;
+    // Operator-owned, exact-thread read grant. No global inspect permission,
+    // target control, other discovery tool, or argument-bearing call is implied.
+    if (failClosedOnHeadlessToolApprovalSync() && Object.keys(args).length === 0 &&
+        context?.threadId && context.verifiedCallerThreadId === context.threadId &&
+        hasNativeCuaDiscoveryGrant(context.threadId, toolName)) return;
+    if (failClosedOnHeadlessToolApprovalSync()) {
+      throw new Error('Computer Use discovery requires an operator inspect grant; unattended approval was denied before acquiring the desktop lock.');
+    }
     const copy = process.platform === 'win32'
       ? windowsDiscoveryApprovalCopy(toolName)
       : {
@@ -3374,8 +3407,13 @@ async function requestApproval(
       `Computer Use ${kind} access to "${displayTarget}" is denied by Settings > Permissions.`,
     );
   }
+  if (autoApproveOrdinaryHeadlessToolsSync() && context?.threadId &&
+      context.verifiedCallerThreadId === context.threadId) return;
   if (kind === 'control' && context?.overlayReviewedAction === true) {
     return;
+  }
+  if (failClosedOnHeadlessToolApprovalSync()) {
+    throw new Error(`Computer Use ${kind} access to "${displayTarget}" requires an operator grant; unattended approval was denied before acquiring the desktop lock.`);
   }
 
   const copy = process.platform === 'win32'
@@ -3423,8 +3461,16 @@ async function callCuaDriverCli(
     }
     await ensureMacComputerUsePermissionsBeforeDaemon();
     return withMacCuaDriverApprovalAndProcessLock(
-      () => requestApproval(toolName, approvalArgs ?? args, context),
+      async () => {
+        await requestApproval(toolName, approvalArgs ?? args, context);
+        const binary = resolveCuaDriverBinary();
+        await ensureCuaDriverDaemon(binary);
+        await requestMacForegroundApprovalIfNeeded(toolName, args, context);
+      },
       () => callMacCuaDriverCli(toolName, args, context, imageOutputPath),
+      MAC_CUA_DRIVER_CALL_LOCK_DIR,
+      toolName,
+      context?.threadId,
     );
   }
   await requestApproval(toolName, approvalArgs ?? args, context);
@@ -3448,8 +3494,7 @@ async function callMacCuaDriverCli(
   imageOutputPath?: string,
 ): Promise<ToolCallResponse> {
   const binary = resolveCuaDriverBinary();
-  await ensureCuaDriverDaemon(binary);
-  await requestMacForegroundApprovalIfNeeded(toolName, args, context);
+  // All permission/daemon waits completed before the cross-process lock.
   const jsonArgs = JSON.stringify(args ?? {});
   let saveToDiskPath = imageOutputPath;
   let userRequestedSaveToDisk = false;

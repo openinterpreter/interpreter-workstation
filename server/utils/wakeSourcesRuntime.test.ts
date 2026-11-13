@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import type { CodexService } from '../../src/lib/codex/service';
 import { agentTabManager } from '../agentTabManager';
 import { startWakeThreadTurn } from './wakeSourcesRuntime';
+import { WakeAdmissionFailure } from './wakeSources';
 
 const boundTokens: string[] = [];
 afterEach(() => {
@@ -9,7 +10,30 @@ afterEach(() => {
 });
 
 describe('native wake browser-tool bridge', () => {
-  test('reapplies a scoped shell policy on the SAME thread, without changing its model', async () => {
+  test('reports the native phase without disclosing a rejection or retrying the user message', async () => {
+    const threadId = `wake-bridge-${crypto.randomUUID()}`;
+    let submissions = 0;
+    const service = {
+      readThread: async () => ({ id: threadId, cwd: '/workspace/worker', turns: [] }),
+      startExistingThreadTurn: async (_id: string, _msg: string, _cwd: string, _config: unknown,
+        _clientId: string, onPhase: (phase: 'resume' | 'start') => void) => {
+        onPhase('resume');
+        onPhase('start');
+        submissions++;
+        throw new Error('private native diagnostic');
+      },
+    } as unknown as CodexService;
+    try {
+      await startWakeThreadTurn(threadId, 'private instruction', service, 'stable-id');
+      throw new Error('Expected native rejection');
+    } catch (error) {
+      expect(error).toBeInstanceOf(WakeAdmissionFailure);
+      expect((error as WakeAdmissionFailure).phase).toBe('start');
+    }
+    expect(submissions).toBe(1);
+    expect(agentTabManager.getBindingForThread(threadId)).toBeUndefined();
+  });
+  test('resumes the SAME thread without replacing its native shell policy or minting a caller', async () => {
     const threadId = `wake-bridge-${crypto.randomUUID()}`;
     let received: unknown[] = [];
     const service = {
@@ -21,23 +45,12 @@ describe('native wake browser-tool bridge', () => {
     } as unknown as CodexService;
 
     expect(await startWakeThreadTurn(threadId, 'approved wake', service)).toBe('native-turn');
-    const binding = agentTabManager.getBindingForThread(threadId);
-    expect(binding?.callerToken).toStartWith('agtok_');
-    boundTokens.push(binding!.callerToken);
     expect(received.slice(0, 3)).toEqual([threadId, 'approved wake', '/workspace/worker']);
-    const config = received[3] as {
-      mcp_servers: Record<string, unknown>;
-      shell_environment_policy: { set: Record<string, string> };
-    };
-    expect(config.mcp_servers).toEqual({});
-    expect(config.shell_environment_policy.set.INTERPRETER_CALLER_TOKEN).toBe(binding?.callerToken);
-    expect(config.shell_environment_policy.set.INTERPRETER_CLI_SERVER_CONNECTION).toBeTruthy();
-    expect(config.shell_environment_policy.set.INTERPRETER_CLI_PATH).toEndWith('/interpreter-app');
-    expect(config.shell_environment_policy.set.PATH).toContain('shell-safe-bin');
-    expect(Object.keys(config)).toEqual(['mcp_servers', 'shell_environment_policy']);
+    expect(received[3]).toEqual({ mcp_servers: {} });
+    expect(agentTabManager.getBindingForThread(threadId)).toBeUndefined();
 
     expect(await startWakeThreadTurn(threadId, 'next wake', service)).toBe('native-turn');
-    expect(agentTabManager.getBindingForThread(threadId)?.callerToken).toBe(binding?.callerToken);
+    expect(agentTabManager.getBindingForThread(threadId)).toBeUndefined();
     expect(await startWakeThreadTurn(threadId, 'identified wake', service, 'wake_fixture'))
       .toBe('native-turn');
     expect(received[4]).toBe('wake_fixture');
@@ -75,7 +88,7 @@ describe('native wake browser-tool bridge', () => {
       },
     } as unknown as CodexService;
     await startWakeThreadTurn(threadId, 'wake', service);
-    expect(config.shell_environment_policy.set.INTERPRETER_CALLER_TOKEN).toBe(callerToken);
+    expect(config).toEqual({ mcp_servers: {} });
     expect(agentTabManager.getBindingForThread(threadId)?.allowedToolNames)
       .toEqual(['builtin-interpreter.interpreter_browser_page_inspect']);
   });

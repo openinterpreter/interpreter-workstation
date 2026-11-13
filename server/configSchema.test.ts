@@ -1,5 +1,19 @@
 import { describe, test, expect } from 'bun:test';
 import { z } from 'zod';
+import { AppConfigSchema } from './configSchema';
+
+describe('operator-scoped Computer Use discovery grants', () => {
+  const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+  test('accepts only exact-thread list_apps entries within the bound', () => {
+    expect(AppConfigSchema.safeParse({ agents: {}, nativeCuaDiscoveryGrants: [{ threadId, toolName: 'list_apps' }] }).success).toBe(true);
+    for (const entry of [
+      { threadId: '*', toolName: 'list_apps' },
+      { threadId, toolName: 'click' },
+      { threadId, toolName: 'list_apps', extra: true },
+    ]) expect(AppConfigSchema.safeParse({ agents: {}, nativeCuaDiscoveryGrants: [entry] }).success).toBe(false);
+    expect(AppConfigSchema.safeParse({ agents: {}, nativeCuaDiscoveryGrants: Array(33).fill({ threadId, toolName: 'list_apps' }) }).success).toBe(false);
+  });
+});
 
 const VALID_PROVIDER_TYPES = [
   'hosted',

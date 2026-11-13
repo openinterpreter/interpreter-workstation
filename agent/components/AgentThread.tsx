@@ -951,6 +951,10 @@ function AgentThreadWithRuntime({
         body: JSON.stringify({
           threadId,
           turnId: currentTurnId,
+          // Reuse the persisted pending input's identity if transport retries.
+          // A new UUID on each attempt could produce a second native message
+          // after an accepted response was lost.
+          clientUserMessageId: pendingInputId,
           message: extracted.text,
           skills: extracted.skills,
         }),

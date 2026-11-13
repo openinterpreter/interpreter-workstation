@@ -18,6 +18,7 @@ import { ConnectionOverlay } from "./components/ConnectionOverlay";
 import { MentionPreviewOverlay } from "./components/MentionPreviewOverlay";
 import { windowingAPI } from "./api/windowingAPI";
 import { AuthCallback } from "./components/auth/AuthCallback";
+import { UnboundCliApprovals } from "./components/UnboundCliApprovals";
 import { BrowserContextMenu } from "./components/BrowserContextMenu";
 import { BrowserSelect } from "./components/BrowserSelect";
 import { ResizeHandle } from "./components/ui/resize-handle";
@@ -1077,6 +1078,8 @@ function AppContent() {
       </AnimatePresence>
 
       {marketingDemoMode ? <MarketingDemoShield /> : null}
+
+      {!marketingDemoMode ? <UnboundCliApprovals /> : null}
 
       {!marketingDemoMode ? <WorkspaceConfirmationModalHost /> : null}
       {!marketingDemoMode ? <ComputerUseSetupModalHost /> : null}

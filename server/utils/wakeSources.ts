@@ -25,6 +25,13 @@ export type WakeSource = {
   /** Persisted admission gate. A running command drains naturally; no child is killed. */
   paused?: boolean;
 };
+export type WakeSourceDrain = {
+  drained: true;
+  commandInFlight: false;
+  nativeOfferInFlight: false;
+  pendingEvents: number;
+  offeredEvents: number;
+};
 export type WakeEvent = {
   threadId: string;
   sourceId: string;
@@ -36,7 +43,38 @@ export type WakeEvent = {
   turnId?: string;
   nextAttemptAt?: string;
   error?: string;
+  /** Safe, durable exception metadata; never stores native/provider content. */
+  failure?: { phase: 'preflight' | 'resume' | 'start' | 'steer' | 'persist' | 'inspect';
+    name: string; category: 'loaded-environment' | 'timeout' | 'unavailable' | 'unknown';
+    code?: string; messageSha256: string };
 };
+export class WakeAdmissionFailure extends Error {
+  constructor(readonly phase: 'preflight' | 'resume' | 'start', readonly original: unknown) {
+    super('Native wake admission failed');
+    this.name = 'WakeAdmissionFailure';
+  }
+}
+export class WakeRecoveryError extends Error {
+  constructor(readonly category: 'invalid_request' | 'stale_revision' | 'refused_ambiguous' |
+    'native_unavailable') {
+    super(category);
+    this.name = 'WakeRecoveryError';
+  }
+}
+function nativeFailure(error: unknown, phase: NonNullable<WakeEvent['failure']>['phase']): NonNullable<WakeEvent['failure']> {
+  const original = error instanceof WakeAdmissionFailure ? error.original : error;
+  const name = original instanceof Error && /^(?:Error|[A-Za-z]{1,60}Error)$/.test(original.name)
+    ? original.name : 'UnknownError';
+  const message = original instanceof Error ? original.message : '';
+  const category = /loaded thread may only rotate existing shell environment values/i.test(message)
+    ? 'loaded-environment' : /timed? ?out|deadline/i.test(message) ? 'timeout'
+      : /unavailable|disconnect|connection refused/i.test(message) ? 'unavailable' : 'unknown';
+  const rawCode = original && typeof original === 'object' && 'code' in original ? original.code : undefined;
+  const code = typeof rawCode === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(rawCode) ? rawCode : undefined;
+  const messageSha256 = createHash('sha256').update(message).digest('hex');
+  return { phase: error instanceof WakeAdmissionFailure ? error.phase : phase, name, category,
+    ...(code ? { code } : {}), messageSha256 };
+}
 type State = { sources: WakeSource[]; events: WakeEvent[] };
 const EMPTY: State = { sources: [], events: [] };
 const ID = /^[a-zA-Z0-9_-]{1,160}$/;
@@ -54,11 +92,21 @@ export const wakeClientId = (event: Pick<WakeEvent, 'threadId' | 'sourceId' | 'e
   `wake_${createHash('sha256').update(JSON.stringify([event.threadId, event.sourceId, event.eventId])).digest('hex')}`;
 function safeError(error: unknown): string {
   const message = error instanceof Error ? error.message.toLowerCase() : '';
+  // A supervising SIGKILL/oversized stdout is not a subscription allowance.
+  // Do not classify "Command exited after timeout or output limit" as quota.
+  if (error instanceof WakeCommandExit) return error.reason === 'timeout'
+    ? 'Wake command timed out before a provider receipt'
+    : error.reason === 'output'
+      ? 'Wake command exceeded bounded output before a provider receipt'
+      : 'Wake command exited nonzero; check local service diagnostics';
   if (/usage|quota|credit|billing|limit/.test(message)) return 'Usage limit reached; operator action required';
   if (/oauth|token|credential|authentication|unauthoriz|login/.test(message)) return 'Authentication unavailable; operator action required';
   if (/overload|capacity|unavailable|timeout|disconnect/.test(message)) return 'Runtime temporarily unavailable';
   if (/command exited/.test(message)) return 'Command exited nonzero or exceeded limits';
   return 'Wake source failed; check local service diagnostics';
+}
+class WakeCommandExit extends Error {
+  constructor(readonly reason: 'timeout' | 'output' | 'exit') { super('Wake command failed'); }
 }
 export function wakeTokenValid(actual: string | undefined, supplied: string | undefined): boolean {
   if (!actual || !supplied) return false;
@@ -111,6 +159,7 @@ export class WakeSources {
   private inFlight = new Set<string>();
   private commands = new Map<string, ReturnType<typeof spawn>>();
   private commandTasks = new Set<Promise<void>>();
+  private commandTasksBySource = new Map<string, Promise<void>>();
   private ticking = false;
   private stopping = false;
   private tickFinished?: Promise<void>;
@@ -118,8 +167,13 @@ export class WakeSources {
   private readonly file: string;
   private readonly lock: string;
   private readonly owner = randomUUID();
+  private readonly nativeInspections = new Map<string, ReturnType<WakeNative['inspect']>>();
 
-  constructor(private readonly native: WakeNative, root = getInterpreterAppDataDir()) {
+  constructor(private readonly native: WakeNative, root = getInterpreterAppDataDir(),
+    private readonly inspectTimeoutMs = 30_000) {
+    if (!Number.isInteger(inspectTimeoutMs) || inspectTimeoutMs < 1 || inspectTimeoutMs > 120_000) {
+      throw new Error('Invalid native inspection timeout');
+    }
     this.file = path.join(root, 'wake-sources.json');
     this.lock = `${this.file}.owner`;
   }
@@ -141,6 +195,7 @@ export class WakeSources {
       if (event.status === 'admitted') {
         event.message = '';
         delete event.error;
+        delete event.failure;
         delete event.offeredAt;
         delete event.nextAttemptAt;
       }
@@ -248,23 +303,141 @@ export class WakeSources {
     });
   }
 
+  /** A content-free, deterministic CAS token for one source and its unadmitted
+   * events. It changes whenever custody relevant to recovery changes. */
+  recoverySnapshot(threadId: string, id: string) {
+    const source = this.state.sources.find(s => s.threadId === threadId && s.id === id);
+    if (!source) throw new WakeRecoveryError('invalid_request');
+    const events = this.state.events.filter(e => e.threadId === threadId && e.sourceId === id);
+    const revision = createHash('sha256').update(JSON.stringify({ source, events })).digest('hex');
+    return { source: structuredClone(source), events: structuredClone(events), revision };
+  }
+
+  /** Rearm only future civil occurrences. The historical held event is kept
+   * byte-for-byte, and an unresolved offer always refuses the operation. */
+  async recoverDailyFuture(threadId: string, id: string, expectedRevision: string,
+    expectedHeldEventId: string): Promise<ReturnType<WakeSources['recoverySnapshot']>> {
+    if (this.stopping || ![threadId, id, expectedHeldEventId].every(x => ID.test(x)) ||
+        !/^[0-9a-f]{64}$/.test(expectedRevision)) throw new WakeRecoveryError('invalid_request');
+    return this.exclusive(async () => {
+      const snapshot = this.recoverySnapshot(threadId, id);
+      if (snapshot.revision !== expectedRevision) throw new WakeRecoveryError('stale_revision');
+      const { source, events } = snapshot;
+      if (source.kind !== 'schedule' || !source.dailyAt || !source.timeZone || source.paused ||
+          source.status !== 'error' || source.nextAt !== undefined ||
+          events.some(e => e.status === 'pending' || e.status === 'offered') ||
+          !events.some(e => e.eventId === expectedHeldEventId && e.status === 'held' &&
+            e.eventId === `${id}-${source.sequence}`)) {
+        throw new WakeRecoveryError('refused_ambiguous');
+      }
+      const current = this.state.sources.find(s => s.threadId === threadId && s.id === id)!;
+      current.nextAt = nextCivilDaily(Date.now(), current.timeZone!, current.dailyAt!);
+      current.status = 'waiting';
+      delete current.error;
+      await this.save();
+      return this.recoverySnapshot(threadId, id);
+    });
+  }
+
+  /** Explicit own-thread read of an ambiguous offer. A positive native marker
+   * alone establishes admission; absence or a failed read is never replayed. */
+  async reconcileOffered(threadId: string, id: string, eventId: string,
+    expectedRevision: string): Promise<ReturnType<WakeSources['recoverySnapshot']>> {
+    if (this.stopping || ![threadId, id, eventId].every(x => ID.test(x)) ||
+        !/^[0-9a-f]{64}$/.test(expectedRevision)) throw new WakeRecoveryError('invalid_request');
+    const key = `${threadId}:${eventId}`;
+    if (this.ticking || this.inFlight.has(key)) throw new WakeRecoveryError('refused_ambiguous');
+    this.inFlight.add(key);
+    try {
+      const before = this.recoverySnapshot(threadId, id);
+      if (before.revision !== expectedRevision) throw new WakeRecoveryError('stale_revision');
+      if (before.source.kind !== 'schedule' || !before.source.dailyAt || !before.source.timeZone)
+        throw new WakeRecoveryError('invalid_request');
+      const event = before.events.find(e => e.eventId === eventId && e.status === 'offered');
+      if (!event) throw new WakeRecoveryError('refused_ambiguous');
+      let native;
+      try { native = await this.inspectWithDeadline(threadId); }
+      catch { throw new WakeRecoveryError('native_unavailable'); }
+      if (!native.clientIds?.includes(wakeClientId(event)) &&
+          !native.messages.some(m => m === wakeInput(event) || m.startsWith(`${wakeInput(event)}\n`))) {
+        throw new WakeRecoveryError('refused_ambiguous');
+      }
+      return this.exclusive(async () => {
+        const current = this.recoverySnapshot(threadId, id);
+        if (current.revision !== expectedRevision) throw new WakeRecoveryError('stale_revision');
+        const owned = this.state.events.find(e => e.threadId === threadId && e.sourceId === id &&
+          e.eventId === eventId && e.status === 'offered')!;
+        this.admitObserved(owned, Date.now());
+        await this.save();
+        return this.recoverySnapshot(threadId, id);
+      });
+    } finally { this.inFlight.delete(key); }
+  }
+
+  private admitObserved(event: WakeEvent, now: number): void {
+    event.status = 'admitted'; event.message = '';
+    delete event.error; delete event.failure; delete event.offeredAt; delete event.nextAttemptAt;
+    const source = this.state.sources.find(s => s.id === event.sourceId && s.threadId === event.threadId);
+    if (source && source.status !== 'cancelled') {
+      delete source.error;
+      source.status = 'delivered';
+      if (source.kind === 'schedule' && source.dailyAt && source.timeZone) {
+        source.nextAt = nextCivilDaily(now, source.timeZone, source.dailyAt); source.status = 'waiting';
+      } else if (source.kind === 'schedule' && source.everyMs) {
+        source.nextAt = new Date(now + source.everyMs).toISOString(); source.status = 'waiting';
+      } else if (source.kind === 'command') {
+        source.nextAt = new Date(now + COMMAND_REARM_MS).toISOString(); source.status = 'waiting';
+      }
+    }
+  }
+
   /** Stop new command launches and native offers without retracting any event.
-   * Already running commands may finish and persist their output while paused.
+   * Return only after this source's running command and the preceding native
+   * tick settle, with a bounded, source-specific drain receipt.
    */
-  async pause(threadId: string, id: string): Promise<WakeSource> {
+  async pause(threadId: string, id: string): Promise<{ source: WakeSource; drain: WakeSourceDrain }> {
     if (this.stopping) throw new Error('Wake admission is draining for restart');
     if (![threadId, id].every(value => ID.test(value))) throw new Error('Invalid source ID');
-    const source = await this.exclusive(async () => {
+    await this.exclusive(async () => {
       const current = this.state.sources.find(item => item.threadId === threadId && item.id === id);
       if (!current || current.status === 'cancelled') throw new Error('Source not found');
       current.paused = true;
       await this.save();
-      return current;
     });
-    // A tick that started before pause may have begun a native RPC. Wait for
-    // that RPC to settle before returning; never infer a receipt from this gate.
-    await this.tickFinished;
-    return structuredClone(source);
+    // The tick waits for native offers, but launches command polls without
+    // awaiting them. A pause response is not a drain receipt until BOTH have
+    // settled. Never terminate a child or discard its durable event/output.
+    const key = `${threadId}:${id}`;
+    const tick = this.tickFinished;
+    const command = this.commandTasksBySource.get(key);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        Promise.all([tick, command]),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new Error('Wake source drain timed out; source remains paused')), 215_000);
+        }),
+      ]);
+    } catch {
+      // Keep the durable pause gate set. A caller must not interpret a child,
+      // disk, or native failure as a completed drain, nor receive raw output.
+      throw new Error('Wake source drain failed; source remains paused and custody is unverified');
+    } finally { if (timeout) clearTimeout(timeout); }
+    return this.exclusive(async () => {
+      const source = this.state.sources.find(item => item.threadId === threadId && item.id === id);
+      if (!source?.paused || source.status === 'cancelled' || this.commands.has(key) ||
+          this.commandTasksBySource.has(key) || this.inFlight.has(key) ||
+          this.state.events.some(event => event.threadId === threadId && event.sourceId === id &&
+            this.inFlight.has(`${threadId}:${event.eventId}`))) {
+        throw new Error('Wake source drain changed or remains in flight; source custody must be rechecked');
+      }
+      const events = this.state.events.filter(event => event.threadId === threadId && event.sourceId === id);
+      return { source: structuredClone(source), drain: {
+        drained: true as const, commandInFlight: false as const, nativeOfferInFlight: false as const,
+        pendingEvents: events.filter(event => event.status === 'pending').length,
+        offeredEvents: events.filter(event => event.status === 'offered').length,
+      } };
+    });
   }
 
   async resume(threadId: string, id: string): Promise<WakeSource> {
@@ -436,6 +609,47 @@ export class WakeSources {
     }); } finally { this.inFlight.delete(key); }
   }
 
+  /** Explicit operator no-replay decision for an old unbound offer after later
+   * native turns made the original failed-turn binding unavailable. This never
+   * asserts rejection or admission; the original event is retained as held.
+   */
+  async holdHistoricalOffered(threadId: string, sourceId: string, eventId: string,
+    expectedClientId: string, expectedLatestTurnId: string, decisionRef: string): Promise<WakeEvent> {
+    if (this.stopping) throw new Error('Wake admission is draining for restart');
+    if (![threadId, sourceId, eventId, expectedLatestTurnId, decisionRef].every(x => ID.test(x)))
+      throw new Error('Invalid wake custody ID');
+    const key = `${threadId}:${eventId}`;
+    if (this.ticking || this.inFlight.has(key)) throw new Error('Wake inspection in progress');
+    this.inFlight.add(key);
+    try { return await this.exclusive(async () => {
+      const event = this.state.events.find(e => e.threadId === threadId && e.sourceId === sourceId && e.eventId === eventId);
+      if (!event || event.status !== 'offered' || event.turnId || !event.offeredAt ||
+          !Number.isFinite(Date.parse(event.offeredAt)) || Date.now() - Date.parse(event.offeredAt) < 60_000 ||
+          wakeClientId(event) !== expectedClientId || !this.native.custody)
+        throw new Error('Historical offer custody mismatch');
+      const [state, custody] = await Promise.all([this.inspectWithDeadline(threadId),
+        this.native.custody(threadId, expectedLatestTurnId)]);
+      if (state.activeTurnId || custody.queuedSubmissionCount !== 0 ||
+          custody.lastTurnId !== expectedLatestTurnId ||
+          !['completed', 'failed', 'interrupted'].includes(custody.turnStatus ?? '') ||
+          !['idle', 'systemError', 'notLoaded'].includes(custody.threadStatus ?? ''))
+        throw new Error('Historical offer requires terminal queue-empty native custody');
+      if (state.clientIds?.includes(expectedClientId) ||
+          state.messages.some(message => message === wakeInput(event) || message.startsWith(`${wakeInput(event)}\n`)))
+        throw new Error('Native receipt exists; reconcile admission instead');
+      event.status = 'held';
+      event.error = `Operator-held historical ambiguous native offer; decision ${decisionRef}; latest terminal turn ${expectedLatestTurnId}; not admitted or replayed`;
+      delete event.nextAttemptAt;
+      const source = this.state.sources.find(s => s.threadId === threadId && s.id === sourceId);
+      if (source && source.status !== 'cancelled') {
+        source.status = 'error'; source.nextAt = undefined;
+        source.error = 'Operator-held historical ambiguous native offer; review source before rearming';
+      }
+      await this.save();
+      return structuredClone(event);
+    }); } finally { this.inFlight.delete(key); }
+  }
+
   async tick(now = Date.now()): Promise<void> {
     if (this.ticking || this.stopping) return;
     this.ticking = true;
@@ -480,9 +694,14 @@ export class WakeSources {
           await this.save();
         });
       } else if (!this.inFlight.has(`${source.threadId}:${source.id}`)) {
+        const key = `${source.threadId}:${source.id}`;
         const task = this.runCommand(source);
         this.commandTasks.add(task);
-        void task.finally(() => this.commandTasks.delete(task));
+        this.commandTasksBySource.set(key, task);
+        void task.finally(() => {
+          this.commandTasks.delete(task);
+          if (this.commandTasksBySource.get(key) === task) this.commandTasksBySource.delete(key);
+        }).catch(() => undefined);
       }
     }
     // An ambiguous RPC result is never automatically resubmitted while its
@@ -510,34 +729,20 @@ export class WakeSources {
 
   private async deliver(event: WakeEvent, now: number): Promise<void> {
     if (event.nextAttemptAt && Date.parse(event.nextAttemptAt) > now) return;
+    let admissionPhase: NonNullable<WakeEvent['failure']>['phase'] = 'inspect';
     try {
       const source = this.state.sources.find(s => s.id === event.sourceId && s.threadId === event.threadId);
       if (source?.paused) return;
       if (source?.status === 'cancelled' && event.status === 'pending') return;
-      const state = await this.native.inspect(event.threadId);
+      // A nonterminating native history read must not pin the only durable
+      // scheduler tick forever. This is read-only; on expiry keep the pending
+      // event (and source fence) and persist a bounded retry. Never infer an
+      // admission receipt or resubmit an ambiguous offered RPC from timeout.
+      const state = await this.inspectWithDeadline(event.threadId);
       if (state.clientIds?.includes(wakeClientId(event)) ||
         state.messages.some(message => message === wakeInput(event) || message.startsWith(`${wakeInput(event)}\n`))) {
         await this.exclusive(async () => {
-          event.status = 'admitted';
-          event.message = '';
-          delete event.error;
-          delete event.offeredAt;
-          delete event.nextAttemptAt;
-          const source = this.state.sources.find(s => s.id === event.sourceId && s.threadId === event.threadId);
-          if (source && source.status !== 'cancelled') {
-            delete source.error;
-            source.status = 'delivered';
-            if (source.kind === 'schedule' && source.dailyAt && source.timeZone) {
-              source.nextAt = nextCivilDaily(now, source.timeZone, source.dailyAt);
-              source.status = 'waiting';
-            } else if (source.kind === 'schedule' && source.everyMs) {
-              source.nextAt = new Date(now + source.everyMs).toISOString();
-              source.status = 'waiting';
-            } else if (source.kind === 'command') {
-              source.nextAt = new Date(now + COMMAND_REARM_MS).toISOString();
-              source.status = 'waiting';
-            }
-          }
+          this.admitObserved(event, now);
           await this.save();
         });
         return;
@@ -550,17 +755,30 @@ export class WakeSources {
       // Mark intent before the RPC: a crash between RPC and response must be
       // reconciled against native history, rather than immediately retried.
       await this.exclusive(async () => { event.status = 'offered'; event.offeredAt = new Date(now).toISOString(); await this.save(); });
+      admissionPhase = state.activeTurnId ? 'steer' : 'start';
       const turnId = state.activeTurnId
         ? await this.native.steer(event.threadId, state.activeTurnId, wakeInput(event), wakeClientId(event))
         : await this.native.start(event.threadId, wakeInput(event), wakeClientId(event));
+      admissionPhase = 'persist';
       await this.exclusive(async () => { event.turnId = turnId; await this.save(); });
     } catch (error) {
-      const explanation = safeError(error);
+      const explanation = safeError(error instanceof WakeAdmissionFailure ? error.original : error);
+      const failure = nativeFailure(error, admissionPhase);
+      event.failure = failure;
+      // Diagnostic contains only bounded IDs and a digest, never native error
+      // prose, user messages, provider responses or tool arguments.
+      console.error('[Wake admission diagnostic]', JSON.stringify({
+        sourceId: event.sourceId, eventId: event.eventId, clientId: wakeClientId(event), ...failure,
+      }));
       // The native steer endpoint explicitly rejected this input before
       // admission: the inspected turn ended between inspect and steer. Unlike
       // a timeout/disconnect, this is not an ambiguous accepted RPC; retry by
       // inspecting the SAME thread, which can now be idle.
-      if (event.status === 'offered' && error instanceof Error && error.message === 'no active turn to steer') {
+      if (event.status === 'offered' && ((error instanceof WakeAdmissionFailure &&
+          (error.phase === 'preflight' || error.phase === 'resume')) ||
+          (error instanceof Error && error.message === 'no active turn to steer'))) {
+        // A pre-start failure cannot have submitted this user message; start
+        // and steer failures remain ambiguous and must never replay blindly.
         event.status = 'pending';
         delete event.offeredAt;
       }
@@ -574,6 +792,30 @@ export class WakeSources {
       await this.exclusive(async () => { await this.save(); });
       // Do not hammer auth, allowance, or transport errors. Explicit intervention
       // or restart can reconcile the retained event.
+    }
+  }
+
+  private async inspectWithDeadline(threadId: string): ReturnType<WakeNative['inspect']> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Keep at most one outstanding native history read per thread. A timed-out
+    // read may still complete later; do not spawn another unbounded read each tick.
+    let inspection = this.nativeInspections.get(threadId);
+    if (!inspection) {
+      inspection = this.native.inspect(threadId);
+      this.nativeInspections.set(threadId, inspection);
+      void inspection.finally(() => {
+        if (this.nativeInspections.get(threadId) === inspection) this.nativeInspections.delete(threadId);
+      }).catch(() => undefined);
+    }
+    try {
+      return await Promise.race([
+        inspection,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('Native inspect timeout')), this.inspectTimeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -593,14 +835,20 @@ export class WakeSources {
         this.commands.set(key, child);
         const chunks: Buffer[] = [];
         let size = 0;
-        const timeout = setTimeout(() => child.kill('SIGKILL'), 120_000);
+        // The enrolled World adapter may run two sequential 90-second bounded
+        // reads (pending and peek). Its parent must outlive both child limits,
+        // otherwise an ordinary timeout is mistaken for an allowance error.
+        let reason: 'timeout' | 'output' | undefined;
+        const timeout = setTimeout(() => { reason = 'timeout'; child.kill('SIGKILL'); }, 200_000);
         child.stdout.on('data', (chunk: Buffer) => {
           size += chunk.length;
-          if (size > MAX_STDOUT) child.kill('SIGKILL');
+          if (size > MAX_STDOUT) { reason = 'output'; child.kill('SIGKILL'); }
           else chunks.push(chunk);
         });
         child.on('error', reject);
-        child.on('close', code => { this.commands.delete(key); clearTimeout(timeout); code === 0 && size <= MAX_STDOUT ? resolve(Buffer.concat(chunks, size).toString('utf8')) : reject(new Error(`Command exited ${code ?? 'after timeout or output limit'}`)); });
+        child.on('close', code => { this.commands.delete(key); clearTimeout(timeout);
+          code === 0 && size <= MAX_STDOUT ? resolve(Buffer.concat(chunks, size).toString('utf8')) :
+            reject(new WakeCommandExit(reason ?? 'exit')); });
       });
       if (source.status === 'cancelled') return;
       const output = JSON.parse(stdout) as { id?: string; message?: string; status?: string };

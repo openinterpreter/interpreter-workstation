@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { clearConfigCache, setInterpreterHomeDir } from '../configStore';
 import { createSimpleProject } from '../simpleProjects';
-import { promoteSimpleProjectApp, resetSimpleProjectRuntimeForTest } from './simpleProjectRuntime';
+import { promoteSimpleProjectApp, readSimpleProjectAppStatus, resetSimpleProjectRuntimeForTest } from './simpleProjectRuntime';
+import { stopSimpleAssetWatchersForTest } from './simpleAssetRevision';
 
 async function eventually<T>(read: () => Promise<T>, accept: (value: T) => boolean): Promise<T> {
   const deadline = Date.now() + 30_000;
@@ -21,15 +22,24 @@ describe('full-stack Simple project runtime', () => {
   let temp: string;
   let projectPath: string;
   let originalHome: string | undefined;
+  let originalRegistry: string | undefined;
+  let originalOffline: string | undefined;
 
   beforeEach(async () => {
     temp = realpathSync(mkdtempSync(join(tmpdir(), 'interpreter-simple-runtime-')));
     originalHome = process.env.HOME;
+    originalRegistry = process.env.npm_config_registry;
+    originalOffline = process.env.npm_config_offline;
     process.env.HOME = temp;
+    process.env.npm_config_registry = 'http://127.0.0.1:1';
+    process.env.npm_config_offline = 'true';
     setInterpreterHomeDir(join(temp, 'config'));
     projectPath = join(temp, 'Interface');
     mkdirSync(projectPath);
     await createSimpleProject(projectPath);
+    const legacyManifest = JSON.parse(readFileSync(join(projectPath, 'package.json'), 'utf8'));
+    legacyManifest.dependencies.next = '16.4.0';
+    writeFileSync(join(projectPath, 'package.json'), `${JSON.stringify(legacyManifest, null, 2)}\n`);
     mkdirSync(join(projectPath, 'app', 'api', 'health'), { recursive: true });
     writeFileSync(
       join(projectPath, 'app', 'api', 'health', 'route.js'),
@@ -39,24 +49,38 @@ describe('full-stack Simple project runtime', () => {
 
   afterEach(async () => {
     await resetSimpleProjectRuntimeForTest(projectPath);
+    stopSimpleAssetWatchersForTest();
     setInterpreterHomeDir(null);
     if (originalHome === undefined) delete process.env.HOME;
     else process.env.HOME = originalHome;
+    if (originalRegistry === undefined) delete process.env.npm_config_registry;
+    else process.env.npm_config_registry = originalRegistry;
+    if (originalOffline === undefined) delete process.env.npm_config_offline;
+    else process.env.npm_config_offline = originalOffline;
     clearConfigCache();
     rmSync(temp, { recursive: true, force: true });
   });
 
-  test('serves backend routes and refreshes project code at one stable URL', async () => {
+  test('starts cold without registry access, serves backend routes, and refreshes at one URL', async () => {
     const status = await promoteSimpleProjectApp('http://127.0.0.1:5177');
-    expect(status.ready).toBe(true);
+    expect(status.ready, status.diagnostic ?? 'No runtime diagnostic').toBe(true);
     expect(status.runtimeUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     expect(readFileSync(join(projectPath, 'next.config.mjs'), 'utf8')).toContain('devIndicators: false');
+    const projectDependencies = JSON.parse(readFileSync(join(projectPath, 'package.json'), 'utf8')).dependencies;
+    const bundledDependencies = JSON.parse(readFileSync(join(process.cwd(), 'resources', 'simple-interface-runtime', 'package.json'), 'utf8')).dependencies;
+    for (const [name, version] of Object.entries(bundledDependencies)) {
+      expect(projectDependencies[name]).toBe(version);
+    }
     const runtimeUrl = status.runtimeUrl!;
 
     const health = await eventually(
       async () => {
-        const response = await fetch(`${runtimeUrl}/api/health`);
-        return response.ok ? await response.json() : null;
+        try {
+          const response = await fetch(`${runtimeUrl}/api/health`);
+          return response.ok ? await response.json() : null;
+        } catch {
+          return null;
+        }
       },
       (value) => value?.backend === true,
     );
@@ -72,5 +96,14 @@ describe('full-stack Simple project runtime', () => {
     );
     expect(refreshedHtml).toContain('fast-refresh-marker');
     expect((await promoteSimpleProjectApp('http://127.0.0.1:5177')).runtimeUrl).toBe(runtimeUrl);
+
+    const beforeAssetChange = status.assetRevision ?? 0;
+    mkdirSync(join(projectPath, 'public'), { recursive: true });
+    writeFileSync(join(projectPath, 'public', 'photo.png'), 'new image bytes');
+    const changed = await eventually(
+      () => readSimpleProjectAppStatus(),
+      (value) => (value.assetRevision ?? 0) > beforeAssetChange,
+    );
+    expect(changed.runtimeUrl).toBe(runtimeUrl);
   }, 60_000);
 });

@@ -9,14 +9,18 @@ standalone project and the running page hot-reloads in place.
 
 This is a portability invariant, not an implementation preference.
 
-- Workstation ships a Node-compatible runtime through Electron and ships its
-  own pinned pnpm CLI. It must not depend on Node, Bun, npm, pnpm, or another
-  developer tool already being installed on the user's computer.
+- Workstation ships a Node-compatible runtime through Electron, its pinned
+  pnpm CLI, and a complete platform-specific copy of the standard Next.js,
+  React, and design-library dependencies. It must not depend on Node, Bun,
+  npm, pnpm, or network access already being available on the user's computer.
 - Each interface is a normal Next.js project with `package.json`, `app/`,
   `src/`, `public/`, server components, route handlers, backend modules, and
   arbitrary declared npm dependencies.
-- Workstation installs the project's declared dependencies with the bundled
-  package manager and supervises the dev server on a loopback-only port.
+- Workstation copies the standard dependency tree from the signed app into a
+  new project without contacting a registry, then supervises the dev server
+  on a loopback-only port. The package manager remains available when the
+  agent deliberately adds a package that is outside that bundled set.
+- Advanced mode never requires, installs, or starts this Next.js runtime.
 - The format and lifecycle are the same on macOS, Windows, and Linux. Platform
   conditionals belong in the supplied runtime launcher, never in generated
   project code.
@@ -34,8 +38,9 @@ This is a portability invariant, not an implementation preference.
 - The interface project is the agent's primary working directory.
 - Project code is served by its own Next.js dev server. Source edits use normal
   Fast Refresh without swapping iframe revisions or mounting two frames.
-- Workstation watches `package.json`; changing declared dependencies triggers
-  installation through the bundled package manager and a supervised restart.
+- Workstation upgrades only its own known older Next.js scaffold pin. It does
+  not silently replace a user-selected core package version. A project with
+  custom core versions must install them explicitly before starting.
 - The dev server binds only to `127.0.0.1`. Workstation owns startup, readiness,
   diagnostics, shutdown, and process-tree cleanup on all supported platforms.
 
@@ -92,10 +97,12 @@ and browser-to-server requests independently.
 ## Packaging and verification contract
 
 The installed app must contain the Electron Node runtime, the exact pinned pnpm
-CLI used by project supervision, and the Interpreter SDK source. Package smoke
-tests must launch the bundled CLI with Electron-as-Node on every target OS.
-Project dependencies are real project-local dependencies installed by that
-supplied toolchain, so standard framework behavior and arbitrary packages work.
+CLI used by project supervision, the Interpreter SDK source, and the full
+platform-native Simple dependency tree. The build prepares that tree on each
+target OS; packaging fails if it is missing or for the wrong architecture.
+Package smoke must start a fresh Next.js project from the packaged files with
+the registry unavailable. Arbitrary extra packages remain normal project-local
+dependencies, but adding an uncached package requires network access.
 
 Tests must cover project creation and migration, bundled package-manager
 resolution, loopback binding, dependency changes, one stable iframe, Fast

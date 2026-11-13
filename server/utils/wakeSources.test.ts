@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { WakeSources, wakeClientId, wakeInput, wakeTokenValid, type WakeNative } from './wakeSources';
+import { WakeSources, WakeAdmissionFailure, wakeClientId, wakeInput, wakeTokenValid, type WakeNative } from './wakeSources';
 import { nextCivilDaily } from './civilSchedule';
 
 async function fixture() {
@@ -27,6 +29,84 @@ async function fixture() {
 }
 
 describe('durable thread wake sources', () => {
+  test('a stalled native history inspection preserves pending custody and does not pin other threads', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-inspect-deadline-'));
+    const messages: string[] = [];
+    let stalledInspections = 0;
+    const wake = new WakeSources({
+      inspect: async (threadId) => threadId === 'thread-stalled'
+        ? (stalledInspections++, await new Promise<never>(() => {})) : { messages },
+      start: async (_thread, message) => { messages.push(message); return 'turn-other'; },
+      steer: async () => { throw new Error('unexpected steer'); },
+    }, root, 10);
+    try {
+      await wake.initialize();
+      await wake.ingest('thread-stalled', 'provider', 'old-id', 'old input');
+      await wake.ingest('thread-healthy', 'provider', 'other-id', 'other input');
+      await wake.tick();
+      expect(wake.list('thread-stalled').events[0]?.status).toBe('pending');
+      expect(wake.list('thread-stalled').events[0]?.error).toBe('Runtime temporarily unavailable');
+      expect(wake.list('thread-healthy').events[0]?.status).toBe('offered');
+      expect(messages).toHaveLength(1);
+      expect(wake.list('thread-stalled').events[0]?.nextAttemptAt).toBeTruthy();
+      await wake.tick(Date.parse(wake.list('thread-stalled').events[0]!.nextAttemptAt!) + 1);
+      expect(stalledInspections).toBe(1);
+    } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+  test('historical unbound offer requires an exact negative receipt and terminal latest-turn snapshot', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-historical-hold-'));
+    let clientIds: string[] = [];
+    let queued = 0;
+    let latest = 'later-turn';
+    const wake = new WakeSources({
+      inspect: async () => ({ messages: [], clientIds }),
+      custody: async () => ({ queuedSubmissionCount: queued, lastTurnId: latest,
+        turnStatus: 'completed', threadStatus: 'idle' }),
+      start: async () => { throw new Error('server overloaded'); },
+      steer: async () => { throw new Error('unexpected steer'); },
+    }, root);
+    try {
+      await wake.initialize();
+      await wake.put({ id: 'old-schedule', threadId: 'thread-1', kind: 'schedule',
+        message: 'Original instruction', at: new Date(Date.now() - 120_000).toISOString(), everyMs: 1_200_000 });
+      await wake.tick();
+      const first = wake.list('thread-1').events[0]!;
+      expect(first.status).toBe('offered');
+      const clientId = wakeClientId(first);
+      await wake.stop();
+      const file = path.join(root, 'wake-sources.json');
+      const saved = JSON.parse(await readFile(file, 'utf8'));
+      saved.events[0].offeredAt = new Date(Date.now() - 61_000).toISOString();
+      await writeFile(file, JSON.stringify(saved));
+      const resumed = new WakeSources({
+        inspect: async () => ({ messages: [], clientIds }),
+        custody: async () => ({ queuedSubmissionCount: queued, lastTurnId: latest,
+          turnStatus: 'completed', threadStatus: 'idle' }),
+        start: async () => { throw new Error('unexpected start'); },
+        steer: async () => { throw new Error('unexpected steer'); },
+      }, root);
+      await resumed.initialize();
+      await expect(resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
+        'wrong-client', latest, 'decision-1')).rejects.toThrow('mismatch');
+      clientIds = [clientId];
+      await expect(resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
+        clientId, latest, 'decision-1')).rejects.toThrow('receipt exists');
+      clientIds = []; queued = 1;
+      await expect(resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
+        clientId, latest, 'decision-1')).rejects.toThrow('queue-empty');
+      queued = 0; latest = 'changed-turn';
+      await expect(resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
+        clientId, 'later-turn', 'decision-1')).rejects.toThrow('queue-empty');
+      const held = await resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
+        clientId, latest, 'decision-1');
+      expect(held.status).toBe('held');
+      expect(held.error).toContain('decision-1');
+      expect(held.turnId).toBeUndefined();
+      expect(resumed.list('thread-1').sources[0]?.status).toBe('error');
+      expect((await resumed.ingest('thread-1', 'provider', 'later-id', 'later input')).status).toBe('pending');
+      await resumed.stop();
+    } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
+  });
   test.skipIf(process.platform !== 'linux')('reclaims a legacy lock after PID reuse, without evicting a live owner', async () => {
     const f = await fixture();
     try {
@@ -167,6 +247,74 @@ describe('durable thread wake sources', () => {
         .toBe('admitted');
     } finally { await f.cleanup(); }
   });
+
+  test('two sources steer one active turn before a supervised command finishes, without restarting it', async () => {
+    const f = await fixture();
+    let finishCommand!: (value: string) => void;
+    const commandResult = new Promise<string>(resolve => { finishCommand = resolve; });
+    let commandFinished = false;
+    void commandResult.then(() => { commandFinished = true; });
+    try {
+      const wake = await f.make();
+      f.setActive('long-command-turn');
+      await wake.ingest('thread-1', 'timer', 'timer-1', 'scheduled input');
+      await wake.ingest('thread-1', 'peer', 'peer-1', 'trusted peer input');
+      for (let attempt = 0; attempt < 4 && f.counts().steers < 2; attempt++) await wake.tick();
+      expect(f.counts()).toEqual({ starts: 0, steers: 2 });
+      expect(commandFinished).toBe(false);
+      for (let attempt = 0; attempt < 4 && wake.list('thread-1').events.some(e => e.status !== 'admitted'); attempt++) {
+        await wake.tick();
+      }
+      expect(wake.list('thread-1').events.map(e => e.status)).toEqual(['admitted', 'admitted']);
+      finishCommand('exit 0; retained output');
+      expect(await commandResult).toContain('retained output');
+      await wake.stop();
+      const resumed = await f.make();
+      expect((await resumed.ingest('thread-1', 'peer', 'peer-1', 'duplicate')).status).toBe('admitted');
+      await resumed.tick();
+      expect(f.counts()).toEqual({ starts: 0, steers: 2 });
+    } finally { await f.cleanup(); }
+  });
+
+  test('a real supervised process survives two same-turn inputs and a wake-owner restart', async () => {
+    const f = await fixture();
+    // This is a real process, not a promise standing in for a command. Native
+    // app-server turn/steer and tool policy still require installed acceptance.
+    const child = spawn(process.execPath, ['-e',
+      "process.stdout.write('ready\\n');setTimeout(()=>{process.stdout.write('late-result\\n');process.exit(0)},2200)"],
+    { stdio: ['ignore', 'pipe', 'pipe'] });
+    const pid = child.pid;
+    let output = '';
+    child.stdout!.on('data', chunk => { output += chunk.toString(); });
+    const exited = once(child, 'close');
+    try {
+      await once(child.stdout!, 'data');
+      const before = await f.make();
+      f.setActive('active-command-turn');
+      await before.ingest('thread-1', 'user', 'message-1', 'A user follow-up');
+      await before.ingest('thread-1', 'peer', 'message-2', 'A peer follow-up');
+      for (let attempt = 0; attempt < 4 && f.counts().steers < 2; attempt++) await before.tick();
+      expect(f.counts()).toEqual({ starts: 0, steers: 2 });
+      expect(child.exitCode).toBeNull();
+      expect(output).not.toContain('late-result');
+      for (let attempt = 0; attempt < 4 && before.list('thread-1').events.some(e => e.status !== 'admitted'); attempt++) {
+        await before.tick();
+      }
+      expect(before.list('thread-1').events.map(e => e.status)).toEqual(['admitted', 'admitted']);
+      await before.stop();
+      const after = await f.make();
+      expect((await after.ingest('thread-1', 'peer', 'message-2', 'duplicate')).status).toBe('admitted');
+      await after.tick();
+      expect(f.counts()).toEqual({ starts: 0, steers: 2 });
+      const [code] = await exited;
+      expect(code).toBe(0);
+      expect(output).toContain('late-result');
+      expect(child.pid).toBe(pid);
+    } finally {
+      if (child.exitCode === null) child.kill();
+      await f.cleanup();
+    }
+  }, 15_000);
 
   test('shutdown does not release custody until an in-flight native admission has settled', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'wake-maintenance-'));
@@ -607,7 +755,7 @@ describe('durable thread wake sources', () => {
       const wake = await f.make();
       const marker = path.join(f.root, 'command-started');
       const script = `require('fs').writeFileSync(${JSON.stringify(marker)}, 'started');
-setTimeout(() => process.stdout.write(JSON.stringify({id:'receipt-1',message:'provider input'})), 80);`;
+setTimeout(() => process.stdout.write(JSON.stringify({id:'receipt-1',message:'provider input'})), 200);`;
       await wake.put({ id: 'provider', threadId: 'thread-1', kind: 'command', argv: [process.execPath, '-e', script] });
       await wake.tick();
       for (let i = 0; i < 100; i++) {
@@ -615,7 +763,22 @@ setTimeout(() => process.stdout.write(JSON.stringify({id:'receipt-1',message:'pr
       }
       expect(wake.list('thread-1').sources[0]?.status).toBe('running');
       const before = wake.list('thread-1').sources[0]!;
-      await wake.pause('thread-1', 'provider');
+      let pauseSettled = false;
+      const pausing = wake.pause('thread-1', 'provider').then(result => {
+        pauseSettled = true; return result;
+      });
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(pauseSettled).toBe(false);
+      const pausedReceipt = await pausing;
+      expect(pausedReceipt.source.paused).toBe(true);
+      expect(pausedReceipt.drain).toEqual({
+        drained: true, commandInFlight: false, nativeOfferInFlight: false,
+        pendingEvents: 1, offeredEvents: 0,
+      });
+      // The command output and stable event are durable at response time, not
+      // merely after a later polling loop or a killed child during restart.
+      expect(wake.list('thread-1').events.map(e => [e.eventId, e.status]))
+        .toEqual([['receipt-1', 'pending']]);
       await expect(wake.put({ id: 'provider', threadId: 'thread-1', kind: 'command', argv: ['/bin/echo', 'new'] }))
         .rejects.toThrow('Resume the paused source');
       for (let i = 0; i < 100 && !wake.list('thread-1').events.length; i++)
@@ -647,7 +810,11 @@ setTimeout(() => process.stdout.write(JSON.stringify({id:'receipt-1',message:'pr
       const wake = await f.make();
       const original = await wake.put({ id: 'poll', threadId: 'thread-1', kind: 'command',
         argv: ['/bin/echo', '{"status":"waiting"}'] });
-      await wake.pause('thread-1', 'poll');
+      const drained = await wake.pause('thread-1', 'poll');
+      expect(drained.drain).toEqual({
+        drained: true, commandInFlight: false, nativeOfferInFlight: false,
+        pendingEvents: 0, offeredEvents: 0,
+      });
       await wake.tick(Date.now() + 60_000);
       expect(wake.list('thread-1').sources[0]?.nextAt).toBe(original.nextAt);
       expect(wake.list('thread-1').events).toHaveLength(0);
@@ -662,6 +829,44 @@ setTimeout(() => process.stdout.write(JSON.stringify({id:'receipt-1',message:'pr
         await new Promise(resolve => setTimeout(resolve, 10));
       expect(recovered.list('thread-1').events).toHaveLength(0);
     } finally { await f.cleanup(); }
+  });
+
+  test('pause waits for an in-flight native offer and preserves its stable ID without replay', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-pause-offer-'));
+    let release!: (turnId: string) => void;
+    const offered = new Promise<string>(resolve => { release = resolve; });
+    let started = 0;
+    const wake = new WakeSources({
+      inspect: async () => ({ messages: [] }),
+      steer: async () => { throw new Error('unexpected steer'); },
+      start: async () => { started++; return offered; },
+    }, root);
+    try {
+      await wake.initialize();
+      await wake.put({ id: 'provider', threadId: 'thread-1', kind: 'command',
+        argv: ['/bin/echo', '{"id":"stable-offer","message":"private input"}'] });
+      await wake.tick();
+      for (let i = 0; i < 100 && !wake.list('thread-1').events.length; i++)
+        await new Promise(resolve => setTimeout(resolve, 10));
+      const delivering = wake.tick();
+      for (let i = 0; i < 100 && !started; i++) await new Promise(resolve => setTimeout(resolve, 10));
+      expect(started).toBe(1);
+      let pauseSettled = false;
+      const pausing = wake.pause('thread-1', 'provider').then(receipt => {
+        pauseSettled = true; return receipt;
+      });
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(pauseSettled).toBe(false);
+      release('turn-stable');
+      await delivering;
+      const receipt = await pausing;
+      expect(receipt.drain.offeredEvents).toBe(1);
+      expect(receipt.drain.nativeOfferInFlight).toBe(false);
+      expect(wake.list('thread-1').events.map(event => [event.eventId, event.turnId, event.status]))
+        .toEqual([['stable-offer', 'turn-stable', 'offered']]);
+      await wake.tick(Date.now() + 60_000);
+      expect(started).toBe(1);
+    } finally { release?.('turn-stable'); await wake.stop(); await rm(root, { recursive: true, force: true }); }
   });
 
   test('pause during an empty in-flight poll lets it finish without spawning another poll', async () => {
@@ -733,6 +938,20 @@ setTimeout(()=>process.stdout.write(b.subarray(i+2)),30);`;
     } finally { await f.cleanup(); }
   });
 
+  test('oversized command output is not misreported as subscription usage', async () => {
+    const f = await fixture();
+    try {
+      const wake = await f.make();
+      await wake.put({ id: 'bounded', threadId: 'thread-1', kind: 'command',
+        argv: [process.execPath, '-e', `process.stdout.write('x'.repeat(65536));`] });
+      await wake.tick();
+      for (let i = 0; i < 100 && wake.list('thread-1').sources[0]?.status !== 'error'; i++)
+        await new Promise(resolve => setTimeout(resolve, 10));
+      expect(wake.list('thread-1').sources[0]?.error).toBe('Wake command exceeded bounded output before a provider receipt');
+      expect(wake.list('thread-1').events).toHaveLength(0);
+    } finally { await f.cleanup(); }
+  });
+
   test('native usage and authentication faults remain retained and do not retry rapidly', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'wake-errors-'));
     let attempts = 0;
@@ -750,6 +969,201 @@ setTimeout(()=>process.stdout.write(b.subarray(i+2)),30);`;
       expect(wake.list('thread-1').sources).toHaveLength(0);
       await wake.tick();
       expect(attempts).toBe(1); // no retry storm, no fallback; retained for recovery
+    } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  test('resume rejection is durably diagnosed and may retry the same stable ID without another user turn', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-resume-reject-'));
+    let attempts = 0;
+    const ids: string[] = [];
+    const messages: string[] = [];
+    const native: WakeNative = {
+      inspect: async () => ({ messages }), steer: async () => { throw new Error('unexpected'); },
+      start: async (_thread, message, id) => {
+        attempts++; ids.push(id!);
+        if (attempts === 1) throw new WakeAdmissionFailure('resume', new Error('native sensitive diagnostic'));
+        messages.push(message); return 'native-turn';
+      },
+    };
+    const wake = new WakeSources(native, root);
+    try {
+      await wake.initialize();
+      await wake.ingest('thread-1', 'daily', 'daily-21', 'private instruction');
+      await wake.tick();
+      const first = wake.list('thread-1').events[0]!;
+      expect(first.status).toBe('pending');
+      expect(first.failure?.phase).toBe('resume');
+      expect(first.failure?.messageSha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(JSON.stringify(first)).not.toContain('native sensitive diagnostic');
+      await wake.tick(Date.now() + 70_000);
+      expect(attempts).toBe(2);
+      expect(ids[0]).toBe(ids[1]);
+      await wake.tick(Date.now() + 70_001);
+      expect(wake.list('thread-1').events[0]?.status).toBe('admitted');
+    } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  test('native start timeout stays offered through restart, then reconciles a late client-ID receipt once', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-start-timeout-'));
+    let attempts = 0;
+    const ids: string[] = [];
+    const native: WakeNative = {
+      inspect: async () => ({ messages: [], clientIds: ids }),
+      steer: async () => { throw new Error('unexpected'); },
+      start: async (_thread, _message, id) => {
+        attempts++;
+        if (attempts === 1) throw new WakeAdmissionFailure('start', new Error('timeout after submission'));
+        ids.push(id!); return 'second';
+      },
+    };
+    const first = new WakeSources(native, root);
+    try {
+      await first.initialize();
+      const event = await first.ingest('thread-1', 'daily', 'daily-21', 'private instruction');
+      await first.tick();
+      expect(first.list('thread-1').events[0]?.status).toBe('offered');
+      expect(first.list('thread-1').events[0]?.failure?.phase).toBe('start');
+      await first.stop();
+      const resumed = new WakeSources(native, root);
+      try {
+        await resumed.initialize();
+        await resumed.tick(Date.now() + 70_000);
+        expect(attempts).toBe(1);
+        ids.push(wakeClientId(event));
+        await resumed.tick(Date.now() + 70_001);
+        expect(resumed.list('thread-1').events[0]?.status).toBe('admitted');
+        expect(resumed.list('thread-1').events[0]?.failure).toBeUndefined();
+        expect(attempts).toBe(1);
+      } finally { await resumed.stop(); }
+    } finally { await first.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  test('persisted errored daily offer fences later input across restart until its exact native receipt', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-daily-offer-fence-'));
+    const clientIds: string[] = [];
+    const starts: string[] = [];
+    const native: WakeNative = {
+      inspect: async () => ({ messages: [], clientIds }),
+      steer: async () => { throw Error('unexpected steer'); },
+      start: async (_thread, _message, clientId) => {
+        starts.push(clientId!);
+        if (starts.length === 1) throw new WakeAdmissionFailure('start', Error('timed out'));
+        clientIds.push(clientId!);
+        return 'later-turn';
+      },
+    };
+    const first = new WakeSources(native, root);
+    try {
+      await first.initialize();
+      await first.put({ id: 'daily', threadId: 'thread-1', kind: 'schedule',
+        message: 'synthetic maintenance', at: new Date(Date.now() - 1_000).toISOString(),
+        everyMs: 86_400_000 });
+      await first.tick();
+      const offered = first.list('thread-1').events[0]!;
+      expect(offered.status).toBe('offered');
+      expect(offered.failure?.phase).toBe('start');
+      await first.ingest('thread-1', 'peer', 'later-input', 'synthetic peer input');
+      await first.stop();
+      const resumed = new WakeSources(native, root);
+      try {
+        await resumed.initialize();
+        const later = Date.now() + 70_000;
+        await resumed.tick(later);
+        expect(resumed.list('thread-1').events.map(e => e.status)).toEqual(['offered', 'pending']);
+        expect(starts).toHaveLength(1);
+        clientIds.push(wakeClientId(offered));
+        await resumed.tick(later + 1);
+        expect(resumed.list('thread-1').events.map(e => e.status)).toEqual(['admitted', 'pending']);
+        expect(starts).toHaveLength(1);
+        await resumed.tick(later + 2);
+        expect(resumed.list('thread-1').events.map(e => e.status)).toEqual(['admitted', 'offered']);
+        expect(starts).toHaveLength(2);
+      } finally { await resumed.stop(); }
+    } finally { await first.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  test('offered daily event remains fenced across a timed-out inspection and reconciles its late receipt', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-offered-inspect-timeout-'));
+    let resolveInspection!: (value: { messages: string[]; clientIds: string[] }) => void;
+    let inspections = 0;
+    let starts = 0;
+    let nativeReceipt = false;
+    let originalClientId = '';
+    const native: WakeNative = {
+      inspect: async () => {
+        inspections++;
+        if (inspections === 1) return { messages: [], clientIds: [] };
+        if (inspections === 2) return new Promise(resolve => { resolveInspection = resolve; });
+        return { messages: [], clientIds: nativeReceipt ? [originalClientId] : [] };
+      },
+      start: async (_thread, _message, clientId) => {
+        starts++;
+        originalClientId = clientId!;
+        throw new WakeAdmissionFailure('start', Error('native outcome unknown'));
+      },
+      steer: async () => { throw Error('unexpected steer'); },
+    };
+    const first = new WakeSources(native, root, 5);
+    try {
+      await first.initialize();
+      await first.put({ id: 'daily', threadId: 'thread-1', kind: 'schedule',
+        message: 'synthetic maintenance', at: new Date(Date.now() - 1_000).toISOString(),
+        everyMs: 86_400_000 });
+      await first.tick();
+      const event = first.list('thread-1').events[0]!;
+      expect(event.status).toBe('offered');
+      expect(originalClientId).toBe(wakeClientId(event));
+      await first.stop();
+      const resumed = new WakeSources(native, root, 5);
+      try {
+        await resumed.initialize();
+        const retry = Date.parse(event.nextAttemptAt!) + 1;
+        await resumed.tick(retry);
+        expect(resumed.list('thread-1').events[0]?.failure?.phase).toBe('inspect');
+        expect(resumed.list('thread-1').events[0]?.failure?.category).toBe('timeout');
+        expect(resumed.list('thread-1').events[0]?.status).toBe('offered');
+        await resumed.tick(Date.parse(resumed.list('thread-1').events[0]!.nextAttemptAt!) + 1);
+        expect(inspections).toBe(2); // A timed-out native RPC is still in flight.
+        expect(starts).toBe(1);
+        nativeReceipt = true;
+        resolveInspection({ messages: [], clientIds: [originalClientId] });
+        await Promise.resolve();
+        await resumed.tick(Date.parse(resumed.list('thread-1').events[0]!.nextAttemptAt!) + 1);
+        expect(resumed.list('thread-1').events[0]?.status).toBe('admitted');
+        expect(resumed.list('thread-1').events[0]?.failure).toBeUndefined();
+        expect(resumed.list('thread-1').sources[0]?.status).toBe('waiting');
+        expect(starts).toBe(1);
+      } finally { await resumed.stop(); }
+    } finally { await first.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  test('due schedule survives a pre-start rejection and re-arms only after a native receipt', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-schedule-rejection-'));
+    const receipts: string[] = [];
+    let attempts = 0;
+    const wake = new WakeSources({
+      inspect: async () => ({ messages: [], clientIds: receipts }),
+      steer: async () => { throw new Error('unexpected'); },
+      start: async (_thread, _message, clientId) => {
+        attempts++;
+        if (attempts === 1) throw new WakeAdmissionFailure('resume', new Error('native resume rejected'));
+        receipts.push(clientId!); return 'native-turn';
+      },
+    }, root);
+    try {
+      await wake.initialize();
+      await wake.put({ id: 'daily', threadId: 'thread-1', kind: 'schedule',
+        message: 'maintenance', at: new Date(Date.now() - 1_000).toISOString(), everyMs: 600_000 });
+      await wake.tick();
+      expect(wake.list('thread-1').events.map(e => [e.eventId, e.status])).toEqual([['daily-1', 'pending']]);
+      expect(wake.list('thread-1').sources[0]?.nextAt).toBeUndefined();
+      await wake.tick(Date.now() + 70_000);
+      expect(wake.list('thread-1').events[0]?.status).toBe('offered');
+      await wake.tick(Date.now() + 70_001);
+      expect(wake.list('thread-1').events[0]?.status).toBe('admitted');
+      expect(wake.list('thread-1').sources[0]?.status).toBe('waiting');
+      expect(wake.list('thread-1').sources[0]?.nextAt).toBeTruthy();
+      expect(attempts).toBe(2);
     } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
   });
 });

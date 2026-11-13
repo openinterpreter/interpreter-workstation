@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, readdirSync, chmodSync, symlinkSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { persistNativeCallerBinding, recoverNativeCallerBinding, revokeNativeCallerBinding } from './persistedCallerBinding';
+import { persistNativeCallerBinding, recoverNativeCallerBinding, revokeNativeCallerBinding, revokeOtherNativeCallerBindingsForThread } from './persistedCallerBinding';
 import { agentTabManager } from '../agentTabManager';
 
 const roots: string[] = [];
@@ -16,6 +16,36 @@ describe.skipIf(process.platform !== 'linux')('native caller scope continuity', 
     allowedToolNames: ['builtin-interpreter__interpreter_whole_computer_state_get'],
     modelConfig: { provider: 'openai-oauth' as const, modelId: 'gpt-6-sol', apiKey: 'MUST_NOT_PERSIST' },
   };
+
+  it('revokes only prior exact-thread bearer hashes after a successful cold bind', () => {
+    const dir = root();
+    const next = 'agtok_replacement123456789';
+    const foreign = 'agtok_foreign123456789';
+    persistNativeCallerBinding({ ...binding, allowedToolNames: undefined }, dir);
+    persistNativeCallerBinding({ ...binding, callerToken: next, allowedToolNames: undefined }, dir);
+    persistNativeCallerBinding({ ...binding, callerToken: foreign, threadId: 'other-thread' }, dir);
+    expect(revokeOtherNativeCallerBindingsForThread(binding.threadId, next, dir, true)).toBe(1);
+    expect(recoverNativeCallerBinding(token, dir)?.threadId).toBe(binding.threadId);
+    expect(revokeOtherNativeCallerBindingsForThread(binding.threadId, next, dir)).toBe(1);
+    expect(recoverNativeCallerBinding(token, dir)).toBeUndefined();
+    expect(recoverNativeCallerBinding(next, dir)?.threadId).toBe(binding.threadId);
+    expect(recoverNativeCallerBinding(foreign, dir)?.threadId).toBe('other-thread');
+  });
+
+  it('refuses to widen a prior restricted caller across a cold restart', () => {
+    const dir = root();
+    const next = 'agtok_replacement123456789';
+    persistNativeCallerBinding(binding, dir);
+    expect(() => revokeOtherNativeCallerBindingsForThread(binding.threadId, next, dir, true))
+      .toThrow(/narrower tool scope/);
+    expect(recoverNativeCallerBinding(token, dir)?.allowedToolNames).toEqual(binding.allowedToolNames);
+  });
+
+  it('allows an empty, not-yet-created binding directory without making one', () => {
+    const dir = root();
+    expect(revokeOtherNativeCallerBindingsForThread('thr-123', 'agtok_replacement123456789', dir, true)).toBe(0);
+    expect(readdirSync(dir)).toEqual([]);
+  });
 
   it('recovers only the exact bearer and scoped thread after an in-memory loss without storing token or credential', () => {
     const dir = root();

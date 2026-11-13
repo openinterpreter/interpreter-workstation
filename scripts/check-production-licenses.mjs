@@ -46,8 +46,8 @@ function flattenInventory(inventory) {
   });
 }
 
-function readRelayLibvipsPackages() {
-  const scopeDir = path.join(root, 'resources', 'browser-extension-relay', 'node_modules', '@img');
+function readRelayLibvipsPackages(runtimeName = 'browser-extension-relay') {
+  const scopeDir = path.join(root, 'resources', runtimeName, 'node_modules', '@img');
   if (!existsSync(scopeDir)) return [];
 
   return readdirSync(scopeDir, { withFileTypes: true })
@@ -65,7 +65,10 @@ function readRelayLibvipsPackages() {
 
 const policy = JSON.parse(readFileSync(policyPath, 'utf8'));
 const entries = flattenInventory(readInventory());
-const relayLibvipsEntries = readRelayLibvipsPackages();
+const relayLibvipsEntries = [
+  ...readRelayLibvipsPackages(),
+  ...readRelayLibvipsPackages('simple-interface-runtime'),
+];
 const failures = [];
 
 for (const noticeFile of policy.noticeFiles) {

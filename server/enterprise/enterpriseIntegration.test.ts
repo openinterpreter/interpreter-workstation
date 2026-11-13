@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { createEnterpriseControlPlane } from './controlPlane';
 import { ServerDirectory } from './serverDirectory';
-import { OidcIntegration, type OidcConfiguration } from './oidc';
+import { OidcIntegration, providerMetadataUri, type OidcConfiguration } from './oidc';
 
 const paths: string[] = [];
 afterEach(async () => { await Promise.all(paths.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
@@ -37,7 +37,12 @@ async function mockIdP(directory: ServerDirectory, overrides: Record<string, unk
   let authorizeNonce = '';
   let authorizeChallenge = '';
   let tokenRequests = 0;
+  let metadataOverride: Record<string, unknown> = {};
   const fetchMock: typeof fetch = async (input, init) => {
+    if (String(input) === providerMetadataUri(config.issuer)) return Response.json({ issuer: config.issuer,
+      authorization_endpoint: config.authorizationEndpoint, token_endpoint: config.tokenEndpoint,
+      jwks_uri: config.jwksUri, response_types_supported: ['code'], id_token_signing_alg_values_supported: ['RS256'],
+      token_endpoint_auth_methods_supported: ['none'], code_challenge_methods_supported: ['S256'], ...metadataOverride });
     if (String(input) === config.jwksUri) return Response.json({ keys: [jwk] });
     if (String(input) !== config.tokenEndpoint || init?.method !== 'POST') throw new Error('Unexpected endpoint');
     tokenRequests++;
@@ -65,10 +70,52 @@ async function mockIdP(directory: ServerDirectory, overrides: Record<string, unk
     expect(url.searchParams.get('scope')).toBe('openid');
     return flow;
   };
-  return { integration, begin, requests: () => tokenRequests };
+  return { integration, begin, requests: () => tokenRequests,
+    metadata: (changed: Record<string, unknown>) => { metadataOverride = changed; } };
 }
 
 describe('server-owned directory and local OIDC fixture', () => {
+  test('provider discovery binds path issuer, endpoints, public client, S256 and algorithms before login and code exchange', async () => {
+    expect(providerMetadataUri(config.issuer)).toBe('http://127.0.0.1:39393/tenant/.well-known/openid-configuration');
+    const { directory: store } = await directory();
+    const idp = await mockIdP(store);
+    for (const changed of [
+      { issuer: 'http://127.0.0.1:39393/other-tenant' }, { jwks_uri: 'http://127.0.0.1:39393/other-tenant/keys' },
+      { token_endpoint: 'http://127.0.0.1:39393/other-tenant/token' }, { response_types_supported: ['id_token'] },
+      { token_endpoint_auth_methods_supported: ['client_secret_basic'] }, { code_challenge_methods_supported: ['plain'] },
+      { id_token_signing_alg_values_supported: ['none'] },
+    ]) {
+      idp.metadata(changed);
+      await expect(idp.begin()).rejects.toThrow('provider metadata');
+    }
+    idp.metadata({});
+    const flow = await idp.begin();
+    idp.metadata({ issuer: 'http://127.0.0.1:39393/other-tenant' });
+    await expect(idp.integration.complete({ code: 'one-time-code', state: flow.state,
+      browserBinding: flow.browserBinding })).rejects.toThrow('provider metadata');
+    idp.metadata({});
+    await expect(idp.integration.complete({ code: 'one-time-code', state: flow.state,
+      browserBinding: flow.browserBinding })).rejects.toThrow('state invalid');
+    expect(idp.requests()).toBe(0);
+    expect((await store.auditSummary('org-a')).eventCount).toBe(1);
+  });
+  test('provider discovery outage, wrong content type and oversized response deny before storing login state', async () => {
+    const { directory: store, file } = await directory();
+    const metadata = providerMetadataUri(config.issuer);
+    for (const response of [
+      () => { throw new Error('Provider unavailable'); },
+      () => new Response('{}', { headers: { 'Content-Type': 'text/html' } }),
+      () => Response.json({ issuer: config.issuer, padding: 'x'.repeat(66_000) }),
+    ]) {
+      const integration = new OidcIntegration(config, store, async (input, init) => {
+        expect(String(input)).toBe(metadata);
+        expect(init).toMatchObject({ method: 'GET', redirect: 'error' });
+        return response();
+      });
+      await expect(integration.begin()).rejects.toThrow();
+    }
+    expect(JSON.parse(await readFile(file, 'utf8')).attempts).toEqual({});
+  });
   test('signed OIDC login creates opaque revocable session and tenant-scoped admin view', async () => {
     const { directory: first, file } = await directory();
     const idp = await mockIdP(first);
@@ -135,6 +182,13 @@ describe('server-owned directory and local OIDC fixture', () => {
     const events = await store.listAudit(identity);
     expect(events.every((event) => event.organizationId === 'org-a')).toBe(true);
     expect((await store.auditSummary('org-a')).eventCount).toBe(events.length + 1);
+    await store.setMember(identity, { organizationId: 'org-a', subject: 'bob', displayName: 'Bob', role: 'member', active: true });
+    const member = await store.createSession(config.issuer, 'org-a', 'bob', Date.now() + 60_000);
+    const before = (await store.auditSummary('org-a')).eventCount;
+    await expect(store.listAudit(member.identity)).rejects.toThrow('Access denied');
+    expect((await store.auditSummary('org-a')).eventCount).toBe(before + 1);
+    expect((await store.listAudit(identity)).at(-1)).toMatchObject({ organizationId: 'org-a', subject: 'bob',
+      action: 'organization.audit.read', outcome: 'denied' });
     await expect(store.listAudit({ ...identity, organizationId: 'org-b' })).rejects.toThrow();
     await store.revokeSession(identity);
     await expect(store.listAudit(identity)).rejects.toThrow();

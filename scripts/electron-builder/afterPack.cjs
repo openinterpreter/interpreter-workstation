@@ -9,6 +9,28 @@ function listAsarEntries(archivePath) {
   return listPackage(archivePath);
 }
 
+// A transitive Jimp/whatwg-url import runs before the main window exists. The
+// dependency is explicit in package.json so electron-builder keeps it, and the
+// final archive must contain the entry points used by whatwg-url. Fail the
+// build rather than shipping another installer that crashes on first launch.
+function assertStartupUrlDependencies(resourcesRoot, listEntries = listAsarEntries) {
+  const archivePath = path.join(resourcesRoot, 'app.asar');
+  if (!fs.existsSync(archivePath)) {
+    throw new Error('[afterPack] Missing app.asar for startup dependency verification');
+  }
+  const entries = new Set(listEntries(archivePath).map((entry) => entry.replaceAll('\\', '/').replace(/^\//, '')));
+  for (const required of [
+    'node_modules/whatwg-url/lib/url-state-machine.js',
+    'node_modules/@exodus/bytes/package.json',
+    'node_modules/@exodus/bytes/encoding.js',
+    'node_modules/@exodus/bytes/whatwg.js',
+  ]) {
+    if (!entries.has(required)) {
+      throw new Error(`[afterPack] Missing main-process startup dependency in app.asar: ${required}`);
+    }
+  }
+}
+
 function copyOptionalFile(source, destination) {
   if (!fs.existsSync(source)) return false;
   fs.mkdirSync(path.dirname(destination), { recursive: true });
@@ -30,8 +52,8 @@ function wildcardMatches(pattern, value) {
   return new RegExp(`^${escaped}$`).test(value);
 }
 
-function assertBundledRelayLibvipsPolicy(resourcesRoot) {
-  const scopeDir = path.join(resourcesRoot, 'browser-extension-relay', 'node_modules', '@img');
+function assertBundledRelayLibvipsPolicy(resourcesRoot, runtimeName = 'browser-extension-relay') {
+  const scopeDir = path.join(resourcesRoot, runtimeName, 'node_modules', '@img');
   if (!fs.existsSync(scopeDir)) return;
 
   const packageDirs = fs.readdirSync(scopeDir, { withFileTypes: true })
@@ -137,6 +159,11 @@ function getRequiredBundledResourcePaths(resourcesRoot, platform, arch) {
     path.join(resourcesRoot, 'browser-extension-relay', 'dist', 'extension', 'manifest.json'),
     path.join(resourcesRoot, 'browser-extension-relay', 'node_modules', 'hono', 'package.json'),
   ];
+  const simpleRuntimePaths = [
+    path.join(resourcesRoot, 'simple-interface-runtime', 'runtime-manifest.json'),
+    path.join(resourcesRoot, 'simple-interface-runtime', 'node_modules', 'next', 'package.json'),
+    path.join(resourcesRoot, 'simple-interface-runtime', 'node_modules', 'react', 'package.json'),
+  ];
 
   if (platform === 'darwin' || platform === 'mac') {
     return [
@@ -144,6 +171,7 @@ function getRequiredBundledResourcePaths(resourcesRoot, platform, arch) {
       path.join(resourcesRoot, 'pdfcpu', 'pdfcpu'),
       ...jsReplRuntimePaths,
       ...relayRuntimePaths,
+      ...simpleRuntimePaths,
       path.join(resourcesRoot, 'qwen-asr', `darwin-${arch}`, 'qwen_asr'),
       path.join(resourcesRoot, 'cua-driver', 'cua-driver'),
       path.join(resourcesRoot, 'cua-driver', 'tool-metadata.json'),
@@ -166,6 +194,7 @@ function getRequiredBundledResourcePaths(resourcesRoot, platform, arch) {
       path.join(resourcesRoot, 'pdfcpu', 'pdfcpu'),
       ...jsReplRuntimePaths,
       ...relayRuntimePaths,
+      ...simpleRuntimePaths,
       path.join(resourcesRoot, 'qwen-asr', `linux-${arch}`, 'qwen_asr'),
     ];
   }
@@ -178,6 +207,7 @@ function getRequiredBundledResourcePaths(resourcesRoot, platform, arch) {
       path.join(resourcesRoot, 'codex-windows-sandbox-setup.exe'),
       ...jsReplRuntimePaths,
       ...relayRuntimePaths,
+      ...simpleRuntimePaths,
       path.join(resourcesRoot, 'cua-driver', 'windows-uia.ps1'),
       path.join(resourcesRoot, 'interpreter-overlay', 'native', 'window_pin.node'),
     ];
@@ -193,6 +223,18 @@ function assertRequiredBundledResources(resourcesRoot, platform, arch) {
     }
   }
 
+  const simpleRuntimeDir = path.join(resourcesRoot, 'simple-interface-runtime');
+  const simpleManifest = JSON.parse(fs.readFileSync(path.join(simpleRuntimeDir, 'runtime-manifest.json'), 'utf8'));
+  const normalizedPlatform = platform === 'mac' ? 'darwin' : platform === 'windows' ? 'win32' : platform;
+  if (simpleManifest.platform !== normalizedPlatform || simpleManifest.arch !== arch) {
+    throw new Error(`[afterPack] Wrong bundled Simple runtime: ${simpleManifest.platform}-${simpleManifest.arch}; expected ${normalizedPlatform}-${arch}`);
+  }
+  const expectedNext = JSON.parse(fs.readFileSync(path.join(simpleRuntimeDir, 'package.json'), 'utf8')).dependencies.next;
+  const actualNext = JSON.parse(fs.readFileSync(path.join(simpleRuntimeDir, 'node_modules', 'next', 'package.json'), 'utf8')).version;
+  if (actualNext !== expectedNext) {
+    throw new Error(`[afterPack] Wrong bundled Next.js version: ${actualNext}; expected ${expectedNext}`);
+  }
+
   const liveRelayTreePath = path.join(resourcesRoot, 'browser-extension-relay');
   const relayArchivePath = path.join(resourcesRoot, 'browser-extension-relay.zip');
   if (!fs.existsSync(liveRelayTreePath)) {
@@ -202,6 +244,7 @@ function assertRequiredBundledResources(resourcesRoot, platform, arch) {
     throw new Error(`[afterPack] Packaged app must not include a relay archive: ${relayArchivePath}`);
   }
   assertBundledRelayLibvipsPolicy(resourcesRoot);
+  assertBundledRelayLibvipsPolicy(resourcesRoot, 'simple-interface-runtime');
 }
 
 function getMacExtraResourceBinariesForSigning(resourcesRoot) {
@@ -275,6 +318,7 @@ async function afterPack(context) {
   }
 
   assertRequiredBundledResources(resourcesRoot, platform, arch);
+  assertStartupUrlDependencies(resourcesRoot);
 
   if (isWin) {
     console.log('[afterPack] Copying Windows runtime DLLs for packaged app...');
@@ -442,6 +486,11 @@ async function afterPack(context) {
       scanDirRecursive(relayRuntimeDir, (name) => name.endsWith('.node') || name.endsWith('.dylib'));
     }
 
+    // Next's platform-native compiler and image libraries live outside ASAR.
+    // Sign them with the app so cold startup also works under hardened runtime.
+    scanDirRecursive(path.join(resourcesRoot, 'simple-interface-runtime'),
+      (name) => name.endsWith('.node') || name.endsWith('.dylib'));
+
     const opts = packager.platformSpecificBuildOptions || {};
     opts.binaries = Array.from(new Set([...(opts.binaries || []), ...toSign]));
     packager.platformSpecificBuildOptions = opts;
@@ -456,4 +505,5 @@ module.exports.assertRequiredBundledResources = assertRequiredBundledResources;
 module.exports.assertBundledRelayLibvipsPolicy = assertBundledRelayLibvipsPolicy;
 module.exports.copyWindowsRuntimeDlls = copyWindowsRuntimeDlls;
 module.exports.assertWindowsDelayLoadDlls = assertWindowsDelayLoadDlls;
+module.exports.assertStartupUrlDependencies = assertStartupUrlDependencies;
 module.exports.getMacExtraResourceBinariesForSigning = getMacExtraResourceBinariesForSigning;

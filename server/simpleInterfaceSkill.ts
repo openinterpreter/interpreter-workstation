@@ -14,8 +14,9 @@ The project is a normal full-stack Next.js application, edited live by the same 
 agent the user is speaking with. It is not a JSON renderer and it is not a
 collection of native declarative screens. Use React state, events, composition,
 normal application logic, server components, route handlers, and backend code.
-Add any ordinary npm dependency the application needs to \`package.json\`;
-Workstation installs declared dependencies with its bundled runtime. Keep the experience direct: the interface is the
+The standard Next.js and design dependencies are already bundled and work offline.
+For an additional npm dependency, install it in this project with the supplied package manager;
+an uncached package needs network access. Keep the experience direct: the interface is the
 work, while Interpreter supplies the single composer, conversation drawer,
 settings, model controls, voice, and channel routing around it.
 
@@ -70,6 +71,24 @@ These two packages are Workstation's app-shipped project SDK. They are normal
 imports inside this ordinary Next.js project, not a restriction on other
 packages. Use any suitable npm package and create files under \`app/api/\` or
 other server modules when the requested interface needs a backend.
+
+Server-only code can import \`computer\`, \`browser\`, or \`tools\` from
+\`@interpreter/workstation\`. This is the Node interface to the same scoped
+Interpreter computer/browser capabilities available through \`interpreter-app\`.
+Call it in a route handler or server action; never import it in a client
+component or expose its caller token. Existing browser permission checks and
+approval prompts still apply. Use ordinary Next.js client/server code to render
+the returned data. The package is not a substitute for editing project files.
+
+For a live Chrome-tab video surface, the user explicitly chooses **Share this
+tab video with Interpreter** from that tab's extension context menu. In client
+code, call \`window.Interpreter.browser.captures.list()\` to find a shared tab,
+then \`connect(videoElement, captureId)\`. The returned handle has \`stop()\`.
+This sends video/audio via local WebRTC, not a web-page iframe. The video
+element can be cropped, masked, filtered, or sampled into a canvas as normal
+browser media. Do not initiate tab capture without the user's explicit share
+action; stop the connection when the UI no longer needs it. Some protected
+video may remain unavailable for capture under browser/DRM rules.
 
 ## Files and selection
 
@@ -155,6 +174,9 @@ visual change to the interface is an audible voice reply.
   it reaches disk.
 - Use the app's visual inspection/computer-use capability after compiling. Do
   not declare a design complete from source alone.
+- When replacing a file in \`public/\`, verify that the live interface actually
+  displays the new bytes. A successful build alone does not prove a same-URL
+  image or video changed in the current window.
 `;
 
 export const SIMPLE_INTERFACE_MANAGED_AGENTS_MARKER = '<!-- interpreter-managed-interface-project:v2 -->';
@@ -170,10 +192,14 @@ export const SIMPLE_INTERFACE_MANAGED_AGENTS = `${SIMPLE_INTERFACE_MANAGED_AGENT
 
 This folder is one standalone full-stack Next.js interface project. It is not a
 route inside another interface. Work in \`app/\` and \`src/\`; keep static assets
-under \`public/\`. Add ordinary npm packages to \`package.json\` whenever useful;
-Workstation's bundled package manager installs them automatically. Backend
+under \`public/\`. Install ordinary npm packages in this project whenever useful;
+the standard runtime is already present, while new packages outside it may need network access. Backend
 route handlers and server modules are supported. Interpreter owns hidden
 \`.interpreter/\` metadata, SDK packages, and runtime files.
+
+The \`@interpreter/workstation\` Node package is available in server-only
+Next.js code for scoped host computer/browser tools. The \`interpreter-app\`
+CLI remains available to the agent. Neither is needed for normal source edits.
 
 Use normal coding tools for normal project work: native shell and filesystem
 commands, source edits, and the package manager. Do not search Interpreter app
@@ -193,6 +219,9 @@ relevant app tool and observing that error.
 Run native Computer Use calls strictly one at a time. Wait for each call to
 finish before starting the next one; do not background calls or schedule a
 sleep-and-next-call sequence while another native action is still running.
+When the user asks what application or interface you can edit, answer from the
+active Next.js project and its files. Prior Chrome turns do not make Chrome the
+target of a new request; use browser tools only when Chrome is actually asked for.
 
 Before designing or editing the visible interface, read the app-maintained
 skill at \`.interpreter/skills/interface-design/SKILL.md\` completely. It defines

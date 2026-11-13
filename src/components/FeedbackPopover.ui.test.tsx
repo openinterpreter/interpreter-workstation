@@ -7,6 +7,7 @@ import { ToastProvider } from '../contexts/ToastContext';
 import { FeedbackPopover } from './FeedbackPopover';
 import { useState } from 'react';
 import { openFeedbackPopover } from '../utils/feedback';
+import { distributionProductConfig } from '../../shared/productConfig';
 
 vi.mock('motion/react', async () => {
   const React = await import('react');
@@ -94,6 +95,7 @@ async function submitMeaningfulFeedback(user: ReturnType<typeof userEvent.setup>
 describe('FeedbackPopover', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    distributionProductConfig.feedbackUrl = '';
     (window as any).electron = {
       feedback: {
         submit: vi.fn(),
@@ -117,10 +119,10 @@ describe('FeedbackPopover', () => {
     });
 
     await act(async () => {
-      deferred.resolve({ success: true, id: 'feedback-1' });
+      deferred.resolve({ success: true, id: 'a'.repeat(32) });
     });
 
-    expect(await screen.findByText('Feedback sent!')).toBeVisible();
+    expect(await screen.findByText(`Feedback sent! Report ID: ${'a'.repeat(32)}`)).toBeVisible();
     expect(screen.queryByText('Sending feedback...')).not.toBeInTheDocument();
   });
 
@@ -211,5 +213,46 @@ describe('FeedbackPopover', () => {
     act(() => openFeedbackPopover());
     expect(await screen.findByLabelText('Message')).toBeVisible();
     expect(telemetryMocks.trackFeedbackOpened).toHaveBeenCalledOnce();
+  });
+
+  test('dedicated feedback requires a separate password field without placing it in the message', async () => {
+    distributionProductConfig.feedbackUrl = 'https://feedback.example.test/v0/feedback';
+    const user = userEvent.setup();
+    (window as any).electron.feedback.submit.mockResolvedValue({ success: true, id: 'a'.repeat(32) });
+    renderFeedbackPopover();
+    await user.click(screen.getByRole('button', { name: 'Feedback' }));
+    await user.type(await screen.findByLabelText('Message'), 'A complete report for support to inspect.');
+    const field = screen.getByLabelText('Report passcode');
+    expect(field).toHaveAttribute('type', 'password');
+    await user.click(screen.getByRole('button', { name: 'Send Feedback' }));
+    expect((window as any).electron.feedback.submit).not.toHaveBeenCalled();
+    await user.type(field, 'operator-report-passcode');
+    await user.click(screen.getByRole('button', { name: 'Send Feedback' }));
+    await waitFor(() => expect((window as any).electron.feedback.submit).toHaveBeenCalledTimes(1));
+    expect((window as any).electron.feedback.submit.mock.calls[0][0]).toMatchObject({
+      message: 'A complete report for support to inspect.', reportPasscode: 'operator-report-passcode',
+    });
+    expect(telemetryMocks.trackFeedbackSubmitted).not.toHaveBeenCalledWith(
+      expect.objectContaining({ reportPasscode: 'operator-report-passcode' }),
+    );
+  });
+
+  test('dedicated transport errors never echo a report passcode in toast or logs', async () => {
+    distributionProductConfig.feedbackUrl = 'https://feedback.example.test/v0/feedback';
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      (window as any).electron.feedback.submit.mockRejectedValue(new Error('operator-report-passcode leaked in transport'));
+      const user = userEvent.setup();
+      renderFeedbackPopover();
+      await user.click(screen.getByRole('button', { name: 'Feedback' }));
+      await user.type(await screen.findByLabelText('Message'), 'A complete report for support to inspect.');
+      await user.type(screen.getByLabelText('Report passcode'), 'operator-report-passcode');
+      await user.click(screen.getByRole('button', { name: 'Send Feedback' }));
+      await waitFor(() => expect(errorLog).toHaveBeenCalled());
+      expect(screen.queryByText(/operator-report-passcode/u)).not.toBeInTheDocument();
+      expect(JSON.stringify(errorLog.mock.calls)).not.toContain('operator-report-passcode');
+    } finally {
+      errorLog.mockRestore();
+    }
   });
 });

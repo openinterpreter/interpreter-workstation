@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'child_process';
+import { createHash } from 'node:crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { PINNED_VERSION } from './download-oix.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
 const SCHEMAS_DIR = path.join(ROOT, 'server', 'handlers', 'codex-generated-types');
 const DOWNLOAD_SCRIPT = path.join(ROOT, 'scripts', 'download-oix.mjs');
 const GENERATE_SCRIPT = path.join(ROOT, 'scripts', 'generate-codex-schemas.ts');
+const FINGERPRINT_FILE = path.join(SCHEMAS_DIR, '.runtime-binary.sha256');
 
 const REQUIRED_OUTPUTS = [
   path.join(SCHEMAS_DIR, 'index.ts'),
@@ -42,12 +45,16 @@ function generateFromBinary(binaryPath) {
   });
 }
 
-if (hasGeneratedTypes()) {
+const binaryPath = resolveCurrentPlatformBinary();
+const versionFile = path.join(ROOT, 'resources', 'oix', 'VERSION');
+const isPinnedRuntime = fs.existsSync(versionFile)
+  && fs.readFileSync(versionFile, 'utf8').trim() === PINNED_VERSION;
+const fingerprint = () => createHash('sha256').update(fs.readFileSync(binaryPath)).digest('hex');
+if (isPinnedRuntime && hasGeneratedTypes() && fs.existsSync(binaryPath) && fs.existsSync(FINGERPRINT_FILE)
+  && fs.readFileSync(FINGERPRINT_FILE, 'utf8').trim() === fingerprint()) {
   process.exit(0);
 }
-
-const binaryPath = resolveCurrentPlatformBinary();
-if (fs.existsSync(binaryPath)) {
+if (isPinnedRuntime && fs.existsSync(binaryPath)) {
   console.log('Generating codex app-server protocol types from the local Interpreter runtime...');
   generateFromBinary(binaryPath);
 } else {
@@ -59,3 +66,4 @@ if (!hasGeneratedTypes()) {
   console.error('Failed to generate codex protocol types.');
   process.exit(1);
 }
+fs.writeFileSync(FINGERPRINT_FILE, `${fingerprint()}\n`);

@@ -14,6 +14,7 @@ import {
   resolvePathForSecurityCheck,
 } from '../utils/permissions';
 import { approvalManager } from '../approvalManager';
+import { failClosedOnHeadlessToolApprovalSync } from '../configStore';
 import { getGlobalSkillsRoot } from '../utils/skillsPaths';
 import {
   getEffectiveFileReadAccessSync,
@@ -138,6 +139,7 @@ export async function requestFilesystemApproval(
 
   // Delete approvals are ALWAYS required (no settings bypass, no session auto-allow).
   if (args.category === FS_GUARD_CATEGORIES.DELETE) {
+    if (failClosedOnHeadlessToolApprovalSync()) return { approved: false };
     const warning = WARNING_MESSAGES[args.category];
     const context: Record<string, any> = {
       message: 'Let Interpreter delete this file?',
@@ -163,6 +165,7 @@ export async function requestFilesystemApproval(
   if (args.category === FS_GUARD_CATEGORIES.MOVE && !shouldPromptForWorkspaceWriteSync()) return { approved: true };
   if (args.category === FS_GUARD_CATEGORIES.WRITE && !shouldPromptForWorkspaceWriteSync()) return { approved: true };
   if (args.category === FS_GUARD_CATEGORIES.WRITE_OUTSIDE) return { approved: false };
+  if (failClosedOnHeadlessToolApprovalSync()) return { approved: false };
 
   const warning = WARNING_MESSAGES[args.category];
   const context: Record<string, any> = { paths: approvalPaths };

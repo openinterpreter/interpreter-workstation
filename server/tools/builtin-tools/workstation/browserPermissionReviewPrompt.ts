@@ -6,7 +6,7 @@ import {
   type BrowserAccessPolicyMode,
 } from '../../../../shared/browserAccessPolicy';
 import { approvalManager } from '../../../approvalManager';
-import { getBrowserAccessPolicy } from '../../../configStore';
+import { autoApproveOrdinaryHeadlessToolsSync, failClosedOnHeadlessToolApprovalSync, getBrowserAccessPolicy } from '../../../configStore';
 import {
   addBrowserAccessSessionGrant,
   withTemporaryBrowserAccessGrant,
@@ -113,6 +113,11 @@ async function requestBrowserPermissionReviewPrompt(
     origin: tab.origin,
     permissionKind: input.permissionKind,
   };
+  // The operator-selected unattended mode authorizes this single ordinary
+  // browser action, not a persistent origin grant. Explicit deny was checked
+  // above and cannot be weakened by this branch.
+  if (autoApproveOrdinaryHeadlessToolsSync()) return { approved: true, grant };
+  if (failClosedOnHeadlessToolApprovalSync()) return { approved: false };
   const approval = await approvalManager.createSessionAwareApproval(
     input.toolName,
     'builtin-interpreter',

@@ -71,6 +71,15 @@ export function getInterpreterOpenRouterBaseUrl(): string {
 }
 
 export function getInterpreterFeedbackUrl(): string {
+  const dedicated = distributionProductConfig.feedbackUrl?.trim();
+  if (dedicated) {
+    const endpoint = new URL(dedicated);
+    if (endpoint.protocol !== 'https:' || endpoint.username || endpoint.password || endpoint.search || endpoint.hash ||
+        endpoint.pathname !== '/v0/feedback') {
+      throw new Error('Invalid distribution feedback endpoint');
+    }
+    return endpoint.href;
+  }
   const baseUrl = getInterpreterHostedApiV0BaseUrl();
   return baseUrl ? `${baseUrl}/feedback` : '';
 }
