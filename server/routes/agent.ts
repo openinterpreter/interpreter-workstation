@@ -65,6 +65,7 @@ import {
 import {
   NativeCustodyPhaseError,
   NativeGlobalInventoryError,
+  SavedThreadIdentityError,
   NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS,
   NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS,
   getCodexService,
@@ -1248,6 +1249,21 @@ router.post('/threads/:threadId/fork', async (req: Request, res: Response) => {
     return res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to fork thread.',
     });
+  }
+});
+
+/** Metadata-only exact binding for authenticated/local saved-thread sends.
+ * No transcript, queue observation, or application active/idle gate. */
+router.get('/threads/:threadId/identity', async (req: Request, res: Response) => {
+  const threadId = req.params.threadId;
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId)) {
+    return res.status(400).json({ error: 'Exact native thread ID required.' });
+  }
+  try {
+    return res.json(await getCodexService().readSavedThreadIdentity(threadId));
+  } catch (error) {
+    return res.status(error instanceof SavedThreadIdentityError ? 404 : 503)
+      .json({ error: 'Exact saved-thread identity unavailable.' });
   }
 });
 
