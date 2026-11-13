@@ -94,6 +94,25 @@ The workflow reuses an existing version tag only for a retry at its **exact
 original commit**. A different commit must advance `publicVersion`; it cannot
 replace an already published binary under the old tag.
 
+### Interrupted publication
+
+For an unpublished exact-commit retry, the publisher checks the local
+`SHA256SUMS`, source/run manifest, and every existing GitHub draft asset's
+size and SHA-256 before adding only absent assets. It then checks every
+versioned public installer and blockmap against the complete remote SHA-256,
+preserves matching objects, and uploads only confirmed missing objects. A
+failed upload may have completed remotely: the retry reads and hashes the
+object before another PUT. A mismatch, incomplete listing, or unavailable
+read stops publication rather than overwriting an asset. This is an ordinary
+protected workflow step, not a standalone repair command.
+
+The unversioned release metadata, download aliases, and auto-update manifests
+are current-version pointers, not immutable package objects. Metadata is
+published only after the GitHub release becomes public; the update manifests
+remain last. A change merged after a workflow was dispatched cannot alter a
+rerun at the old workflow SHA. Do not use a different release revision to
+overwrite that older draft; prepare a distinct version instead.
+
 ## Verifying a download
 
 Download the relevant binary and `SHA256SUMS` from the GitHub release, then

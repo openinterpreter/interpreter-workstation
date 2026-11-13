@@ -3,9 +3,16 @@ import { createHash } from 'node:crypto';
 import express from 'express';
 import { createServer, type Server } from 'node:http';
 import { createSupervisorPeerRouter } from './supervisorPeer';
+import { createSupervisorGoal, SupervisorGoalCreateError } from '../utils/supervisorGoalCreate';
+import { GoalRevisionConflictError } from '../../src/lib/codex/goal-revision';
 import type { VerifiedSupervisorGrant } from '../utils/supervisorPeerScope';
 
 const threadId = '00000000-0000-4000-8000-000000000001';
+const createBody = { creationId: 'unique-supervisor-job', objective: 'managed',
+  document: 'mission', precondition: { kind: 'completed' as const,
+    expectedGoalId: '00000000-0000-4000-8000-000000000004',
+    expectedStatus: 'complete' as const, expectedMissionRevision: 4,
+    expectedLifecycleRevision: 7 } };
 const grant: VerifiedSupervisorGrant = {
   issuer: 'enrolled-issuer', subject: 'supervisor-1', sourceComputer: 'source-1',
   targetComputer: 'target-1', threadId,
@@ -15,8 +22,10 @@ const grant: VerifiedSupervisorGrant = {
 let server: Server | undefined;
 afterEach(() => server?.close());
 
-async function fixture(verified: VerifiedSupervisorGrant | null = grant, alteredDocument = false) {
-  const calls = { goal: 0, create: 0, resume: 0, terminal: 0, artifact: 0, submission: 0 };
+async function fixture(verified: VerifiedSupervisorGrant | null = grant, alteredDocument = false,
+  resumeError?: Error) {
+  const calls = { goal: 0, create: 0, resume: 0, terminal: 0, terminalList: 0,
+    artifact: 0, submission: 0 };
   const app = express();
   app.use(express.json({ limit: '2kb' }));
   app.use('/peer', createSupervisorPeerRouter({
@@ -30,8 +39,13 @@ async function fixture(verified: VerifiedSupervisorGrant | null = grant, altered
         missionRevision: 4,
       } }; },
     createGoal: async () => { calls.create++; throw new Error('creation outcome unknown'); },
-    resumeGoal: async (_thread, expected) => { calls.resume++; return { ...expected, status: 'active' }; },
+    resumeGoal: async (_thread, expected) => { calls.resume++;
+      if (resumeError) throw resumeError;
+      return { ...expected, status: 'active' }; },
     readTerminal: async () => { calls.terminal++; throw new Error('private command text'); },
+    listTerminalOwners: async () => { calls.terminalList++; return { data: [{ threadId,
+      turnId: '00000000-0000-4000-8000-000000000003', itemId: 'item-1',
+      nativeProcessId: 'process-1', terminalGeneration: 1 }], nextCursor: null }; },
     readJournal: async () => ({ requestId: 'request-1', threadId,
       clientUserMessageId: 'client-1', phase: 'turn_started', turnId: 'turn-1', at: 'now' }),
     readSubmission: async (_thread, clientUserMessageId) => { calls.submission++;
@@ -74,12 +88,13 @@ describe('enrolled supervisor peer route seam', () => {
     const { base, calls } = await fixture(null);
     expect((await fetch(`${base}/goal`)).status).toBe(403);
     expect((await fetch(`${base}/artifacts/receipt-1?content=true`)).status).toBe(403);
-    expect(calls).toEqual({ goal: 0, create: 0, resume: 0, terminal: 0, artifact: 0, submission: 0 });
+    expect(calls).toEqual({ goal: 0, create: 0, resume: 0, terminal: 0,
+      terminalList: 0, artifact: 0, submission: 0 });
   });
   it('denies cross-thread creation before a native call and keeps uncertain creation typed', async () => {
     const { base, calls } = await fixture();
     const create = (url: string) => fetch(`${url}/goal/create`, { method: 'POST',
-      headers: { 'content-type': 'application/json' }, body: JSON.stringify({ document: 'mission' }) });
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify(createBody) });
     const denied = await create(base.replace(threadId, '00000000-0000-4000-8000-000000000002'));
     expect(denied.status).toBe(403);
     expect(calls.create).toBe(0);
@@ -88,6 +103,56 @@ describe('enrolled supervisor peer route seam', () => {
     expect(await uncertain.json()).toEqual({ available: false, category: 'mutation_unconfirmed' });
     expect(calls.create).toBe(1);
   });
+  it('creates an initial native-managed Goal only for the exact enrolled thread', async () => {
+    const full = '# First full mission\n' + 'Retain this task.\n'.repeat(300);
+    const sha = createHash('sha256').update(full).digest('hex');
+    const first = { creationId: 'peer-first-mission', objective: 'first mission pointer',
+      document: full, precondition: { kind: 'absent' as const,
+        admissionState: 'noGoal' as const } };
+    const goal = { threadId, status: 'active', objective: first.objective };
+    const revision = { goalId: '00000000-0000-4000-8000-000000000005',
+      status: 'active', missionRevision: 1, lifecycleRevision: 1 };
+    const document = { path: `managed-goals/${threadId}/mission-1-${sha}.md`,
+      sha256: sha, byteLength: Buffer.byteLength(full), missionRevision: 1 };
+    let writes = 0;
+    let effects = 0;
+    const native = {
+      createThreadGoalDocument: async () => { writes++;
+        if (writes === 1) effects++;
+        return { goal, revision, document, previousRevision: null,
+          creationId: first.creationId, replayed: writes > 1 }; },
+      getThreadGoalWithRevision: async () => ({ goal, revision }),
+      getThreadGoalDocument: async () => ({ goal, document, content: full }),
+    } as never;
+    const app = express();
+    app.use(express.json());
+    app.use('/peer', createSupervisorPeerRouter({ targetComputer: 'target-1',
+      verify: async () => grant,
+      readGoal: async () => ({ goal: null, revision: null, document: null }),
+      createGoal: (id, input) => createSupervisorGoal(native, id, input),
+      resumeGoal: async () => { throw Error('unused'); },
+      readTerminal: async () => { throw Error('unused'); },
+    }));
+    server = createServer(app);
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw Error('No listener');
+    const base = `http://127.0.0.1:${address.port}/peer/threads/${threadId}/goal/create`;
+    const post = (url: string, body: unknown) => fetch(url, { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    expect((await post(base.replace(threadId, '00000000-0000-4000-8000-000000000002'),
+      first)).status).toBe(403);
+    expect(writes).toBe(0);
+    const created = await post(base, first);
+    expect(created.status).toBe(200);
+    expect(await created.json()).toMatchObject({ available: true, creationId: first.creationId,
+      previousRevision: null, replayed: false, document: { content: full } });
+    const replay = await post(base, first);
+    expect(replay.status).toBe(200);
+    expect(await replay.json()).toMatchObject({ replayed: true, previousRevision: null });
+    expect(writes).toBe(2); // Two explicit requests, one native effect under its creation ID.
+    expect(effects).toBe(1);
+  });
   it('accepts a large managed mission only on the scoped peer JSON transport', async () => {
     const app = express();
     app.use('/peer/threads/:threadId/goal/create', express.json({ limit: '6292000b' }));
@@ -95,15 +160,24 @@ describe('enrolled supervisor peer route seam', () => {
     const mission = '# Mission\n' + 'A retained requirement.\n'.repeat(7_000) + '\n'.repeat(600_000);
     const digest = createHash('sha256').update(mission).digest('hex');
     let received = '';
+    let receivedCreationId = '';
     app.use('/peer', createSupervisorPeerRouter({ targetComputer: 'target-1',
       verify: async () => grant,
       readGoal: async () => ({ goal: null, revision: null, document: null }),
-      createGoal: async (_id, document) => { received = document; return {
+      createGoal: async (_id, input) => { received = input.document;
+        receivedCreationId = input.creationId;
+        return {
         goal: { threadId, status: 'active', objective: 'managed' } as never,
         revision: { goalId: '00000000-0000-4000-8000-000000000004',
           status: 'active', missionRevision: 1, lifecycleRevision: 1 },
-        document: { content: document, sha256: digest, byteLength: Buffer.byteLength(document),
+        document: { content: input.document, sha256: digest,
+          byteLength: Buffer.byteLength(input.document),
           missionRevision: 1 },
+        creationId: input.creationId, replayed: false,
+        previousRevision: input.precondition.kind === 'completed' ? {
+          goalId: input.precondition.expectedGoalId, status: 'complete',
+          missionRevision: input.precondition.expectedMissionRevision,
+          lifecycleRevision: input.precondition.expectedLifecycleRevision } : null,
       }; },
       resumeGoal: async () => { throw Error('unused'); },
       readTerminal: async () => { throw Error('unused'); },
@@ -114,13 +188,14 @@ describe('enrolled supervisor peer route seam', () => {
     if (!address || typeof address === 'string') throw Error('No listener');
     const response = await fetch(`http://127.0.0.1:${address.port}/peer/threads/${threadId}/goal/create`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ document: mission }),
+      body: JSON.stringify({ ...createBody, document: mission }),
     });
     expect(mission.length).toBeGreaterThan(100_000);
     expect(Buffer.byteLength(mission)).toBeLessThan(1_048_576);
     expect(Buffer.byteLength(JSON.stringify({ document: mission }))).toBeGreaterThan(1_050_000);
     expect(response.status).toBe(200);
     expect(received).toBe(mission);
+    expect(receivedCreationId).toBe(createBody.creationId);
     const oversized = await fetch(`http://127.0.0.1:${address.port}/peer/threads/${threadId}/goal/create`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ document: '\n'.repeat(3_200_000) }),
@@ -132,6 +207,30 @@ describe('enrolled supervisor peer route seam', () => {
       body: JSON.stringify({ expected: '\n'.repeat(60_000) }),
     });
     expect(unrelated.status).toBe(413);
+  });
+  it('returns a typed predecessor conflict without leaking native text or changing source scope', async () => {
+    const app = express();
+    app.use(express.json());
+    let calls = 0;
+    app.use('/peer', createSupervisorPeerRouter({ targetComputer: 'target-1',
+      verify: async () => grant,
+      readGoal: async () => ({ goal: null, revision: null, document: null }),
+      createGoal: async () => { calls++;
+        throw new SupervisorGoalCreateError('stale_predecessor'); },
+      resumeGoal: async () => { throw Error('unused'); },
+      readTerminal: async () => { throw Error('unused'); },
+    }));
+    server = createServer(app);
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw Error('No listener');
+    const response = await fetch(`http://127.0.0.1:${address.port}/peer/threads/${threadId}/goal/create`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(createBody),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ available: false, category: 'stale_predecessor' });
+    expect(calls).toBe(1);
   });
   it('authorizes exact task scope before projecting a saved current turn and denies cross-thread reads', async () => {
     const app = express();
@@ -181,6 +280,25 @@ describe('enrolled supervisor peer route seam', () => {
     expect(content.path).toBeUndefined();
     expect(calls.artifact).toBe(2);
   });
+  it('lists only scoped native terminal owner IDs, not process status or private output', async () => {
+    const { base, calls } = await fixture();
+    const denied = await fetch(`${base.replace(threadId,
+      '00000000-0000-4000-8000-000000000002')}/terminals`);
+    expect(denied.status).toBe(403);
+    expect(calls.terminalList).toBe(0);
+    const malformed = await fetch(`${base}/terminals?cursor=../other`);
+    expect(malformed.status).toBe(400);
+    expect(calls.terminalList).toBe(0);
+    const response = await fetch(`${base}/terminals`);
+    expect(response.status).toBe(200);
+    const value = await response.json() as Record<string, unknown>;
+    expect(value).toMatchObject({ available: true, threadId,
+      observation: 'native-terminal-owners-only-not-process-status',
+      data: [{ threadId, turnId: '00000000-0000-4000-8000-000000000003',
+        itemId: 'item-1', nativeProcessId: 'process-1', terminalGeneration: 1 }] });
+    expect(JSON.stringify(value)).not.toMatch(/private|output|running|exited/);
+    expect(calls.terminalList).toBe(1);
+  });
   it('uses the exact native Goal revision for a conditional resume, never a read-then-write', async () => {
     const { base, calls } = await fixture();
     const expected = { goalId: '00000000-0000-4000-8000-000000000004',
@@ -194,6 +312,25 @@ describe('enrolled supervisor peer route seam', () => {
     expect(await accepted.json()).toEqual({ available: true,
       revision: { ...expected, status: 'active' } });
     expect(calls.resume).toBe(1);
+  });
+  it('reports only an authoritative native CAS conflict as stale, never private text or a successful resume', async () => {
+    const expected = { goalId: '00000000-0000-4000-8000-000000000004',
+      status: 'blocked', missionRevision: 4, lifecycleRevision: 7 };
+    const send = async (error: Error) => {
+      const { base, calls } = await fixture(grant, false, error);
+      const result = await fetch(`${base}/goal/resume`, { method: 'POST',
+        headers: { 'content-type': 'application/json' }, body: JSON.stringify({ expected }) });
+      expect(calls.resume).toBe(1);
+      return result;
+    };
+    const conflict = await send(new GoalRevisionConflictError());
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toEqual({ available: false, category: 'stale_revision' });
+    await new Promise<void>(resolve => server!.close(() => resolve()));
+    server = undefined;
+    const unknown = await send(Error('PRIVATE transport outcome'));
+    expect(unknown.status).toBe(503);
+    expect(await unknown.json()).toEqual({ available: false, category: 'mutation_unconfirmed' });
   });
   it('joins an exact client ID to content-free saved native custody, not live OS status', async () => {
     const { base, calls } = await fixture();

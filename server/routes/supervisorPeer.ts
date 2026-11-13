@@ -1,6 +1,6 @@
 import { Router, type Request } from 'express';
 import { createHash } from 'node:crypto';
-import { goalCasExpectedParams, verifyThreadGoalRevision,
+import { GoalRevisionConflictError, goalCasExpectedParams, verifyThreadGoalRevision,
   type ThreadGoalRevision } from '../../src/lib/codex/goal-revision';
 import type { v2 } from '../handlers/codex-generated-types/index';
 import { type NativeTerminalStatusRequest, validateNativeTerminalRequest,
@@ -10,7 +10,8 @@ import { authorizeSupervisorPeer, type VerifiedSupervisorGrant,
 import { threadArtifactReceipts } from '../utils/threadArtifactReceipts';
 import { nativeSubmissionJournal } from '../utils/nativeSubmissionJournal';
 import { getCodexService } from '../../src/lib/codex/service';
-import { createSupervisorGoal, SupervisorGoalCreateError } from '../utils/supervisorGoalCreate';
+import { createSupervisorGoal, SupervisorGoalCreateError,
+  type SupervisorGoalCreateInput } from '../utils/supervisorGoalCreate';
 import { projectSupervisorTurn } from '../utils/supervisorTurnObservation';
 
 type Capability = SupervisorPeerTarget['capability'];
@@ -23,9 +24,12 @@ export function createSupervisorPeerRouter(options: Readonly<{
   targetComputer: string;
   verify: (request: Request) => Promise<VerifiedSupervisorGrant | null>;
   readGoal: (threadId: string) => Promise<GoalState>;
-  createGoal?: (threadId: string, document: string) => Promise<GoalState>;
+  createGoal?: (threadId: string, input: SupervisorGoalCreateInput) =>
+    ReturnType<typeof createSupervisorGoal>;
   resumeGoal: (threadId: string, expected: ThreadGoalRevision) => Promise<ThreadGoalRevision>;
   readTerminal: (request: NativeTerminalStatusRequest) => Promise<NativeTerminalStatusResponse>;
+  listTerminalOwners?: (threadId: string, cursor?: string | null) =>
+    ReturnType<ReturnType<typeof getCodexService>['listNativeTerminalOwners']>;
   readSubmission?: (threadId: string, clientUserMessageId: string) =>
     ReturnType<ReturnType<typeof getCodexService>['readNativeSubmissionCustody']>;
   readJournal?: typeof nativeSubmissionJournal.lookup;
@@ -49,7 +53,7 @@ export function createSupervisorPeerRouter(options: Readonly<{
     try {
       const scope = await authorize(req, 'task:read');
       if (scope !== 'allowed') return void res.status(403).json(denied(scope));
-      const read = options.readThread ?? ((id: string) => getCodexService().readThread(id));
+      const read = options.readThread ?? ((id: string) => getCodexService().readSupervisorThreadSnapshot(id));
       // A deadline does not cancel the native RPC or establish an empty queue.
       let timer: ReturnType<typeof setTimeout> | undefined;
       const thread = await Promise.race([read(req.params.threadId),
@@ -82,13 +86,14 @@ export function createSupervisorPeerRouter(options: Readonly<{
     try {
       const scope = await authorize(req, 'goal:create');
       if (scope !== 'allowed') return void res.status(403).json(denied(scope));
-      const create = options.createGoal ?? ((id: string, document: string) =>
-        createSupervisorGoal(getCodexService(), id, document));
-      const state = await create(req.params.threadId, req.body?.document);
+      const create = options.createGoal ?? ((id: string, input: SupervisorGoalCreateInput) =>
+        createSupervisorGoal(getCodexService(), id, input));
+      const state = await create(req.params.threadId, req.body);
       return void res.json({ available: true, ...state });
     } catch (error) {
       const category = error instanceof SupervisorGoalCreateError ? error.category : 'mutation_unconfirmed';
-      return void res.status(category === 'invalid_document' ? 400 : category === 'goal_exists' ? 409 : 503)
+      return void res.status(category === 'invalid_request' ? 400 :
+        category === 'stale_predecessor' ? 409 : 503)
         .json(denied(category));
     }
   });
@@ -105,7 +110,12 @@ export function createSupervisorPeerRouter(options: Readonly<{
       // Native CAS owns the mutation. A transport failure is UNKNOWN, never a retry authorization.
       const revision = await options.resumeGoal(req.params.threadId, expected);
       return void res.json({ available: true, revision });
-    } catch { return void res.status(503).json(denied('mutation_unconfirmed')); }
+    } catch (error) {
+      if (error instanceof GoalRevisionConflictError) {
+        return void res.status(409).json(denied('stale_revision'));
+      }
+      return void res.status(503).json(denied('mutation_unconfirmed'));
+    }
   });
   router.post('/threads/:threadId/terminals/status', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -116,6 +126,27 @@ export function createSupervisorPeerRouter(options: Readonly<{
       validateNativeTerminalRequest(input);
       const status = boundNativeTerminalStatus(await options.readTerminal(input), input.terminalGeneration);
       return void res.json({ available: true, ...status });
+    } catch { return void res.status(503).json(denied('observation_unavailable')); }
+  });
+  router.get('/threads/:threadId/terminals', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const scope = await authorize(req, 'command:read');
+      if (scope !== 'allowed') return void res.status(403).json(denied(scope));
+      const cursor = req.query.cursor;
+      if (cursor !== undefined && (typeof cursor !== 'string' ||
+          !/^[A-Za-z0-9_-]{1,160}$/.test(cursor))) {
+        return void res.status(400).json(denied('invalid_cursor'));
+      }
+      const list = options.listTerminalOwners ?? ((id: string, after?: string | null) =>
+        getCodexService().listNativeTerminalOwners(id, after));
+      const result = await list(req.params.threadId, cursor);
+      if (result.data.length > 100 || result.data.some(owner => owner.threadId !== req.params.threadId)) {
+        throw new Error('wrong owner');
+      }
+      return void res.json({ available: true, threadId: req.params.threadId,
+        data: result.data, nextCursor: result.nextCursor,
+        observation: 'native-terminal-owners-only-not-process-status' });
     } catch { return void res.status(503).json(denied('observation_unavailable')); }
   });
   router.get('/threads/:threadId/submissions/:clientUserMessageId', async (req, res) => {

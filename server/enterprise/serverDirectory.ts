@@ -6,7 +6,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type { EnterpriseDirectory, OrganizationMember, VerifiedIdentity } from './controlPlane';
 import { evaluateTenantPolicy } from './tenantPolicy';
 
-type Audit = { organizationId: string; subject: string; action: string; outcome: 'allowed' | 'denied'; at: string };
+type Audit = { organizationId: string; subject: string; targetSubject?: string; targetOrganizationId?: string;
+  action: string; outcome: 'allowed' | 'denied'; at: string };
 type Attempt = { organizationId: string; issuer: string; nonce: string; verifier: string; bindingHash: string; expiresAt: number };
 type Session = { organizationId: string; issuer: string; subject: string; expiresAt: number; revoked: boolean };
 export type DirectoryState = { version: 1; organizations: Record<string, { name: string; issuer: string; members: Record<string, OrganizationMember> }>;
@@ -62,6 +63,8 @@ export function validateDirectoryState(data: Data): void {
   for (const event of data.audit) {
     if (!record(event) || !key(event.organizationId as string) || !data.organizations[event.organizationId as string] ||
         typeof event.subject !== 'string' || !event.subject || typeof event.action !== 'string' || !event.action ||
+        (event.targetSubject !== undefined && !key(event.targetSubject as string)) ||
+        (event.targetOrganizationId !== undefined && !key(event.targetOrganizationId as string)) ||
         !['allowed', 'denied'].includes(event.outcome as string) ||
         typeof event.at !== 'string' || !Number.isFinite(Date.parse(event.at))) throw new Error('Directory audit is invalid');
   }
@@ -231,31 +234,100 @@ export class ServerDirectory implements EnterpriseDirectory {
       for (const session of Object.values(data.sessions)) {
         if (session.organizationId === actor.organizationId && session.subject === member.subject) session.revoked = true;
       }
-      data.audit.push({ organizationId: actor.organizationId, subject: actor.subject, action: 'organization.member.update', outcome: 'allowed', at: new Date().toISOString() });
+      data.audit.push({ organizationId: actor.organizationId, subject: actor.subject, targetSubject: member.subject,
+        action: 'organization.member.update', outcome: 'allowed', at: new Date().toISOString() });
     });
   }
 
   /** Atomic, admin-only deactivation; never provisions or promotes an identity. */
   async deactivateMember(actor: VerifiedIdentity, subject: string): Promise<void> {
     if (!key(subject)) throw new EnterpriseAccessDenied();
-    await this.change((data) => {
+    const allowed = await this.change((data) => {
       const org = data.organizations[actor.organizationId];
-      if (!org || !evaluateTenantPolicy({ identity: actor, organizationId: actor.organizationId,
-        issuer: org.issuer, member: org.members[actor.subject], sessionActive: this.active(data, actor), action: 'member.manage' })) {
-        throw new EnterpriseAccessDenied();
-      }
+      const actorMember = org?.members[actor.subject];
+      if (!org || org.issuer !== actor.issuer || !actorMember?.active ||
+          actorMember.organizationId !== actor.organizationId || !this.active(data, actor)) throw new EnterpriseAccessDenied();
+      const canManage = evaluateTenantPolicy({ identity: actor, organizationId: actor.organizationId,
+        issuer: org.issuer, member: actorMember, sessionActive: true, action: 'member.manage' });
       const target = org.members[subject];
-      if (!target || !target.active || target.organizationId !== actor.organizationId ||
-          (target.role === 'admin' && !Object.values(org.members).some((m) => m.subject !== subject && m.active && m.role === 'admin'))) {
-        throw new EnterpriseAccessDenied();
+      const permitted = Boolean(canManage && target && target.active && target.organizationId === actor.organizationId &&
+        !(target.role === 'admin' && !Object.values(org.members).some((m) => m.subject !== subject && m.active && m.role === 'admin')));
+      if (!permitted || !target) {
+        data.audit.push({ organizationId: actor.organizationId, subject: actor.subject, targetSubject: subject,
+          action: 'organization.member.deactivate', outcome: 'denied', at: new Date().toISOString() });
+        return false;
       }
       org.members[subject] = { ...target, active: false };
       for (const session of Object.values(data.sessions)) {
         if (session.organizationId === actor.organizationId && session.subject === subject) session.revoked = true;
       }
-      data.audit.push({ organizationId: actor.organizationId, subject: actor.subject,
+      data.audit.push({ organizationId: actor.organizationId, subject: actor.subject, targetSubject: subject,
         action: 'organization.member.deactivate', outcome: 'allowed', at: new Date().toISOString() });
+      return true;
     });
+    if (!allowed) throw new EnterpriseAccessDenied();
+  }
+
+  /** Revoke one existing member's sessions without changing membership. A
+   * subsequent login is still possible; use deactivation to disable access. */
+  async revokeMemberSessions(actor: VerifiedIdentity, subject: string): Promise<number> {
+    if (!key(subject)) throw new EnterpriseAccessDenied();
+    const revoked = await this.change((data) => {
+      const org = data.organizations[actor.organizationId];
+      const actorMember = org?.members[actor.subject];
+      if (!org || org.issuer !== actor.issuer || !actorMember?.active ||
+          actorMember.organizationId !== actor.organizationId || !this.active(data, actor)) throw new EnterpriseAccessDenied();
+      const permitted = subject !== actor.subject && evaluateTenantPolicy({ identity: actor, organizationId: actor.organizationId,
+        issuer: org.issuer, member: actorMember, sessionActive: true, action: 'member.manage' }) &&
+        org.members[subject]?.organizationId === actor.organizationId;
+      if (!permitted) {
+        data.audit.push({ organizationId: actor.organizationId, subject: actor.subject, targetSubject: subject,
+          action: 'organization.member.sessions.revoke', outcome: 'denied', at: new Date().toISOString() });
+        return null;
+      }
+      let revoked = 0;
+      for (const session of Object.values(data.sessions)) {
+        if (session.organizationId === actor.organizationId && session.subject === subject && !session.revoked) {
+          session.revoked = true;
+          revoked++;
+        }
+      }
+      data.audit.push({ organizationId: actor.organizationId, subject: actor.subject, targetSubject: subject,
+        action: 'organization.member.sessions.revoke', outcome: 'allowed', at: new Date().toISOString() });
+      return revoked;
+    });
+    if (revoked === null) throw new EnterpriseAccessDenied();
+    return revoked;
+  }
+
+  /** Tenant-wide emergency session kill. The initiating session is included.
+   * This does not deprovision members or prevent a subsequent IdP login. */
+  async revokeOrganizationSessions(actor: VerifiedIdentity): Promise<number> {
+    const revoked = await this.change((data) => {
+      const org = data.organizations[actor.organizationId];
+      const member = org?.members[actor.subject];
+      if (!org || org.issuer !== actor.issuer || !member?.active ||
+          member.organizationId !== actor.organizationId || !this.active(data, actor)) throw new EnterpriseAccessDenied();
+      const permitted = evaluateTenantPolicy({ identity: actor, organizationId: actor.organizationId,
+        issuer: org.issuer, member, sessionActive: true, action: 'member.manage' });
+      if (!permitted) {
+        data.audit.push({ organizationId: actor.organizationId, subject: actor.subject,
+          action: 'organization.sessions.revoke-all', outcome: 'denied', at: new Date().toISOString() });
+        return null;
+      }
+      let count = 0;
+      for (const session of Object.values(data.sessions)) {
+        if (session.organizationId === actor.organizationId && !session.revoked) {
+          session.revoked = true;
+          count++;
+        }
+      }
+      data.audit.push({ organizationId: actor.organizationId, subject: actor.subject,
+        action: 'organization.sessions.revoke-all', outcome: 'allowed', at: new Date().toISOString() });
+      return count;
+    });
+    if (revoked === null) throw new EnterpriseAccessDenied();
+    return revoked;
   }
 
   async putAttempt(state: string, attempt: Attempt): Promise<void> {
@@ -334,17 +406,42 @@ export class ServerDirectory implements EnterpriseDirectory {
     await this.change((data) => { data.audit.push({ ...event, at: new Date().toISOString() }); });
   }
 
-  async listAudit(actor: VerifiedIdentity): Promise<readonly Audit[]> {
-    return this.change((data) => {
+  /** Record a cross-tenant URL probe only in the authenticated actor's own
+   * ledger. A forged/stale identity cannot attribute a denial to another org. */
+  async recordTenantDenial(actor: VerifiedIdentity, targetOrganizationId: string,
+    view: 'overview' | 'members' | 'activity' | 'export' | 'deactivate' | 'revoke-sessions' | 'revoke-all-sessions' | 'logout'): Promise<void> {
+    if (!key(targetOrganizationId) || !['overview', 'members', 'activity', 'export', 'deactivate', 'revoke-sessions', 'revoke-all-sessions', 'logout'].includes(view)) {
+      throw new EnterpriseAccessDenied();
+    }
+    await this.change((data) => {
       const org = data.organizations[actor.organizationId];
       const member = org?.members[actor.subject];
-      if (!org || !evaluateTenantPolicy({ identity: actor, organizationId: actor.organizationId,
-        issuer: org.issuer, member, sessionActive: this.active(data, actor), action: 'audit.read' })) throw new Error('Access denied');
+      if (!org || org.issuer !== actor.issuer || !member?.active || member.organizationId !== actor.organizationId ||
+          !this.active(data, actor)) throw new EnterpriseAccessDenied();
+      data.audit.push({ organizationId: actor.organizationId, subject: actor.subject, targetOrganizationId,
+        action: `organization.${view}.cross-tenant`, outcome: 'denied', at: new Date().toISOString() });
+    });
+  }
+
+  async listAudit(actor: VerifiedIdentity, purpose: 'view' | 'export' = 'view'): Promise<readonly Audit[]> {
+    if (purpose !== 'view' && purpose !== 'export') throw new EnterpriseAccessDenied();
+    const events = await this.change((data) => {
+      const org = data.organizations[actor.organizationId];
+      const member = org?.members[actor.subject];
+      // Only a presently active, tenant-bound member can be attributed to this
+      // ledger. Never write a forged identity's denial into another tenant.
+      if (!org || org.issuer !== actor.issuer || !member?.active || member.organizationId !== actor.organizationId ||
+          !this.active(data, actor)) throw new EnterpriseAccessDenied();
+      const allowed = evaluateTenantPolicy({ identity: actor, organizationId: actor.organizationId,
+        issuer: org.issuer, member, sessionActive: true, action: 'audit.read' });
       // Authorization, scoped snapshot and audit commit share one exclusive transaction.
-      const events = data.audit.filter((event) => event.organizationId === actor.organizationId);
+      const events = allowed ? data.audit.filter((event) => event.organizationId === actor.organizationId) : null;
       data.audit.push({ organizationId: actor.organizationId, subject: actor.subject,
-        action: 'organization.audit.read', outcome: 'allowed', at: new Date().toISOString() });
+        action: purpose === 'export' ? 'organization.audit.export' : 'organization.audit.read',
+        outcome: allowed ? 'allowed' : 'denied', at: new Date().toISOString() });
       return events;
     });
+    if (!events) throw new EnterpriseAccessDenied();
+    return events;
   }
 }

@@ -16,6 +16,7 @@ import { wakeScheduleTool } from './wakeScheduleTool';
 import { goalResumeTool, goalRevisionTool } from './goalRevisionTool';
 import { goalDocumentCreateTool, goalDocumentReadTool, goalDocumentUpdateTool } from './goalDocumentTool';
 import { nativeTerminalListTool, nativeTerminalStatusTool } from './nativeTerminalStatusTool';
+import { currentTaskTool } from './currentTaskTool';
 import { threadArtifactCreateTool, threadArtifactReadTool } from './threadArtifactTool';
 import { settingsGetTool } from './settingsGetTool';
 import { settingsSetTool } from './settingsSetTool';
@@ -56,6 +57,7 @@ export const interpreterServerDefinition: BuiltinServerDefinition = {
     goalDocumentCreateTool,
     goalDocumentUpdateTool,
     nativeTerminalStatusTool,
+    currentTaskTool,
     threadArtifactCreateTool,
     threadArtifactReadTool,
     nativeTerminalListTool,

@@ -75,7 +75,10 @@ const manifest = {
   build: {
     workflow: process.env.GITHUB_WORKFLOW ?? '',
     runId: process.env.GITHUB_RUN_ID ?? '',
-    runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? '',
+    // A failed publish job may be retried with the same build artifacts. The
+    // release identity must not change merely because Actions increments its
+    // attempt counter; the attempt remains available in Actions provenance.
+    runAttempt: process.env.GITHUB_RUN_ID ? '1' : '',
     url: process.env.GITHUB_SERVER_URL && process.env.GITHUB_RUN_ID
       ? `${process.env.GITHUB_SERVER_URL}/${repository}/actions/runs/${process.env.GITHUB_RUN_ID}`
       : '',

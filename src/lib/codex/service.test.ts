@@ -30,6 +30,18 @@ function createTurn(id: string, status: v2.TurnStatus = "inProgress"): v2.Turn {
   };
 }
 
+function terminalPage(turns: v2.Turn[]) {
+  return async (params: v2.ThreadTurnsListParams): Promise<v2.ThreadTurnsListResponse> => {
+    const offset = Number(params.cursor ?? 0);
+    const ordered = [...turns].reverse();
+    const data = ordered.slice(offset, offset + (params.limit ?? 32)).map(turn => ({
+      ...turn, itemsView: 'notLoaded' as const, items: [],
+    }));
+    return { data, nextCursor: offset + data.length < ordered.length ? String(offset + data.length) : null,
+      backwardsCursor: null };
+  };
+}
+
 describe('native custody metadata', () => {
   test('exact historical turn receipt times out without claiming failure or cancelling late native read', async () => {
     const id = '00000000-0000-4000-8000-000000000042';
@@ -165,13 +177,26 @@ describe('native custody metadata', () => {
     let calls = 0;
     client.threadQueueList = async () => ({ data: calls++ === 0
       ? [] : [{ id: 'queue_2', clientUserMessageId: 'opaque_2', input: [] }], nextCursor: null });
-    await assert.rejects(new CodexService(client).readGlobalNativeCustody(), /changed/);
+    await assert.rejects(new CodexService(client).readGlobalNativeCustody(),
+      { name: 'NativeGlobalInventoryError', category: 'queue_changed' });
   });
 
   test('rejects a loaded native thread omitted by persisted inventory', async () => {
     const client = createFakeClient({}).client;
     client.threadLoadedList = async () => ({ data: ['00000000-0000-4000-8000-000000000123'], nextCursor: null });
-    await assert.rejects(new CodexService(client).readGlobalNativeCustody(), /missing/);
+    await assert.rejects(new CodexService(client).readGlobalNativeCustody(),
+      { name: 'NativeGlobalInventoryError', category: 'loaded_missing' });
+  });
+
+  test('classifies a changed loaded inventory without returning a partial snapshot', async () => {
+    const id = '00000000-0000-4000-8000-000000000123';
+    const client = createFakeClient({}).client;
+    let calls = 0;
+    client.threadLoadedList = async () => ({ data: calls++ ? [id] : [], nextCursor: null });
+    client.threadList = async () => ({ data: [{ id } as v2.Thread], nextCursor: null, backwardsCursor: null });
+    client.threadQueueList = async () => ({ data: [], nextCursor: null });
+    await assert.rejects(new CodexService(client).readGlobalNativeCustody(),
+      { name: 'NativeGlobalInventoryError', category: 'inventory_changed' });
   });
 
   test('does not report an empty global queue when native listing is unsupported', async () => {
@@ -323,6 +348,7 @@ function createFakeClient(overrides: {
   resumeThread?: (...args: Parameters<CodexClient["resumeThread"]>) => Promise<string>;
   forkThread?: (...args: Parameters<CodexClient["forkThread"]>) => Promise<string>;
   threadRead?: (params: Parameters<CodexClient["threadRead"]>[0]) => Promise<v2.ThreadReadResponse>;
+  threadTurnsList?: (params: v2.ThreadTurnsListParams) => Promise<v2.ThreadTurnsListResponse>;
   configValueWrite?: (keyPath: string, value: JsonValue) => Promise<void>;
   configRead?: () => Promise<v2.ConfigReadResponse>;
 } = {}) {
@@ -552,6 +578,9 @@ function createFakeClient(overrides: {
           turns: [],
         },
       };
+    },
+    async threadTurnsList(params) {
+      return overrides.threadTurnsList?.(params) ?? { data: [], nextCursor: null, backwardsCursor: null };
     },
     async threadQueueList() {
       return { data: [], nextCursor: null };
@@ -1236,10 +1265,9 @@ describe("CodexService", () => {
     let startCount = 0;
     const fake = createFakeClient({
       startTurn: async () => createTurn(`turn_${++startCount}`),
-      threadRead: async () => ({ thread: {
-        id: "thr_existing", status: { type: "idle" },
-        turns: [createTurn("turn_1", "completed")],
-      } } as v2.ThreadReadResponse),
+      threadRead: async () => ({ thread: { id: "thr_existing", status: { type: "idle" },
+        turns: [] } } as v2.ThreadReadResponse),
+      threadTurnsList: terminalPage([createTurn("turn_1", "completed")]),
     });
     const service = new CodexService(fake.client);
     void service.runTurn({ threadId: "thr_existing", message: "first", model: "test-model", onEvent: () => {} });
@@ -1256,9 +1284,9 @@ describe("CodexService", () => {
 
   test("clears an older exact terminal owner when a later autonomous turn also completed", async () => {
     const fake = createFakeClient({ threadRead: async () => ({ thread: {
-      id: "thr_existing", status: { type: "idle" },
-      turns: [createTurn("turn_1", "completed"), createTurn("turn_goal", "completed")],
-    } } as v2.ThreadReadResponse) });
+      id: "thr_existing", status: { type: "idle" }, turns: [],
+    } } as v2.ThreadReadResponse), threadTurnsList: terminalPage([
+      createTurn("turn_1", "completed"), createTurn("turn_goal", "completed")]) });
     const service = new CodexService(fake.client);
     void service.runTurn({ threadId: "thr_existing", message: "first", model: "test-model", onEvent: () => {} });
     await waitFor(() => fake.calls.startTurn === 1);
@@ -1269,6 +1297,33 @@ describe("CodexService", () => {
     assert.equal(fake.calls.startTurn, 1); // Resume never creates a user turn.
   });
 
+  test("starts an ordinary turn on the same thread after an older retained owner and newer turn are terminal", async () => {
+    let startCount = 0;
+    const fake = createFakeClient({
+      startTurn: async () => createTurn(`turn_${++startCount}`),
+      threadRead: async () => ({ thread: { id: "thr_existing", status: { type: "idle" },
+        turns: [] } } as v2.ThreadReadResponse),
+      threadTurnsList: terminalPage([createTurn("turn_1", "completed"),
+        createTurn("turn_goal", "completed")]),
+    });
+    const service = new CodexService(fake.client);
+    void service.runTurn({ threadId: "thr_existing", message: "first",
+      model: "test-model", onEvent: () => {} });
+    await waitFor(() => fake.calls.startTurn === 1);
+
+    const received: StreamEvent[] = [];
+    const next = service.runTurn({ threadId: "thr_existing", message: "ordinary input",
+      model: "test-model", onEvent: event => received.push(event) });
+    await waitFor(() => fake.calls.startTurn === 2);
+    assert.equal(fake.calls.startTurn, 2);
+    assert.equal(fake.calls.steerTurn.length, 0);
+    assert.ok(received.some(event => event.kind === "turn" && event.turnId === "turn_2"));
+    fake.emit({ method: SERVER_METHOD.turnCompleted, params: {
+      threadId: "thr_existing", turn: createTurn("turn_2", "completed"),
+    } });
+    assert.equal((await next).turnId, "turn_2");
+  });
+
   test("does not release an older owner if its exact native turn is missing or still active", async () => {
     for (const turns of [
       [createTurn("other_turn", "completed")],
@@ -1276,8 +1331,9 @@ describe("CodexService", () => {
       [createTurn("turn_1", "completed"), createTurn("later_turn", "inProgress")],
     ]) {
       const fake = createFakeClient({ threadRead: async () => ({ thread: {
-        id: "thr_existing", status: { type: turns.at(-1)?.status === "inProgress" ? "active" : "idle" }, turns,
-      } } as v2.ThreadReadResponse) });
+        id: "thr_existing", status: { type: turns.at(-1)?.status === "inProgress" ? "active" : "idle" },
+        turns: [],
+      } } as v2.ThreadReadResponse), threadTurnsList: terminalPage(turns) });
       const service = new CodexService(fake.client);
       void service.runTurn({ threadId: "thr_existing", message: "first", model: "test-model", onEvent: () => {} });
       await waitFor(() => fake.calls.startTurn === 1);
@@ -1290,9 +1346,9 @@ describe("CodexService", () => {
   test("retains the active guard when persisted turn identity does not match", async () => {
     const fake = createFakeClient({
       threadRead: async () => ({ thread: {
-        id: "thr_existing", status: { type: "idle" },
-        turns: [createTurn("different_turn", "completed")],
+        id: "thr_existing", status: { type: "idle" }, turns: [],
       } } as v2.ThreadReadResponse),
+      threadTurnsList: terminalPage([createTurn("different_turn", "completed")]),
     });
     const service = new CodexService(fake.client);
     void service.runTurn({ threadId: "thr_existing", message: "first", model: "test-model", onEvent: () => {} });
@@ -1692,6 +1748,49 @@ describe("CodexService", () => {
     assert.equal(fake.calls.startTurn, 1);
   });
 
+  test('saved input delegates idle and active admission to native turn/start with the same client ID', async () => {
+    const id = '00000000-0000-4000-8000-000000000123';
+    let status: 'idle' | 'active' = 'idle';
+    const ids: Array<string | undefined> = [];
+    const fake = createFakeClient({
+      async threadRead() { return { thread: { id, cwd: '/workspace', status: { type: status },
+        turns: [] } as v2.Thread }; },
+      async startTurn(params) {
+        ids.push(params.clientUserMessageId);
+        return createTurn(status === 'active' ? 'turn_active' : 'turn_idle');
+      },
+    });
+    const service = new CodexService(fake.client);
+    assert.equal(await service.submitSavedThreadInput(id, 'first', '/workspace', 'stable_1'), 'turn_idle');
+    status = 'active';
+    assert.equal(await service.submitSavedThreadInput(id, 'second', '/workspace', 'stable_2'), 'turn_active');
+    assert.deepEqual(ids, ['stable_1', 'stable_2']);
+    assert.equal(fake.calls.resumeThread, 0);
+    assert.deepEqual(fake.calls.threadReadParams, [
+      { threadId: id, includeTurns: false }, { threadId: id, includeTurns: false },
+    ]);
+    assert.equal(fake.calls.startTurn, 2);
+    assert.equal(fake.calls.steerTurn.length, 0);
+  });
+
+  test('saved unloaded thread resumes without changing identity, and unknown scope fails closed', async () => {
+    const id = '00000000-0000-4000-8000-000000000123';
+    let cwd = '/workspace';
+    let status = 'notLoaded';
+    const fake = createFakeClient({ async threadRead() { return { thread: {
+      id, cwd, status: { type: status }, turns: [],
+    } as v2.Thread }; } });
+    const service = new CodexService(fake.client);
+    assert.equal(await service.submitSavedThreadInput(id, 'message', '/workspace', 'stable_3'), 'turn_1');
+    assert.equal(fake.calls.resumeThread, 1);
+    assert.deepEqual(fake.calls.resumeThreadConfig[0], { mcp_servers: {} });
+    cwd = '/other';
+    await assert.rejects(service.submitSavedThreadInput(id, 'message', '/workspace', 'stable_4'), /identity or state unavailable/);
+    cwd = '/workspace'; status = 'systemError';
+    await assert.rejects(service.submitSavedThreadInput(id, 'message', '/workspace', 'stable_5'), /identity or state unavailable/);
+    assert.equal(fake.calls.startTurn, 1);
+  });
+
   test("loaded native wake preserves its original shell keys and stable client ID", async () => {
     let nativeClientId: string | undefined;
     const fake = createFakeClient({
@@ -1783,6 +1882,42 @@ describe("CodexService", () => {
     assert.deepEqual(ids, ['ui_stable', 'wake_stable']);
     assert.equal(fake.calls.steerTurn[0]?.clientUserMessageId, 'peer_stable');
     assert.deepEqual(fake.calls.resumeThreadConfig, [{ mcp_servers: {} }, { mcp_servers: {} }]);
+    assert.equal(fake.calls.startThread, 0);
+  });
+
+  test('ordinary and wake inputs cannot double-admit while shared existing-thread resume is unresolved', async () => {
+    let releaseResume!: () => void;
+    const resumeGate = new Promise<void>(resolve => { releaseResume = resolve; });
+    let firstResume = true;
+    const admitted: Array<string | undefined> = [];
+    const fake = createFakeClient({
+      async resumeThread(id) {
+        if (firstResume) {
+          firstResume = false;
+          await resumeGate;
+        }
+        return id;
+      },
+      async startTurn(params) {
+        admitted.push(params.clientUserMessageId);
+        return createTurn(`turn_${admitted.length}`);
+      },
+    });
+    const service = new CodexService(fake.client);
+    const ordinary = service.runTurn({ threadId: 'thr_existing', message: 'user input',
+      clientUserMessageId: 'user_once', model: 'test-model', onEvent: () => {} });
+    await waitFor(() => fake.calls.resumeThread === 1);
+    await assert.rejects(service.startExistingThreadTurn('thr_existing', 'timer input',
+      '/workspace', { mcp_servers: {} }, 'timer_once'), /already responding/);
+    assert.equal(fake.calls.startTurn, 0);
+    releaseResume();
+    await waitFor(() => fake.calls.startTurn === 1);
+    fake.emit({ method: SERVER_METHOD.turnCompleted,
+      params: { threadId: 'thr_existing', turn: createTurn('turn_1', 'completed') } });
+    assert.equal((await ordinary).turnId, 'turn_1');
+    assert.equal(await service.startExistingThreadTurn('thr_existing', 'timer input',
+      '/workspace', { mcp_servers: {} }, 'timer_once'), 'turn_2');
+    assert.deepEqual(admitted, ['user_once', 'timer_once']);
     assert.equal(fake.calls.startThread, 0);
   });
 

@@ -21,6 +21,7 @@ mock.module('../utils/mcpServiceBridge', () => ({
 import JSZip from 'jszip';
 import { agentTabManager } from '../agentTabManager';
 import { getCodexService } from '../../src/lib/codex/service';
+import { ManagedGoalDocumentError } from '../../src/lib/codex/goal-document';
 import { approvalManager } from '../approvalManager';
 import { clearConfigCache, setConfigOverride } from '../configStore';
 import { calculatorTool } from '../tools/builtin-tools/utility/calculatorTool';
@@ -135,18 +136,77 @@ describe('interpreterCli handlers', () => {
     }
   });
 
+  test('current-task CLI reads only the selected same-thread native snapshot, not stale preview or command text', async () => {
+    const threadId = '00000000-0000-4000-8000-000000000077';
+    const otherThread = '00000000-0000-4000-8000-000000000078';
+    const service = getCodexService();
+    const originalRead = service.readSupervisorThreadSnapshot;
+    const calls: string[] = [];
+    setConfigOverride({ agents: {}, mcpServers: {} } as any);
+    setToolManager(new ToolManager());
+    agentTabManager.bindThread({ agentId: 'current-owner', threadId,
+      callerToken: 'agtok_current_owner', allowedToolNames: [
+        'builtin-interpreter__interpreter_task_current',
+      ] });
+    agentTabManager.bindThread({ agentId: 'other-owner', threadId: otherThread,
+      callerToken: 'agtok_other_owner', allowedToolNames: ['builtin-utility__calculate'] });
+    service.readSupervisorThreadSnapshot = async id => {
+      calls.push(id);
+      return { id, turns: [
+        { id: 'previous-turn', status: 'completed', itemsView: 'full', items: [
+          { type: 'agentMessage', id: 'previous-message', text: 'PRIVATE previous answer' },
+        ] },
+        { id: 'current-turn', status: 'inProgress', itemsView: 'full', items: [
+          { type: 'commandExecution', id: 'command-item', status: 'completed', exitCode: 0,
+            processId: 'opaque-process', command: 'PRIVATE command', aggregatedOutput: 'PRIVATE output' },
+        ] },
+      ] } as any;
+    };
+    try {
+      const discovered = await findInterpreterCliTools('agtok_current_owner', 'current task');
+      expect(discovered.matches.some(match =>
+        match.qualifiedName === 'builtin-interpreter__interpreter_task_current')).toBe(true);
+      const foreignDiscovery = await findInterpreterCliTools('agtok_other_owner', 'current task');
+      expect(foreignDiscovery.matches.some(match =>
+        match.qualifiedName === 'builtin-interpreter__interpreter_task_current')).toBe(false);
+      const tool = { serverId: 'builtin-interpreter', toolName: 'interpreter_task_current', args: {} };
+      const result = await callInterpreterCliTool({ callerToken: 'agtok_current_owner', ...tool }) as {
+        content: Array<{ text: string }>; isError?: boolean;
+      };
+      expect(result.isError).toBeUndefined();
+      const observed = JSON.parse(result.content[0]!.text);
+      expect(observed.turn).toMatchObject({ id: 'current-turn', status: 'inProgress' });
+      expect(observed.latestMessage).toEqual({ turnId: 'previous-turn', relation: 'historical' });
+      expect(observed.command).toMatchObject({ itemId: 'command-item', exitCode: 0,
+        observation: 'saved-command-item-not-os-process-custody' });
+      expect(observed.preview.relation).toBe('initial-thread-historical-non-authoritative');
+      expect(observed.modelPhase).toEqual({ available: false,
+        category: 'native_model_phase_unavailable' });
+      expect(JSON.stringify(result)).not.toContain('PRIVATE');
+      expect(calls).toEqual([threadId]);
+      await expect(callInterpreterCliTool({ callerToken: 'agtok_other_owner', ...tool })).rejects.toThrow();
+      await expect(callInterpreterCliTool({ callerToken: 'unknown-caller', ...tool })).rejects.toThrow();
+      expect(calls).toEqual([threadId]);
+    } finally { service.readSupervisorThreadSnapshot = originalRead; }
+  });
+
   test('Goal document CLI creates and reads only the bound thread; an unrelated blocked Goal is untouched', async () => {
     const threadId = '00000000-0000-4000-8000-000000000077';
     const blockedId = '00000000-0000-4000-8000-000000000078';
     const document = `# Full mission\n${'Retain the entire instruction.\n'.repeat(170)}`;
+    const objective = 'A distinct full mission';
+    const creationId = 'stable_creation_1';
+    const precondition = { kind: 'absent' as const, admissionState: 'noGoal' as const };
     const digest = createHash('sha256').update(document).digest('hex');
     const stored = { path: `managed-goals/${threadId}/mission-1-${digest}.md`,
       sha256: digest, byteLength: Buffer.byteLength(document), missionRevision: 1 };
-    const activeGoal = { threadId, status: 'active' as const };
+    const activeGoal = { threadId, status: 'active' as const, objective };
+    const revision = { goalId: '00000000-0000-4000-8000-000000000088',
+      status: 'active' as const, missionRevision: 1, lifecycleRevision: 1 };
     const service = getCodexService();
     const originalRead = service.getThreadGoalDocument;
     const originalGoal = service.getThreadGoalWithRevision;
-    const originalCreate = service.setThreadGoalDocument;
+    const originalCreate = service.createThreadGoalDocument;
     let writes = 0;
     let created = false;
     setConfigOverride({ agents: {}, mcpServers: {} } as any);
@@ -161,37 +221,43 @@ describe('interpreterCli handlers', () => {
     }
     service.getThreadGoalWithRevision = async id => ({ goal: id === blockedId
       ? { threadId: blockedId, status: 'blocked' } as any
-      : created ? activeGoal as any : null, revision: null });
+      : created ? activeGoal as any : null, revision: created ? revision : null });
     service.getThreadGoalDocument = async id => ({ goal: created && id === threadId
       ? activeGoal as any : null, document: created && id === threadId ? stored : null,
     content: created && id === threadId ? document : null });
-    service.setThreadGoalDocument = async input => {
-      expect(input).toEqual({ threadId, document, status: 'active' });
+    service.createThreadGoalDocument = async input => {
+      if (input.threadId === blockedId) throw new ManagedGoalDocumentError('stale_predecessor');
+      expect(input).toEqual({ threadId, creationId, objective, document,
+        status: 'active', precondition });
       writes++;
       created = true;
-      return { goal: activeGoal as any, document: stored };
+      return { creationId, goal: activeGoal as any, document: stored,
+        previousRevision: null, revision, replayed: false };
     };
     try {
       const call = (token: string, toolName: string, args: unknown) =>
         callInterpreterCliTool({ callerToken: token, serverId: 'builtin-interpreter',
           toolName, args }) as Promise<{ content: Array<{ text: string }>; isError?: boolean }>;
       const denied = await call('agtok_blocked-owner', 'interpreter_goal_document_create',
-        { document });
-      expect(JSON.parse(denied.content[0]!.text).category).toBe('goal_exists');
+        { creationId, objective, document, precondition });
+      expect(JSON.parse(denied.content[0]!.text).category).toBe('stale_predecessor');
       expect(writes).toBe(0);
       const success = await call('agtok_document-owner', 'interpreter_goal_document_create',
-        { document });
-      expect(JSON.parse(success.content[0]!.text)).toMatchObject({ created: true,
-        document: stored });
+        { creationId, objective, document, precondition });
+      const created = JSON.parse(success.content[0]!.text);
+      expect(created).toMatchObject({ created: true, creationId, replayed: false,
+        previousRevision: null, revision });
+      expect(created.document).toEqual({ content: document, sha256: digest,
+        byteLength: stored.byteLength, missionRevision: 1 });
       const full = await call('agtok_document-owner', 'interpreter_goal_document_get', {});
-      expect(JSON.parse(full.content[0]!.text).content).toBe(document);
+      expect(JSON.parse(full.content[0]!.text).document.content).toBe(document);
       expect(writes).toBe(1);
       await expect(call('unbound-caller', 'interpreter_goal_document_get', {})).rejects.toThrow();
       expect(writes).toBe(1);
     } finally {
       service.getThreadGoalDocument = originalRead;
       service.getThreadGoalWithRevision = originalGoal;
-      service.setThreadGoalDocument = originalCreate;
+      service.createThreadGoalDocument = originalCreate;
     }
   });
 

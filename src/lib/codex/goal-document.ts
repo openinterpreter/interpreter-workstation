@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { v2 } from '../../../server/handlers/codex-generated-types/index';
+import type { ThreadGoalRevision } from './goal-revision';
 
 /** The experimental OIX managed-document RPC owns the file; Workstation never writes it. */
 export type ThreadGoalDocument = {
@@ -25,6 +26,32 @@ export type ThreadGoalDocumentSetResponse = {
   revision?: unknown;
 };
 
+/** One native atomic create for an explicitly observed absent Goal or exact
+ * completed predecessor. The absent contract remains gated on the final OIX
+ * producer revision; no legacy document/set insertion is a fallback. */
+export type ThreadGoalDocumentCreatePrecondition =
+  | { kind: 'absent'; admissionState: 'noGoal' }
+  | { kind: 'completed'; expectedGoalId: string; expectedStatus: 'complete';
+      expectedMissionRevision: number; expectedLifecycleRevision: number };
+
+export type ThreadGoalDocumentCreateParams = {
+  threadId: string;
+  creationId: string;
+  objective: string;
+  document: string;
+  status: 'active';
+  precondition: ThreadGoalDocumentCreatePrecondition;
+};
+
+export type ThreadGoalDocumentCreateResponse = {
+  creationId: string;
+  goal: v2.ThreadGoal;
+  document: ThreadGoalDocument;
+  previousRevision: ThreadGoalRevision | null;
+  revision: ThreadGoalRevision;
+  replayed: boolean;
+};
+
 export type ThreadGoalDocumentGetResponse = {
   goal: v2.ThreadGoal | null;
   document: ThreadGoalDocument | null;
@@ -37,10 +64,17 @@ const threadIdPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 
 /** An unacknowledged write may have taken effect; never blindly submit it again. */
 export class ManagedGoalDocumentError extends Error {
-  constructor(readonly category: 'read_unavailable' | 'update_unconfirmed') {
+  constructor(readonly category: 'read_unavailable' | 'create_unavailable' |
+    'stale_predecessor' | 'stale_revision' | 'update_unconfirmed') {
     super(category === 'read_unavailable'
       ? 'Managed Goal document read unavailable.'
-      : 'Managed Goal document update unconfirmed; reread before retry.');
+      : category === 'create_unavailable'
+        ? 'Native managed Goal creation is unavailable.'
+        : category === 'stale_predecessor'
+          ? 'Goal creation precondition changed; reread before a distinct creation.'
+          : category === 'stale_revision'
+            ? 'Native Goal document revision changed; obtain a fresh revision.'
+          : 'Managed Goal document update unconfirmed; reread before retry.');
     this.name = 'ManagedGoalDocumentError';
   }
 }
