@@ -255,6 +255,21 @@ function wakeMutationAllowed(req: Request): boolean {
   catch { return false; }
 }
 
+// Saved-thread identity includes local filesystem paths. Matching Origin to an
+// arbitrary Host is not sufficient: a rebinding hostname can supply both.
+function savedThreadIdentityReadAllowed(req: Request): boolean {
+  if (!wakeMutationAllowed(req)) return false;
+  const host = req.get('host');
+  if (!host) return false;
+  try {
+    const parsed = new URL(`http://${host}`);
+    return parsed.host.toLowerCase() === host.toLowerCase() &&
+      ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 // Inbound producers know the explicit secret; a normal browser session never
 // receives it. This is not a public desktop or network ingress endpoint.
 router.post('/threads/:threadId/wake-events', async (req: Request, res: Response) => {
@@ -1255,7 +1270,7 @@ router.post('/threads/:threadId/fork', async (req: Request, res: Response) => {
 /** Metadata-only exact binding for authenticated/local saved-thread sends.
  * No transcript, queue observation, or application active/idle gate. */
 router.get('/threads/:threadId/identity', async (req: Request, res: Response) => {
-  if (!wakeMutationAllowed(req)) return res.status(403).json({ error: 'Local same-origin request required.' });
+  if (!savedThreadIdentityReadAllowed(req)) return res.status(403).json({ error: 'Local same-origin request required.' });
   const threadId = req.params.threadId;
   if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId)) {
     return res.status(400).json({ error: 'Exact native thread ID required.' });
