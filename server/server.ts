@@ -295,6 +295,8 @@ if (process.env.INTERPRETER_SUPERVISOR_VERIFY_URL &&
     readGoal: (id) => readStableSupervisorGoal(getCodexService(), id),
     resumeGoal: async (id, expected) =>
       (await getCodexService().setThreadGoalWithRevision(id, expected, { status: 'active' })).revision,
+    updateGoalStatus: async (id, expected, status) =>
+      (await getCodexService().setThreadGoalWithRevision(id, expected, { status })).revision,
     readTerminal: (request) => getCodexService().readNativeTerminalStatus(request),
   }));
 }

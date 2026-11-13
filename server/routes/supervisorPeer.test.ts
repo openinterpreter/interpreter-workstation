@@ -24,7 +24,7 @@ afterEach(() => server?.close());
 
 async function fixture(verified: VerifiedSupervisorGrant | null = grant, alteredDocument = false,
   resumeError?: Error) {
-  const calls = { goal: 0, create: 0, resume: 0, terminal: 0, terminalList: 0,
+  const calls = { goal: 0, create: 0, resume: 0, update: 0, terminal: 0, terminalList: 0,
     artifact: 0, submission: 0 };
   const app = express();
   app.use(express.json({ limit: '2kb' }));
@@ -42,6 +42,9 @@ async function fixture(verified: VerifiedSupervisorGrant | null = grant, altered
     resumeGoal: async (_thread, expected) => { calls.resume++;
       if (resumeError) throw resumeError;
       return { ...expected, status: 'active' }; },
+    updateGoalStatus: async (_thread, expected, status) => { calls.update++;
+      if (resumeError) throw resumeError;
+      return { ...expected, status, lifecycleRevision: expected.lifecycleRevision + 1 }; },
     readTerminal: async () => { calls.terminal++; throw new Error('private command text'); },
     listTerminalOwners: async () => { calls.terminalList++; return { data: [{ threadId,
       turnId: '00000000-0000-4000-8000-000000000003', itemId: 'item-1',
@@ -68,6 +71,57 @@ async function fixture(verified: VerifiedSupervisorGrant | null = grant, altered
 }
 
 describe('enrolled supervisor peer route seam', () => {
+  it('status update requires exact self-grant, active CAS, and a paused/blocked-only change', async () => {
+    const expected = { goalId: '00000000-0000-4000-8000-000000000004',
+      status: 'active', missionRevision: 4, lifecycleRevision: 7 };
+    const own = { ...grant, sourceComputer: 'target-1',
+      capabilities: [...grant.capabilities, 'goal:status-update' as const] };
+    const post = (url: string, body: unknown) => fetch(`${url}/goal/status`, { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const cross = await fixture({ ...grant, capabilities: own.capabilities });
+    expect((await post(cross.base, { expected, status: 'paused' })).status).toBe(403);
+    expect(cross.calls.update).toBe(0);
+    server?.close();
+    const absent = await fixture({ ...own, capabilities: grant.capabilities });
+    expect((await post(absent.base, { expected, status: 'paused' })).status).toBe(403);
+    expect(absent.calls.update).toBe(0);
+    server?.close();
+    const { base, calls } = await fixture(own);
+    expect((await post(base.replace(threadId, '00000000-0000-4000-8000-000000000002'),
+      { expected, status: 'paused' })).status).toBe(403);
+    for (const body of [
+      { expected: { ...expected, status: 'blocked' }, status: 'paused' },
+      { expected, status: 'active' }, { expected, status: 'complete' },
+      { expected, status: 'paused', objective: 'overreach' },
+      { expected: { ...expected, lifecycleRevision: 0 }, status: 'paused' },
+    ]) expect((await post(base, body)).status).toBe(400);
+    expect(calls.update).toBe(0);
+    const result = await post(base, { expected, status: 'paused' });
+    expect(result.status).toBe(200);
+    expect(await result.json()).toEqual({ available: true, revision: {
+      ...expected, status: 'paused', lifecycleRevision: 8 } });
+    expect(calls.update).toBe(1);
+  });
+  it('classifies native CAS conflict and unknown mutation without retry or content leak', async () => {
+    const own = { ...grant, sourceComputer: 'target-1',
+      capabilities: [...grant.capabilities, 'goal:status-update' as const] };
+    const body = JSON.stringify({ status: 'blocked', expected: {
+      goalId: '00000000-0000-4000-8000-000000000004',
+      status: 'active', missionRevision: 4, lifecycleRevision: 7 } });
+    const request = (base: string) => fetch(`${base}/goal/status`, { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body });
+    const conflict = await fixture(own, false, new GoalRevisionConflictError());
+    const rejected = await request(conflict.base);
+    expect(rejected.status).toBe(409);
+    expect(await rejected.json()).toEqual({ available: false, category: 'stale_revision' });
+    expect(conflict.calls.update).toBe(1);
+    server?.close();
+    const unknown = await fixture(own, false, Error('secret native content'));
+    const unconfirmed = await request(unknown.base);
+    expect(unconfirmed.status).toBe(503);
+    expect(await unconfirmed.json()).toEqual({ available: false, category: 'mutation_unconfirmed' });
+    expect(unknown.calls.update).toBe(1);
+  });
   it('permits only exact verified scope and retains a full Goal plus revision', async () => {
     const { base, calls } = await fixture();
     const allowed = await fetch(`${base}/goal`);
@@ -88,7 +142,7 @@ describe('enrolled supervisor peer route seam', () => {
     const { base, calls } = await fixture(null);
     expect((await fetch(`${base}/goal`)).status).toBe(403);
     expect((await fetch(`${base}/artifacts/receipt-1?content=true`)).status).toBe(403);
-    expect(calls).toEqual({ goal: 0, create: 0, resume: 0, terminal: 0,
+    expect(calls).toEqual({ goal: 0, create: 0, resume: 0, update: 0, terminal: 0,
       terminalList: 0, artifact: 0, submission: 0 });
   });
   it('denies cross-thread creation before a native call and keeps uncertain creation typed', async () => {

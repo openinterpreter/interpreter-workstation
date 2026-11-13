@@ -5,7 +5,7 @@ export type VerifiedSupervisorGrant = Readonly<{
   sourceComputer: string;
   targetComputer: string;
   threadId: string;
-  capabilities: readonly ('goal:read' | 'goal:create' | 'goal:resume' | 'task:read' | 'command:read' | 'artifact:read')[];
+  capabilities: readonly ('goal:read' | 'goal:create' | 'goal:resume' | 'goal:status-update' | 'task:read' | 'command:read' | 'artifact:read')[];
   expiresAt: number;
 }>;
 

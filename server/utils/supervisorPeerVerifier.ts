@@ -42,6 +42,7 @@ export function createSupervisorPeerVerifier(config: SupervisorVerifierConfig,
     const capability: SupervisorPeerTarget['capability'] | undefined =
       request.path.endsWith('/goal/create') ? 'goal:create' :
       request.path.endsWith('/goal/resume') ? 'goal:resume' :
+      request.path.endsWith('/goal/status') ? 'goal:status-update' :
       request.path.endsWith('/goal') ? 'goal:read' :
       request.path.endsWith('/terminals/status') ? 'command:read' :
       request.path.endsWith('/turns/current') ? 'task:read' :

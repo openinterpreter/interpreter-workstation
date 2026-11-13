@@ -27,6 +27,8 @@ export function createSupervisorPeerRouter(options: Readonly<{
   createGoal?: (threadId: string, input: SupervisorGoalCreateInput) =>
     ReturnType<typeof createSupervisorGoal>;
   resumeGoal: (threadId: string, expected: ThreadGoalRevision) => Promise<ThreadGoalRevision>;
+  updateGoalStatus?: (threadId: string, expected: ThreadGoalRevision,
+    status: 'paused' | 'blocked') => Promise<ThreadGoalRevision>;
   readTerminal: (request: NativeTerminalStatusRequest) => Promise<NativeTerminalStatusResponse>;
   listTerminalOwners?: (threadId: string, cursor?: string | null) =>
     ReturnType<ReturnType<typeof getCodexService>['listNativeTerminalOwners']>;
@@ -109,6 +111,37 @@ export function createSupervisorPeerRouter(options: Readonly<{
       }
       // Native CAS owns the mutation. A transport failure is UNKNOWN, never a retry authorization.
       const revision = await options.resumeGoal(req.params.threadId, expected);
+      return void res.json({ available: true, revision });
+    } catch (error) {
+      if (error instanceof GoalRevisionConflictError) {
+        return void res.status(409).json(denied('stale_revision'));
+      }
+      return void res.status(503).json(denied('mutation_unconfirmed'));
+    }
+  });
+  router.post('/threads/:threadId/goal/status', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      // Lifecycle status changes are self-scoped only. A cross-host supervisor
+      // grant, even with this capability, cannot pause somebody else's Goal.
+      const grant = await options.verify(req);
+      const scope = authorizeSupervisorPeer(grant, {
+        sourceComputer: options.targetComputer, targetComputer: options.targetComputer,
+        threadId: req.params.threadId, capability: 'goal:status-update',
+      });
+      if (scope !== 'allowed') return void res.status(403).json(denied(scope));
+      const expected = req.body?.expected as ThreadGoalRevision;
+      const status = req.body?.status;
+      try { goalCasExpectedParams(expected); } catch {
+        return void res.status(400).json(denied('invalid_revision'));
+      }
+      if (expected.status !== 'active' || (status !== 'paused' && status !== 'blocked') ||
+          !req.body || Object.keys(req.body).some(key => key !== 'expected' && key !== 'status')) {
+        return void res.status(400).json(denied('invalid_request'));
+      }
+      if (!options.updateGoalStatus) return void res.status(503).json(denied('mutation_unconfirmed'));
+      // No fallback to old, unconditional Goal/set. Native revision CAS owns the effect.
+      const revision = await options.updateGoalStatus(req.params.threadId, expected, status);
       return void res.json({ available: true, revision });
     } catch (error) {
       if (error instanceof GoalRevisionConflictError) {

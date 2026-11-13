@@ -45,6 +45,20 @@ describe('optional enrolled target peer verifier', () => {
       fetcher: (async () => { throw Error('private upstream text'); }) as typeof fetch });
     expect(await verify(req())).toBeNull();
   });
+  it('asks enrolled verifier for status-update capability, not a generic Goal grant', async () => {
+    const calls: string[] = [];
+    const selfGrant = { ...grant, sourceComputer: 'target-1',
+      capabilities: ['goal:status-update'] };
+    const verify = createSupervisorPeerVerifier(config, {
+      identity: async () => 'a.b.c',
+      fetcher: (async (_url: URL, init: RequestInit) => {
+        calls.push(JSON.parse(String(init.body)).capability);
+        return new Response(JSON.stringify(selfGrant));
+      }) as typeof fetch,
+    });
+    expect(await verify(req(`/threads/${threadId}/goal/status`))).toEqual(selfGrant);
+    expect(calls).toEqual(['goal:status-update']);
+  });
   it('rejects unconfigured or unsafe verification destinations', () => {
     expect(() => createSupervisorPeerVerifier({ ...config, verifyUrl: 'http://localhost:3000/' })).toThrow();
     expect(() => createSupervisorPeerVerifier({ ...config,
