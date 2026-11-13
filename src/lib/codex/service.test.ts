@@ -2803,6 +2803,30 @@ describe("CodexService", () => {
     assert.deepEqual(fake.calls.threadReadParams[0], { threadId: "thr_123", includeTurns: true });
   });
 
+  test('saved-thread identity reads only native metadata and rejects foreign or non-durable shells', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    const path = `/workspace/home/sessions/2026/11/13/turn-${id}.jsonl`;
+    let native = { id, path, cwd: '/workspace/projects/interpreter',
+      ephemeral: false, status: { type: 'active', activeFlags: [] }, turns: [] } as unknown as v2.Thread;
+    const fake = createFakeClient({ threadRead: async () => ({ thread: native }) });
+    const service = new CodexService(fake.client);
+    assert.deepEqual(await service.readSavedThreadIdentity(id), {
+      threadId: id, path, cwd: '/workspace/projects/interpreter', archived: false,
+    });
+    assert.deepEqual(fake.calls.threadReadParams, [{ threadId: id, includeTurns: false }]);
+    for (const changed of [
+      { id: '00000000-0000-4000-8000-000000000002' },
+      { path: `/workspace/home/archived_sessions/turn-${id}.jsonl` },
+      { cwd: '/tmp/private' }, { ephemeral: true },
+      { turns: [{ id: 'private', items: [{ text: 'PRIVATE TRANSCRIPT' }] }] },
+    ]) {
+      native = { ...native, ...changed } as v2.Thread;
+      await assert.rejects(service.readSavedThreadIdentity(id), /Exact durable saved-thread identity unavailable/);
+      native = { id, path, cwd: '/workspace/projects/interpreter', ephemeral: false,
+        status: { type: 'idle' }, turns: [] } as unknown as v2.Thread;
+    }
+  });
+
   test("should_pass_setThreadName_params_to_client", async () => {
     const fake = createFakeClient();
     const service = new CodexService(fake.client);
