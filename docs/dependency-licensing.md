@@ -33,6 +33,12 @@ Known items requiring explicit release review:
   Preserve the npm and upstream Rust notices and audit the shipped native/WASM
   artifacts at every bridge update, because the pnpm inventory does not inspect
   licenses embedded inside prebuilt binaries.
+  As of the October 2026 channel review, upstream documents
+  `@whiskeysockets/baileys` as its stable installation path and publishes
+  6.7.24 alongside 7.0.0 release candidates. We retain the reviewed bridge
+  and its lockfile/compatibility patch for this change: switching to the
+  upstream 6.x Signal dependency or a breaking 7.x candidate requires a
+  separate binary-license, credential-migration, and real-session test.
 - Platform packages matching `@img/sharp-libvips-*` appear in two reviewed
   places: optional 1.3.3 packages in pnpm's conservative app inventory and a
   platform-specific 1.2.4 package in the generated browser-relay runtime. Both

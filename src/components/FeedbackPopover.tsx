@@ -12,6 +12,7 @@ import { isBrowserDevMode } from '@/ipc';
 import { FEEDBACK_BUTTON_ID, FEEDBACK_POPOVER_ID } from '../../shared/element-ids';
 import { FEEDBACK_BUTTON_FLASH_EVENT, FEEDBACK_POPOVER_OPEN_EVENT } from '../utils/feedback';
 import { isMeaningfulFeedbackMessage } from '../utils/feedbackValidation';
+import { distributionProductConfig } from '../../shared/productConfig';
 import { trackFeedbackSubmitted, trackFeedbackOpened } from '../utils/telemetry';
 import { cn } from '@/lib/utils';
 import { formatPrimaryShortcut } from '../utils/platformShortcuts';
@@ -25,11 +26,14 @@ import { SIDEBAR_FOOTER_SECONDARY_BUTTON_CLASSNAME } from './sidebarFooterButton
 
 interface FeedbackPopoverProps {
   className?: string;
+  iconOnly?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  openRequested?: boolean;
 }
 
 const DEFAULT_INCLUDE_LOGS = true;
 
-export function FeedbackPopover({ className }: FeedbackPopoverProps) {
+export function FeedbackPopover({ className, iconOnly = false, onOpenChange, openRequested = false }: FeedbackPopoverProps) {
   const { session } = useAuth();
   const { dismissToast, showToast } = useToast();
   const { t } = useTranslation();
@@ -67,7 +71,18 @@ export function FeedbackPopover({ className }: FeedbackPopoverProps) {
       window.removeEventListener(FEEDBACK_POPOVER_OPEN_EVENT, handleOpen);
     };
   }, []);
+  // A hidden floating trigger mounts through the notice layer after Settings
+  // closes. Carry the request as state instead of racing a one-shot event
+  // against the new trigger's effect subscription.
+  useEffect(() => {
+    if (openRequested) {
+      setIsOpen(true);
+      trackFeedbackOpened();
+    }
+  }, [openRequested]);
   const [message, setMessage] = useState('');
+  const [reportPasscode, setReportPasscode] = useState('');
+  const requiresReportPasscode = Boolean(distributionProductConfig.feedbackUrl?.trim());
 
   useEffect(() => {
     if (!email && session?.user?.email) {
@@ -154,18 +169,26 @@ export function FeedbackPopover({ className }: FeedbackPopoverProps) {
       return;
     }
 
+    if (requiresReportPasscode && (new TextEncoder().encode(reportPasscode).length < 12 ||
+        new TextEncoder().encode(reportPasscode).length > 128)) {
+      setSubmitError(t('feedback.reportPasscodeError', { defaultValue: 'Enter a report passcode of 12–128 bytes.' }));
+      return;
+    }
+
     if (isBrowserDevMode() || !window.electron?.feedback) {
       setSubmitError(t('feedback.errorDesktopOnly'));
       return;
     }
 
     const imagesToSubmit = images;
+    const passcodeToSubmit = requiresReportPasscode ? reportPasscode : undefined;
     const includeLogsToSubmit = includeLogs;
     setIsSubmitting(true);
     setSubmitError(null);
     const sendingToastId = showToast(t('feedback.sendingToast'), 'info');
     setIsOpen(false);
     setMessage('');
+    setReportPasscode('');
     setImages([]);
     setIncludeLogs(DEFAULT_INCLUDE_LOGS);
 
@@ -196,6 +219,7 @@ export function FeedbackPopover({ className }: FeedbackPopoverProps) {
       const result = await window.electron.feedback.submit({
         email: trimmedEmail,
         message: trimmedMessage,
+        reportPasscode: passcodeToSubmit,
         includeLogs: includeLogsToSubmit,
         images: encodedImages,
       });
@@ -207,7 +231,10 @@ export function FeedbackPopover({ className }: FeedbackPopoverProps) {
           messageLength: trimmedMessage.length,
         });
         dismissToast(sendingToastId);
-        showToast(t('feedback.success'), 'success', 4000);
+        const reportId = typeof result.id === 'string' && /^[a-f0-9]{32}$/i.test(result.id)
+          ? result.id
+          : null;
+        showToast(reportId ? `${t('feedback.success')} Report ID: ${reportId}` : t('feedback.success'), 'success', 15000);
       } else {
         let errorMessage = result.error;
         if (!errorMessage) {
@@ -218,10 +245,13 @@ export function FeedbackPopover({ className }: FeedbackPopoverProps) {
       }
     } catch (err: any) {
       let errorMsg = t('feedback.errorSendFailed');
-      if (err?.message) {
+      if (!requiresReportPasscode && err?.message) {
         errorMsg = err.message;
       }
-      console.error('[FEEDBACK] Submit error:', errorMsg, err);
+      // Dedicated transport errors may contain a signed URL or secret in their
+      // exception text. Neither diagnostics nor toasts may echo those bytes.
+      if (requiresReportPasscode) console.error('[FEEDBACK] Submission failed');
+      else console.error('[FEEDBACK] Submit error:', errorMsg, err);
       dismissToast(sendingToastId);
       showToast(errorMsg, 'error', 8000);
     }
@@ -233,7 +263,11 @@ export function FeedbackPopover({ className }: FeedbackPopoverProps) {
 
   return (
 // we use the popover component here over dropdownmenu as it is makes we the form fields keyboard navigatable
-    <Popover open={isOpen} onOpenChange={setIsOpen}>
+    <Popover open={isOpen} onOpenChange={(open) => {
+      setIsOpen(open);
+      if (!open) setReportPasscode('');
+      onOpenChange?.(open);
+    }}>
       <Tooltip>
         <TooltipTrigger asChild>
           <span>
@@ -249,6 +283,7 @@ export function FeedbackPopover({ className }: FeedbackPopoverProps) {
                   showPulse && 'feedback-button-onboarding-pulse',
                 )}
                 onAnimationEnd={() => setShowPulse(false)}
+                aria-label={iconOnly ? t('feedback.button') : undefined}
                 data-help-title={t('feedback.helpTitle')}
                 data-help-description={t('feedback.helpDescription')}
               >
@@ -256,8 +291,8 @@ export function FeedbackPopover({ className }: FeedbackPopoverProps) {
                   whileTap={reducedMotion ? undefined : { scale: 0.982 }}
                   transition={reducedMotion ? { duration: 0.12 } : { duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
                 >
-                  <Bug />
-                  {t('feedback.button')}
+                  <Bug aria-hidden="true" />
+                  {!iconOnly && t('feedback.button')}
                 </motion.button>
               </Button>
             </PopoverTrigger>
@@ -291,7 +326,7 @@ export function FeedbackPopover({ className }: FeedbackPopoverProps) {
               variant="ghost"
               size="icon-xs"
               className="mt-[-2px] text-muted-foreground hover:bg-black/[0.03] hover:text-foreground dark:hover:bg-white/[0.05]"
-              onClick={() => setIsOpen(false)}
+              onClick={() => { setIsOpen(false); onOpenChange?.(false); }}
             >
               <X className="h-3 w-3" />
             </Button>
@@ -336,6 +371,27 @@ export function FeedbackPopover({ className }: FeedbackPopoverProps) {
                 required
               />
             </div>
+
+            {requiresReportPasscode && (
+              <div className="space-y-1.5">
+                <Label htmlFor="feedback-report-passcode" className="text-ui-sm text-muted-foreground">
+                  {t('feedback.reportPasscodeLabel', { defaultValue: 'Report passcode' })}
+                </Label>
+                <Input
+                  id="feedback-report-passcode"
+                  type="password"
+                  autoComplete="new-password"
+                  spellCheck={false}
+                  value={reportPasscode}
+                  onChange={(e) => setReportPasscode(e.target.value)}
+                  className="h-9 rounded-[12px] text-ui-sm shadow-none"
+                  required
+                />
+                <p className="text-ui-xs text-muted-foreground">
+                  {t('feedback.reportPasscodeHelp', { defaultValue: 'Keep this separate from your message. Support needs it to retrieve this report.' })}
+                </p>
+              </div>
+            )}
 
             <div
               className="space-y-1.5 rounded-[12px] px-3 py-2.5"

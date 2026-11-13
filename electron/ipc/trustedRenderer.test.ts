@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { assertTrustedFileIpcFrame, isTrustedAppRendererUrl, isTrustedFileIpcFrame } from './trustedRenderer';
+import { assertTrustedFileIpcFrame, isTrustedAppRendererUrl, isTrustedFileIpcFrame, isWhatsAppApiPath } from './trustedRenderer';
 
 describe('trustedRenderer', () => {
   test('allows the packaged app main frame', () => {
@@ -26,5 +26,14 @@ describe('trustedRenderer', () => {
     expect(() => assertTrustedFileIpcFrame('about:srcdoc', false)).toThrow(
       'Access denied: privileged file IPC requires the app main frame'
     );
+  });
+
+  test('guards equivalent WhatsApp API path spellings before forwarding', () => {
+    for (const path of ['/api/servers/whatsapp/thread-binding', '/api/servers/whatsapp/thread-binding/',
+      '/api/servers/whatsapp/thread-binding?retry=1', '/API/SERVERS/WHATSAPP/thread-binding',
+      '/api/servers/%77hatsapp/thread-binding', '/api/servers/whatsapp/setup']) {
+      expect(isWhatsAppApiPath(path)).toBe(true);
+    }
+    expect(isWhatsAppApiPath('/api/servers/whatsapped/thread-binding')).toBe(false);
   });
 });

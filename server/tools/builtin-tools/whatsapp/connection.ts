@@ -25,7 +25,6 @@ import {
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   makeWASocket,
-  useLegacyMultiFileAuthState as useMultiFileAuthState,
   isJidGroup,
   type WASocket,
   type WAMessage,
@@ -39,6 +38,7 @@ import {
   enqueueSaveCreds,
   maybeRestoreCredsFromBackup,
 } from './credentials';
+import { loadWhatsAppAuthState } from './authState';
 import { extractMessageBody, describeReplyContext } from './extract';
 import { isIgnoredJid } from './normalize';
 import type { CachedChat, CachedMessage, CloseReason } from './types';
@@ -362,23 +362,32 @@ export async function initializeSocket(): Promise<void> {
   // Restore corrupted creds from backup (Open Claw pattern)
   maybeRestoreCredsFromBackup();
 
-  const logger = pino({ level: 'silent' });
-  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-  const { version } = await fetchLatestBaileysVersion();
+  let sock: WhatsAppSocket;
+  let saveCreds: () => Promise<void>;
+  try {
+    const logger = pino({ level: 'silent' });
+    const authState = await loadWhatsAppAuthState(AUTH_DIR);
+    saveCreds = authState.saveCreds;
+    const { version } = await fetchLatestBaileysVersion();
 
-  const sock = makeWASocket({
-    auth: {
-      creds: state.creds,
-      keys: makeCacheableSignalKeyStore(state.keys, logger),
-    },
-    version,
-    logger,
-    printQRInTerminal: false,
-    browser: ['Interpreter', 'Desktop', '1.0.0'],
-    syncFullHistory: false,
-    shouldSyncHistoryMessage: () => true,
-    markOnlineOnConnect: false,
-  }) as WhatsAppSocket;
+    sock = makeWASocket({
+      auth: {
+        ...authState.state,
+        keys: makeCacheableSignalKeyStore(authState.state.keys, logger),
+      },
+      version,
+      logger,
+      printQRInTerminal: false,
+      browser: ['Interpreter', 'Desktop', '1.0.0'],
+      syncFullHistory: false,
+      shouldSyncHistoryMessage: () => true,
+      markOnlineOnConnect: false,
+    }) as WhatsAppSocket;
+  } catch (error) {
+    connectionState = 'disconnected';
+    connectionEvents.emit('disconnected', { error });
+    throw error;
+  }
 
   sock.fetchMessagesFromWA = (chatId, limit) => fetchMessagesFromWA(sock, chatId, limit);
   socket = sock;

@@ -49,7 +49,9 @@ import { OnboardingModal } from '../components/OnboardingModal';
 import { OnboardingHeading, OnboardingScreenShell } from '../components/OnboardingScreenShell';
 import {
   buildOpenAIOAuthOnboardingPack,
+  chooseOpenAIModelRoles,
   getHostedOnboardingFastProfileId,
+  getOpenAIOAuthFastProfileId,
   getOpenAIOAuthInitialSelectedProfileIds,
   getOnboardingModelPack,
   inferPreferredProfileIdFromOnboardingText,
@@ -724,10 +726,6 @@ export function ModelSetupScreen({
     return buildOpenAIOAuthOnboardingPack(models);
   }, []);
 
-  const getOpenAIOAuthFastProfileId = useCallback((pack: OnboardingModelPack): string | undefined => {
-    return pack.profiles.find((profile) => profile.id !== pack.defaultProfileId)?.id;
-  }, []);
-
   const openApiKeyPackReview = useCallback(async (
     keyType: ApiKeyProvider,
     credentials?: { apiKey?: string; environmentKey?: string },
@@ -797,9 +795,12 @@ export function ModelSetupScreen({
       isBuiltin: false,
     }));
 
-    const defaultModel = models.find((model) => model.isDefault) ?? models[0];
-    const defaultProfileId = `onboarding:${keyType}-${toSlug(defaultModel.id)}`;
-    const fastProfileId = profilesToApply.find((profile) => profile.id !== defaultProfileId)?.id;
+    const roles = keyType === 'openai' ? chooseOpenAIModelRoles(models) : null;
+    const defaultModelId = roles?.defaultModelId ?? models.find((model) => model.isDefault)?.id ?? models[0].id;
+    const defaultProfileId = `onboarding:${keyType}-${toSlug(defaultModelId)}`;
+    const fastProfileId = keyType === 'openai'
+      ? profilesToApply.find((profile) => profile.modelId === roles?.fastModelId)?.id
+      : profilesToApply.find((profile) => profile.id !== defaultProfileId)?.id;
 
     openPackReview(
       `api:${keyType}`,

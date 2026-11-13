@@ -87,6 +87,7 @@ async function setOnboardingState(page: Page, state: OnboardingState): Promise<v
 }
 
 test('first run is gated by the shared onboarding state contract', async ({ page }) => {
+  test.setTimeout(90_000); // Two real Electron reloads can exceed the default smoke timeout.
   const original = await ipc<{ state: OnboardingState }>(page, 'onboardingState', 'get');
 
   try {

@@ -233,6 +233,9 @@ export const test = base.extend<{}, { electronApp: ElectronApplication }>({
           // tokens so background refresh returns 400 / fails to fetch.
           // Also skip Sentry SDK errors -- it can't establish IPC in e2e tests.
           if (
+            // Chromium can report a deferred observer notification during a
+            // layout transition; this is not a renderer exception or lost UI.
+            text.includes('ResizeObserver loop completed with undelivered notifications.') ||
             text.includes('Failed to fetch') ||
             text.includes('Invalid Refresh Token') ||
             text.includes('AuthApiError') ||
@@ -293,7 +296,7 @@ export const test = base.extend<{}, { electronApp: ElectronApplication }>({
           completed: true,
           completedStepIds: ['test-bootstrap'],
         };
-        await p.evaluate(async ({ port, bootstrapProfile, completedOnboardingState }: { port: number; bootstrapProfile: any; completedOnboardingState: any }) => {
+        await p.evaluate(async ({ port, bootstrapProfile, completedOnboardingState, legacyAdvancedSpec }: { port: number; bootstrapProfile: any; completedOnboardingState: any; legacyAdvancedSpec: boolean }) => {
           const request = async (path: string, init?: RequestInit): Promise<any> => {
             const controller = new AbortController();
             // A first OIX app-server initialization can take roughly 60-75s on
@@ -389,7 +392,16 @@ export const test = base.extend<{}, { electronApp: ElectronApplication }>({
           if (persistedOnboarding?.state?.completed !== true) {
             throw new Error('Onboarding completion state did not persist');
           }
-        }, { port, bootstrapProfile, completedOnboardingState });
+
+          // Existing E2E cases assert the pre-Simple editor/sidebar experience.
+          // Exercise it as Advanced, while simple-mode.spec.ts explicitly starts
+          // in Simple and checks reversible switching/persistence.
+          await request('/api/ipc/uiSettings/setAdvancedMode', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify([legacyAdvancedSpec]),
+          });
+        }, { port, bootstrapProfile, completedOnboardingState, legacyAdvancedSpec: !testInfo.file.endsWith('simple-mode.spec.ts') });
 
         // Reload to ensure fresh state
         await reloadAndWaitForPageLoadSignals(p);

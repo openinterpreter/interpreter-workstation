@@ -4,6 +4,7 @@ export interface LowerLeftNoticeEntry {
   id: string;
   content: ReactNode;
   createdAt: number;
+  side?: 'left' | 'right';
 }
 
 interface LowerLeftNoticesContextType {
@@ -22,7 +23,7 @@ export function useLowerLeftNotices() {
   return context;
 }
 
-export function useLowerLeftNotice(id: string, content: ReactNode | null) {
+export function useLowerLeftNotice(id: string, content: ReactNode | null, side: 'left' | 'right' = 'left') {
   const { upsertNotice, removeNotice } = useLowerLeftNotices();
   const createdAtRef = useRef<number | null>(null);
 
@@ -41,8 +42,9 @@ export function useLowerLeftNotice(id: string, content: ReactNode | null) {
       id,
       content,
       createdAt: createdAtRef.current,
+      side,
     });
-  }, [content, id, removeNotice, upsertNotice]);
+  }, [content, id, removeNotice, side, upsertNotice]);
 
   useEffect(() => () => {
     removeNotice(id);

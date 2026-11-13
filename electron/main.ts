@@ -874,6 +874,9 @@ import {
   getZoomFactor,
   setZoomFactor,
   incrementAppLaunchCount,
+  getSimpleProjectSetting,
+  getSimpleOpenProjectPaths,
+  setSimpleOpenProjectPaths,
 } from '../server/configStore';
 import { broadcastEvent } from '../server/handlers/broadcast';
 import { globalFileAccessResolver } from '../server/globalFileAccessResolver';
@@ -911,6 +914,7 @@ import {
   registerWindowSession,
   runWithWindowSessionOverride,
   unregisterWindowSession,
+  getWindowSessionSimpleProject,
 } from '../server/utils/windowSessions';
 import {
   bindWindowSessionWorkspace,
@@ -1689,6 +1693,7 @@ interface CreateWindowOptions {
   sessionKey?: string;
   workspacePath?: string | null;
   bootstrapLayout?: LayoutState | null;
+  simpleProjectPath?: string | null;
   primary?: boolean;
   background?: boolean;
 }
@@ -2121,11 +2126,20 @@ function bindWindowEvents(window: BrowserWindow, options: { primary: boolean; se
       mainWindowCloseRequested = false;
       mainWindowLaunchState = null;
     }
+    const closedSimpleProjectPath = getWindowSessionSimpleProject(options.sessionKey);
     workstationService.unregisterWindow(options.windowId);
     void unbindWindowSessionWorkspace(options.sessionKey).catch((error) => {
       console.error('[Main] Failed to unbind workspace watch for window session:', error);
     });
     unregisterWindowSession(options.windowId);
+    const projectStillOpen = closedSimpleProjectPath
+      ? listWindowSessions().some((session) => session.simpleProjectPath === closedSimpleProjectPath)
+      : false;
+    if (!isQuitting && closedSimpleProjectPath && !projectStillOpen) {
+      void getSimpleOpenProjectPaths()
+        .then((paths) => setSimpleOpenProjectPaths(paths.filter((candidate) => candidate !== closedSimpleProjectPath)))
+        .catch((error) => console.error('[Main] Failed to persist closed Simple interface window:', error));
+    }
 
     if (mainWindow === window) {
       mainWindow = workstationService.getMainWindow();
@@ -2273,6 +2287,27 @@ async function createWindow(options?: CreateWindowOptions): Promise<CreateWindow
   });
   const windowId = window.id;
   const webContentsId = window.webContents.id;
+  const publishComposerOwner = (owner: BrowserWindow) => {
+    for (const candidate of getLiveWorkstationWindows()) {
+      if (!candidate.webContents.isDestroyed()) {
+        candidate.webContents.send(IPC_CHANNELS.WINDOW_FOCUS_CHANGED, {
+          focused: candidate.id === owner.id,
+        });
+      }
+    }
+  };
+  // The composer belongs to the active Workstation window, not to every
+  // renderer. Losing focus to another application does not destroy ownership;
+  // the desktop overlay takes over independently when its hotkey is invoked.
+  window.on('focus', () => publishComposerOwner(window));
+  window.webContents.on('did-finish-load', () => {
+    const focused = BrowserWindow.getFocusedWindow();
+    publishComposerOwner(
+      focused && getWindowSessionByWindowId(focused.id)
+        ? focused
+        : (mainWindow && !mainWindow.isDestroyed() ? mainWindow : window),
+    );
+  });
   if (shouldKeepMainWindowHiddenForHeadlessRuns()) {
     hideWorkstationWindowForHeadlessRuns(window);
     window.on('show', () => {
@@ -2298,6 +2333,7 @@ async function createWindow(options?: CreateWindowOptions): Promise<CreateWindow
     sessionKey,
     windowId,
     workspacePath: initialWorkspacePath ?? null,
+    simpleProjectPath: options?.simpleProjectPath ?? null,
   });
   await bindWindowSessionWorkspace(sessionKey, initialWorkspacePath ?? null);
   if (isBrowserWindowUnavailable(window)) {
@@ -2345,6 +2381,7 @@ async function createWorkstationWindow(options?: {
   sourceWindowId?: number | null;
   workspacePath?: string | null;
   bootstrapLayout?: LayoutState | null;
+  simpleProjectPath?: string | null;
   background?: boolean;
 }): Promise<{ success: true; windowId: number; sessionKey: string } | { success: false; error: string }> {
   const sourceWindow = options?.sourceWindowId ? BrowserWindow.fromId(options.sourceWindowId) : BrowserWindow.getFocusedWindow();
@@ -2356,6 +2393,7 @@ async function createWorkstationWindow(options?: {
     sessionKey,
     workspacePath: inheritedWorkspacePath,
     bootstrapLayout: options?.bootstrapLayout ?? null,
+    simpleProjectPath: options?.simpleProjectPath ?? null,
     primary: false,
     background: options?.background === true,
   });
@@ -2385,6 +2423,11 @@ async function createWorkstationWindow(options?: {
 
   if (options?.background !== true) {
     focusWorkstationWindow(createWindowResult.window);
+  }
+
+  if (options?.simpleProjectPath) {
+    const openPaths = await getSimpleOpenProjectPaths();
+    await setSimpleOpenProjectPaths([...openPaths, options.simpleProjectPath]);
   }
 
   return {
@@ -2661,10 +2704,31 @@ app.whenReady().then(async () => {
       console.error('[Main] Failed to increment app launch count:', error);
     }
 
-    // Create the window
-    const createWindowResult = await createWindow();
+    // Simple restores one independent window per interface project. Advanced
+    // continues to restore its layout inside the ordinary primary window.
+    const simpleMode = !(await getBooleanUISetting('advancedMode'));
+    const savedSimpleProjects = simpleMode
+      ? (await getSimpleOpenProjectPaths()).filter((candidate) => fs.existsSync(candidate))
+      : [];
+    const launchDefaultProject = simpleMode
+      ? (savedSimpleProjects[0] ?? (await getSimpleProjectSetting()).activePath)
+      : null;
+    const createWindowResult = await createWindow({ simpleProjectPath: launchDefaultProject });
     if (createWindowResult.status === 'aborted-during-teardown') {
       return;
+    }
+    if (simpleMode && launchDefaultProject && savedSimpleProjects.length === 0) {
+      await setSimpleOpenProjectPaths([launchDefaultProject]);
+    }
+    for (const projectPath of savedSimpleProjects.slice(1)) {
+      const restored = await createWorkstationWindow({
+        sourceWindowId: createWindowResult.window.id,
+        simpleProjectPath: projectPath,
+        background: false,
+      });
+      if (!restored.success) {
+        console.warn('[Main] Could not restore Simple interface window:', projectPath, restored.error);
+      }
     }
 
     await handlePendingNativeCrashReports({

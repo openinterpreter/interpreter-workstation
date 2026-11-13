@@ -159,6 +159,8 @@ export interface OverlayAdvancedVoiceCompletionNotice {
 export type OverlayAdvancedVoiceSessionKind = 'advanced_voice' | 'onboarding_voice_interview';
 
 export interface OverlayState {
+  /** Simple keeps the selection machinery but renders only a dimmed screen and compact composer. */
+  simpleMode: boolean;
   mode: 'idle' | 'input' | 'working' | 'review';
   action: ReviewAction | null;
   ghosts: ReviewAction[];
@@ -330,6 +332,7 @@ export type OverlayAction =
     };
 
 export const DEFAULT_OVERLAY_STATE: OverlayState = {
+  simpleMode: false,
   mode: 'idle',
   action: null,
   ghosts: [],

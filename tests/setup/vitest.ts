@@ -44,26 +44,31 @@ vi.mock('react-i18next', () => ({
 // vitest.config.ts); the jsdom-only globals below are skipped there.
 const isBrowserEnvironment = typeof window !== 'undefined';
 
+// Motion reads reduced-motion preferences while modules mount, before the
+// suite-level beforeAll hook runs. Install the browser primitive eagerly so
+// components using layout projection behave like they do in Electron.
+if (isBrowserEnvironment && !window.matchMedia) {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false,
+    }),
+  });
+}
+
 beforeAll(() => {
   server.listen({ onUnhandledRequest: 'error' });
 
   if (!isBrowserEnvironment) {
     return;
   }
-
-  Object.defineProperty(window, 'matchMedia', {
-    writable: true,
-    value: vi.fn().mockImplementation((query: string) => ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      dispatchEvent: vi.fn(),
-    })),
-  });
 
   Object.defineProperty(window, 'scrollTo', {
     writable: true,

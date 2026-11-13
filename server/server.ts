@@ -49,8 +49,13 @@ import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import { join as pathJoin, dirname, normalize as pathNormalize, resolve as pathResolve, sep as pathSep } from "node:path";
 import os from "node:os";
 import agentRouter from "./routes/agent";
+import { createSupervisorPeerRouter } from './routes/supervisorPeer';
+import { createSupervisorPeerVerifier } from './utils/supervisorPeerVerifier';
+import { getCodexService } from '../src/lib/codex/service';
+import { readStableSupervisorGoal } from './utils/supervisorGoalRead';
 import { startWakeSources } from './utils/wakeSourcesRuntime';
 import authRouter from "./routes/auth";
+import { ENTERPRISE_READINESS } from './enterprise/controlPlane';
 import workspaceRouter from "./routes/workspace";
 import activityRouter from "./routes/activity";
 import nylasRouter from "./routes/nylas";
@@ -59,6 +64,7 @@ import telegramRouter from "./routes/telegram";
 import inboxRouter from "./routes/inbox";
 import pdfRouter from "./routes/pdf";
 import ipcRouter from "./routes/ipc";
+import simpleInterfaceRouter from './routes/simpleInterface';
 import mcpRouter from "./routes/mcp";
 import interpreterCliRouter from "./routes/interpreterCli";
 import publicThreadRouter from "./routes/publicThread";
@@ -266,7 +272,32 @@ export const broadcastSSE = broadcast;
 
 // Mount route modules
 app.use('/api/auth', authRouter);
+// Only the truthful readiness endpoint is mounted. Do not mount a directory
+// until a verified IdP and server-owned tenant directory are configured.
+app.get('/api/enterprise/readiness', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.json(ENTERPRISE_READINESS);
+});
 app.use('/api/agent', agentRouter);
+// Enrolled peers use the same verified, machine-scoped native Goal transport
+// as the desktop server. An incomplete verifier configuration grants nothing.
+if (process.env.INTERPRETER_SUPERVISOR_VERIFY_URL &&
+    process.env.INTERPRETER_SUPERVISOR_VERIFY_AUDIENCE &&
+    process.env.INTERPRETER_SUPERVISOR_TARGET_COMPUTER) {
+  const targetComputer = process.env.INTERPRETER_SUPERVISOR_TARGET_COMPUTER;
+  app.use('/api/interpreter-peer', createSupervisorPeerRouter({
+    targetComputer,
+    verify: createSupervisorPeerVerifier({
+      verifyUrl: process.env.INTERPRETER_SUPERVISOR_VERIFY_URL,
+      audience: process.env.INTERPRETER_SUPERVISOR_VERIFY_AUDIENCE,
+      targetComputer,
+    }),
+    readGoal: (id) => readStableSupervisorGoal(getCodexService(), id),
+    resumeGoal: async (id, expected) =>
+      (await getCodexService().setThreadGoalWithRevision(id, expected, { status: 'active' })).revision,
+    readTerminal: (request) => getCodexService().readNativeTerminalStatus(request),
+  }));
+}
 app.use('/api/workspace', workspaceRouter);
 app.use('/api/activity', activityRouter);
 app.use('/api/servers/nylas', nylasRouter);
@@ -275,6 +306,7 @@ app.use('/api/servers/telegram', telegramRouter);
 app.use('/api/inbox', inboxRouter);
 app.use('/api/pdf', pdfRouter); // Direct PDF API (no IPC events) for UI use
 app.use('/api/ipc', ipcRouter); // Browser mode IPC-equivalent endpoints
+app.use('/api/simple-interface', simpleInterfaceRouter); // Compiled, workspace-backed React interface
 app.use('/api/interpreter-cli', interpreterCliRouter);
 app.use('/api/public-thread', publicThreadRouter);
 app.use('/api/public-workspace', publicWorkspaceRouter);

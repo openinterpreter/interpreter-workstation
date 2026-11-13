@@ -23,6 +23,18 @@ test('two packaging failures retain only verified Windows and Linux', () => {
   assert.equal(decidePlatformMode(source, context), 'windows-linux');
 });
 
+test('explicit Windows/Linux run verifies exactly its current-run build jobs without starting macOS', () => {
+  const source = jobs().slice(2);
+  assert.equal(decidePlatformMode(source, { ...context, requestedMode: 'windows-linux' }), 'windows-linux');
+  assert.throws(() => decidePlatformMode(jobs(), { ...context, requestedMode: 'windows-linux' }));
+  source[0].conclusion = 'failure';
+  assert.throws(() => decidePlatformMode(source, { ...context, requestedMode: 'windows-linux' }));
+  source[0].conclusion = 'success';
+  source[1].head_sha = 'b'.repeat(40);
+  assert.throws(() => decidePlatformMode(source, { ...context, requestedMode: 'windows-linux' }));
+  assert.throws(() => decidePlatformMode(source, { ...context, requestedMode: '' }));
+});
+
 test('missing or failed Windows/Linux jobs never publish', () => {
   const source = jobs();
   assert.throws(() => decidePlatformMode(source.slice(1), context));

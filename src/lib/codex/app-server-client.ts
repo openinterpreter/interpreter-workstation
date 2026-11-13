@@ -20,6 +20,7 @@ import {
   isValidNotificationShape,
 } from "../validators/index";
 import type { v2 } from "../../../server/handlers/codex-generated-types/index";
+import { boundedSupervisorThread } from "../../../server/utils/boundedSupervisorThread";
 import type { JsonValue } from "../../../server/handlers/codex-generated-types/serde_json/JsonValue";
 import type {
   StreamImageAttachment,
@@ -628,6 +629,7 @@ export interface JsonRpcTransport {
   onClose(handler: (error?: Error) => void): void;
   stop(): void | Promise<void>;
   getStderrSnapshot?(): string;
+  getSelectedRuntimeVersion?(): Promise<string | null>;
 }
 
 export interface CodexCliRunner {
@@ -1506,6 +1508,11 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
   private startPromise: Promise<void> | null = null;
   private oixRuntimeResolutionPromise: Promise<OixRuntimeResolution> | null = null;
 
+  async getSelectedRuntimeVersion(): Promise<string | null> {
+    // Never resolve/install a new runtime just to inspect a native process.
+    return (await this.oixRuntimeResolutionPromise)?.version ?? null;
+  }
+
   constructor(
     private readonly spawnProcess: SpawnProcess = (command, args, env) =>
       spawn(command, args, {
@@ -2156,6 +2163,8 @@ export class CodexAppServerClient {
     cwd?: string | null,
     config?: Record<string, JsonValue> | null,
     developerInstructions?: string | null,
+    dynamicTools?: v2.DynamicToolSpec[] | null,
+    additionalWritableRoots?: string[],
   ) {
     const threadApprovalPolicy = await getConfigApprovalPolicy();
     const runtimeAccess = await this.getRuntimeAccessSnapshot();
@@ -2166,7 +2175,7 @@ export class CodexAppServerClient {
       allowTempAccess: process.platform === "darwin" ? runtimeAccess.macosTempAccess : true,
       cwd,
       additionalReadableRoots: getInterpreterCliSandboxReadableRoots(),
-      additionalWritableRoots: getInterpreterCliSandboxWritableRoots(),
+      additionalWritableRoots: [...getInterpreterCliSandboxWritableRoots(), ...(additionalWritableRoots ?? [])],
     });
     const nextConfig = withWorkspacePermissionConfig(config, workspacePermission);
 
@@ -2180,6 +2189,7 @@ export class CodexAppServerClient {
       ...(cwd ? { cwd } : {}),
       ...(baseInstructions ? { baseInstructions } : {}),
       ...(developerInstructions ? { developerInstructions } : {}),
+      ...(dynamicTools?.length ? { dynamicTools } : {}),
       config: nextConfig,
       approvalPolicy: threadApprovalPolicy as v2.ThreadStartParams["approvalPolicy"],
       ...(workspacePermission
@@ -2256,6 +2266,7 @@ export class CodexAppServerClient {
     config?: Record<string, JsonValue> | null,
     baseInstructions?: string | null,
     developerInstructions?: string | null,
+    additionalWritableRoots?: string[],
   ) {
     const runtimeAccess = await this.getRuntimeAccessSnapshot();
     const workspacePermission = buildCodexWorkspacePermissionSelection({
@@ -2265,7 +2276,7 @@ export class CodexAppServerClient {
       allowTempAccess: process.platform === "darwin" ? runtimeAccess.macosTempAccess : true,
       cwd,
       additionalReadableRoots: getInterpreterCliSandboxReadableRoots(),
-      additionalWritableRoots: getInterpreterCliSandboxWritableRoots(),
+      additionalWritableRoots: [...getInterpreterCliSandboxWritableRoots(), ...(additionalWritableRoots ?? [])],
     });
     const nextConfig = withWorkspacePermissionConfig(config, workspacePermission);
 
@@ -2354,8 +2365,28 @@ export class CodexAppServerClient {
     return this.rpcRequest(CLIENT_METHOD.threadRead, params);
   }
 
+  async threadTurnsList(params: v2.ThreadTurnsListParams): Promise<v2.ThreadTurnsListResponse> {
+    return this.rpcRequest(CLIENT_METHOD.threadTurnsList, params);
+  }
+
+  async threadSupervisorSnapshot(threadId: string): Promise<v2.Thread> {
+    const generation = await this.assertNativeTerminalStatusAvailable();
+    const thread = await boundedSupervisorThread(threadId,
+      params => this.rpcRequest(CLIENT_METHOD.threadRead, params, { skipEnsureConnected: true }),
+      params => this.rpcRequest(CLIENT_METHOD.threadTurnsList, params, { skipEnsureConnected: true }),
+      () => this.initialized && this.disconnectSequence === generation);
+    if (!this.initialized || this.disconnectSequence !== generation) {
+      throw new Error('Native supervisor observation crossed a runtime disconnect.');
+    }
+    return thread;
+  }
+
   async threadQueueList(params: RequestMap[typeof CLIENT_METHOD.threadQueueList]['params']): Promise<RequestMap[typeof CLIENT_METHOD.threadQueueList]['result']> {
     return this.rpcRequest(CLIENT_METHOD.threadQueueList, params);
+  }
+
+  async threadLoadedList(params: v2.ThreadLoadedListParams = {}): Promise<v2.ThreadLoadedListResponse> {
+    return this.rpcRequest(CLIENT_METHOD.threadLoadedList, params);
   }
 
   async threadSetName(params: v2.ThreadSetNameParams): Promise<v2.ThreadSetNameResponse> {
@@ -2368,6 +2399,77 @@ export class CodexAppServerClient {
 
   async threadGoalGet(params: v2.ThreadGoalGetParams): Promise<v2.ThreadGoalGetResponse> {
     return this.rpcRequest(CLIENT_METHOD.threadGoalGet, params);
+  }
+
+  /** Owner inspection is read-only and must not launch or reconnect a native runtime. */
+  async threadGoalRevisionGet(params: v2.ThreadGoalGetParams): Promise<v2.ThreadGoalGetResponse> {
+    if (!this.initialized) throw new Error('Native Goal revision read is unavailable.');
+    const generation = this.disconnectSequence;
+    const result = await this.rpcRequest(CLIENT_METHOD.threadGoalGet, params, { skipEnsureConnected: true });
+    if (!this.initialized || this.disconnectSequence !== generation) {
+      throw new Error('Native Goal revision observation crossed a runtime disconnect.');
+    }
+    return result;
+  }
+
+  /** A CAS mutation must never be retried or reconnect a torn-down native owner. */
+  async threadGoalRevisionSet(params: v2.ThreadGoalSetParams): Promise<v2.ThreadGoalSetResponse> {
+    if (!this.initialized) throw new Error('Native Goal CAS is unavailable.');
+    const generation = this.disconnectSequence;
+    const result = await this.rpcRequest(CLIENT_METHOD.threadGoalSet, params, { skipEnsureConnected: true });
+    if (!this.initialized || this.disconnectSequence !== generation) {
+      throw new Error('Native Goal CAS result crossed a runtime disconnect.');
+    }
+    return result;
+  }
+
+  async threadGoalDocumentGet(params: RequestMap[typeof CLIENT_METHOD.threadGoalDocumentGet]['params']) {
+    if (!this.initialized) throw new Error('Native Goal document read is unavailable.');
+    const generation = this.disconnectSequence;
+    const result = await this.rpcRequest(CLIENT_METHOD.threadGoalDocumentGet, params,
+      { skipEnsureConnected: true });
+    if (!this.initialized || generation !== this.disconnectSequence) {
+      throw new Error('Native Goal document read crossed a runtime disconnect.');
+    }
+    return result;
+  }
+
+  async threadGoalDocumentSet(params: RequestMap[typeof CLIENT_METHOD.threadGoalDocumentSet]['params']) {
+    // A document update is still a mutation. A lost receipt is uncertain,
+    // and reconnecting could create an unrelated second native owner.
+    if (!this.initialized) throw new Error('Native Goal document update is unavailable.');
+    const generation = this.disconnectSequence;
+    const result = await this.rpcRequest(CLIENT_METHOD.threadGoalDocumentSet, params,
+      { skipEnsureConnected: true });
+    if (!this.initialized || generation !== this.disconnectSequence) {
+      throw new Error('Native Goal document update crossed a runtime disconnect.');
+    }
+    return result;
+  }
+
+  /** A creation-id retry belongs to the caller after exact receipt reconciliation;
+   * this transport never reconnects, reissues, or treats a late response as success. */
+  async threadGoalDocumentCreate(params: RequestMap[typeof CLIENT_METHOD.threadGoalDocumentCreate]['params']) {
+    if (!this.initialized) throw new Error('Native Goal creation is unavailable.');
+    const generation = this.disconnectSequence;
+    const result = await this.rpcRequest(CLIENT_METHOD.threadGoalDocumentCreate, params,
+      { skipEnsureConnected: true });
+    if (!this.initialized || generation !== this.disconnectSequence) {
+      throw new Error('Native Goal creation crossed a runtime disconnect.');
+    }
+    return result;
+  }
+
+  /** Full document CAS must not start or reconnect a native runtime after owner teardown. */
+  async threadGoalDocumentRevisionSet(params: RequestMap[typeof CLIENT_METHOD.threadGoalDocumentSet]['params']) {
+    if (!this.initialized) throw new Error('Native Goal document CAS is unavailable.');
+    const generation = this.disconnectSequence;
+    const result = await this.rpcRequest(CLIENT_METHOD.threadGoalDocumentSet, params,
+      { skipEnsureConnected: true });
+    if (!this.initialized || generation !== this.disconnectSequence) {
+      throw new Error('Native Goal document CAS crossed a runtime disconnect.');
+    }
+    return result;
   }
 
   async threadGoalClear(params: v2.ThreadGoalClearParams): Promise<v2.ThreadGoalClearResponse> {
@@ -2390,6 +2492,42 @@ export class CodexAppServerClient {
     return this.rpcRequest(CLIENT_METHOD.threadBackgroundTerminalsClean, {
       threadId,
     });
+  }
+
+  private async assertNativeTerminalStatusAvailable(): Promise<number> {
+    // An inspection must not start a runtime or silently retry on a different one.
+    const generation = this.disconnectSequence;
+    if (!this.initialized || !this.transport.getSelectedRuntimeVersion) {
+      throw new Error('Native terminal status is unavailable on the selected OIX runtime.');
+    }
+    const version = await this.transport.getSelectedRuntimeVersion();
+    if (!this.initialized || this.disconnectSequence !== generation ||
+        !/^0\.0\.(?:59|[6-9][0-9]|[1-9][0-9]{2,})$/.test(version ?? '')) {
+      throw new Error('Native terminal status is unavailable on the selected OIX runtime.');
+    }
+    return generation;
+  }
+
+  private async nativeTerminalRequest<M extends typeof CLIENT_METHOD.threadBackgroundTerminalsStatus |
+      typeof CLIENT_METHOD.threadBackgroundTerminalsList>(method: M, params: RequestMap[M]['params']) {
+    const generation = await this.assertNativeTerminalStatusAvailable();
+    if (!this.initialized || this.disconnectSequence !== generation) {
+      throw new Error('Native terminal status is unavailable on the selected OIX runtime.');
+    }
+    // Unlike ordinary reads, inspection never initiates a connection/reconnect.
+    const result = await this.rpcRequest(method, params, { skipEnsureConnected: true });
+    if (!this.initialized || this.disconnectSequence !== generation) {
+      throw new Error('Native terminal observation crossed a runtime disconnect.');
+    }
+    return result;
+  }
+
+  async threadBackgroundTerminalsStatus(params: RequestMap[typeof CLIENT_METHOD.threadBackgroundTerminalsStatus]['params']) {
+    return this.nativeTerminalRequest(CLIENT_METHOD.threadBackgroundTerminalsStatus, params);
+  }
+
+  async threadBackgroundTerminalsList(params: RequestMap[typeof CLIENT_METHOD.threadBackgroundTerminalsList]['params']) {
+    return this.nativeTerminalRequest(CLIENT_METHOD.threadBackgroundTerminalsList, params);
   }
 
   async modelList(params: v2.ModelListParams = {}): Promise<v2.ModelListResponse> {
@@ -2470,6 +2608,7 @@ export class CodexAppServerClient {
     model?: string;
     effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
     summary?: "auto" | "concise" | "detailed" | "none" | null;
+    additionalWritableRoots?: string[];
   }) {
     const input = buildUserInput(params);
 
@@ -2482,13 +2621,22 @@ export class CodexAppServerClient {
       allowTempAccess: process.platform === "darwin" ? runtimeAccess.macosTempAccess : true,
       cwd: params.cwd,
       additionalReadableRoots: getInterpreterCliSandboxReadableRoots(),
-      additionalWritableRoots: getInterpreterCliSandboxWritableRoots(),
+      additionalWritableRoots: [...getInterpreterCliSandboxWritableRoots(), ...(params.additionalWritableRoots ?? [])],
     });
     const sandboxPolicy = workspacePermission
       ? undefined
       : params.sandboxPolicy ?? buildCodexSandboxPolicy({
           sandboxMode: runtimeAccess.sandboxMode,
           networkAccess: runtimeAccess.networkAccess,
+          // Full-system read mode uses the upstream sandbox policy instead of
+          // Workstation's named permission profile. Keep the same narrowly
+          // scoped write grants in both paths so the shell-visible
+          // `interpreter-app` capability bridge remains usable without
+          // granting write access to the rest of Interpreter's data home.
+          writableRoots: [
+            ...getInterpreterCliSandboxWritableRoots(),
+            ...(params.additionalWritableRoots ?? []),
+          ],
           allowTempAccess: process.platform === "darwin" ? runtimeAccess.macosTempAccess : true,
         });
     if (workspacePermission && !this.workspaceScopedThreads.has(params.threadId)) {
@@ -3049,7 +3197,8 @@ export class CodexAppServerClient {
       return typedResult;
     } catch (error) {
       if (
-        remainingReconnectAttempts <= 0
+        skipEnsureConnected
+        || remainingReconnectAttempts <= 0
         || !RETRYABLE_RPC_METHODS.has(method)
         || disconnectSequence === this.disconnectSequence
       ) {

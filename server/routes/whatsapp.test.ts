@@ -232,3 +232,33 @@ function formatDisconnectMessageForTest(reason: { isLoggedOut: boolean; status?:
   if (typeof reason.status === 'number') return `WhatsApp connection failed (status ${reason.status}).`;
   return 'WhatsApp connection failed. Check your network/firewall and try again.';
 }
+
+test('opaque and unrelated browser origins cannot mutate binding; native loopback proxy can', async () => {
+  const server: Server = await new Promise(resolve => {
+    const s = createTestApp().listen(0, '127.0.0.1', () => resolve(s));
+  });
+  const addr = server.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 0;
+  try {
+    const url = `http://127.0.0.1:${port}/api/servers/whatsapp/thread-binding`;
+    const request = (origin: string) => fetch(url, {
+      method: 'PUT', headers: { Origin: origin, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ threadId: '../invalid' }),
+    });
+    expect((await request('https://unrelated.example')).status).toBe(403);
+    expect((await request('null')).status).toBe(403);
+    expect((await fetch(url, { method: 'PUT', headers: { Origin: 'http://malicious.example:5173', Host: 'malicious.example:5173', 'Content-Type': 'application/json' }, body: JSON.stringify({ threadId: '../invalid' }) })).status).toBe(403);
+    expect((await fetch(url, { method: 'PUT', headers: { Host: 'malicious.example:5173', 'Content-Type': 'application/json' }, body: JSON.stringify({ threadId: '../invalid' }) })).status).toBe(403);
+    expect((await fetch(url, { method: 'PUT', headers: { Origin: 'http://localhost:5174', Host: 'localhost:5173', 'Content-Type': 'application/json' }, body: JSON.stringify({ threadId: '../invalid' }) })).status).toBe(403);
+    expect((await fetch(url, { method: 'PUT', headers: { Host: 'localhost:5173', 'Content-Type': 'application/json' }, body: JSON.stringify({ threadId: '../invalid' }) })).status).toBe(403);
+    expect((await fetch(url, { method: 'GET', headers: { Host: 'localhost:5173' } })).status).toBe(200);
+    // The Vite browser-dev proxy preserves its Host and Origin while forwarding
+    // to this loopback socket; an invalid thread then reaches normal validation.
+    expect((await fetch(url, { method: 'PUT', headers: { Origin: 'http://localhost:5173', Host: 'localhost:5173', 'Content-Type': 'application/json' }, body: JSON.stringify({ threadId: '../invalid' }) })).status).toBe(400);
+    // The trusted Electron main-frame IPC handler proxies without Origin;
+    // normal thread-ID validation still rejects the malformed value.
+    const native = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ threadId: '../invalid' }) });
+    expect(native.status).toBe(400);
+  } finally { await closeTestServer(server); }
+});

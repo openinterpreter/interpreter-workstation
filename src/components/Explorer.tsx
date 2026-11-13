@@ -724,6 +724,14 @@ function ExplorerContent({
       if (!event.path || !isAbsolutePath(event.path)) {
         return;
       }
+      // A standalone interface writes state, diagnostics and compiled assets
+      // beneath .interpreter. Those are not user-facing folder entries, and
+      // reloading the virtualized tree for each write recycles the row under
+      // the pointer while a user is opening a normal project file.
+      const runtimeRoot = pathJoin(rootPathOverride, '.interpreter');
+      if (event.path === runtimeRoot || pathStartsWith(event.path, runtimeRoot)) {
+        return;
+      }
       if (event.path === rootPathOverride || pathStartsWith(event.path, rootPathOverride)) {
         void loadFilesPreservingScroll();
       }

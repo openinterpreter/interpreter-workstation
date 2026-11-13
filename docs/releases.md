@@ -28,8 +28,33 @@ remain on their previous release. The release notes and manifest identify the
 platforms actually published. A later full retry must satisfy the macOS
 signature, notarization, and stapling gates before advancing macOS.
 
+The manual workflow also accepts the explicit `windows-linux` platform choice
+when Apple signing should not be attempted. This choice schedules only the
+Windows and Linux build jobs; the current-run verifier rejects an unexpected
+macOS job or an incomplete/failed Windows or Linux job. The default `all`
+choice retains the full four-platform build and its existing macOS failure
+fallback. A later full-platform retry must use the same protected source
+commit for that version and pass the Apple gates before publishing macOS.
+
 A local package, a pull-request artifact, or an internal candidate is useful
 for review but is not an official build.
+
+## Signed macOS test builds
+
+The manual `Signed macOS test build` workflow builds both Apple Silicon and
+Intel packages from protected `main` after the dedicated automation identity
+dispatches it with confirmation `test`. It uses the protected signing
+environment, verifies Developer ID signing, notarization and stapling, and
+uploads only the installable DMG/ZIP files, per-architecture SHA-256 checksums,
+and exact source commit. It does **not** publish an update manifest, upload to
+the production download bucket, create a release, or change the latest release.
+
+For a prerelease, a maintainer must verify the successful workflow run, exact
+source commit, signatures, notarization, and artifact checksums after download;
+then attach the verified packages and a combined `SHA256SUMS` to a clearly
+labeled GitHub prerelease using the repository's authorized publishing identity.
+Do not attach an unsigned candidate or include `latest*.yml` update manifests.
+The test build and prerelease are not a production release or auto-update.
 
 ## Release authority
 
@@ -53,8 +78,9 @@ are public. Those manifests are the final commit point for installed clients.
 
 1. Merge a version bump and all intended release changes to protected `main`.
 2. Confirm all required CI and DCO checks pass on that commit.
-3. Dispatch `Official release` from `main` with the confirmation value
-   `release`.
+3. Dispatch `Official release` from `main` with confirmation `release` and the
+   `all` platform choice (default), or explicitly choose `windows-linux` when
+   macOS signing must not run.
 4. Review and approve the pending `production-release` deployment.
 5. Let every platform build and signature check finish. If macOS packaging
    fails, confirm the Windows/Linux-only gate accepted both successful build
@@ -68,6 +94,25 @@ The workflow reuses an existing version tag only for a retry at its **exact
 original commit**. A different commit must advance `publicVersion`; it cannot
 replace an already published binary under the old tag.
 
+### Interrupted publication
+
+For an unpublished exact-commit retry, the publisher checks the local
+`SHA256SUMS`, source/run manifest, and every existing GitHub draft asset's
+size and SHA-256 before adding only absent assets. It then checks every
+versioned public installer and blockmap against the complete remote SHA-256,
+preserves matching objects, and uploads only confirmed missing objects. A
+failed upload may have completed remotely: the retry reads and hashes the
+object before another PUT. A mismatch, incomplete listing, or unavailable
+read stops publication rather than overwriting an asset. This is an ordinary
+protected workflow step, not a standalone repair command.
+
+The unversioned release metadata, download aliases, and auto-update manifests
+are current-version pointers, not immutable package objects. Metadata is
+published only after the GitHub release becomes public; the update manifests
+remain last. A change merged after a workflow was dispatched cannot alter a
+rerun at the old workflow SHA. Do not use a different release revision to
+overwrite that older draft; prepare a distinct version instead.
+
 ## Verifying a download
 
 Download the relevant binary and `SHA256SUMS` from the GitHub release, then
@@ -80,10 +125,10 @@ gh attestation verify ./Interpreter-<platform>-<arch>-<version>.<ext> \
 ```
 
 `RELEASE-MANIFEST.json` ties the files to the source commit, OIX release,
-submodule commits, and workflow run. `SBOM.spdx.json` provides the release
-software bill of materials. Platform-native signature inspection remains an
-independent verification boundary and should also be used for managed
-deployment.
+submodule commits, and workflow run. `SBOM.spdx.json` inventories the locked
+application source dependencies; it does not replace package inspection.
+Platform-native signature inspection remains an independent verification
+boundary and should also be used for managed deployment.
 
 ## Reproducibility boundary
 

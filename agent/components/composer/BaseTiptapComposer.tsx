@@ -429,6 +429,7 @@ export interface BaseTiptapComposerRef {
 interface BaseTiptapComposerProps {
   placeholder?: string;
   initialContent?: string;
+  onContentChange?: (text: string) => void;
   onSend: (
     text: string,
     submission?: SerializedComposerSubmission,
@@ -452,6 +453,7 @@ interface BaseTiptapComposerProps {
   agentId?: string;
   profileShortcutScope?: string;
   renderSendButton?: (props: { onSend: () => void; disabled: boolean }) => React.ReactNode;
+  onQueueShortcut?: () => void;
   highlightToolKeywords?: boolean;
   disableSkillMentions?: boolean;
   skillsWorkspacePath?: string | null;
@@ -461,6 +463,7 @@ export const BaseTiptapComposer = forwardRef<BaseTiptapComposerRef, BaseTiptapCo
   ({
     placeholder,
     initialContent = '',
+    onContentChange,
     onSend,
     onCancel: _onCancel,
     sendButtonLabel: _sendButtonLabel = 'Send message (Enter)',
@@ -481,6 +484,7 @@ export const BaseTiptapComposer = forwardRef<BaseTiptapComposerRef, BaseTiptapCo
     agentId,
     profileShortcutScope,
     renderSendButton,
+    onQueueShortcut,
     highlightToolKeywords = false,
     disableSkillMentions = false,
     skillsWorkspacePath,
@@ -1061,6 +1065,7 @@ export const BaseTiptapComposer = forwardRef<BaseTiptapComposerRef, BaseTiptapCo
       for (const record of attachmentStoreRef.current.snapshot()) {
         if (!liveIds.has(record.id)) attachmentStoreRef.current.remove(record.id);
       }
+      onContentChange?.(getSerializedSubmission(editor).text);
     },
   }, [
     disableSkillMentions,
@@ -1068,6 +1073,7 @@ export const BaseTiptapComposer = forwardRef<BaseTiptapComposerRef, BaseTiptapCo
     getSerializedSubmission,
     hasSubmissionContent,
     highlightToolKeywords,
+    onContentChange,
   ]);
 
   const lastAppliedInitialContentRef = useRef<string | null>(null);
@@ -1255,7 +1261,11 @@ export const BaseTiptapComposer = forwardRef<BaseTiptapComposerRef, BaseTiptapCo
         }
       }
 
-      if (event.key === 'Enter' && !event.shiftKey) {
+      if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && onQueueShortcut) {
+        event.preventDefault();
+        event.stopPropagation();
+        setTimeout(() => onQueueShortcut(), 0);
+      } else if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
         setTimeout(() => handleSend(), 0);
       } else if (event.key === 'Escape') {
@@ -1270,7 +1280,7 @@ export const BaseTiptapComposer = forwardRef<BaseTiptapComposerRef, BaseTiptapCo
     return () => {
       editorDom.removeEventListener('keydown', handleKeyDown, true);
     };
-  }, [editorInstance, handleSend, isMainComposer, profileShortcutScope]);
+  }, [editorInstance, handleSend, isMainComposer, onQueueShortcut, profileShortcutScope]);
 
   // Track clicks for hideControlsOnBlur
   useEffect(() => {

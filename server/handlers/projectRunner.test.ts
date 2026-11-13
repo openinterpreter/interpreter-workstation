@@ -10,6 +10,7 @@ import {
   getProjectStatus,
   startProject,
   stopProject,
+  trustedProjectRunner,
 } from './projectRunner';
 import { runWithWindowSessionOverride } from '../utils/windowSessions';
 import { runWithWorkspaceOverride } from '../utils/workspace';
@@ -37,6 +38,7 @@ afterEach(async () => {
 
 async function createRunnableProject(options?: {
   launcher?: boolean;
+  startupDelayMs?: number;
 }): Promise<string> {
   const projectDir = await mkdtemp(path.join(tmpdir(), 'interpreter-project-runner-'));
   tempDirs.push(projectDir);
@@ -53,6 +55,7 @@ async function createRunnableProject(options?: {
 import http from 'node:http';
 
 const port = Number(process.env.PORT);
+await new Promise((resolve) => setTimeout(resolve, ${options?.startupDelayMs ?? 0}));
 const server = http.createServer((_request, response) => {
   response.statusCode = 200;
   response.end('ok');
@@ -108,6 +111,7 @@ function killPid(pid: number): void {
 async function waitForCondition(
   predicate: () => Promise<boolean>,
   timeoutMs = 5000,
+  description = 'condition',
 ): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -117,7 +121,7 @@ async function waitForCondition(
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 
-  throw new Error(`Condition not met within ${timeoutMs}ms`);
+  throw new Error(`${description} not met within ${timeoutMs}ms`);
 }
 
 async function isServerReachable(url: string): Promise<boolean> {
@@ -130,17 +134,15 @@ async function isServerReachable(url: string): Promise<boolean> {
 }
 
 describe('projectRunner', () => {
-  test('starts projects from cwd and uses the shell only on Windows', () => {
-    expect(getPnpmSpawnOptionsForTest('dev', 'win32')).toEqual({
-      command: 'pnpm',
-      args: ['run', 'dev'],
-      shell: true,
-    });
-    expect(getPnpmSpawnOptionsForTest('start', 'linux')).toEqual({
-      command: 'pnpm',
-      args: ['run', 'start'],
-      shell: false,
-    });
+  test('starts projects with Workstation bundled Node and pnpm on every OS', () => {
+    for (const platform of ['win32', 'linux', 'darwin'] as const) {
+      const command = getPnpmSpawnOptionsForTest('dev', platform);
+      expect(path.basename(command.command)).toMatch(/^(node|node\.exe|Interpreter)$/i);
+      expect(command.args.at(-3)).toMatch(/pnpm\.cjs$/);
+      expect(command.args.at(-1)).toBe('dev');
+      expect(command.args).toContain('run');
+      expect(command.shell).toBe(false);
+    }
   });
 
   test('formats pnpm launcher spawn failures', () => {
@@ -148,9 +150,23 @@ describe('projectRunner', () => {
       Object.assign(new Error('spawn EINVAL'), { code: 'EINVAL' }),
     );
 
-    expect(message).toBe('Could not start the project because pnpm could not be launched.');
+    expect(message).toBe("Could not start the project because Workstation's bundled project runtime could not be launched.");
   });
 
+  test('a trusted Simple startup can use a longer bounded budget without changing the generic one', async () => {
+    const projectDir = await createRunnableProject({ startupDelayMs: 800 });
+    const short = await trustedProjectRunner.start(projectDir, {}, 100);
+    expect(short.success).toBe(false);
+    expect(short.state.status).toBe('error');
+
+    const longer = await trustedProjectRunner.start(projectDir, {}, 5000);
+    expect(longer.success).toBe(true);
+    expect(longer.state.status).toBe('running');
+    await trustedProjectRunner.stop(projectDir);
+  }, 15_000);
+
+  // Startup and shutdown each have their own 5 s readiness check; Bun's
+  // default 5 s test deadline cannot encompass both even when each succeeds.
   test('kills the detached process group from the exit cleanup hook', async () => {
     if (process.platform === 'win32') {
       return;
@@ -167,14 +183,14 @@ describe('projectRunner', () => {
 
     await waitForCondition(async () => {
       return await isServerReachable(start.state.url!);
-    });
+    }, 5000, 'launcher server readiness');
 
     (cleanupHandler as (code?: number) => void)(0);
 
     await waitForCondition(async () => {
       return !(await isServerReachable(start.state.url!));
-    });
-  });
+    }, 5000, 'launcher server shutdown');
+  }, 15_000);
 
   test('broadcasts project runner updates to every window for the current workspace', async () => {
     const projectDir = await createRunnableProject();

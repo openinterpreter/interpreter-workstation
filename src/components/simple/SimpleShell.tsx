@@ -1,0 +1,1283 @@
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
+import {
+  ArrowLeft,
+  AudioLines,
+  Check,
+  ChevronRight,
+  CircleAlert,
+  Loader2,
+  Settings2,
+  X,
+} from "lucide-react";
+import { animate, motion, useDragControls, useMotionValue } from "motion/react";
+import { AgentThread } from "../../../agent/components/AgentThread";
+import { Approvals } from "../Approvals";
+import { getApprovalsSnapshot, refreshApprovals, subscribeApprovals } from "../../stores/approvalsStore";
+import { ComposerArea } from "../../../agent/components/ComposerArea";
+import type { BaseTiptapComposerRef } from "../../../agent/components/composer/BaseTiptapComposer";
+import { AgentMetadataProvider, type AgentMetadata } from "../../../agent/contexts/AgentMetadataContext";
+import { AgentErrorProvider } from "../../../agent/contexts/AgentErrorContext";
+import { createAgentCallerToken } from "../../utils/layoutHelpers";
+import { isWorkstationReadOnly } from "../../remote/workstationConnection";
+import { ExperienceSectionContent } from "../settings/ExperienceSection";
+import { ProfilesSectionContent } from "../settings/ProfilesSection";
+import {
+  openFolderDialog,
+  quickActions,
+  simplePrimaryThread,
+  simpleComposerState,
+  windowIpc,
+} from "@/ipc";
+import { useSimpleLive } from "./useSimpleLive";
+import { useSimpleStoredProfile } from "./useSimpleStoredProfile";
+import { SimpleConnectionsSettings } from "./SimpleConnectionsSettings";
+import { SimpleThemeSettings } from "./SimpleThemeSettings";
+import { SimpleFeedbackSettings } from "./SimpleFeedbackSettings";
+import { SimpleWhatsNew } from "./SimpleWhatsNew";
+import { SimpleChannelsSettings } from "./SimpleChannelsSettings";
+import {
+  simpleInterfaceClient,
+  type SimplePresentation,
+  type SimpleProject,
+} from "./simpleInterfaceClient";
+
+/** A fixed identity names the one conversation even when the shell is remounted. */
+export const SIMPLE_PRIMARY_AGENT_ID = "simple-primary-agent";
+
+type SimpleSurfaceMode =
+  | "compact"
+  | "conversation"
+  | "presentation"
+  | "settings";
+type SimpleSettingsView = "main" | "models";
+export function sendSimpleMessage(
+  text: string,
+  workspacePath: string,
+  source?: string,
+): void {
+  if (!text.trim()) throw new Error("A message is required.");
+  if (
+    document.querySelector(
+      '[data-simple-shell][data-primary-thread-error="true"]',
+    )
+  ) {
+    throw new Error(
+      "The primary conversation needs recovery before another message can be sent.",
+    );
+  }
+  let accepted = false;
+  window.dispatchEvent(
+    new CustomEvent("agent-runtime:get-state", {
+      detail: {
+        tabId: SIMPLE_PRIMARY_AGENT_ID,
+        callback: () => {
+          accepted = true;
+        },
+      },
+    }),
+  );
+  if (!accepted)
+    throw new Error(
+      "The primary conversation is not ready. Try again shortly.",
+    );
+  const attributedText = source?.trim()
+    ? `[From ${source.trim()}]\n${text}`
+    : text;
+  window.dispatchEvent(
+    new CustomEvent("agent-runtime:send", {
+      detail: {
+        tabId: SIMPLE_PRIMARY_AGENT_ID,
+        text: attributedText,
+        workspacePath,
+        messageSource: source,
+      },
+    }),
+  );
+}
+
+interface SimpleShellProps {
+  firstRunSession?: boolean;
+  workspacePath: string;
+  initialThreadId: string | null;
+  onBindThread: (threadId: string) => void | Promise<void>;
+  onOpenSettings: () => void;
+  settingsOpen: boolean;
+  onCloseSettings: () => void;
+  feedbackVisible: boolean;
+  onFeedbackVisibilityChange: (visible: boolean) => Promise<void>;
+  onLeaveFeedback: () => void;
+  canvas: ReactNode;
+}
+
+/** Simple is a separate surface: no explorer, tabs, sidebars, or second-chat affordances. */
+export function SimpleShell({
+  firstRunSession = false,
+  workspacePath,
+  initialThreadId,
+  onBindThread,
+  onOpenSettings,
+  settingsOpen,
+  onCloseSettings,
+  feedbackVisible,
+  onFeedbackVisibilityChange,
+  onLeaveFeedback,
+  canvas,
+}: SimpleShellProps) {
+  const [surfaceMode, setSurfaceMode] = useState<SimpleSurfaceMode>(
+    settingsOpen ? "settings" : "compact",
+  );
+  const [lastExpandedSurfaceMode, setLastExpandedSurfaceMode] = useState<
+    Exclude<SimpleSurfaceMode, "compact">
+  >(settingsOpen ? "settings" : "conversation");
+  const [settingsView, setSettingsView] = useState<SimpleSettingsView>("main");
+  const [voiceSetupRequired, setVoiceSetupRequired] = useState(false);
+  const [threadId, setThreadId] = useState<string | null>(initialThreadId);
+  const [approvalCount, setApprovalCount] = useState(0);
+  const [whatsNewVisible, setWhatsNewVisible] = useState(false);
+  useEffect(() => {
+    if (whatsNewVisible) {
+      setSurfaceMode((current) => current === "compact" ? "conversation" : current);
+    }
+  }, [whatsNewVisible]);
+  useEffect(() => {
+    if (approvalCount > 0) {
+      setSurfaceMode((current) => current === "compact" ? "conversation" : current);
+    }
+  }, [approvalCount]);
+  useEffect(() => {
+    const update = () => setApprovalCount(getApprovalsSnapshot().filter((approval) =>
+      threadId !== null && (approval.owner?.identity.threadId ?? approval.context?.threadId) === threadId,
+    ).length);
+    const unsubscribe = subscribeApprovals(update);
+    void refreshApprovals().catch(() => {});
+    return unsubscribe;
+  }, [threadId]);
+  const storedProfile = useSimpleStoredProfile();
+  const modelConfig = storedProfile.modelConfig;
+  const modelStatus = storedProfile.status;
+  const profiles = storedProfile.availableProfiles;
+  const selectedProfileId = storedProfile.profileId;
+  const modelError = storedProfile.selectionError;
+  const modelPending = storedProfile.selecting;
+  const [project, setProject] = useState<SimpleProject | null>(null);
+  const [recentProjects, setRecentProjects] = useState<SimpleProject[]>([]);
+  const [projectPending, setProjectPending] = useState(false);
+  const [projectError, setProjectError] = useState<string | null>(null);
+  const [presentation, setPresentation] = useState<SimplePresentation | null>(
+    null,
+  );
+  const [presentationImageUrl, setPresentationImageUrl] = useState<
+    string | null
+  >(null);
+  const seenPresentationId = useRef<string | null>(null);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [activitySummary, setActivitySummary] = useState("Ready");
+  const [messageCount, setMessageCount] = useState(0);
+  const [persistenceError, setPersistenceError] = useState(false);
+  const [overlayError, setOverlayError] = useState<string | null>(null);
+  const [ownsComposer, setOwnsComposer] = useState(true);
+  const composerRef = useRef<BaseTiptapComposerRef>(null);
+  const [initialDraft, setInitialDraft] = useState("");
+  const dragBoundsRef = useRef<HTMLDivElement | null>(null);
+  const dragControls = useDragControls();
+  const dragX = useMotionValue(0);
+  const dragY = useMotionValue(0);
+  const callerToken = useMemo(() => createAgentCallerToken(), []);
+  const readOnly = isWorkstationReadOnly();
+  const handleLiveDelegate = useCallback(
+    (text: string) => {
+      sendSimpleMessage(text, workspacePath, "GPT Live");
+    },
+    [workspacePath],
+  );
+  const live = useSimpleLive({ onDelegate: handleLiveDelegate });
+
+  useEffect(() => {
+    setThreadId(initialThreadId);
+  }, [initialThreadId]);
+
+  useEffect(() => {
+    if (typeof windowIpc.onFocusChanged !== "function") return;
+    return windowIpc.onFocusChanged(({ focused }: { focused: boolean }) =>
+      setOwnsComposer(focused),
+    );
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    void simpleComposerState
+      .get()
+      .then(({ draft }) => {
+        if (!alive) return;
+        setInitialDraft(draft);
+        composerRef.current?.setContent(draft);
+      })
+      .catch(() => {
+        /* Older desktop/browser hosts may not expose the optional draft bridge yet. */
+      });
+    let unsubscribe = () => {};
+    try {
+      unsubscribe = simpleComposerState.onChanged(({ draft }) => {
+        setInitialDraft(draft);
+        if (composerRef.current?.getContent() !== draft)
+          composerRef.current?.setContent(draft);
+      });
+    } catch {
+      /* Keep the local composer usable if the host has not restarted its preload yet. */
+    }
+    return () => {
+      alive = false;
+      unsubscribe();
+    };
+  }, []);
+
+  const persistComposerDraft = useCallback((draft: string) => {
+    void simpleComposerState.set({ draft }).catch(() => {
+      /* Draft syncing is a handoff enhancement; sending locally must remain available. */
+    });
+  }, []);
+
+  useEffect(() => {
+    if (settingsOpen) setSurfaceMode("settings");
+    else
+      setSurfaceMode((current) =>
+        current === "settings" ? "compact" : current,
+      );
+  }, [settingsOpen]);
+
+  useEffect(
+    () =>
+      simplePrimaryThread.onOverlaySubmit(({ text, interfacePath }) => {
+        try {
+          sendSimpleMessage(
+            text,
+            workspacePath,
+            interfacePath
+              ? `desktop overlay while viewing ${interfacePath}`
+              : "desktop overlay",
+          );
+          setOverlayError(null);
+        } catch (error) {
+          setOverlayError(
+            error instanceof Error
+              ? error.message
+              : "Could not send from the overlay.",
+          );
+          setSurfaceMode("conversation");
+        }
+      }),
+    [workspacePath],
+  );
+
+  const loadProjects = useCallback(async () => {
+    const result = await simpleInterfaceClient.projects();
+    setProject(result.active);
+    setRecentProjects(result.recent);
+  }, []);
+
+  useEffect(() => {
+    void loadProjects().catch((error) =>
+      setProjectError(
+        error instanceof Error ? error.message : "Could not load interfaces.",
+      ),
+    );
+  }, [loadProjects]);
+
+  useEffect(() => {
+    let stopped = false;
+    const refreshPresentation = async () => {
+      try {
+        const next = await simpleInterfaceClient.presentation();
+        if (stopped) return;
+        setPresentation(next);
+        setPresentationImageUrl(
+          next?.asset ? await simpleInterfaceClient.assetUrl(next.asset) : null,
+        );
+        if (next && next.id !== seenPresentationId.current) {
+          seenPresentationId.current = next.id;
+          setSurfaceMode("presentation");
+        }
+      } catch {
+        /* Presentation is an enhancement; chat remains usable if it is unavailable. */
+      }
+    };
+    void refreshPresentation();
+    const timer = window.setInterval(() => {
+      void refreshPresentation();
+    }, 750);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  const chooseProjectFolder = useCallback(
+    async (mode: "new" | "open") => {
+      if (projectPending || readOnly) return;
+      setProjectPending(true);
+      setProjectError(null);
+      try {
+        const selection = await openFolderDialog();
+        const path = selection.filePaths[0];
+        if (selection.canceled || !path) return;
+        const next =
+          mode === "new"
+            ? await simpleInterfaceClient.createProject(path, {
+                activate: false,
+              })
+            : await simpleInterfaceClient.openProject(path, {
+                activate: false,
+              });
+        const opened = await windowIpc.create({
+          workspacePath,
+          simpleProjectPath: next.path,
+        });
+        if (!opened.success)
+          throw new Error(
+            opened.error || "Could not open the interface window.",
+          );
+        await loadProjects();
+      } catch (error) {
+        setProjectError(
+          error instanceof Error
+            ? error.message
+            : `Could not ${mode} the interface.`,
+        );
+      } finally {
+        setProjectPending(false);
+      }
+    },
+    [loadProjects, projectPending, readOnly, workspacePath],
+  );
+
+  const reopenProject = useCallback(
+    async (path: string) => {
+      if (projectPending || readOnly) return;
+      setProjectPending(true);
+      setProjectError(null);
+      try {
+        const next = await simpleInterfaceClient.openProject(path, {
+          activate: false,
+        });
+        const opened = await windowIpc.create({
+          workspacePath,
+          simpleProjectPath: next.path,
+        });
+        if (!opened.success)
+          throw new Error(
+            opened.error || "Could not open the interface window.",
+          );
+        await loadProjects();
+      } catch (error) {
+        setProjectError(
+          error instanceof Error
+            ? error.message
+            : "Could not open the interface.",
+        );
+      } finally {
+        setProjectPending(false);
+      }
+    },
+    [loadProjects, projectPending, readOnly, workspacePath],
+  );
+
+  const agent = useMemo<AgentMetadata | null>(
+    () => modelConfig ? ({
+      id: SIMPLE_PRIMARY_AGENT_ID,
+      createdAt: 0,
+      agent: {
+        runtime: { modelConfig, workspacePath },
+        session: { callerToken, codexThreadId: threadId ?? undefined },
+      },
+    }) : null,
+    [callerToken, modelConfig, threadId, workspacePath],
+  );
+
+  const handleThreadAssigned = useCallback(
+    (_agentId: string, assignedThreadId: string) => {
+      void Promise.resolve()
+        .then(() => onBindThread(assignedThreadId))
+        .then(() => {
+          setThreadId(assignedThreadId);
+          setPersistenceError(false);
+        })
+        .catch((error) => {
+          console.error(
+            "[SimpleShell] Could not persist primary conversation",
+            error,
+          );
+          setPersistenceError(true);
+          setSurfaceMode("conversation");
+        });
+    },
+    [onBindThread],
+  );
+
+  const openSettings = useCallback(() => {
+    setSettingsView("main");
+    setSurfaceMode("settings");
+    onOpenSettings();
+  }, [onOpenSettings]);
+
+  const collapseSurface = useCallback(() => {
+    if (surfaceMode === "settings" && settingsView === "models") {
+      setSettingsView("main");
+      return;
+    }
+    if (surfaceMode === "settings") onCloseSettings();
+    setSurfaceMode("compact");
+  }, [onCloseSettings, settingsView, surfaceMode]);
+
+  useEffect(
+    () =>
+      quickActions.onSimpleProjectAction?.(
+        (event: { action: "new" | "open" | "recent"; path?: string }) => {
+          if (event.action === "new" || event.action === "open") {
+            void chooseProjectFolder(event.action);
+            return;
+          }
+          if (event.action === "recent" && event.path) {
+            void reopenProject(event.path);
+          }
+        },
+      ),
+    [chooseProjectFolder, reopenProject],
+  );
+
+  useEffect(() => {
+    const closeDrawer = () => collapseSurface();
+    window.addEventListener("simple-interface:interaction", closeDrawer);
+    return () =>
+      window.removeEventListener("simple-interface:interaction", closeDrawer);
+  }, [collapseSurface]);
+
+  const refreshProfiles = storedProfile.refresh;
+
+  const isConversationOpen = surfaceMode === "conversation";
+  const isPresentationOpen = surfaceMode === "presentation";
+  const isSettingsOpen = surfaceMode === "settings";
+  const isCompact = surfaceMode === "compact";
+  const drawerVisible = !isCompact;
+  const visibleDrawerMode = isCompact ? lastExpandedSurfaceMode : surfaceMode;
+  const drawerHeight =
+    isCompact ? "auto" : visibleDrawerMode === "conversation"
+      ? "min(72vh, 680px)"
+      : visibleDrawerMode === "settings"
+        ? "min(68vh, 640px)"
+        : "min(46vh, 440px)";
+  const displayedActivitySummary = /^(new agent|agent)$/i.test(
+    activitySummary.trim(),
+  )
+    ? isStreaming
+      ? "Interpreter is working…"
+      : "Ready"
+    : activitySummary;
+
+  useEffect(() => {
+    if (surfaceMode !== "compact") setLastExpandedSurfaceMode(surfaceMode);
+  }, [surfaceMode]);
+
+  const startSurfaceDrag = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      if (event.button !== 0) return;
+      const target = event.target as HTMLElement;
+      if (
+        target.closest(
+          'button, a, input, textarea, select, [contenteditable="true"]',
+        )
+      )
+        return;
+      if (!isCompact && !target.closest('[data-pill-drag-handle="true"]'))
+        return;
+      dragControls.start(event);
+    },
+    [dragControls, isCompact],
+  );
+
+  const snapSurface = useCallback(
+    (element: HTMLElement) => {
+      const bounds = dragBoundsRef.current?.getBoundingClientRect();
+      if (!bounds) return;
+      const rect = element.getBoundingClientRect();
+      const margin = 20;
+      const xTargets = [
+        bounds.left + margin,
+        bounds.left + (bounds.width - rect.width) / 2,
+        bounds.right - margin - rect.width,
+      ];
+      const yTargets = [
+        bounds.top + margin,
+        bounds.top + (bounds.height - rect.height) / 2,
+        bounds.bottom - margin - rect.height,
+      ];
+      const candidates = xTargets
+        .flatMap((left, xIndex) =>
+          yTargets.map((top, yIndex) => ({ left, top, xIndex, yIndex })),
+        )
+        .filter(({ xIndex, yIndex }) => !(xIndex === 1 && yIndex === 1));
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const target = candidates.reduce(
+        (best, candidate) => {
+          const distance = Math.hypot(
+            centerX - (candidate.left + rect.width / 2),
+            centerY - (candidate.top + rect.height / 2),
+          );
+          return !best || distance < best.distance
+            ? { ...candidate, distance }
+            : best;
+        },
+        null as null | {
+          left: number;
+          top: number;
+          xIndex: number;
+          yIndex: number;
+          distance: number;
+        },
+      );
+      if (!target) return;
+      void animate(dragX, dragX.get() + target.left - rect.left, {
+        type: "spring",
+        stiffness: 520,
+        damping: 42,
+        mass: 0.7,
+      });
+      void animate(dragY, dragY.get() + target.top - rect.top, {
+        type: "spring",
+        stiffness: 520,
+        damping: 42,
+        mass: 0.7,
+      });
+    },
+    [dragX, dragY],
+  );
+
+  const composer = (expanded: boolean) =>
+    !readOnly && !persistenceError && modelConfig ? (
+      <ComposerArea
+        ref={composerRef}
+        isTerminal={false}
+        agentId={SIMPLE_PRIMARY_AGENT_ID}
+        modelConfig={modelConfig}
+        workspacePath={workspacePath}
+        isStreaming={isStreaming}
+        messageCount={messageCount}
+        showSuggestionChips={false}
+        showQueuedMessages={expanded}
+        noBorderPadding={true}
+        compactLayout={true}
+        composerPlaceholder="Ask Interpreter"
+        initialDraft={initialDraft}
+        onDraftChange={persistComposerDraft}
+        conciseStreamingActions={true}
+        voiceButtonOverride={
+          <button
+            type="button"
+            aria-label={
+              live.state === "active" || live.state === "connecting"
+                ? "Stop GPT Live"
+                : live.state === "error"
+                  ? "Retry GPT Live"
+                  : "Start GPT Live"
+            }
+            aria-pressed={live.state === "active"}
+            title={live.error ?? undefined}
+            onClick={() => {
+              if (live.state === "active" || live.state === "connecting") { live.stop(); return; }
+              if (live.configured === false) {
+                setVoiceSetupRequired(true);
+                openSettings();
+                setSettingsView("models");
+                return;
+              }
+              void live.start();
+            }}
+            className="simple-live-button flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-[scale,filter] duration-150 hover:brightness-110 active:scale-[0.95]"
+          >
+            {live.state === "connecting" ? (
+              <Loader2 className="size-[18px] animate-spin" />
+            ) : live.state === "active" ? (
+              <X className="size-[18px]" />
+            ) : live.state === "error" ? (
+              <CircleAlert className="size-[18px]" />
+            ) : (
+              <AudioLines className="size-[18px]" />
+            )}
+          </button>
+        }
+        settingsContent={<></>}
+        onAgentSend={(text, options) => {
+          window.dispatchEvent(
+            new CustomEvent("agent-runtime:send", {
+              detail: {
+                tabId: SIMPLE_PRIMARY_AGENT_ID,
+                text,
+                workspacePath,
+                attachments: options?.attachments,
+                messageSource: options?.messageSource,
+              },
+            }),
+          );
+        }}
+      />
+    ) : !readOnly && !persistenceError ? (
+      <div className="flex min-h-16 items-center justify-between gap-3 px-5 text-ui-sm">
+        <span
+          className={
+            modelStatus === "error"
+              ? "text-destructive"
+              : "text-muted-foreground"
+          }
+        >
+          {modelStatus === "loading" && "Loading your models…"}
+          {modelStatus === "missing" && "Choose a model before starting."}
+          {modelStatus === "error" && "Your models could not be loaded."}
+        </span>
+        {modelStatus !== "loading" && (
+          <button
+            type="button"
+            onClick={openSettings}
+            className="shrink-0 rounded-full bg-foreground px-3 py-1.5 font-medium text-background"
+          >
+            Open settings
+          </button>
+        )}
+      </div>
+    ) : null;
+
+  return (
+    <div
+      ref={dragBoundsRef}
+      className="relative flex h-screen w-full flex-col overflow-hidden bg-background text-foreground"
+      data-simple-shell="true"
+      data-simple-thread-id={threadId ?? undefined}
+      data-primary-thread-error={persistenceError ? "true" : undefined}
+    >
+      <div
+        data-simple-titlebar-drag-region="true"
+        aria-hidden="true"
+        className="absolute inset-x-0 top-0 z-20 h-8 [-webkit-app-region:drag]"
+      />
+      <main
+        aria-label="Interface"
+        className="absolute inset-0 overflow-y-auto"
+        onPointerDown={(event) => {
+          if (event.target === event.currentTarget) collapseSurface();
+        }}
+      >
+        <div className="min-h-full" onPointerDown={collapseSurface}>
+          {canvas}
+        </div>
+      </main>
+
+      {ownsComposer ? (
+        <div className="contents">
+          <AgentMetadataProvider agent={agent}>
+            <AgentErrorProvider>
+              <motion.section
+                aria-label="Primary conversation"
+                data-simple-conversation="true"
+                data-surface-mode={surfaceMode}
+                data-live-state={live.state}
+                drag
+                dragListener={false}
+                dragControls={dragControls}
+                dragConstraints={dragBoundsRef}
+                dragElastic={0.04}
+                dragMomentum={false}
+                style={{
+                  x: dragX,
+                  y: dragY,
+                  ["--simple-live-position" as string]: `${20 + live.level * 25}%`,
+                  ["--simple-surface-fill" as string]:
+                    "color-mix(in srgb, var(--oa-composer-surface, var(--background)) 82%, transparent)",
+                }}
+                onDragEnd={(event) =>
+                  snapSurface(event.currentTarget as HTMLElement)
+                }
+                whileDrag={{ scale: 0.99 }}
+                onPointerDown={startSurfaceDrag}
+                transition={{ scale: { duration: 0.12 } }}
+                className="absolute bottom-[18px] left-1/2 z-30 flex w-[calc(100%-2rem)] max-w-[560px] -translate-x-1/2 flex-col overflow-visible"
+              >
+                <style>{`
+              [data-simple-conversation] .oa-composer-surface {
+                background: transparent !important;
+                border: 0 !important;
+                border-radius: 0 !important;
+                box-shadow: none !important;
+              }
+              [data-simple-conversation] .oa-composer-surface {
+                height: auto !important;
+              }
+              [data-simple-conversation] .oa-main-composer-preview {
+                background: var(--oa-composer-surface, var(--background)) !important;
+              }
+              .simple-activity-tab {
+                border-bottom: var(--border-width) solid var(--border);
+              }
+              .simple-drawer {
+                background: var(--simple-surface-fill);
+                backdrop-filter: blur(28px) saturate(1.18);
+                -webkit-backdrop-filter: blur(28px) saturate(1.18);
+              }
+              @keyframes simple-live-grain {
+                0%, 100% { background-position: 0% 50%; }
+                50% { background-position: 100% 50%; }
+              }
+              [data-simple-conversation][data-live-state="active"] .simple-composer-capsule {
+                background:
+                  radial-gradient(circle at var(--simple-live-position) 35%, color-mix(in srgb, #7c5cff 34%, transparent), transparent 36%),
+                  radial-gradient(circle at 78% 70%, color-mix(in srgb, #2f8cff 26%, transparent), transparent 40%),
+                  color-mix(in srgb, var(--oa-composer-surface, var(--background)) 70%, transparent);
+                background-size: 125% 125%;
+                animation: simple-live-grain 2.8s ease-in-out infinite;
+              }
+              [data-simple-conversation][data-live-state="active"] .oa-main-composer-preview {
+                background: transparent !important;
+              }
+              [data-simple-conversation] .oa-composer-body {
+                display: block !important;
+                min-height: 46px;
+                height: auto;
+                position: relative;
+              }
+              [data-simple-conversation] .oa-composer-body > div:first-child {
+                width: 100%;
+                min-width: 0;
+                min-height: 46px;
+                display: flex;
+                align-items: center;
+                padding: .6875rem 4rem .6875rem 2.75rem !important;
+                box-sizing: border-box;
+              }
+              [data-simple-conversation] .oa-composer-body > div:first-child > div,
+              [data-simple-conversation] .oa-composer-body > div:first-child > div > div {
+                width: 100%;
+                min-width: 0;
+                flex: 1 1 auto;
+              }
+              [data-simple-conversation] .oa-composer-body > div:first-child > div > div {
+                display: flex;
+                align-items: center;
+              }
+              [data-simple-conversation][data-surface-mode="compact"][data-live-state="connecting"] .oa-composer-body > div:first-child,
+              [data-simple-conversation][data-surface-mode="compact"][data-live-state="active"] .oa-composer-body > div:first-child,
+              [data-simple-conversation][data-surface-mode="compact"][data-live-state="error"] .oa-composer-body > div:first-child {
+                padding-right: 16.5rem !important;
+              }
+              [data-simple-conversation] .oa-composer-body > div:first-child > div > div {
+                min-height: 1.5rem !important;
+                max-height: 7.5rem;
+              }
+              [data-simple-conversation] .oa-composer-body .tiptap-editor {
+                height: auto !important;
+                min-height: 1.5rem;
+                max-height: 7.5rem;
+              }
+              [data-simple-conversation] .oa-composer-body .ProseMirror {
+                height: auto !important;
+                min-height: 1.5rem;
+                line-height: 1.5rem !important;
+                padding-block: 0 !important;
+              }
+              [data-simple-conversation] .main-composer-content .ProseMirror.main-composer-editor p:first-child {
+                flex: none !important;
+                min-height: 1.5rem !important;
+              }
+              [data-simple-conversation] .oa-main-composer-placeholder {
+                top: 50% !important;
+                transform: translateY(-50%);
+                line-height: 1.5rem !important;
+                max-width: none !important;
+                white-space: nowrap !important;
+              }
+              [data-simple-conversation] .oa-composer-body > div:nth-child(2) {
+                position: absolute;
+                inset: 0;
+                pointer-events: none;
+              }
+              [data-simple-conversation] .oa-composer-body > div:nth-child(2) > div {
+                min-height: 46px !important;
+                height: 100%;
+                padding: 0 !important;
+                pointer-events: none;
+              }
+              [data-simple-conversation] .oa-composer-body > div:nth-child(2) > div > div:first-child {
+                position: absolute;
+                left: .5rem;
+                top: 50%;
+                transform: translateY(-50%);
+                margin: 0 !important;
+                pointer-events: auto;
+              }
+              [data-simple-conversation] .oa-composer-body > div:nth-child(2) > div > div:last-child {
+                position: absolute;
+                right: .5rem;
+                top: 50%;
+                transform: translateY(-50%);
+                pointer-events: auto;
+              }
+            `}</style>
+
+                <div
+                  data-simple-drawer-surface="true"
+                  className="simple-drawer absolute bottom-[calc(100%-1px)] left-5 right-5 z-0 flex flex-col overflow-hidden rounded-t-[14px]"
+                  style={{ boxShadow: "0 0 0 var(--border-width) var(--border), 0 18px 48px rgba(0,0,0,.18)" }}
+                >
+                <motion.div
+                  data-simple-activity-tab="true"
+                  data-pill-drag-handle="true"
+                  className="simple-activity-tab relative z-10 flex h-8 w-full shrink-0 items-center gap-1 px-2.5"
+                >
+                  <button
+                    type="button"
+                    aria-label={
+                      !isCompact
+                        ? "Close drawer"
+                        : "Open drawer"
+                    }
+                    aria-expanded={drawerVisible}
+                    onClick={() => {
+                      if (isCompact) {
+                        setSurfaceMode("conversation");
+                      } else {
+                        if (isSettingsOpen) onCloseSettings();
+                        setSurfaceMode("compact");
+                      }
+                    }}
+                    className="flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-full px-1.5 text-left text-[11px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
+                  >
+                    <ChevronRight
+                      className={`size-3.5 shrink-0 transition-transform duration-200 ${drawerVisible ? "-rotate-90" : "rotate-0"}`}
+                    />
+                    <span className="truncate">
+                      {isStreaming
+                        ? displayedActivitySummary
+                        : messageCount
+                          ? displayedActivitySummary
+                          : "Ready"}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={
+                      isSettingsOpen ? "Back to conversation" : "Open Settings"
+                    }
+                    aria-expanded={isSettingsOpen}
+                    onClick={() => {
+                      if (isSettingsOpen) {
+                        onCloseSettings();
+                        setSurfaceMode("conversation");
+                      } else {
+                        openSettings();
+                      }
+                    }}
+                    className="mr-0.5 flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-[background-color,color,scale] duration-150 hover:bg-foreground/[0.06] hover:text-foreground active:scale-[0.94]"
+                  >
+                    {isSettingsOpen ? <ArrowLeft className="size-3.5" /> : <Settings2 className="size-3" />}
+                  </button>
+                </motion.div>
+
+                <motion.div
+                  data-simple-drawer="true"
+                  aria-hidden={!drawerVisible}
+                  {...(!drawerVisible ? { inert: true } : {})}
+                  initial={false}
+                  animate={{
+                    opacity: drawerVisible ? 1 : 0,
+                    y: drawerVisible ? 0 : 4,
+                    clipPath: !drawerVisible
+                      ? "inset(100% 0 0 0 round 20px 20px 0 0)"
+                      : "inset(0% 0 0 0 round 20px 20px 0 0)",
+                  }}
+                  transition={{
+                    duration: isCompact ? 0.18 : 0.26,
+                    ease: [0.16, 1, 0.3, 1],
+                  }}
+                  className={`relative flex min-h-0 flex-col overflow-hidden ${drawerVisible ? "pointer-events-auto" : "pointer-events-none"}`}
+                  style={{
+                    height: drawerVisible ? drawerHeight : 0,
+                    transformOrigin: "bottom center",
+
+                  }}
+                >
+                  <SimpleWhatsNew firstRunSession={firstRunSession} onVisibilityChange={setWhatsNewVisible} />
+
+                  {isConversationOpen && (
+                    <details className="shrink-0 border-t border-foreground/[0.06] px-5 py-2 text-ui-xs text-muted-foreground" data-simple-activity-details>
+                      <summary className="cursor-pointer select-none rounded-md py-1 font-medium text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-foreground">Activity details</summary>
+                      <p role="status" className="mt-1 pb-1 leading-5">{isStreaming ? 'Working' : 'Ready'} · {displayedActivitySummary} · {messageCount} messages in this conversation</p>
+                    </details>
+                  )}
+
+                  {isPresentationOpen && presentation && (
+                    <motion.div
+                      layout="position"
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{
+                        duration: 0.14,
+                        delay: 0.04,
+                        ease: [0.16, 1, 0.3, 1],
+                      }}
+                      className="min-h-0 flex-1 overflow-y-auto border-y border-foreground/[0.06] p-4"
+                    >
+                      <div className="mx-auto flex h-full max-w-[720px] flex-col justify-center overflow-hidden rounded-2xl bg-foreground/[0.045]">
+                        {presentationImageUrl && (
+                          <img
+                            src={presentationImageUrl}
+                            alt=""
+                            className="min-h-0 w-full flex-1 object-cover"
+                          />
+                        )}
+                        {presentation.text && (
+                          <p className="whitespace-pre-wrap px-5 py-4 text-[15px] leading-6 text-foreground">
+                            {presentation.text}
+                          </p>
+                        )}
+                        {!presentation.asset && !presentation.text && (
+                          <p className="px-5 py-4 text-ui-sm text-muted-foreground">
+                            {presentation.title}
+                          </p>
+                        )}
+                      </div>
+                    </motion.div>
+                  )}
+
+                  {modelConfig && (
+                    <motion.div
+                      layout="position"
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{
+                        duration: 0.14,
+                        delay: 0.07,
+                        ease: [0.16, 1, 0.3, 1],
+                      }}
+                      aria-hidden={!isConversationOpen}
+                      {...(!isConversationOpen ? { inert: true } : {})}
+                      className={
+                        isConversationOpen
+                          ? "flex min-h-0 flex-1 flex-col"
+                          : "pointer-events-none absolute size-px overflow-hidden opacity-0"
+                      }
+                    >
+                      <div
+                        className={
+                          isConversationOpen
+                            ? "min-h-0 flex-1 overflow-hidden border-y border-foreground/[0.06]"
+                            : "size-px overflow-hidden"
+                        }
+                      >
+                        <AgentThread
+                          key={`${selectedProfileId ?? "none"}:${threadId ?? "new"}`}
+                          agentId={SIMPLE_PRIMARY_AGENT_ID}
+                          codexThreadId={threadId ?? undefined}
+                          callerToken={callerToken}
+                          workspacePath={workspacePath}
+                          modelConfig={modelConfig}
+                          isVisible={isConversationOpen}
+                          isEditorPane={false}
+                          readOnly={readOnly}
+                          allowConversationRestart={false}
+                          onModelConfigUpdate={() => { /* Settings owns persisted Simple model selection. */ }}
+                          onCodexThreadIdAssigned={handleThreadAssigned}
+                          onLabelUpdate={(_id, label, running) => {
+                            setActivitySummary(label);
+                            setIsStreaming(running);
+                          }}
+                          onMessageCountChange={(_id, count) =>
+                            setMessageCount(count)
+                          }
+                          onLatestAssistantMessage={(text) => {
+                            live.sendResult(text);
+                          }}
+                        />
+                      </div>
+                    </motion.div>
+                  )}
+
+                  {isSettingsOpen && settingsView === "main" && (
+                    <motion.div
+                      layout="position"
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{
+                        duration: 0.14,
+                        delay: 0.07,
+                        ease: [0.16, 1, 0.3, 1],
+                      }}
+                      className="min-h-0 flex-1 overflow-y-auto border-t border-foreground/[0.06] px-6 py-5"
+                      aria-label="Settings"
+                    >
+                      <section
+                        className="mb-7"
+                        aria-labelledby="simple-interface-heading"
+                      >
+                        <div className="mb-3 flex items-start justify-between gap-4">
+                          <div className="min-w-0">
+                            <h2
+                              id="simple-interface-heading"
+                              className="text-ui-sm font-medium text-foreground"
+                            >
+                              Interface
+                            </h2>
+                            <p
+                              className="mt-1 truncate text-ui-sm text-muted-foreground"
+                              title={project?.path}
+                            >
+                              {project?.metadata.name ?? "Loading…"} ·{" "}
+                              {project?.path ?? ""}
+                            </p>
+                          </div>
+                          {project?.legacy && (
+                            <span className="shrink-0 rounded-full bg-foreground/[0.06] px-2 py-1 text-[11px] text-muted-foreground">
+                              Legacy prototype
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            disabled={projectPending || readOnly}
+                            onClick={() => void chooseProjectFolder("new")}
+                            className="rounded-full bg-foreground px-3 py-1.5 text-ui-sm font-medium text-background disabled:opacity-50"
+                          >
+                            New interface
+                          </button>
+                          <button
+                            type="button"
+                            disabled={projectPending || readOnly}
+                            onClick={() => void chooseProjectFolder("open")}
+                            className="rounded-full px-3 py-1.5 text-ui-sm font-medium hover:bg-foreground/[0.06] disabled:opacity-50"
+                            style={{
+                              border:
+                                "1px solid color-mix(in srgb, var(--foreground) 10%, transparent)",
+                            }}
+                          >
+                            Open folder
+                          </button>
+                        </div>
+                        {recentProjects.filter(
+                          (item) => item.path !== project?.path,
+                        ).length > 0 && (
+                          <div
+                            className="mt-3 flex flex-wrap gap-1.5"
+                            aria-label="Recent interfaces"
+                          >
+                            {recentProjects
+                              .filter((item) => item.path !== project?.path)
+                              .slice(0, 5)
+                              .map((item) => (
+                                <button
+                                  key={item.metadata.id}
+                                  type="button"
+                                  disabled={projectPending || readOnly}
+                                  onClick={() => void reopenProject(item.path)}
+                                  title={item.path}
+                                  className="max-w-48 truncate rounded-full bg-foreground/[0.05] px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground"
+                                >
+                                  {item.metadata.name}
+                                </button>
+                              ))}
+                          </div>
+                        )}
+                        {projectError && (
+                          <p
+                            role="alert"
+                            className="mt-2 text-ui-sm text-destructive"
+                          >
+                            {projectError}
+                          </p>
+                        )}
+                      </section>
+                      <section
+                        className="mb-7"
+                        aria-labelledby="simple-model-heading"
+                      >
+                        <div className="mb-3">
+                          <h2
+                            id="simple-model-heading"
+                            className="text-ui-sm font-medium text-foreground"
+                          >
+                            Model
+                          </h2>
+                          <p className="mt-1 text-ui-sm text-muted-foreground">
+                            Choose the model used by your Simple conversation.
+                          </p>
+                        </div>
+                        <div
+                          className="grid gap-2 sm:grid-cols-2"
+                          role="radiogroup"
+                          aria-label="Model"
+                        >
+                          {profiles.map((profile) => {
+                            const selected = profile.id === selectedProfileId;
+                            return (
+                              <button
+                                key={profile.id}
+                                type="button"
+                                role="radio"
+                                aria-checked={selected}
+                                disabled={modelPending}
+                                onClick={() => void storedProfile.selectProfile(profile.id)}
+                                className={`flex min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-[background-color,border-color,scale] duration-150 active:scale-[0.99] ${selected ? "bg-foreground/[0.07]" : "hover:bg-foreground/[0.04]"}`}
+                                style={{
+                                  border:
+                                    "1px solid color-mix(in srgb, var(--foreground) 9%, transparent)",
+                                }}
+                              >
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate text-ui-sm font-medium text-foreground">
+                                    {profile.name}
+                                  </span>
+                                  <span className="block truncate text-xs text-muted-foreground">
+                                    {profile.modelId}
+                                  </span>
+                                </span>
+                                {selected && (
+                                  <Check className="size-4 shrink-0" />
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {profiles.length === 0 && (
+                          <p className="text-ui-sm text-muted-foreground">
+                            No configured models are available.
+                          </p>
+                        )}
+                        {modelError && (
+                          <p
+                            role="alert"
+                            className="mt-2 text-ui-sm text-destructive"
+                          >
+                            {modelError}
+                          </p>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setSettingsView("models")}
+                          className="mt-3 rounded-full px-3 py-1.5 text-ui-sm font-medium text-foreground transition-[background-color,scale] duration-150 hover:bg-foreground/[0.06] active:scale-[0.98]"
+                          style={{
+                            border:
+                              "1px solid color-mix(in srgb, var(--foreground) 10%, transparent)",
+                          }}
+                        >
+                          Add or manage models
+                        </button>
+                      </section>
+                      <SimpleThemeSettings />
+                      <ExperienceSectionContent compact />
+                      <SimpleFeedbackSettings
+                        visible={feedbackVisible}
+                        onVisibilityChange={onFeedbackVisibilityChange}
+                        onLeaveFeedback={() => {
+                          onCloseSettings();
+                          onLeaveFeedback();
+                        }}
+                      />
+                      <SimpleChannelsSettings threadId={threadId} />
+                      <div className="mt-7 border-t border-foreground/[0.08] pt-5">
+                        <SimpleConnectionsSettings />
+                        {live.error && (
+                          <p
+                            role="alert"
+                            className="mt-2 text-ui-sm text-destructive"
+                          >
+                            {live.error}
+                          </p>
+                        )}
+                      </div>
+                    </motion.div>
+                  )}
+
+                  {isSettingsOpen && settingsView === "models" && (
+                    <motion.div
+                      layout="position"
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{
+                        duration: 0.14,
+                        delay: 0.07,
+                        ease: [0.16, 1, 0.3, 1],
+                      }}
+                      className="min-h-0 flex-1 overflow-y-auto border-t border-foreground/[0.06] px-6 py-5"
+                      aria-label="Models"
+                    >
+                      {voiceSetupRequired && <div role="status" className="mb-4 rounded-xl border border-foreground/[0.12] p-3 text-ui-sm leading-5 text-foreground">
+                        GPT Live needs an OpenAI API key with Realtime access. Add an API-key model below, then return to the microphone button. ChatGPT sign-in may support text responses but does not establish Realtime access.
+                      </div>}
+                      <ProfilesSectionContent
+                        selectedProfileId={selectedProfileId}
+                        onProfileUpdate={() => {
+                          refreshProfiles();
+                        }}
+                      />
+                    </motion.div>
+                  )}
+                  {approvalCount > 0 && threadId && (
+                    <section aria-label="Approvals" className="max-h-[45vh] min-h-0 overflow-y-auto border-t border-foreground/[0.06] px-4 pb-4 pt-3">
+                      <h2 className="mb-2.5 px-1 text-[11px] font-medium text-muted-foreground">Approval needed · {approvalCount}</h2>
+                      <Approvals ownerThreadId={threadId} />
+                    </section>
+                  )}
+                </motion.div>
+
+
+                </div>
+
+                <motion.div
+                  data-simple-composer-capsule="true"
+                  className="simple-composer-capsule relative z-10 min-w-0 shrink-0 overflow-hidden rounded-full"
+                  style={{
+                    background: "var(--simple-surface-fill)",
+                    backdropFilter: "blur(28px) saturate(1.18)",
+                    WebkitBackdropFilter: "blur(28px) saturate(1.18)",
+                    boxShadow:
+                      "0 0 0 1px color-mix(in srgb, var(--foreground) 9%, transparent), 0 14px 38px rgba(0,0,0,.18)",
+                  }}
+                >
+                  {persistenceError && (
+                    <div
+                      role="alert"
+                      className="mb-2 rounded-md bg-destructive/10 px-3 py-2 text-ui-sm text-destructive"
+                    >
+                      The primary conversation could not be saved. Reload
+                      Interpreter to recover before sending again.
+                      <button
+                        type="button"
+                        className="ml-2 underline"
+                        onClick={() => window.location.reload()}
+                      >
+                        Reload
+                      </button>
+                    </div>
+                  )}
+                  {overlayError && (
+                    <div
+                      role="alert"
+                      className="mb-2 rounded-md bg-destructive/10 px-3 py-2 text-ui-sm text-destructive"
+                    >
+                      {overlayError}
+                    </div>
+                  )}
+                  {composer(isConversationOpen)}
+                </motion.div>
+              </motion.section>
+            </AgentErrorProvider>
+          </AgentMetadataProvider>
+        </div>
+      ) : null}
+    </div>
+  );
+}

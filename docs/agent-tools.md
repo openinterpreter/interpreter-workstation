@@ -130,6 +130,80 @@ and edits retain the same thread and permission checks.
 
 Interpreter workstation tools are model-facing through the `interpreter-app` CLI only.
 
+### Native desktop authorization on a headless computer
+
+`codexApprovalPolicy` and `codexSandboxMode` do not grant native Computer Use
+access. The independent `cuaAccessPolicy` has separate `inspect` and `control`
+modes (`ask`, `deny`, `all`); discovery follows the **inspect** mode. An owner
+may explicitly set both to `all` in the config of an isolated computer whose
+agent controls that computer's own desktop. The setting is local to that
+Workstation installation, not an authorization to reach another computer,
+change a different machine's policy, use an external MCP tool, or bypass
+protected desktop targets. Unconfigured installations continue to ask.
+External MCP tools retain their own per-tool approval mode.
+
+Native app-server MCP elicitation is a **separate** approval channel from OIX
+`--approval-policy never`, Workstation's MCP tool-manager settings, and Computer
+Use permissions. A headless operator can explicitly provision
+`nativeMcpReadGrants` in the host's private configuration for an exact native
+thread UUID and one of `codex_apps` `sites.get_site` / `sites.list_sites`.
+There are no grants by default. Only a bound thread and a matching native tool
+identity receive a one-call read decision; display titles cannot supply that
+identity. The agent cannot change these grants with `interpreter_settings_set`.
+The same exact-thread read grant applies to a direct `interpreter-app tools`
+call only when its authenticated caller is bound to that native thread. A
+claimed thread ID without that caller binding cannot use the grant. The grant
+bypasses only the default prompt for the named read tool, not an explicit
+per-tool `approve` mode, server enablement, or provider access. With
+`headlessToolApprovalMode: "fail-closed"`, other direct MCP calls that would
+prompt are denied rather than leaving an invisible pending card. This grant
+is **tool-scoped, not project-ID-scoped**: review the provider's authenticated
+principal and data scope before allowing `sites.get_site`.
+Creation, mutation, provider, filesystem, and every other elicitation retain
+the existing approval flow. An existing pending request is **not** retroactively
+resolved when configuration changes. Do not configure a read grant until the
+operator has reviewed the particular tool's data exposure and the host's
+single-custodian boundary. Unattended hosts should not start calls that still
+require an interactive approval owner.
+
+An operator can explicitly set `headlessToolApprovalMode: "fail-closed"` on a
+dedicated unattended host. Ungranted native MCP tool calls and Computer Use
+permissions that would otherwise prompt return a denial immediately; they are
+not silently approved. Exact read grants above and independently configured
+Computer Use inspect/control `all` still apply. Agents cannot change this
+setting. It does not derive from OIX `--approval-policy never` or dispose an
+existing pending request; the owner must use the ordinary approval UI before
+supervised migration.
+
+Computer Use app discovery is independently governed by the operator's
+`cuaAccessPolicy.permissions.inspect.mode`: `all` allows inspected discovery,
+`ask` continues to request approval, and `deny` rejects it. None of these
+settings relax browser profile permissions or external MCP approval. Desktop
+driver process locking occurs **after** the permission decision; a pending
+approval must not hold the cross-process lock.
+
+For a dedicated unattended host using `headlessToolApprovalMode: "fail-closed"`,
+an operator may instead provision a narrower private host-config entry:
+`nativeCuaDiscoveryGrants: [{ "threadId": "<exact native thread UUID>", "toolName": "list_apps" }]`.
+This permits **only** the no-argument app-list call by that bound thread when
+the inspect mode is `ask`; `deny` still wins. It does not grant other discovery,
+app inspection/control, browser access, or external MCP tools. Missing thread
+binding, extra arguments, malformed grants, and different threads fail closed.
+Agents cannot edit the grant. Configuration changes do not resolve existing
+pending approvals: the owner must review and dispose each exact old card by
+the normal route, then verify its original tool-call outcome. Do not set the
+host-wide inspect mode to `all` merely to enable one thread's app list.
+
+The driver requests any required approval **before** taking the cross-process
+desktop lock. An unresolved permission request must not block already-permitted
+desktop actions. Do not resolve old requests merely because the policy changes;
+review their original owner and action in the ordinary Approvals UI.
+
+For ordinary local video inspection, prefer `ffprobe` for stream metadata,
+`ffmpeg` for bounded frames/contact sheets, and a supported full-speed player
+for final motion/audio review. Listing desktop apps is not needed to parse an
+MP4, and contact sheets alone do not prove full-speed playback quality.
+
 - Builtins and configured MCP servers are discovered and called through the CLI.
 - Do not add a second direct model-facing tool surface for workstation tools.
 - Codex-native capabilities such as shell execution and patching remain native runtime features. `js_repl` is a builtin workstation tool (`builtin-js-repl`) backed by a persistent Node kernel in the Express backend (`server/tools/builtin-tools/js-repl/`).

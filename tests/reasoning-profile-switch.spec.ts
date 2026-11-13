@@ -15,7 +15,17 @@ import {
   waitForResponseWithErrorCheck,
 } from './helpers';
 import { sel } from './selectors';
+import type { Locator } from '@playwright/test';
 import type { StreamRequestBody } from '../src/lib/codex/api-types';
+
+async function expectPopoverClosed(popover: Locator): Promise<void> {
+  // Radix can briefly retain a closed popover for its exit animation, or
+  // remove it before Playwright observes that state.
+  await expect.poll(async () => {
+    if (await popover.count() === 0) return true;
+    return await popover.first().getAttribute('data-state', { timeout: 1000 }).catch(() => null) === 'closed';
+  }, { timeout: 5000 }).toBe(true);
+}
 
 function buildSse(events: Array<{ event: string; payload: unknown }>): string {
   return events
@@ -111,6 +121,20 @@ async function deleteProfiles(page: import('@playwright/test').Page, profileIds:
   }
 }
 
+async function selectAdvancedMode(page: import('@playwright/test').Page): Promise<void> {
+  // This suite exercises the Advanced composer and settings popover. Simple is
+  // the default, including after clearUserConfig reloads the renderer.
+  await page.evaluate(() => (window as any).electron.uiSettings.setAdvancedMode(true));
+  await expect(page.locator('.app-workspace-shell')).toBeVisible({ timeout: 15000 });
+  await expect(page.locator(sel('agentSettingsButton'))).toBeVisible({ timeout: 15000 });
+}
+
+async function resetToAdvancedMode(page: import('@playwright/test').Page): Promise<void> {
+  await clearUserConfig(page);
+  await waitForAppReady(page);
+  await selectAdvancedMode(page);
+}
+
 test.describe('Reasoning and profile switching', () => {
   test('settings does not expose hosted profile reasoning defaults', async ({ page }) => {
     test.setTimeout(60000);
@@ -118,8 +142,7 @@ test.describe('Reasoning and profile switching', () => {
     const profileId = `reasoning-default-${Date.now()}`;
     try {
       writeOpenRouterReasoningModelCache();
-      await clearUserConfig(page);
-      await waitForAppReady(page);
+      await resetToAdvancedMode(page);
       await createHostedProfile(page, {
         id: profileId,
         name: 'Reasoning Default Test',
@@ -128,7 +151,9 @@ test.describe('Reasoning and profile switching', () => {
 
       await page.locator(sel('agentSettingsButton')).click();
       await expect(page.locator(sel('settingsPopover'))).toBeVisible({ timeout: 5000 });
-      await page.locator(sel('settingsPopover')).getByText('Settings').click();
+      // The panel can overlap the new-tab notice while it animates. Activate
+      // its semantic Settings button by keyboard rather than its text span.
+      await page.locator(sel('settingsPopover')).getByRole('button', { name: 'Settings' }).press('Enter');
 
       const settingsView = page.locator(sel('settingsView'));
       await expect(settingsView).toBeVisible({ timeout: 10000 });
@@ -144,7 +169,7 @@ test.describe('Reasoning and profile switching', () => {
   });
 
   test('composer keeps the current chat when switching profiles and applies reasoning on the next turn', async ({ page }) => {
-    test.setTimeout(60000);
+    test.setTimeout(120000);
 
     const threadId = randomUUID();
     const profileA = {
@@ -159,8 +184,7 @@ test.describe('Reasoning and profile switching', () => {
     };
     try {
       writeOpenRouterReasoningModelCache();
-      await clearUserConfig(page);
-      await waitForAppReady(page);
+      await resetToAdvancedMode(page);
       await createHostedProfile(page, profileA);
       await createHostedProfile(page, profileB);
 
@@ -191,12 +215,12 @@ test.describe('Reasoning and profile switching', () => {
       await settingsButton.click();
       const popover = page.locator(sel('settingsPopover'));
       await expect(popover).toBeVisible({ timeout: 5000 });
-      await popover.getByText(profileA.name, { exact: true }).click();
-      await expect(popover).toBeHidden({ timeout: 5000 });
+      await popover.locator(sel.profileCard(profileA.id)).press('Enter');
+      await expectPopoverClosed(popover);
       expect(await page.locator(sel.agentTabAny()).count()).toBe(initialTabCount);
 
       const composer = page.locator(sel.activeComposer());
-      await composer.click();
+      await composer.focus();
       await page.keyboard.type('First request to create thread.', { delay: 10 });
       await page.keyboard.press('Enter');
 
@@ -205,15 +229,18 @@ test.describe('Reasoning and profile switching', () => {
       await expect(thread.getByText('Something went wrong')).toHaveCount(0);
       await expect(page.locator(sel('typingIndicator'))).toBeHidden({ timeout: 10000 });
 
-    await settingsButton.click();
-    await expect(popover).toBeVisible({ timeout: 5000 });
-    await popover.getByText(profileB.name, { exact: true }).click();
+      await settingsButton.press('Enter');
+      await expect(popover).toBeVisible({ timeout: 5000 });
+      await popover.locator(sel.profileCard(profileB.id)).press('Enter');
 
-      await expect(popover).toBeHidden({ timeout: 5000 });
+      await expectPopoverClosed(popover);
       expect(await page.locator(sel.agentTabAny()).count()).toBe(initialTabCount);
 
-    await settingsButton.click();
-    await expect(popover).toBeVisible({ timeout: 5000 });
+      // Wait for Radix's exit animation to remove the previous popover before
+      // opening it again; its closed state alone is not a stable reentry point.
+      await expect(popover).toHaveCount(0, { timeout: 5000 });
+      await settingsButton.press('Enter');
+      await expect(popover).toBeVisible({ timeout: 5000 });
 
       const settingsFooterButton = popover.getByRole('button', { name: 'Settings' });
       await expect(settingsFooterButton).toBeVisible({ timeout: 5000 });
@@ -229,9 +256,11 @@ test.describe('Reasoning and profile switching', () => {
       await slider.focus();
       await page.keyboard.press('End');
       await page.keyboard.press('Escape');
-      await expect(popover).toBeHidden({ timeout: 5000 });
+      await expectPopoverClosed(popover);
 
-      await composer.click();
+      // The composer's bounding box moves while the reasoning popover collapses;
+      // keyboard focus exercises the same editor without racing that transition.
+      await composer.focus();
       await page.keyboard.type('Second request after switching profile.', { delay: 10 });
       await page.keyboard.press('Enter');
 
@@ -271,8 +300,7 @@ test.describe('Reasoning and profile switching', () => {
       releaseSecondStream = resolve;
     });
 
-    await clearUserConfig(page);
-    await waitForAppReady(page);
+    await resetToAdvancedMode(page);
     await setWorkspace(page, getTestWorkspace());
 
     await page.route('**/api/agent/chat/stream**', async (route) => {
@@ -344,7 +372,10 @@ test.describe('Reasoning and profile switching', () => {
   });
 
   test('inline errors offer bug reporting and fresh-chat recovery after a profile switch', async ({ page }) => {
-    test.setTimeout(60000);
+    // This exercise spans three streamed turns and profile transitions. Keep
+    // each assertion's short timeout, but allow the full Electron/OIX sequence
+    // to finish on a slower CI host before Playwright tears down the fixture.
+    test.setTimeout(120000);
 
     const firstThreadId = randomUUID();
     const recoveryThreadId = randomUUID();
@@ -361,8 +392,7 @@ test.describe('Reasoning and profile switching', () => {
 
     try {
       writeOpenRouterReasoningModelCache();
-      await clearUserConfig(page);
-      await waitForAppReady(page);
+      await resetToAdvancedMode(page);
       await createHostedProfile(page, profileA);
       await createHostedProfile(page, profileB);
 
@@ -411,10 +441,17 @@ test.describe('Reasoning and profile switching', () => {
       await settingsButton.click();
       const popover = page.locator(sel('settingsPopover'));
       await expect(popover).toBeVisible({ timeout: 5000 });
-      await popover.getByText(profileA.name, { exact: true }).click();
-      await expect(popover).toBeHidden({ timeout: 5000 });
+      // Focus the semantic card button: cards can move beneath the animated
+      // label's click point while the popover lays out.
+      await popover.locator(sel.profileCard(profileA.id)).press('Enter');
+      await expect(popover).toHaveAttribute('data-state', 'closed', { timeout: 5000 });
 
-      await composer.click();
+      // Profile persistence and editor layout settle independently. Wait for
+      // the selected model before focusing the contenteditable composer;
+      // a physical click can chase the composer while its tab is relocating.
+      await expect(settingsButton).toContainText(profileA.name, { timeout: 10000 });
+      await composer.focus();
+      await expect(composer).toBeFocused();
       await page.keyboard.type('First request to create thread.', { delay: 10 });
       await page.keyboard.press('Enter');
 
@@ -423,10 +460,12 @@ test.describe('Reasoning and profile switching', () => {
 
       await settingsButton.click();
       await expect(popover).toBeVisible({ timeout: 5000 });
-      await popover.getByText(profileB.name, { exact: true }).click();
-      await expect(popover).toBeHidden({ timeout: 5000 });
+      await popover.locator(sel.profileCard(profileB.id)).press('Enter');
+      await expect(popover).toHaveAttribute('data-state', 'closed', { timeout: 5000 });
 
-      await composer.click();
+      await expect(settingsButton).toContainText(profileB.name, { timeout: 10000 });
+      await composer.focus();
+      await expect(composer).toBeFocused();
       await page.keyboard.type('Second request after switching profile.', { delay: 10 });
       const errorBlock = page.locator(sel('errorMessage'));
       pauseErrorChecking(page);
@@ -479,12 +518,13 @@ test.describe('Reasoning and profile switching', () => {
   });
 
   test('popover stays within the window and scrolls when many profiles exist', async ({ page }) => {
-    test.setTimeout(60000);
+    // Eighteen persisted profile writes and the corresponding UI refreshes
+    // can consume most of a minute on a shared desktop test host.
+    test.setTimeout(120000);
 
     const createdProfileIds: string[] = [];
     try {
-      await clearUserConfig(page);
-      await waitForAppReady(page);
+      await resetToAdvancedMode(page);
 
       const runId = Date.now();
       const createdProfiles: string[] = [];
@@ -509,6 +549,11 @@ test.describe('Reasoning and profile switching', () => {
       });
 
       const viewportHeight = await page.evaluate(() => window.innerHeight);
+      // The list grows after the popover first opens. Assert its final
+      // collision-aware placement rather than an intermediate animation frame.
+      await expect.poll(async () => (await popover.boundingBox())?.y ?? -Infinity, {
+        timeout: 10000,
+      }).toBeGreaterThanOrEqual(8);
       const bounds = await popover.boundingBox();
       expect(bounds).not.toBeNull();
       expect(viewportHeight).toBeGreaterThan(0);
@@ -544,8 +589,7 @@ test.describe('Reasoning and profile switching', () => {
     test.setTimeout(60000);
 
     const threadId = randomUUID();
-    await clearUserConfig(page);
-    await waitForAppReady(page);
+    await resetToAdvancedMode(page);
 
     const workspaceA = getTestWorkspace();
     const workspaceB = fs.mkdtempSync(path.join(os.tmpdir(), 'workstation-chat-workspace-'));
@@ -590,6 +634,8 @@ test.describe('Reasoning and profile switching', () => {
 
   test('reloading the app keeps the active conversation on the same thread and model', async ({ page }) => {
     test.setTimeout(60000);
+
+    await selectAdvancedMode(page);
 
     const threadId = randomUUID();
     const profile = {
@@ -660,8 +706,8 @@ test.describe('Reasoning and profile switching', () => {
       await settingsButton.click();
       const popover = page.locator(sel('settingsPopover'));
       await expect(popover).toBeVisible({ timeout: 5000 });
-      await popover.getByText(profile.name, { exact: true }).click();
-      await expect(popover).toBeHidden({ timeout: 5000 });
+      await popover.locator(sel.profileCard(profile.id)).press('Enter');
+      await expect(popover).toHaveAttribute('data-state', 'closed', { timeout: 5000 });
 
       const composer = editorAgentSurface.locator(sel('mainComposerInput'));
       await composer.click();

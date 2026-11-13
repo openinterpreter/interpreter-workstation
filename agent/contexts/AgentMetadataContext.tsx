@@ -20,14 +20,14 @@ export function AgentMetadataProvider({
   agent,
   children,
 }: {
-  agent: AgentMetadata;
+  agent: AgentMetadata | null;
   children: ReactNode;
 }) {
   // Memoize value to prevent unnecessary re-renders
   const memoizedAgent = useMemo(() => agent, [
-    agent.id,
-    agent.createdAt,
-    agent.agent,
+    agent?.id,
+    agent?.createdAt,
+    agent?.agent,
   ]);
 
   return (

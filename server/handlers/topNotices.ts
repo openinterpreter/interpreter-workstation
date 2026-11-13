@@ -2,12 +2,24 @@ import * as configStore from '../configStore';
 import type { TopNotice } from '../../shared/types/topNotices';
 
 const WHATS_NEW_NOTICE_ID = 'whats-new';
+export const SIMPLE_WHATS_NEW_NOTICE_ID = 'simple-whats-new';
+export const SIMPLE_WHATS_NEW_VERSION = '2026-10-simple-first-run';
 const WHATS_NEW_NOTICE_VERSION = '2026-06-22-main-window-start';
 // Paste a YouTube video ID here when this release has one. The notice still
 // renders written notes when no video is available.
 const WHATS_NEW_YOUTUBE_VIDEO_ID = '';
 
 const TOP_NOTICES: TopNotice[] = [
+  {
+    id: SIMPLE_WHATS_NEW_NOTICE_ID,
+    kind: 'release',
+    version: SIMPLE_WHATS_NEW_VERSION,
+    labelKey: 'topNotices.whatsNew.label',
+    dismissLabelKey: 'topNotices.whatsNew.dismiss',
+    titleKey: 'topNotices.whatsNew.release.title',
+    subtitleKey: 'topNotices.whatsNew.release.subtitle',
+    items: [], // Simple renders its own compact attached release note.
+  },
   {
     id: WHATS_NEW_NOTICE_ID,
     kind: 'release',

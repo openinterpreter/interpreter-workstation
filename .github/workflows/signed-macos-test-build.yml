@@ -1,0 +1,105 @@
+name: Signed macOS test build
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type test to build signed macOS review artifacts without publishing updates
+        required: true
+        type: string
+
+concurrency:
+  group: signed-macos-test-build
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: >-
+      github.actor == 'interpreterwork-automation[bot]' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.confirm == 'test'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    environment: production-release
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9.15.9
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version: 1.2.20
+      - uses: dtolnay/rust-toolchain@stable
+      - run: pnpm install --frozen-lockfile
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Set the public package version
+        run: bun scripts/ci/set-version.ts --version "$(node -p "require('./package.json').publicVersion")"
+      - run: pnpm typecheck
+      - run: pnpm run test:unit
+      - run: pnpm run release:licenses:check
+      - name: Patch electron-builder temporary keychain authentication
+        run: node scripts/ci/patch-electron-builder-keychain.mjs
+      - name: Prepare the passwordless macOS signing certificate
+        env:
+          SOURCE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+        run: |
+          brew install openssl@3
+          openssl_bin="$(brew --prefix openssl@3)/bin/openssl"
+          original="$RUNNER_TEMP/apple-certificate.p12"
+          pem="$RUNNER_TEMP/apple-certificate.pem"
+          protected="$RUNNER_TEMP/apple-certificate-protected.p12"
+          printf '%s' "$SOURCE_CERTIFICATE" | base64 --decode > "$original"
+          "$openssl_bin" pkcs12 -legacy -in "$original" -passin pass: -nodes -out "$pem"
+          password=$("$openssl_bin" rand -hex 32)
+          echo "::add-mask::$password"
+          "$openssl_bin" pkcs12 -legacy -export -in "$pem" -out "$protected" -passout "pass:$password"
+          echo "CSC_LINK=$protected" >> "$GITHUB_ENV"
+          echo "CSC_KEY_PASSWORD=$password" >> "$GITHUB_ENV"
+      - name: Build signed and notarized macOS package
+        env:
+          PYTHON: /usr/bin/python3
+          CSC_NAME: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: pnpm run package:official -- --mac dmg zip --${{ matrix.arch }} --publish never
+      - name: Verify official profile and package resources
+        run: pnpm run release:verify:official-candidate -- --arch=${{ matrix.arch }}
+      - name: Verify Apple signature, notarization, and stapling
+        run: |
+          app=$(find dist -maxdepth 3 -type d -name Interpreter.app -print -quit)
+          test -n "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+          xcrun stapler validate "$app"
+      - name: Retain only installable test assets and their checksums
+        run: |
+          mkdir signed-test-assets
+          find dist -maxdepth 1 -type f \( -name 'Interpreter-*.dmg' -o -name 'Interpreter-*.zip' \) -exec cp {} signed-test-assets/ \;
+          test "$(find signed-test-assets -maxdepth 1 -type f | wc -l)" -eq 2
+          (cd signed-test-assets && shasum -a 256 Interpreter-* > SHA256SUMS)
+          printf '%s\n' "$GITHUB_SHA" > signed-test-assets/SOURCE_COMMIT
+      - uses: actions/upload-artifact@v7
+        with:
+          name: signed-macos-${{ matrix.arch }}
+          path: signed-test-assets/
+          if-no-files-found: error
+          retention-days: 14

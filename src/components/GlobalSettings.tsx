@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Footprints, MessageSquare, Settings, Palette, Wrench, Plug, AudioLines, Volume2, Monitor, Globe, Shield } from 'lucide-react';
+import { Footprints, MessageSquare, Settings, Palette, Wrench, Plug, AudioLines, Volume2, Monitor, Globe, Shield, MessagesSquare } from 'lucide-react';
 import { getRuntimeSystemInfo } from '@/ipc';
 import { resetOnboardingState, resetRuntimeConfigFiles } from '../api';
 import { isInterpreterOverlaySupportedPlatform } from '../../shared/constants/interpreter-overlay-platform';
@@ -19,6 +19,7 @@ import { PlanSectionContent } from "./settings/PlanSection";
 import { ProfilesSectionContent } from "./settings/ProfilesSection";
 import { ToolsSectionContent } from "./settings/ToolsSection";
 import { InboxSectionContent } from "./settings/InboxSection";
+import { DurableThreadsSectionContent } from './settings/DurableThreadsSection';
 import { StyleSectionContent } from "./settings/StyleSection";
 import { TelemetrySectionContent } from "./settings/TelemetrySection";
 import { SettingsPane, SettingsSection } from "./settings/SettingsSection";
@@ -33,6 +34,7 @@ import { McpSettingsSectionContent } from './settings/McpSettingsSection';
 import { Button } from './ui/button';
 import { buildVerticalEdgeMask } from './ui/ProgressiveBlurOverlay';
 import { AppBehaviorSectionContent } from './settings/AppBehaviorSection';
+import { ExperienceSectionContent } from './settings/ExperienceSection';
 import { CustomInstructionsSectionContent } from './settings/CustomInstructionsSection';
 import { OverlaySectionContent, OverlaySectionIntroContent } from './settings/OverlaySection';
 import { BrowserSectionContent } from './settings/BrowserSection';
@@ -68,6 +70,7 @@ const TAB_INFO: Record<SettingsTabId, { icon: any }> = {
   sounds: { icon: Volume2 },
   overlay: { icon: Monitor },
   inbox: { icon: Footprints },
+  durableThreads: { icon: MessagesSquare },
   style: { icon: Palette },
 };
 
@@ -293,7 +296,7 @@ export function GlobalSettings({
   }, [t]);
 
   const tabCatalogById = Object.fromEntries(SETTINGS_TABS.map((tab) => [tab.id, tab])) as Record<SettingsTabId, (typeof SETTINGS_TABS)[number]>;
-  const currentPageTitle = t(tabCatalogById[activeTab].titleKey);
+  const currentPageTitle = t(tabCatalogById[activeTab].titleKey, { defaultValue: tabCatalogById[activeTab].defaultLabel });
   const settingsViewportMask = buildVerticalEdgeMask({
     topFade: SETTINGS_HEADER_FADE_TAIL,
     bottomFade: "0px",
@@ -332,8 +335,8 @@ export function GlobalSettings({
                   type="button"
                   onClick={() => setActiveTab(key)}
                   data-testid={SETTINGS_TAB_ID(key)}
-                  data-help-title={t(tabCatalog.titleKey)}
-                  data-help-description={t(tabCatalog.descriptionKey)}
+                  data-help-title={t(tabCatalog.titleKey, { defaultValue: tabCatalog.defaultLabel })}
+                  data-help-description={t(tabCatalog.descriptionKey, { defaultValue: tabCatalog.defaultLabel })}
                   className={[
                     navButtonBaseClassName,
                     isActive
@@ -343,7 +346,7 @@ export function GlobalSettings({
                 >
                   <Icon className="size-4 shrink-0" />
                   <span className="min-w-0 truncate">
-                    {t(tabCatalog.titleKey)}
+                    {t(tabCatalog.titleKey, { defaultValue: tabCatalog.defaultLabel })}
                   </span>
                 </button>
               );
@@ -396,6 +399,7 @@ export function GlobalSettings({
                     <SettingsSection
                       title={t("settings.general.preferencesSection")}
                     >
+                      <ExperienceSectionContent />
                       {typeof window !== 'undefined' && !!window.electron && (
                         <AppBehaviorSectionContent />
                       )}
@@ -577,6 +581,7 @@ export function GlobalSettings({
                 {activeTab === "extensions" && <ExtensionsSectionContent />}
 
                 {activeTab === "inbox" && <InboxSectionContent />}
+                {activeTab === "durableThreads" && <DurableThreadsSectionContent />}
 
                 {activeTab === "textToSpeech" && (
                   <SettingsPane>

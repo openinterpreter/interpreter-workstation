@@ -8,11 +8,19 @@ import type {
   v2,
 } from "../../../server/handlers/codex-generated-types/index";
 import type { JsonValue } from "../../../server/handlers/codex-generated-types/serde_json/JsonValue";
+import type { ThreadGoalDocumentCreateParams, ThreadGoalDocumentCreateResponse,
+  ThreadGoalDocumentGetResponse, ThreadGoalDocumentSetParams,
+  ThreadGoalDocumentSetResponse } from './goal-document';
 
 type ClientMethod =
   | ClientRequest["method"]
   | "thread/queue/list"
   | "thread/backgroundTerminals/clean"
+  | "thread/backgroundTerminals/status"
+  | "thread/backgroundTerminals/list"
+  | "thread/goal/document/get"
+  | "thread/goal/document/set"
+  | "thread/goal/document/create"
   | "mcpServer/tool/call"
   | "mcpServer/resource/read";
 type ServerMethod = ServerNotification["method"];
@@ -28,9 +36,14 @@ export const CLIENT_METHOD = {
   threadGoalSet: "thread/goal/set",
   threadGoalGet: "thread/goal/get",
   threadGoalClear: "thread/goal/clear",
+  threadGoalDocumentGet: "thread/goal/document/get",
+  threadGoalDocumentSet: "thread/goal/document/set",
+  threadGoalDocumentCreate: "thread/goal/document/create",
   threadArchive: "thread/archive",
   threadUnarchive: "thread/unarchive",
   threadBackgroundTerminalsClean: "thread/backgroundTerminals/clean",
+  threadBackgroundTerminalsStatus: "thread/backgroundTerminals/status",
+  threadBackgroundTerminalsList: "thread/backgroundTerminals/list",
   skillsList: "skills/list",
   skillsConfigWrite: "skills/config/write",
   windowsSandboxSetupStart: "windowsSandbox/setupStart",
@@ -47,7 +60,9 @@ export const CLIENT_METHOD = {
   mcpResourceRead: "mcpServer/resource/read",
   threadList: "thread/list",
   threadRead: "thread/read",
+  threadTurnsList: "thread/turns/list",
   threadQueueList: "thread/queue/list",
+  threadLoadedList: "thread/loaded/list",
   modelList: "model/list",
   interpreterProviderList: "interpreter/provider/list",
   interpreterProviderSet: "interpreter/provider/set",
@@ -168,6 +183,18 @@ export type RequestMap = {
     params: v2.ThreadGoalClearParams;
     result: v2.ThreadGoalClearResponse;
   };
+  [CLIENT_METHOD.threadGoalDocumentGet]: {
+    params: { threadId: string };
+    result: ThreadGoalDocumentGetResponse;
+  };
+  [CLIENT_METHOD.threadGoalDocumentSet]: {
+    params: ThreadGoalDocumentSetParams;
+    result: ThreadGoalDocumentSetResponse;
+  };
+  [CLIENT_METHOD.threadGoalDocumentCreate]: {
+    params: ThreadGoalDocumentCreateParams;
+    result: ThreadGoalDocumentCreateResponse;
+  };
   [CLIENT_METHOD.threadArchive]: {
     params: v2.ThreadArchiveParams;
     result: v2.ThreadArchiveResponse;
@@ -181,6 +208,19 @@ export type RequestMap = {
       threadId: string;
     };
     result: Record<string, never>;
+  };
+  [CLIENT_METHOD.threadBackgroundTerminalsStatus]: {
+    params: { threadId: string; turnId: string; itemId: string; nativeProcessId: string; maxWaitMs?: number | null };
+    result: { phase: 'running' | 'exited' | 'unknown'; outputBytes: number;
+      outputSha256: string | null; outputCapReached: boolean; exitCode: number | null;
+      terminalGeneration: number | null; observationTimedOut: boolean };
+  };
+  [CLIENT_METHOD.threadBackgroundTerminalsList]: {
+    params: { threadId: string; cursor?: string | null; limit?: number | null };
+    result: { data: Array<{ itemId: string; processId: string; turnId?: string | null;
+      nativeProcessId?: string | null; terminalGeneration?: number | null;
+      command: string; cwd: string; osPid: number | null; cpuPercent: number | null; rssKb: number | null }>;
+      nextCursor: string | null };
   };
   [CLIENT_METHOD.skillsList]: {
     params: v2.SkillsListParams;
@@ -246,9 +286,17 @@ export type RequestMap = {
     params: v2.ThreadReadParams;
     result: v2.ThreadReadResponse;
   };
+  [CLIENT_METHOD.threadTurnsList]: {
+    params: v2.ThreadTurnsListParams;
+    result: v2.ThreadTurnsListResponse;
+  };
   [CLIENT_METHOD.threadQueueList]: {
     params: { threadId: string; cursor?: string | null; limit?: number | null };
     result: { data: Array<{ id: string; clientUserMessageId: string; input: unknown[] }>; nextCursor: string | null };
+  };
+  [CLIENT_METHOD.threadLoadedList]: {
+    params: v2.ThreadLoadedListParams;
+    result: v2.ThreadLoadedListResponse;
   };
   [CLIENT_METHOD.modelList]: {
     params: v2.ModelListParams;

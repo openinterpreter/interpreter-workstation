@@ -4,10 +4,60 @@ import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { macUnpackedDirectory } from './mac-unpacked-directory.mjs';
 
 const workflow = await readFile('.github/workflows/release.yml', 'utf8');
+const signedTestWorkflow = await readFile('.github/workflows/signed-macos-test-build.yml', 'utf8');
 const electronBuilderConfig = await readFile('electron-builder.yml', 'utf8');
 const publishedVerifier = await readFile('scripts/ci/verify-published-release.mjs', 'utf8');
+const licensePolicy = JSON.parse(await readFile('licenses/release-policy.json', 'utf8'));
+
+test('each packaging verifier requires every reviewed license notice', async () => {
+  for (const scriptPath of [
+    'scripts/package-smoke.mjs',
+    'scripts/verify-official-release-candidate.mjs',
+    'scripts/verify-internal-release.mjs',
+  ]) {
+    const source = await readFile(scriptPath, 'utf8');
+    for (const notice of licensePolicy.noticeFiles) {
+      const required = scriptPath.endsWith('package-smoke.mjs')
+        ? notice.split('/').at(-1)
+        : `licenses/${notice.split('/').at(-1)}`;
+      assert.ok(source.includes(`'${required}'`), `${scriptPath} omits ${required}`);
+    }
+  }
+});
+
+test('signed macOS test builds reuse the protected signing boundary without publishing updates', () => {
+  assert.match(signedTestWorkflow, /github\.actor == 'interpreterwork-automation\[bot\]'/);
+  assert.match(signedTestWorkflow, /github\.ref == 'refs\/heads\/main'/);
+  assert.match(signedTestWorkflow, /inputs\.confirm == 'test'/);
+  assert.match(signedTestWorkflow, /environment: production-release/);
+  assert.match(signedTestWorkflow, /runner: macos-26\s+arch: arm64/);
+  assert.match(signedTestWorkflow, /runner: macos-15-intel\s+arch: x64/);
+  assert.match(signedTestWorkflow, /pnpm run package:official -- --mac dmg zip --\$\{\{ matrix\.arch \}\} --publish never/);
+  assert.match(signedTestWorkflow, /codesign --verify --deep --strict/);
+  assert.match(signedTestWorkflow, /spctl --assess --type execute/);
+  assert.match(signedTestWorkflow, /xcrun stapler validate/);
+  assert.match(signedTestWorkflow, /pnpm run release:verify:official-candidate -- --arch=\$\{\{ matrix\.arch \}\}/);
+  assert.match(signedTestWorkflow, /SOURCE_COMMIT/);
+  assert.match(signedTestWorkflow, /SHA256SUMS/);
+  assert.match(signedTestWorkflow, /actions\/upload-artifact@/);
+  assert.doesNotMatch(signedTestWorkflow, /gh release|upload_and_verify|latest\*\.yml|AWS_ACCESS_KEY_ID|contents: write|secrets\.SENTRY_AUTH_TOKEN/);
+
+  const certificateStep = /      - name: Prepare the passwordless macOS signing certificate\n([\s\S]*?)(?=      - name: Build signed and notarized macOS package)/;
+  assert.equal(signedTestWorkflow.match(certificateStep)?.[1],
+    workflow.match(certificateStep)?.[1].replace(/^        if: matrix\.os == 'macos'\n/, ''));
+});
+
+test('macOS candidate verifier selects the matching architecture without changing the production default', async () => {
+  const source = await readFile('scripts/verify-official-release-candidate.mjs', 'utf8');
+  assert.match(source, /archArg\?\.slice\('--arch='\.length\) \?\? 'arm64'/);
+  assert.equal(macUnpackedDirectory('x64'), 'mac');
+  assert.equal(macUnpackedDirectory('arm64'), 'mac-arm64');
+  assert.throws(() => macUnpackedDirectory('ia32'), /Unsupported macOS release candidate architecture/);
+  assert.match(source, /path\.join\(distRoot, macUnpackedDirectory\(arch\), 'Interpreter\.app'\)/);
+});
 
 test('Apple keychain patch matches the locked builder source and edits only a test copy', async () => {
   const manifest = JSON.parse(await readFile('package.json', 'utf8'));
@@ -60,10 +110,18 @@ test('publishing authority is not exposed at job scope', () => {
   assert.doesNotMatch(jobEnvironment, /\$\{\{ secrets\./);
   assert.doesNotMatch(jobEnvironment, /GH_TOKEN:/);
 
-  assert.equal((publish.match(/AWS_ACCESS_KEY_ID:/g) ?? []).length, 3);
-  assert.equal((publish.match(/AWS_SECRET_ACCESS_KEY:/g) ?? []).length, 3);
-  assert.equal((publish.match(/GH_TOKEN:/g) ?? []).length, 3);
+  assert.equal((publish.match(/AWS_ACCESS_KEY_ID:/g) ?? []).length, 4);
+  assert.equal((publish.match(/AWS_SECRET_ACCESS_KEY:/g) ?? []).length, 4);
+  assert.equal((publish.match(/GH_TOKEN:/g) ?? []).length, 5);
   assert.equal((publish.match(/GITHUB_TOKEN:/g) ?? []).length, 1);
+});
+
+test('failed publish retries reuse the first exact-run metadata, never regenerate a different draft identity', () => {
+  const publish = section('  publish:');
+  assert.match(publish, /id: metadata[\s\S]*?reconcile-release-metadata\.mjs release/);
+  assert.match(publish, /reconcile-release-metadata\.mjs release/);
+  assert.match(publish, /if: steps\.metadata\.outputs\.created == 'true'[\s\S]*?name: official-release-metadata/);
+  assert.ok(publish.indexOf('Preserve first-attempt release metadata') < publish.indexOf('Attest build provenance'));
 });
 
 test('passwordless Apple certificate is protected before electron-builder imports it', () => {
@@ -81,7 +139,11 @@ test('the GitHub read token is scoped to dependency installation', () => {
   assert.doesNotMatch(verify.slice(0, verify.indexOf('    steps:')), /GITHUB_TOKEN:/);
   assert.doesNotMatch(build.slice(0, build.indexOf('    steps:')), /GITHUB_TOKEN:/);
   assert.equal((verify.match(/GITHUB_TOKEN:/g) ?? []).length, 1);
-  assert.equal((build.match(/GITHUB_TOKEN:/g) ?? []).length, 1);
+  // Windows and non-Windows installs are mutually exclusive. Each receives
+  // only the read token needed during dependency installation.
+  assert.equal((build.match(/GITHUB_TOKEN:/g) ?? []).length, 2);
+  assert.match(build, /install-windows-deps\.ps1\n\s+if: matrix\.os == 'windows'\n\s+shell: pwsh\n\s+env:\n\s+GITHUB_TOKEN:/);
+  assert.match(build, /pnpm install --frozen-lockfile\n\s+if: matrix\.os != 'windows'\n\s+env:[\s\S]*?GITHUB_TOKEN:/);
 });
 
 test('installed clients discover a release only after GitHub publication', () => {
@@ -124,13 +186,31 @@ test('partial publication requires verified current-run Windows and Linux jobs, 
   assert.match(publishedVerifier, /Partial release unexpectedly includes macOS package/);
 });
 
-test('a failed publication can reuse only its exact commit', () => {
+test('a failed publication can reuse only its exact unpublished commit and immutable assets', () => {
   const authorize = section('  authorize:', '  verify:');
   const publish = section('  publish:');
   assert.match(authorize, /--json isDraft,targetCommitish/);
   assert.match(authorize, /"\$target" != "\$GITHUB_SHA"/);
-  assert.doesNotMatch(authorize, /"\$draft" != "true"/);
-  assert.match(publish, /gh release upload "\$RELEASE_TAG" release\/\* --repo "\$GITHUB_REPOSITORY" --clobber/);
+  assert.match(authorize, /"\$draft" != true/);
+  assert.match(publish, /node scripts\/ci\/reconcile-release-draft\.mjs release/);
+  assert.match(publish, /node scripts\/ci\/reconcile-immutable-uploads\.mjs/);
+  assert.match(publish, /--checksums release\/SHA256SUMS/);
+  assert.doesNotMatch(publish, /--clobber/);
+});
+
+test('SBOM attestation scans bounded locked source dependencies, not recursive binaries', () => {
+  const publish = section('  publish:');
+  const prepare = publish.indexOf('Prepare bounded source dependency inventory');
+  const generate = publish.indexOf('Generate SPDX software bill of materials');
+  const validate = publish.indexOf('Validate source dependency SBOM for attestation');
+  const attest = publish.indexOf('Attest the release SBOM');
+  assert.ok(prepare >= 0 && generate > prepare && validate > generate && attest > validate);
+  assert.match(publish, /cp package\.json pnpm-lock\.yaml release-sbom-source\//);
+  assert.match(publish, /path: \.\/release-sbom-source/);
+  assert.doesNotMatch(publish.slice(generate, validate), /^\s*path: \.$/m);
+  assert.match(publish, /sbom\.packages\.length < 100/);
+  assert.match(publish, /size >= 16 \* 1024 \* 1024/);
+  assert.match(publish, /fs\.writeFileSync\(file, compact\)/);
 });
 
 test('release packaging does not rebuild N-API native dependencies', () => {

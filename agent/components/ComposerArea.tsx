@@ -163,6 +163,16 @@ export interface ComposerAreaProps {
   onBeforeSend?: (text: string) => void;
   noBorderPadding?: boolean;
   morphTarget?: boolean;
+  /** Renders the shared composer edge-to-edge inside the Simple mode capsule. */
+  compactLayout?: boolean;
+  /** Product-specific placeholder while retaining the shared composer implementation. */
+  composerPlaceholder?: string;
+  /** Simple mode sends into a running turn as steering and names the hover choices plainly. */
+  conciseStreamingActions?: boolean;
+  /** Replaces Advanced mode's transcription control (used by Simple GPT Live). */
+  voiceButtonOverride?: React.ReactNode;
+  initialDraft?: string;
+  onDraftChange?: (text: string) => void;
 }
 
 const WIDE_BREAKPOINT = 500;
@@ -288,6 +298,12 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
   onBeforeSend,
   noBorderPadding = false,
   morphTarget = false,
+  compactLayout = false,
+  composerPlaceholder,
+  conciseStreamingActions = false,
+  voiceButtonOverride,
+  initialDraft,
+  onDraftChange,
 }: ComposerAreaProps, forwardedRef) {
   "use no memo";
 
@@ -3393,6 +3409,10 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
       );
     }
 
+    if (!isStreaming && disabled && voiceButtonOverride) {
+      return voiceButtonOverride;
+    }
+
     const isBusy = isVoiceModeStarting;
     const isActive = isVoiceModeActive;
 
@@ -3577,12 +3597,13 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
           void handleQueue();
         }}
         onInterruptAndSendImmediately={() => {
-          void handleSendImmediate();
+          void (conciseStreamingActions ? handleSteer() : handleSendImmediate());
         }}
         onStop={handleStop}
         disabled={disabled}
         showOnboardingPulse={showSendButtonPulse}
         onOnboardingPulseEnd={() => setShowSendButtonPulse(false)}
+        conciseStreamingActions={conciseStreamingActions}
       />
     );
   }, [
@@ -3591,10 +3612,12 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
     handleSteer,
     handleSendImmediate,
     handleStop,
+    conciseStreamingActions,
     isPushToTalkFinishing,
     isVoiceReactive,
     isVoiceWorking,
     isStreaming,
+    voiceButtonOverride,
     isTerminal,
     isVoiceModeActive,
     isVoiceModeStarting,
@@ -3911,9 +3934,11 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
       )}
       <BaseTiptapComposer
         ref={composerRef}
-        placeholder={isTerminal
+        placeholder={composerPlaceholder ?? (isTerminal
           ? "Send to terminal..."
-          : (marketingDemoMode ? "Pick a demo prompt above" : undefined)}
+          : (marketingDemoMode ? "Pick a demo prompt above" : undefined))}
+        initialContent={initialDraft}
+        onContentChange={onDraftChange}
         onSend={handleComposerSend}
         sendButtonLabel="Send message (Enter)"
         autoFocus={false}
@@ -3928,13 +3953,16 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
         leadingControl={voiceExitLeadingControl}
         contextContent={isVoiceModeActive ? undefined : composerContextContent}
         renderSendButton={renderSendButton}
+        onQueueShortcut={isStreaming && conciseStreamingActions ? () => { void handleQueue(); } : undefined}
         settingsContent={settingsContent}
         skillsWorkspacePath={effectiveWorkspacePath ?? null}
       />
     </div>
   );
 
-  const emptyStateComposerShell = isWide ? (
+  const emptyStateComposerShell = compactLayout ? (
+    composerInner
+  ) : isWide ? (
     <div style={{ padding: '0 var(--unit-padding-medium)' }}>
       {composerInner}
     </div>
@@ -3945,7 +3973,7 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
   );
 
   return (
-    <div ref={wrapperRef} className="mx-auto w-full max-w-[48rem]">
+    <div ref={wrapperRef} className={`mx-auto w-full ${compactLayout ? 'max-w-none' : 'max-w-[48rem]'}`}>
       {/* Queued messages display (agent mode only) */}
       {!isTerminal && showQueuedMessages && (
         <QueuedMessagesDisplay

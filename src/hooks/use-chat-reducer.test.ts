@@ -340,6 +340,7 @@ describe("applyChatEvent", () => {
         deltaEvent("Hi", "msg_1"),
       );
       assert.equal(state.draftAgentMessageId, "msg_1");
+      assert.equal(state.draft?.id, "msg_1");
     });
 
     test("should_append_a_compaction_divider_message_when_context_is_compacted", () => {
@@ -440,7 +441,18 @@ describe("applyChatEvent", () => {
       assert.equal(textContent(split.messages[0]!), "First part");
       assert.equal(msgToolCalls(split.messages[0]!).length, 1);
       assert.equal(textContent(split.draft!), "Second part");
-      assert.equal(split.draft?.id, "test-id-2");
+      assert.equal(split.draft?.id, "msg_2");
+    });
+
+    test("uses server item ids for tool and text rows so history refreshes do not duplicate them", () => {
+      let state = createInitialChatState();
+      state = apply(state, turnEvent("turn_1")).state;
+      state = apply(state, toolEvent("started", mcpItem("tool_1"))).state;
+      state = apply(state, toolEvent("completed", mcpItem("tool_1"))).state;
+      state = apply(state, deltaEvent("Finished", "msg_1")).state;
+
+      assert.equal(state.messages[0]?.id, "tool_1");
+      assert.equal(state.draft?.id, "msg_1");
     });
 
     test("should_split_when_text_arrives_after_tools_even_if_agentMessage_id_unchanged", () => {

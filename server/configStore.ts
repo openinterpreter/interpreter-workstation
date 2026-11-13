@@ -127,8 +127,18 @@ export interface AppConfig {
   backgroundOpacity?: number; // Background opacity (0-1 range)
   zoomFactor?: number; // Interface zoom factor (0.5-3 range)
   theme?: 'light' | 'dark' | 'system'; // Theme preference
+  showSimpleFeedback?: boolean; // Floating Simple feedback button (menu action remains available)
   primaryColor?: string; // Primary accent color (e.g., "blue", "purple")
   lastWorkspace?: string | null; // Last opened workspace path
+  /** The durable Simple conversation is scoped to its workspace, not an Advanced tab. */
+  simplePrimaryThreads?: Record<string, string>;
+  simpleWorkspacePath?: string; // Durable control workspace for the Simple agent
+  simpleProjectPath?: string; // Active standalone interface project
+  simpleRecentProjectPaths?: string[];
+  simpleOpenProjectPaths?: string[]; // Interface windows restored on the next launch
+  whatsappThreadBinding?: { threadId: string; accountId: string }; // One paired self-chat account to one existing thread
+  whatsappReplyReceipts?: Record<string, 'offered' | 'sent' | 'held'>; // Durable no-replay receipts for channel replies
+  whatsappOutboundMessageIds?: string[]; // Bounded sent-message IDs, suppress late Baileys history replay
   recentFolders?: RecentFolder[]; // Recent workspace folders
   detectedNoteWorkspaces?: DetectedNoteWorkspace[]; // Results from the last user-requested note workspace scan
 
@@ -168,11 +178,18 @@ export interface AppConfig {
   browserAccessPolicy?: BrowserAccessPolicy;
   // Native Computer Use app access policy
   cuaAccessPolicy?: CuaAccessPolicy;
+  /** Operator-owned exact-thread read grants for native app-server MCP elicitation. Never inferred from OIX approval policy. */
+  nativeMcpReadGrants?: Array<{ threadId: string; serverName: 'codex_apps'; toolName: 'sites.get_site' | 'sites.list_sites' }>;
+  /** Operator-owned, exact-thread grant for the no-argument Computer Use app list only. */
+  nativeCuaDiscoveryGrants?: Array<{ threadId: string; toolName: 'list_apps' }>;
+  /** Explicit operator choice: ungranted headless tool calls return a denial, never an invisible pending question. */
+  headlessToolApprovalMode?: 'fail-closed' | 'ordinary-auto';
 
   // UI settings
   showHelpPanelPreview?: boolean; // Show file preview in help panel (default: false)
   reviewMarkdownEdits?: boolean; // Show accept/reject UI when agents edit markdown files (default: true)
   launchAtLogin?: boolean; // Launch the app when user logs into the OS (default: false)
+  advancedMode?: boolean; // Explicit opt-in to the existing multi-pane Advanced experience
   whatsNewDismissed?: boolean; // Whether the "What's new" video has been dismissed
   dismissedTopNoticeVersions?: Record<string, string>; // Per-notice dismissed versions for top-of-page notices
   lastDismissedReleaseNotesVersion?: number | string; // RELEASE_NOTES_VERSION string the user last dismissed (legacy: number)
@@ -1416,6 +1433,43 @@ export function getCuaAccessPolicySync(): CuaAccessPolicy {
   );
 }
 
+export function hasNativeMcpReadGrant(threadId: string, serverName: string, toolName: string): boolean {
+  // An operator must provision each exact thread/tool in the host config. A
+  // model's native --approval-policy never is not app-tool authorization.
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId) ||
+      serverName !== 'codex_apps' ||
+      (toolName !== 'sites.get_site' && toolName !== 'sites.list_sites')) return false;
+  const grants = overrideConfig ? overrideConfig.nativeMcpReadGrants : readStoreValue('nativeMcpReadGrants');
+  return Array.isArray(grants) && grants.some((grant) =>
+    grant?.threadId === threadId && grant.serverName === serverName && grant.toolName === toolName);
+}
+
+export function hasNativeCuaDiscoveryGrant(threadId: string | undefined, toolName: string): boolean {
+  if (!threadId || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId) ||
+      toolName !== 'list_apps') return false;
+  const grants = overrideConfig ? overrideConfig.nativeCuaDiscoveryGrants : readStoreValue('nativeCuaDiscoveryGrants');
+  return Array.isArray(grants) && grants.some((grant) =>
+    grant?.threadId === threadId && grant.toolName === toolName);
+}
+
+export function failClosedOnHeadlessToolApprovalSync(): boolean {
+  const mode = overrideConfig ? overrideConfig.headlessToolApprovalMode : readStoreValue('headlessToolApprovalMode');
+  return mode === 'fail-closed' || mode === 'ordinary-auto';
+}
+
+/** Explicit operator mode, valid only with the native runtime's never policy.
+ * Deny modes in each subsystem still take precedence over this ordinary-tool choice. */
+export function autoApproveOrdinaryHeadlessToolsSync(): boolean {
+  const mode = overrideConfig ? overrideConfig.headlessToolApprovalMode : readStoreValue('headlessToolApprovalMode');
+  return mode === 'ordinary-auto' && getCodexApprovalPolicySync() === 'never';
+}
+
+/** Static, audited read classification; never classify arbitrary MCP servers,
+ * provider gateways, Site creation, uploads, or writes as ordinary. */
+export function isOrdinaryHeadlessMcpRead(serverName: string, toolName: string): boolean {
+  return serverName === 'codex_apps' && (toolName === 'sites.get_site' || toolName === 'sites.list_sites');
+}
+
 export async function setCuaAccessPolicy(policy: CuaAccessPolicy): Promise<CuaAccessPolicy> {
   const config = await loadConfig();
   const normalizedPolicy = normalizeCuaAccessPolicy(policy);
@@ -2026,6 +2080,44 @@ export async function setSttSettings(settings: SttSettings): Promise<void> {
 }
 
 // Last Workspace Functions
+
+export async function getSimpleWorkspaceSetting(): Promise<string | null> {
+  const config = await loadConfig();
+  return config.simpleWorkspacePath ?? null;
+}
+
+export async function setSimpleWorkspaceSetting(workspacePath: string): Promise<void> {
+  const config = await loadConfig();
+  config.simpleWorkspacePath = workspacePath;
+  await saveConfig(config);
+}
+
+export async function getSimpleProjectSetting(): Promise<{ activePath: string | null; recentPaths: string[] }> {
+  const config = await loadConfig();
+  return {
+    activePath: config.simpleProjectPath ?? null,
+    recentPaths: config.simpleRecentProjectPaths ?? [],
+  };
+}
+
+export async function setSimpleProjectSetting(projectPath: string, options?: { activate?: boolean }): Promise<void> {
+  const config = await loadConfig();
+  const recent = [projectPath, ...(config.simpleRecentProjectPaths ?? []).filter((path) => path !== projectPath)].slice(0, 20);
+  if (options?.activate !== false) config.simpleProjectPath = projectPath;
+  config.simpleRecentProjectPaths = recent;
+  await saveConfig(config);
+}
+
+export async function getSimpleOpenProjectPaths(): Promise<string[]> {
+  const config = await loadConfig();
+  return Array.from(new Set(config.simpleOpenProjectPaths ?? []));
+}
+
+export async function setSimpleOpenProjectPaths(projectPaths: string[]): Promise<void> {
+  const config = await loadConfig();
+  config.simpleOpenProjectPaths = Array.from(new Set(projectPaths));
+  await saveConfig(config);
+}
 
 /**
  * Get the last opened workspace path

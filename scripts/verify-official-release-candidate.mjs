@@ -5,10 +5,13 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { macUnpackedDirectory } from './ci/mac-unpacked-directory.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const distRoot = path.join(root, 'dist');
-const appBundle = path.join(distRoot, 'mac-arm64', 'Interpreter.app');
+const archArg = process.argv.slice(2).find((arg) => arg.startsWith('--arch='));
+const arch = archArg?.slice('--arch='.length) ?? 'arm64';
+const appBundle = path.join(distRoot, macUnpackedDirectory(arch), 'Interpreter.app');
 const resources = path.join(appBundle, 'Contents', 'Resources');
 const appAsar = path.join(resources, 'app.asar');
 const infoPlist = path.join(appBundle, 'Contents', 'Info.plist');
@@ -47,9 +50,11 @@ for (const relativePath of [
   'licenses/sharp-libvips-v1.2.4-THIRD-PARTY-NOTICES.md',
   'licenses/sharp-libvips-v1.3.2-THIRD-PARTY-NOTICES.md',
   'licenses/sharp-libvips-v1.3.3-THIRD-PARTY-NOTICES.md',
+  'licenses/sharp-libvips-v1.3.4-THIRD-PARTY-NOTICES.md',
   'licenses/release-policy.json',
   'licenses/LGPL-3.0.txt',
   'licenses/GPL-3.0.txt',
+  'licenses/MPL-1.1.txt',
   'oix/bin/interpreter',
   'oix/bin/i',
   'cua-driver/cua-driver',

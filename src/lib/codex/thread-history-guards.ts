@@ -11,15 +11,20 @@ function hasString(value: Record<string, unknown>, key: string): boolean {
 function isThreadItemType(value: unknown): value is v2.ThreadItem["type"] {
   return (
     value === "userMessage" ||
+    value === "hookPrompt" ||
     value === "agentMessage" ||
     value === "reasoning" ||
     value === "plan" ||
     value === "commandExecution" ||
     value === "fileChange" ||
     value === "mcpToolCall" ||
+    value === "dynamicToolCall" ||
     value === "collabAgentToolCall" ||
+    value === "subAgentActivity" ||
     value === "webSearch" ||
     value === "imageView" ||
+    value === "sleep" ||
+    value === "imageGeneration" ||
     value === "enteredReviewMode" ||
     value === "exitedReviewMode" ||
     value === "contextCompaction"

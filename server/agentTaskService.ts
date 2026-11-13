@@ -15,6 +15,7 @@ import {
 } from './utils/interpreterCliRuntime';
 import { buildGroqProxyBaseUrl, routeGroqProfileThroughProxy } from './utils/groqResponsesProxy';
 import { getServerPort } from './utils/serverPort';
+import { revokeOtherNativeCallerBindingsForThread } from './utils/persistedCallerBinding';
 import { IPC_CHANNELS } from '../electron/ipc/registry';
 import type { AgentModelConfig } from '../shared/types/model';
 import type { AgentPermissionOwnerReference } from '../shared/types/approval';
@@ -40,6 +41,7 @@ export interface StartAgentTaskOptions {
   modelConfig?: AgentModelConfig;
   workspace?: string;
   threadId?: string;
+  clientUserMessageId?: string;
   activate?: boolean;
   targetWindowSessionKey?: string;
   allowedToolNames?: string[];
@@ -139,6 +141,15 @@ export async function resumeAgentTaskThread(
     resolveCodexProfileFromModelConfig(modelConfig),
     buildGroqProxyBaseUrl(getServerPort()),
   );
+  // A loaded native thread keeps its original shell environment. A newly
+  // minted caller here would be registered in Workstation but absent from the
+  // native shell; a failed resume would also leave that false binding behind.
+  const binding = agentTabManager.getBindingForThread(options.threadId);
+  if (!binding || binding.workspacePath !== workspace ||
+      (binding.modelConfig && (binding.modelConfig.provider !== modelConfig.provider ||
+        binding.modelConfig.modelId !== modelConfig.modelId))) {
+    throw new Error('Existing thread caller is unavailable or its owner scope differs; use guarded cold bind only when eligible');
+  }
   const service = getCodexService();
   await ensureOpenAIOAuthAccountReady(
     service,
@@ -148,24 +159,6 @@ export async function resumeAgentTaskThread(
   // as Goal. Provision the provider in OIX first so those later turns retain
   // environment-backed auth after the request-scoped resume overrides are gone.
   await service.ensureProvider(profile, true);
-  const callerToken = `agtok_${nanoid()}`;
-  const agentId = `resumed-${nanoid()}`;
-  const shellEnvironmentPolicy = buildInterpreterCliShellEnvironmentPolicy(
-    callerToken,
-    process.env,
-    process.platform,
-    workspace,
-    buildInterpreterCliServerConnection(getServerPort(), {
-      transport: resolveAgentInterpreterCliTransport(process.platform),
-    }),
-  );
-  agentTabManager.bindThread({
-    agentId,
-    callerToken,
-    threadId: options.threadId,
-    workspacePath: workspace,
-    modelConfig,
-  });
   const threadId = await service.resumeThread({
     threadId: options.threadId,
     model: modelConfig.modelId,
@@ -176,15 +169,59 @@ export async function resumeAgentTaskThread(
       ...(modelConfig.reasoningEffort
         ? { model_reasoning_effort: modelConfig.reasoningEffort }
         : {}),
-      // A resumed thread may immediately continue an active native Goal without
-      // another Workstation request. Reapply the model-facing app-tool bridge
-      // here so those autonomous turns retain interpreter-app and js_repl.
+      // Preserve the verified original native caller and bridge on loaded
+      // Goal continuations; changing shell keys is not a supported resume.
       mcp_servers: {},
-      shell_environment_policy: shellEnvironmentPolicy,
     },
   });
 
   return { threadId };
+}
+
+/** Operator-only cold rebind: no input, model change, token export or loaded-shell mutation. */
+export async function coldBindAgentTaskThread(options: { threadId: string; workspace: string }) {
+  const workspace = normalizeHeadlessTaskWorkspace(options.workspace);
+  if (!workspace) throw new Error(HEADLESS_TASK_WORKSPACE_ERROR);
+  const service = getCodexService();
+  const thread = await service.readThread(options.threadId);
+  const custody = await service.readNativeCustody(options.threadId);
+  const global = await service.readGlobalNativeCustody();
+  if (thread.id !== options.threadId || thread.cwd !== workspace ||
+      !['idle', 'notLoaded'].includes(custody.status) || custody.queuedSubmissionCount !== 0 ||
+      global.queuedSubmissionCount !== 0 || global.loadedThreadIds.includes(options.threadId) ||
+      !global.threads.some(row => row.threadId === options.threadId)) {
+    throw new Error('Cold caller bind requires the exact unloaded idle thread, workspace and empty native queues');
+  }
+  const oldBinding = agentTabManager.getBindingForThread(options.threadId);
+  if (oldBinding && (oldBinding.workspacePath !== workspace || oldBinding.windowSessionKey ||
+      oldBinding.parentOwner || oldBinding.allowedToolNames?.length || oldBinding.toolProfileId)) {
+    throw new Error('Existing caller owner or tool scope differs');
+  }
+  const callerToken = `agtok_${nanoid()}`;
+  // Inventory the private on-disk scopes before native resume; a process
+  // restart must not turn a previously restricted caller into an open one.
+  revokeOtherNativeCallerBindingsForThread(options.threadId, callerToken, undefined, true);
+  const agentId = `cold-${nanoid()}`;
+  const policy = buildInterpreterCliShellEnvironmentPolicy(
+    callerToken, process.env, process.platform, workspace,
+    buildInterpreterCliServerConnection(getServerPort(), {
+      transport: resolveAgentInterpreterCliTransport(process.platform),
+    }),
+  );
+  // Register before native resume so autonomous native turns cannot race the
+  // caller binding. If resume rejects, restore the prior exact owner.
+  agentTabManager.bindThread({ agentId, callerToken, threadId: options.threadId, workspacePath: workspace });
+  try {
+    await service.resumeThread({ threadId: options.threadId, model: null, cwd: workspace,
+      config: { mcp_servers: {}, shell_environment_policy: policy }, coldShellPolicy: true });
+  } catch (error) {
+    agentTabManager.disposeBinding(callerToken);
+    if (oldBinding) agentTabManager.bindThread({ ...oldBinding, threadId: options.threadId });
+    throw error;
+  }
+  if (oldBinding) agentTabManager.disposeBinding(oldBinding.callerToken);
+  const revokedPriorBindings = revokeOtherNativeCallerBindingsForThread(options.threadId, callerToken);
+  return { threadId: options.threadId, carrier: 'cold-bound' as const, revokedPriorBindings };
 }
 
 /** Preserve the source thread and continue its native OIX state from a completed turn. */
@@ -275,6 +312,7 @@ async function startHeadlessAgentTask(
     allowedToolNames: options.allowedToolNames,
     parentOwner: options.parentOwner,
     threadId: options.threadId,
+    clientUserMessageId: options.clientUserMessageId,
     retainThreadCaller: true,
     onEvent: (event) => {
       if (event.kind === 'thread') {

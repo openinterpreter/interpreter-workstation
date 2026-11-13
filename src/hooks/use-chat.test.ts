@@ -120,6 +120,27 @@ describe("mergeChatHistory", () => {
     assert.equal(merged[0]?.parts[0]?.kind, "text");
     assert.equal((merged[0]?.parts[0] as { content: string }).content, "complete");
   });
+
+  test("removes duplicate live rows once newer history confirms one copy", () => {
+    const confirmed: ChatMessage = {
+      id: "server-assistant",
+      role: "assistant",
+      parts: [{ kind: "text", content: "Done" }],
+    };
+    const duplicateLive: ChatMessage = {
+      id: "local-assistant",
+      role: "assistant",
+      parts: [{ kind: "text", content: "Done" }],
+    };
+
+    const merged = mergeChatHistory(
+      [duplicateLive, confirmed],
+      [confirmed],
+      "newer",
+    );
+
+    assert.deepEqual(merged.map((entry) => entry.id), ["server-assistant"]);
+  });
 });
 
 function reasoning(id: string, state: ToolCallInfo["state"]): ToolCallInfo {

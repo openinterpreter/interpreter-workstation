@@ -26,10 +26,10 @@ export default defineConfig({
     clearMocks: true,
     restoreMocks: true,
     mockReset: true,
-    // Unbounded worker fan-out made interaction-heavy UI tests miss their
-    // five-second deadlines on otherwise healthy code and multiplied the
-    // child-process load from server tests.
-    maxWorkers: 4,
+    // The retained two-core test runner cannot run four jsdom workers at once
+    // without starving interaction-heavy tests. Bound parallelism to cores
+    // rather than increasing individual test deadlines.
+    maxWorkers: 2,
     minWorkers: 1,
     // Cold dependency transforms on CI can legitimately push interaction-heavy
     // renderer tests beyond Vitest's five-second default without indicating a

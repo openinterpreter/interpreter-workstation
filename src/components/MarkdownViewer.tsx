@@ -119,12 +119,18 @@ export function MarkdownViewer({ filePath }: MarkdownViewerProps) {
 
   // Refs
   const saveTimeoutRef = useRef<number | null>(null);
+  const pendingRawContentRef = useRef<string | null>(null);
   const loadingTimerRef = useRef<number | null>(null);
   const refreshTimerRef = useRef<number | null>(null);
   const refreshRequestRef = useRef(0);
   const editorRef = useRef<TipTapViewerRef>(null);
   const lastSavedContentRef = useRef<string>('');
   const saveInFlightRef = useRef(false);
+  const queuedSaveRef = useRef<{
+    markdownContent: string;
+    trackEdit?: boolean;
+    persist: (markdownContent: string, options?: { trackEdit?: boolean }) => Promise<void>;
+  } | null>(null);
   const hasTrackedEditRef = useRef(false);
   const persistMarkdownRef = useRef<
     ((markdownContent: string, options?: { trackEdit?: boolean }) => Promise<void>) | null
@@ -192,15 +198,12 @@ export function MarkdownViewer({ filePath }: MarkdownViewerProps) {
     options?: { trackEdit?: boolean },
   ) => {
     if (saveInFlightRef.current) {
-      if (saveTimeoutRef.current !== null) {
-        clearTimeout(saveTimeoutRef.current);
+      // A pending save must survive a viewer remount, which clears debounce
+      // timers. Keep the latest write queued until the in-flight write settles.
+      const persist = persistMarkdownRef.current;
+      if (persist) {
+        queuedSaveRef.current = { markdownContent, trackEdit: options?.trackEdit, persist };
       }
-      saveTimeoutRef.current = window.setTimeout(() => {
-        const nextPersistMarkdown = persistMarkdownRef.current;
-        if (nextPersistMarkdown) {
-          void nextPersistMarkdown(markdownContent, options);
-        }
-      }, SAVE_DEBOUNCE_MS);
       return;
     }
 
@@ -225,6 +228,11 @@ export function MarkdownViewer({ filePath }: MarkdownViewerProps) {
     }
 
     saveInFlightRef.current = false;
+    const queued = queuedSaveRef.current;
+    queuedSaveRef.current = null;
+    if (queued) {
+      void queued.persist(queued.markdownContent, { trackEdit: queued.trackEdit });
+    }
   }, [filePath]);
 
   useEffect(() => {
@@ -411,11 +419,18 @@ export function MarkdownViewer({ filePath }: MarkdownViewerProps) {
       if (saveTimeoutRef.current !== null) {
         clearTimeout(saveTimeoutRef.current);
       }
+      // Live project reloads may unmount an editor before its debounce fires.
+      // Complete the user's latest raw edit even if React removes the viewer.
+      const pendingRawContent = pendingRawContentRef.current;
+      pendingRawContentRef.current = null;
+      if (pendingRawContent !== null) {
+        void persistMarkdown(pendingRawContent, { trackEdit: true });
+      }
       if (refreshTimerRef.current !== null) {
         clearTimeout(refreshTimerRef.current);
       }
     };
-  }, []);
+  }, [persistMarkdown]);
 
   // Save content to disk
   const saveContent = useCallback(async () => {
@@ -444,20 +459,30 @@ export function MarkdownViewer({ filePath }: MarkdownViewerProps) {
     setViewMode(newMode);
   }, [applyMarkdownDocument, rawContent, serializeEditorMarkdown, viewMode]);
 
+  const flushPendingRawContent = useCallback(() => {
+    const pendingRawContent = pendingRawContentRef.current;
+    if (pendingRawContent === null) return;
+    pendingRawContentRef.current = null;
+    if (saveTimeoutRef.current !== null) {
+      clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
+    }
+    void persistMarkdown(pendingRawContent, { trackEdit: true });
+  }, [persistMarkdown]);
+
   // Handle raw content changes
   const handleRawChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newContent = e.target.value;
     setRawContent(newContent);
     setSaveStatus('unsaved');
+    pendingRawContentRef.current = newContent;
 
     if (saveTimeoutRef.current !== null) {
       clearTimeout(saveTimeoutRef.current);
     }
 
-    saveTimeoutRef.current = window.setTimeout(async () => {
-      await persistMarkdown(newContent, { trackEdit: true });
-    }, SAVE_DEBOUNCE_MS);
-  }, [persistMarkdown]);
+    saveTimeoutRef.current = window.setTimeout(flushPendingRawContent, SAVE_DEBOUNCE_MS);
+  }, [flushPendingRawContent]);
 
   const handleFrontmatterChange = useCallback((key: string, value: unknown) => {
     setFrontmatter((current) => {
@@ -1498,6 +1523,7 @@ export function MarkdownViewer({ filePath }: MarkdownViewerProps) {
             ref={rawTextareaRef}
             value={rawContent}
             onChange={handleRawChange}
+            onBlur={flushPendingRawContent}
             onContextMenu={handleContextMenu}
             className="h-full w-full resize-none bg-transparent p-4 font-mono text-ui-sm text-foreground outline-none"
             placeholder={t('markdown.placeholder')}

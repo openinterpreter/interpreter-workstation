@@ -3,13 +3,34 @@ import { describe, expect, test } from 'bun:test';
 import { applyChatEvent, createInitialChatState } from '../../src/hooks/use-chat-reducer';
 import {
   createAgentStreamErrorPayload,
+  getAgentServiceTierConfig,
   getProgrammaticTaskHttpError,
+  getProgrammaticClientIdError,
+  getUnacknowledgedTaskError,
   parseProgrammaticTaskBody,
   resolveTestModelRuntime,
   toProgrammaticTaskProgressSseEvents,
 } from './agent';
 
+describe('Simple mode service tier', () => {
+  test('uses the actual OpenAI fast tier only for the Simple primary agent', () => {
+    expect(getAgentServiceTierConfig('simple-primary-agent')).toEqual({
+      service_tier: 'fast',
+    });
+    expect(getAgentServiceTierConfig('advanced-agent')).toBeUndefined();
+  });
+});
+
 describe('programmatic task HTTP transport', () => {
+  test('accepts an exact optional native client ID and rejects malformed values before admission', () => {
+    expect(parseProgrammaticTaskBody({ message: 'task', clientUserMessageId: 'origin_01' }).clientUserMessageId)
+      .toBe('origin_01');
+    expect(getProgrammaticClientIdError(undefined)).toBe(false);
+    expect(getProgrammaticClientIdError('origin_01')).toBe(false);
+    for (const invalid of ['', 'a b', '../bad', 'x'.repeat(161), 1, null]) {
+      expect(getProgrammaticClientIdError(invalid)).toBe(true);
+    }
+  });
   test('keeps whole-task and turn-idle timeouts separate', () => {
     const parsed = parseProgrammaticTaskBody({
       message: 'Keep going.',
@@ -71,6 +92,26 @@ describe('programmatic task HTTP transport', () => {
 });
 
 describe('programmatic task SSE progress mapping', () => {
+  test('reports a terminal pre-ack failure instead of an unexplained no-ack', () => {
+    const failed = {
+      mode: 'headless' as const,
+      completed: false,
+      timestamp: '2026-10-31T00:00:00Z',
+      messageCount: 0,
+      messages: [],
+      error: 'Existing thread could not resume',
+    };
+    expect(getUnacknowledgedTaskError(failed, false)).toEqual({
+      code: 'turn_not_acknowledged',
+      message: 'Existing thread could not resume',
+    });
+    expect(getUnacknowledgedTaskError(failed, true)).toBeNull();
+    expect(getUnacknowledgedTaskError({ ...failed, error: undefined }, false)).toEqual({
+      code: 'turn_not_acknowledged',
+      message: 'Agent task ended without a native turn acknowledgement.',
+    });
+  });
+
   test('maps thread and turn progress to stable SSE events', () => {
     expect(
       toProgrammaticTaskProgressSseEvents({

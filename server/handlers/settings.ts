@@ -263,7 +263,7 @@ export async function setAutoContinuationLimit(limit: number): Promise<{ success
 // Boolean UI Settings (generic)
 // ============================================================================
 
-const BOOLEAN_SETTING_SIDE_EFFECTS: Partial<Record<BooleanUISettingId, (enabled: boolean) => void>> = {
+const BOOLEAN_SETTING_SIDE_EFFECTS: Partial<Record<BooleanUISettingId, (enabled: boolean) => void | Promise<void>>> = {
   launchAtLogin: (_enabled) => {
     if (!process.versions.electron) return;
     const { app } = getElectronModule();
@@ -272,6 +272,11 @@ const BOOLEAN_SETTING_SIDE_EFFECTS: Partial<Record<BooleanUISettingId, (enabled:
       openAtLogin: launchAtLogin,
       openAsHidden: launchAtLogin,
     });
+  },
+  advancedMode: async () => {
+    if (!process.versions.electron) return;
+    const { buildApplicationMenu } = await import('../../electron/menu');
+    await buildApplicationMenu();
   },
 };
 
@@ -282,7 +287,7 @@ export async function getBooleanUISetting(id: BooleanUISettingId): Promise<{ ena
 
 export async function setBooleanUISetting(id: BooleanUISettingId, enabled: boolean): Promise<{ success: boolean }> {
   await configStore.setBooleanUISetting(id, enabled);
-  BOOLEAN_SETTING_SIDE_EFFECTS[id]?.(enabled);
+  await BOOLEAN_SETTING_SIDE_EFFECTS[id]?.(enabled);
   emitBooleanUISettingChanged({ id, enabled });
   broadcastEvent(booleanSettingChannels(id).changed, { enabled });
   return { success: true };

@@ -124,7 +124,11 @@ function isElectronRuntime(): boolean {
   return typeof window !== 'undefined' && !!window.electron;
 }
 
-const isElectron = isElectronRuntime();
+// A paired Workstation window is an Electron window only as a shell. Its data,
+// events, and workspace operations belong to the selected remote computer, so
+// it must use the HTTP/SSE client rather than silently falling back to this
+// Mac's preload IPC namespaces.
+const isElectron = isElectronRuntime() && !isRemoteWorkstationHost();
 const ELECTRON_APP_SERVER_HOST = '127.0.0.1';
 const NOOP_UNSUBSCRIBE = () => {};
 
@@ -699,6 +703,23 @@ export const agentThreads: AgentThreadsIpc = isMarketingDemoMode()
   : isElectron
     ? window.electron.agentThreads
     : disabledAgentThreadsIpc;
+export const simplePrimaryThread: {
+  get: () => Promise<{ threadId: string | null }>;
+  bind: (request: { threadId: string; expectedThreadId?: string | null }) => Promise<{ threadId: string }>;
+  clear: (request: { expectedThreadId: string }) => Promise<{ threadId: null }>;
+  onOverlaySubmit: (callback: (event: { text: string; interfacePath?: string }) => void) => () => void;
+} = client.simplePrimaryThread;
+export const simpleComposerState: {
+  get: () => Promise<{ draft: string }>;
+  set: (state: { draft: string }) => Promise<{ success: boolean }>;
+  onChanged: (callback: (state: { draft: string }) => void) => () => void;
+} = client.simpleComposerState;
+export const simpleLive: {
+  status: () => Promise<{ configured: boolean; source: 'profile' | 'environment' | 'secure' | 'none' }>;
+  configure?: (request: { apiKey: string }) => Promise<{ configured: true; source: 'secure' }>;
+  clearCredential?: () => Promise<{ configured: boolean; source: 'profile' | 'environment' | 'secure' | 'none' }>;
+  createSession: (request: { offerSdp: string }) => Promise<{ answerSdp: string; sessionId: string }>;
+} = client.simpleLive;
 export const workspace = isRemoteWorkstationMode()
   ? remoteWorkstationWorkspaceIpc
   : isMarketingDemoMode() ? marketingDemoWorkspaceIpc : client.workspace;
@@ -796,6 +817,7 @@ export const appToasts = client.appToasts;
 export const programmaticTasks = isMarketingDemoMode()
   ? marketingDemoProgrammaticTasksIpc
   : client.programmaticTasks;
+export const simpleInterfaceAgents = client.simpleInterfaceAgents;
 export const userName = isMarketingDemoMode() ? marketingDemoUserNameIpc : client.userName;
 export const whatsNew = client.whatsNew;
 export const topNotices = isMarketingDemoMode() ? marketingDemoTopNoticesIpc : client.topNotices;

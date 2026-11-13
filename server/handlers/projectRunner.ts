@@ -1,4 +1,4 @@
-import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -8,6 +8,7 @@ import { broadcastEvent } from './broadcast';
 import { resolvePathWithWorkspace } from '../utils/permissions';
 import { detectRunnableProject } from '../utils/runnableProjects';
 import { getCurrentWorkspace } from '../utils/workspace';
+import { getBundledPnpmCommand } from '../utils/bundledPackageManager';
 import type {
   ProjectRunnerState,
   RunnableProjectRunScript,
@@ -76,18 +77,14 @@ function getRuntimeError(runtime: ProjectRuntime): string {
 
 function getPnpmSpawnOptions(
   runScript: RunnableProjectRunScript,
-  platform: NodeJS.Platform = process.platform,
-): { command: string; args: string[]; shell: boolean } {
-  return {
-    command: 'pnpm',
-    args: ['run', runScript],
-    shell: platform === 'win32',
-  };
+  _platform: NodeJS.Platform = process.platform,
+): { command: string; args: string[]; shell: false; env: NodeJS.ProcessEnv } {
+  return getBundledPnpmCommand(['run', runScript]);
 }
 
 function formatSpawnError(error: NodeJS.ErrnoException): string {
   if (error.code === 'ENOENT' || error.code === 'EINVAL') {
-    return 'Could not start the project because pnpm could not be launched.';
+    return 'Could not start the project because Workstation\'s bundled project runtime could not be launched.';
   }
 
   return error.message || String(error);
@@ -133,9 +130,31 @@ function getBroadcastScope(): BroadcastScope | undefined {
   return { workspacePath };
 }
 
+function runtimeSessionProcessIds(leaderPid: number): number[] {
+  try {
+    // pnpm may start `run` scripts in a *new process group* within the
+    // detached runner's session. Killing only -leaderPid leaves that group
+    // (and the web server) alive. Enumerate the exact session while its
+    // leader still exists; do not sweep by command name or project path.
+    const rows = execFileSync('ps', ['-eo', 'pid=,sess='], {
+      encoding: 'utf8', timeout: 2_000, maxBuffer: 8 * 1024 * 1024,
+    });
+    const ids = rows.split('\n').flatMap((row) => {
+      const match = /^\s*(\d+)\s+(\d+)\s*$/.exec(row);
+      return match && Number(match[2]) === leaderPid ? [Number(match[1])] : [];
+    });
+    return ids.includes(leaderPid) ? ids : [];
+  } catch {
+    return [];
+  }
+}
+
 function killRuntimeChild(runtime: ProjectRuntime, signal: NodeJS.Signals): void {
   const pid = runtime.child.pid;
   if (pid && process.platform !== 'win32') {
+    for (const member of runtimeSessionProcessIds(pid).filter((id) => id !== pid)) {
+      try { process.kill(member, signal); } catch { /* Already exited. */ }
+    }
     try {
       process.kill(-pid, signal);
       return;
@@ -234,9 +253,9 @@ async function terminateRuntime(runtime: ProjectRuntime): Promise<boolean> {
   return await waitForChildExit(runtime.child, PROJECT_KILL_TIMEOUT_MS);
 }
 
-async function waitForProject(runtime: ProjectRuntime): Promise<boolean> {
+async function waitForProject(runtime: ProjectRuntime, startupTimeoutMs: number): Promise<boolean> {
   const start = Date.now();
-  while (Date.now() - start < PROJECT_STARTUP_TIMEOUT_MS) {
+  while (Date.now() - start < startupTimeoutMs) {
     if (runtime.finalized || runtime.spawnError) {
       return false;
     }
@@ -293,6 +312,12 @@ export async function getProjectStatus(
 ): Promise<{ success: boolean; state: ProjectRunnerState }> {
   const workspace = getCurrentWorkspace();
   const resolvedPath = normalizeProjectKey(resolvePathWithWorkspace(projectPath, workspace));
+  return getProjectStatusAtResolvedPath(resolvedPath);
+}
+
+async function getProjectStatusAtResolvedPath(
+  resolvedPath: string,
+): Promise<{ success: boolean; state: ProjectRunnerState }> {
   const runtime = runtimes.get(resolvedPath);
 
   if (!runtime || runtime.finalized) {
@@ -311,11 +336,17 @@ export async function getProjectStatus(
 export async function startProject(
   projectPath: string,
 ): Promise<{ success: boolean; state: ProjectRunnerState; error?: string }> {
-  registerCleanup();
-
   const workspace = getCurrentWorkspace();
   const resolvedPath = resolvePathWithWorkspace(projectPath, workspace);
-  const normalizedPath = normalizeProjectKey(resolvedPath);
+  return startProjectAtResolvedPath(normalizeProjectKey(resolvedPath));
+}
+
+async function startProjectAtResolvedPath(
+  normalizedPath: string,
+  envOverrides: NodeJS.ProcessEnv = {},
+  startupTimeoutMs = PROJECT_STARTUP_TIMEOUT_MS,
+): Promise<{ success: boolean; state: ProjectRunnerState; error?: string }> {
+  registerCleanup();
 
   const existingRuntime = runtimes.get(normalizedPath);
   if (existingRuntime && !existingRuntime.finalized) {
@@ -354,10 +385,11 @@ export async function startProject(
   const child = spawn(pnpmSpawn.command, pnpmSpawn.args, {
     cwd: runnableProject.projectPath,
     env: {
-      ...process.env,
+      ...pnpmSpawn.env,
       PORT: String(port),
       HOST: '127.0.0.1',
       BROWSER: 'none',
+      ...envOverrides,
     },
     stdio: 'pipe',
     detached: process.platform !== 'win32',
@@ -405,7 +437,7 @@ export async function startProject(
   emitProjectRunnerChanged(toProjectRunnerState(runtime), broadcastScope);
 
   runtime.startupPromise = (async () => {
-    const ready = await waitForProject(runtime);
+    const ready = await waitForProject(runtime, startupTimeoutMs);
     if (!ready) {
       throw new Error(getRuntimeError(runtime));
     }
@@ -454,6 +486,12 @@ export async function stopProject(
 ): Promise<{ success: boolean; state: ProjectRunnerState; error?: string }> {
   const workspace = getCurrentWorkspace();
   const resolvedPath = normalizeProjectKey(resolvePathWithWorkspace(projectPath, workspace));
+  return stopProjectAtResolvedPath(resolvedPath);
+}
+
+async function stopProjectAtResolvedPath(
+  resolvedPath: string,
+): Promise<{ success: boolean; state: ProjectRunnerState; error?: string }> {
   const runtime = runtimes.get(resolvedPath);
 
   if (!runtime || runtime.finalized) {
@@ -484,3 +522,13 @@ export async function stopProject(
     state: stoppedState,
   };
 }
+
+/** Internal-only entry points for a Simple project already validated by
+ * simpleProjects.ts. Public IPC callers still pass through workspace checks.
+ */
+export const trustedProjectRunner = {
+  status: (projectPath: string) => getProjectStatusAtResolvedPath(normalizeProjectKey(projectPath)),
+  start: (projectPath: string, env?: NodeJS.ProcessEnv, startupTimeoutMs?: number) =>
+    startProjectAtResolvedPath(normalizeProjectKey(projectPath), env, startupTimeoutMs),
+  stop: (projectPath: string) => stopProjectAtResolvedPath(normalizeProjectKey(projectPath)),
+};

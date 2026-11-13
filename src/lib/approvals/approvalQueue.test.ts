@@ -5,6 +5,7 @@ import {
   buildApprovalQueueGroups,
   buildApprovalQueueItems,
   filterApprovalQueueItems,
+  filterWindowCliApprovals,
   resolveApprovalOwnerAgentId,
 } from './approvalQueue';
 
@@ -68,6 +69,18 @@ function makeAgentTab(overrides: Partial<Tab> & { codexThreadId?: string } = {})
 }
 
 describe('approvalQueue', () => {
+  test('only exposes unbound CLI approvals to the captured window', () => {
+    const items = buildApprovalQueueItems([
+      makeApproval({ id: 'owned', owner: makeOwner({ approvalOwnerKind: 'cli', identity: { agentId: null, windowSessionKey: 'window-1' } }) }),
+      makeApproval({ id: 'other-window', owner: makeOwner({ approvalOwnerKind: 'cli', identity: { agentId: null, windowSessionKey: 'window-2' } }) }),
+      makeApproval({ id: 'unbound', owner: makeOwner({ approvalOwnerKind: 'cli', identity: { agentId: null, windowSessionKey: null } }) }),
+      makeApproval({ id: 'other-agent', owner: makeOwner({ identity: { agentId: 'agent-tab-1', windowSessionKey: 'window-1' } }) }),
+      makeApproval({ id: 'other-thread', owner: makeOwner({ approvalOwnerKind: 'cli', identity: { agentId: null, threadId: 'thread-1', windowSessionKey: 'window-1' } }) }),
+    ], {});
+    expect(filterWindowCliApprovals(items, 'window-1').map((item) => item.approval.id)).toEqual(['owned']);
+    expect(filterWindowCliApprovals(items, 'window-2').map((item) => item.approval.id)).toEqual(['other-window']);
+    expect(filterWindowCliApprovals(items, null)).toEqual([]);
+  });
   test('uses approval owner snapshots as the shared queue owner metadata', () => {
     const owner = makeOwner({
       approvalOwnerKind: 'overlay-agent',
@@ -103,6 +116,16 @@ describe('approvalQueue', () => {
 
     expect(filterApprovalQueueItems(items, 'agent-tab-1').map((item) => item.approval.id)).toEqual(['a1']);
     expect(filterApprovalQueueItems(items).map((item) => item.approval.id)).toEqual(['a1', 'a2']);
+  });
+
+  test('filters Simple drawer approvals by durable thread rather than a layout tab', () => {
+    const items = buildApprovalQueueItems([
+      makeApproval({ id: 'simple-one', owner: makeOwner({ identity: { agentId: null, threadId: 'simple-thread', windowSessionKey: 'simple-window' } }) }),
+      makeApproval({ id: 'other-window', owner: makeOwner({ identity: { agentId: null, threadId: 'other-thread', windowSessionKey: 'other-window' } }) }),
+      makeApproval({ id: 'simple-two', owner: makeOwner({ identity: { agentId: null, threadId: 'simple-thread', windowSessionKey: 'simple-window' } }) }),
+    ], {});
+    expect(filterApprovalQueueItems(items, undefined, 'simple-thread').map((item) => item.approval.id))
+      .toEqual(['simple-one', 'simple-two']);
   });
 
   test('groups non-tab overlay and hidden-agent approvals without dropping them', () => {

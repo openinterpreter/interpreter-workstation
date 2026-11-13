@@ -20,6 +20,7 @@ describe('topNotices', () => {
     const { notices } = await listTopNotices();
 
     expect(notices).toEqual([
+      expect.objectContaining({ id: 'simple-whats-new', version: '2026-10-simple-first-run' }),
       expect.objectContaining({
         id: 'whats-new',
         kind: 'release',
@@ -27,7 +28,7 @@ describe('topNotices', () => {
         youtubeVideoId: undefined,
       }),
     ]);
-    expect(notices[0]?.items.map((item) => item.id)).toEqual([
+    expect(notices[1]?.items.map((item) => item.id)).toEqual([
       'shortcut',
       'documents',
       'desktop',
@@ -43,7 +44,7 @@ describe('topNotices', () => {
     expect(config.dismissedTopNoticeVersions?.['whats-new']).toBe('2026-06-22-main-window-start');
 
     const afterDismiss = await listTopNotices();
-    expect(afterDismiss.notices).toEqual([]);
+    expect(afterDismiss.notices.map((notice) => notice.id)).toEqual(['simple-whats-new']);
   });
 
   test('uses translation keys that exist in the English locale', async () => {

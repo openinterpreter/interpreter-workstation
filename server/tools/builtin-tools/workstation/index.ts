@@ -13,6 +13,11 @@ import { getSelectionTool } from './getSelectionTool';
 import { closeTabTool } from './closeTabTool';
 import { refreshFileTool } from './refreshFileTool';
 import { wakeScheduleTool } from './wakeScheduleTool';
+import { goalResumeTool, goalRevisionTool } from './goalRevisionTool';
+import { goalDocumentCreateTool, goalDocumentReadTool, goalDocumentUpdateTool } from './goalDocumentTool';
+import { nativeTerminalListTool, nativeTerminalStatusTool } from './nativeTerminalStatusTool';
+import { currentTaskTool } from './currentTaskTool';
+import { threadArtifactCreateTool, threadArtifactReadTool } from './threadArtifactTool';
 import { settingsGetTool } from './settingsGetTool';
 import { settingsSetTool } from './settingsSetTool';
 import { usageGetTool } from './usageGetTool';
@@ -31,6 +36,7 @@ import { browserPageTypeTool } from './browserPageTypeTool';
 import { browserPageSelectTool } from './browserPageSelectTool';
 import { browserPageScrollTool } from './browserPageScrollTool';
 import { readImageTool } from './readImageTool';
+import { displayInSimpleModeTool } from './displayInSimpleModeTool';
 
 export const interpreterServerDefinition: BuiltinServerDefinition = {
   id: 'builtin-interpreter',
@@ -45,6 +51,16 @@ export const interpreterServerDefinition: BuiltinServerDefinition = {
     closeTabTool,
     refreshFileTool,
     wakeScheduleTool,
+    goalRevisionTool,
+    goalResumeTool,
+    goalDocumentReadTool,
+    goalDocumentCreateTool,
+    goalDocumentUpdateTool,
+    nativeTerminalStatusTool,
+    currentTaskTool,
+    threadArtifactCreateTool,
+    threadArtifactReadTool,
+    nativeTerminalListTool,
     showInFolderTool,
     vaultTool,
     settingsGetTool,
@@ -53,6 +69,7 @@ export const interpreterServerDefinition: BuiltinServerDefinition = {
     customInstructionsSetTool,
     wholeComputerStateGetTool,
     readImageTool,
+    displayInSimpleModeTool,
     browserTabActivateTool,
     browserPageInspectTool,
     browserPageTraceTool,

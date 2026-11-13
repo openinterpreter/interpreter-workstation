@@ -9,6 +9,7 @@ import { normalizeCoverageFileUrl } from "./tests/coverage-urls";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const smokeSpecs = [
   "**/placeholder.spec.ts",
+  "**/simple-mode.spec.ts",
   "**/interpreter-identity.spec.ts",
   "**/file-open.spec.ts",
   "**/onboarding-first-run.spec.ts",

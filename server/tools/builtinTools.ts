@@ -28,6 +28,8 @@ export interface BuiltinToolContext {
   callerTabId?: string;
   /** Agent runtime thread that issued the call. Used to scope per-thread tool state such as js_repl kernels. */
   threadId?: string;
+  /** Server-verified caller/thread match; never set from untrusted tool arguments. */
+  verifiedCallerThreadId?: string;
   /** Optional explicit output path from `interpreter-app tools ... --save-to-disk <path>`. */
   saveToDiskPath?: string;
   /** True only for internal overlay actions already accepted through computer_batch review. */
@@ -193,6 +195,16 @@ const includeElectronWorkstationServers =
 const HEADLESS_BROWSER_TOOL_NAMES = new Set([
   // Thread-scoped durable schedules are hosted by the sidecar, not Electron.
   'interpreter_wake_schedule',
+  'interpreter_goal_revision_get',
+  'interpreter_task_current',
+  'interpreter_goal_resume',
+  'interpreter_goal_document_get',
+  'interpreter_goal_document_create',
+  'interpreter_goal_document_update',
+  'interpreter_native_terminal_status',
+  'interpreter_native_terminal_list',
+  'interpreter_thread_artifact_create',
+  'interpreter_thread_artifact_read',
   'interpreter_whole_computer_state_get',
   'interpreter_browser_tab_activate',
   'interpreter_browser_page_inspect',

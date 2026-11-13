@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
-import { execFileSync } from 'node:child_process';
-import { existsSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { constants, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -12,14 +13,17 @@ const DIST_DIR = path.join(ROOT, 'dist');
 const PRODUCT_NAME = 'Interpreter';
 const PACKAGE_SMOKE_SENTINEL = '[package-smoke] js_repl runtime ok';
 const PACKAGE_SMOKE_SENTRY_SENTINEL = '[package-smoke] sentry runtime ok';
+const PACKAGE_SMOKE_PROJECT_RUNTIME_SENTINEL = '[package-smoke] bundled project runtime ok';
 const REQUIRED_LICENSE_RESOURCES = [
   'NOTICE',
   'THIRD_PARTY_NOTICES.md',
   'sharp-libvips-v1.2.4-THIRD-PARTY-NOTICES.md',
   'sharp-libvips-v1.3.2-THIRD-PARTY-NOTICES.md',
   'sharp-libvips-v1.3.3-THIRD-PARTY-NOTICES.md',
+  'sharp-libvips-v1.3.4-THIRD-PARTY-NOTICES.md',
   'LGPL-3.0.txt',
   'GPL-3.0.txt',
+  'MPL-1.1.txt',
   'release-policy.json',
 ];
 
@@ -197,7 +201,6 @@ const Sentry = require('@sentry/node');
 if (typeof Sentry.init !== 'function') {
   throw new Error('@sentry/node did not expose init');
 }
-
 process.stdout.write(${JSON.stringify(`${PACKAGE_SMOKE_SENTRY_SENTINEL}\n`)});
 `, 'utf8');
 
@@ -222,7 +225,128 @@ process.stdout.write(${JSON.stringify(`${PACKAGE_SMOKE_SENTRY_SENTINEL}\n`)});
   }
 }
 
-function main() {
+function runBundledProjectRuntimeSmoke() {
+  const resourcesRoot = findBundledResourcesRoot();
+  const appBinary = resolvePackagedAppBinary(resourcesRoot);
+  const appNodeModulesDir = path.join(resourcesRoot, 'app.asar', 'node_modules');
+  const simpleRuntimeDir = path.join(resourcesRoot, 'simple-interface-runtime');
+  const simpleRuntimeManifest = JSON.parse(readFileSync(path.join(simpleRuntimeDir, 'runtime-manifest.json'), 'utf8'));
+  if (simpleRuntimeManifest.platform !== process.platform || simpleRuntimeManifest.arch !== process.arch) {
+    throw new Error(`[package-smoke] Wrong Simple runtime platform: ${simpleRuntimeManifest.platform}-${simpleRuntimeManifest.arch}`);
+  }
+  const simpleNextVersion = JSON.parse(readFileSync(path.join(simpleRuntimeDir, 'node_modules', 'next', 'package.json'), 'utf8')).version;
+  const nextOutput = execFileSync(appBinary, [path.join(simpleRuntimeDir, 'node_modules', 'next', 'dist', 'bin', 'next'), '--version'], {
+    cwd: simpleRuntimeDir,
+    encoding: 'utf8',
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', NEXT_TELEMETRY_DISABLED: '1' },
+  });
+  if (!nextOutput.includes(simpleNextVersion)) {
+    throw new Error(`[package-smoke] Bundled Next.js failed to start: ${nextOutput.trim()}`);
+  }
+  const smokeScriptPath = path.join(resourcesRoot, '__package-smoke-project-runtime.cjs');
+
+  writeFileSync(smokeScriptPath, `
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const manifestPath = require.resolve('pnpm');
+const manifest = require(manifestPath);
+const cliPath = path.resolve(path.dirname(manifestPath), manifest.bin.pnpm);
+const result = spawnSync(process.execPath, [cliPath, '--version'], {
+  encoding: 'utf8',
+  env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', npm_config_manage_package_manager_versions: 'false' },
+});
+if (result.status !== 0) {
+  throw new Error(result.stderr || result.stdout || 'bundled pnpm failed');
+}
+if (result.stdout.trim() !== '10.34.5') {
+  throw new Error('expected bundled pnpm 10.34.5, received ' + result.stdout.trim());
+}
+process.stdout.write(${JSON.stringify(`${PACKAGE_SMOKE_PROJECT_RUNTIME_SENTINEL}\n`)});
+`, 'utf8');
+
+  try {
+    const output = execFileSync(appBinary, [smokeScriptPath], {
+      cwd: resourcesRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        NODE_PATH: appNodeModulesDir,
+      },
+    });
+    if (!output.includes(PACKAGE_SMOKE_PROJECT_RUNTIME_SENTINEL)) {
+      throw new Error(`[package-smoke] Bundled project runtime smoke did not report success. Output: ${output.trim()}`);
+    }
+    console.log(output.trim());
+  } finally {
+    rmSync(smokeScriptPath, { force: true });
+  }
+}
+
+async function runBundledNextOfflineSmoke() {
+  const resourcesRoot = findBundledResourcesRoot();
+  const appBinary = resolvePackagedAppBinary(resourcesRoot);
+  const runtime = path.join(resourcesRoot, 'simple-interface-runtime');
+  const project = mkdtempSync(path.join(tmpdir(), 'interpreter-packaged-next-'));
+  const port = 45000 + Math.floor(Math.random() * 10000);
+  let child;
+  try {
+    cpSync(path.join(runtime, 'node_modules'), path.join(project, 'node_modules'), {
+      recursive: true,
+      verbatimSymlinks: true,
+      mode: constants.COPYFILE_FICLONE,
+    });
+    mkdirSync(path.join(project, 'app'), { recursive: true });
+    const { dependencies } = JSON.parse(readFileSync(path.join(ROOT, 'resources', 'simple-interface-runtime', 'package.json'), 'utf8'));
+    writeFileSync(path.join(project, 'package.json'), JSON.stringify({ private: true, dependencies }));
+    writeFileSync(path.join(project, 'app', 'layout.jsx'), 'export default function Layout({ children }) { return <html><body>{children}</body></html> }\n');
+    writeFileSync(path.join(project, 'app', 'page.jsx'), 'export default function Page() { return <main>packaged-offline-next-ready</main> }\n');
+    child = spawn(appBinary, [path.join(project, 'node_modules', 'next', 'dist', 'bin', 'next'), 'dev', '--hostname', '127.0.0.1', '--port', String(port)], {
+      cwd: project,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        NEXT_TELEMETRY_DISABLED: '1',
+        npm_config_offline: 'true',
+        npm_config_registry: 'http://127.0.0.1:1',
+      },
+    });
+    let logs = '';
+    child.stdout.on('data', (chunk) => { logs = (logs + chunk).slice(-3000); });
+    child.stderr.on('data', (chunk) => { logs = (logs + chunk).slice(-3000); });
+    const deadline = Date.now() + 45_000;
+    while (Date.now() < deadline) {
+      if (child.exitCode !== null) break;
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}`);
+        if (response.ok && (await response.text()).includes('packaged-offline-next-ready')) {
+          console.log('[package-smoke] packaged Next.js cold offline startup ok');
+          return;
+        }
+      } catch { /* still compiling */ }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    throw new Error(`[package-smoke] Packaged Next.js did not serve the offline project. ${logs}`);
+  } finally {
+    if (child?.pid) {
+      if (process.platform === 'win32') {
+        try { execFileSync('taskkill', ['/pid', String(child.pid), '/t', '/f']); } catch { /* already exited */ }
+      } else {
+        try { child.kill('SIGTERM'); } catch { /* already exited */ }
+      }
+      if (child.exitCode === null && child.signalCode === null) {
+        await new Promise((resolve) => {
+          const timeout = setTimeout(() => { child.kill('SIGKILL'); }, 5000);
+          child.once('exit', () => { clearTimeout(timeout); resolve(); });
+        });
+      }
+    }
+    rmSync(project, { recursive: true, force: true });
+  }
+}
+
+async function main() {
   const args = [
     'exec',
     'electron-builder',
@@ -234,20 +358,26 @@ function main() {
     'never',
   ];
 
-  console.log(`[package-smoke] Running: ${PNPM_BIN} ${args.join(' ')}`);
-  execFileSync(PNPM_BIN, args, {
-    cwd: ROOT,
-    stdio: 'inherit',
-    shell: process.platform === 'win32',
-    env: {
-      ...process.env,
-      CSC_IDENTITY_AUTO_DISCOVERY: 'false',
-    },
-  });
+  if (!process.argv.includes('--reuse-package')) {
+    console.log(`[package-smoke] Running: ${PNPM_BIN} ${args.join(' ')}`);
+    execFileSync(PNPM_BIN, args, {
+      cwd: ROOT,
+      stdio: 'inherit',
+      shell: process.platform === 'win32',
+      env: {
+        ...process.env,
+        CSC_IDENTITY_AUTO_DISCOVERY: 'false',
+      },
+    });
+  } else {
+    console.log('[package-smoke] Reusing the existing packaged directory.');
+  }
 
   assertPackagedLicenseResources();
   runJsReplRuntimeSmoke();
   runSentryRuntimeSmoke();
+  runBundledProjectRuntimeSmoke();
+  await runBundledNextOfflineSmoke();
 }
 
-main();
+main().catch((error) => { console.error(error); process.exitCode = 1; });

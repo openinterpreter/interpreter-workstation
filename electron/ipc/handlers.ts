@@ -8,6 +8,8 @@
 import { ipcMain, dialog, shell, BrowserWindow, systemPreferences, clipboard, WebContents, app, Notification, desktopCapturer, screen, type IpcMainInvokeEvent } from 'electron';
 import { BOOLEAN_UI_SETTING_IDS, BOOLEAN_UI_SETTINGS, booleanSettingChannels, type BooleanSettingGetResponse, type BooleanSettingSetResult } from '../../shared/booleanSettings';
 import { getInterpreterFeedbackUrl } from '../../shared/hostedApi';
+import { distributionProductConfig } from '../../shared/productConfig';
+import { needsSignedFeedback, requireSignedFeedback, submitSignedFeedback, type FeedbackOriginal } from '../utils/feedbackSignedUpload';
 
 // Type extension for WebContents.getOwnerBrowserWindow (exists at runtime but missing from types)
 type WebContentsWithOwner = WebContents & { getOwnerBrowserWindow(): BrowserWindow | null };
@@ -16,7 +18,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { IPC_CHANNELS } from './registry';
-import { assertTrustedFileIpcFrame } from './trustedRenderer';
+import { assertTrustedFileIpcFrame, isWhatsAppApiPath } from './trustedRenderer';
 import type {
   ApiRequestParams,
   ApiRequestResponse,
@@ -421,11 +423,14 @@ interface HandlerDependencies {
   cachedFileTree: CachedFileTree | null;
   getInterpreterOverlayService: () => {
     startWindowVoiceMode: (request?: InterpreterOverlayStartWindowVoiceRequest) => Promise<InterpreterOverlayStartWindowVoiceResponse>;
+    getSimpleComposerState: (windowSessionKey: string) => { draft: string };
+    setSimpleComposerState: (windowSessionKey: string, state: { draft: string }) => void;
   } | null;
   createWorkstationWindow: (options?: {
     sourceWindowId?: number | null;
     workspacePath?: string | null;
     bootstrapLayout?: LayoutState | null;
+    simpleProjectPath?: string | null;
     background?: boolean;
   }) => Promise<{ success: true; windowId: number; sessionKey: string } | { success: false; error: string }>;
 }
@@ -652,6 +657,16 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
   registerHandle(
     IPC_CHANNELS.API_REQUEST,
     async (event, params: ApiRequestParams): Promise<ApiRequestResponse> => {
+      // Express accepts query/trailing-slash variants of the same route. Guard
+      // the entire channel namespace, rather than only one spelling of PUT.
+      if (isWhatsAppApiPath(params.path)) {
+        // Never treat an opaque HTTP Origin as proof of the packaged renderer.
+        // Only the registered app window's main frame can proxy this mutation.
+        assertTrustedFileIpcSender(event);
+        if (!getWindowSessionKeyForWindowId(getEventWindowId(event))) {
+          throw new Error('Access denied: no registered application window.');
+        }
+      }
       return new Promise((resolve, reject) => {
         const url = `http://${APP_SERVER_HOST}:${serverPort}${params.path}`;
         const senderWindowId = getEventWindowId(event);
@@ -735,6 +750,7 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
       const result = await createWorkstationWindow({
         sourceWindowId: senderWindowId,
         workspacePath: request?.workspacePath ?? senderWorkspace,
+        simpleProjectPath: request?.simpleProjectPath ?? null,
         background: request?.background === true,
       });
 
@@ -807,6 +823,16 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
       return getWorkspace();
     }
   );
+
+  registerHandle(IPC_CHANNELS.WORKSPACE_GET_SIMPLE, async () => {
+    const { getSimpleWorkspacePath } = await import('../../server/simpleWorkspace');
+    return { workspacePath: await getSimpleWorkspacePath() };
+  });
+
+  registerHandle(IPC_CHANNELS.WORKSPACE_SET_SIMPLE, async (_event, request: { workspacePath: string }) => {
+    const { setSimpleWorkspacePath } = await import('../../server/simpleWorkspace');
+    return { workspacePath: await setSimpleWorkspacePath(request.workspacePath) };
+  });
 
   registerHandle(
     IPC_CHANNELS.WORKSPACE_CREATE_SAMPLE,
@@ -1617,6 +1643,74 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
         console.error('[IPC] Error unarchiving agent thread:', error);
         return { success: false, error: error?.message ?? 'Failed to unarchive thread.' };
       }
+    },
+  );
+
+  registerHandle(IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_GET, async () => {
+    const { getSimplePrimaryThread } = await import('../../server/handlers/simplePrimaryThread');
+    return getSimplePrimaryThread();
+  });
+
+  registerHandle(
+    IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_BIND,
+    async (_event, request: { threadId: string; expectedThreadId?: string | null }) => {
+      const { bindSimplePrimaryThread } = await import('../../server/handlers/simplePrimaryThread');
+      return bindSimplePrimaryThread(request);
+    },
+  );
+
+  registerHandle(
+    IPC_CHANNELS.SIMPLE_PRIMARY_THREAD_CLEAR,
+    async (_event, request: { expectedThreadId: string }) => {
+      const { clearSimplePrimaryThread } = await import('../../server/handlers/simplePrimaryThread');
+      return clearSimplePrimaryThread(request);
+    },
+  );
+
+  registerHandle(IPC_CHANNELS.SIMPLE_COMPOSER_STATE_GET, (event) => {
+    const sessionKey = getWindowSessionKeyForWindowId(getEventWindowId(event));
+    if (!sessionKey) return { draft: '' };
+    return getInterpreterOverlayService()?.getSimpleComposerState(sessionKey) ?? { draft: '' };
+  });
+
+  registerHandle(
+    IPC_CHANNELS.SIMPLE_COMPOSER_STATE_SET,
+    (event, state: { draft: string }) => {
+      const sessionKey = getWindowSessionKeyForWindowId(getEventWindowId(event));
+      if (!sessionKey) return { success: false };
+      getInterpreterOverlayService()?.setSimpleComposerState(sessionKey, state);
+      return { success: true };
+    },
+  );
+
+  registerHandle(IPC_CHANNELS.SIMPLE_LIVE_STATUS, async () => {
+    const { getSimpleLiveStatus } = await import('../../server/handlers/simpleLive');
+    const { readSimpleLiveApiKey } = await import('../services/simpleLiveCredential');
+    return getSimpleLiveStatus({ secureApiKey: await readSimpleLiveApiKey() });
+  });
+
+  registerHandle(
+    IPC_CHANNELS.SIMPLE_LIVE_CONFIGURE,
+    async (_event, request: { apiKey: string }) => {
+      const { saveSimpleLiveApiKey } = await import('../services/simpleLiveCredential');
+      await saveSimpleLiveApiKey(request?.apiKey ?? '');
+      return { configured: true as const, source: 'secure' as const };
+    },
+  );
+
+  registerHandle(IPC_CHANNELS.SIMPLE_LIVE_CLEAR_CREDENTIAL, async () => {
+    const { clearSimpleLiveApiKey } = await import('../services/simpleLiveCredential');
+    await clearSimpleLiveApiKey();
+    const { getSimpleLiveStatus } = await import('../../server/handlers/simpleLive');
+    return getSimpleLiveStatus();
+  });
+
+  registerHandle(
+    IPC_CHANNELS.SIMPLE_LIVE_CREATE_SESSION,
+    async (_event, request: { offerSdp: string }) => {
+      const { createSimpleLiveSession } = await import('../../server/handlers/simpleLive');
+      const { readSimpleLiveApiKey } = await import('../services/simpleLiveCredential');
+      return createSimpleLiveSession(request, { secureApiKey: await readSimpleLiveApiKey() });
     },
   );
 
@@ -3429,11 +3523,19 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
   registerHandle(
     IPC_CHANNELS.FEEDBACK_SUBMIT,
     async (_event, request: FeedbackSubmitRequest): Promise<FeedbackSubmitResponse> => {
+      const dedicatedFeedback = Boolean(distributionProductConfig.feedbackUrl?.trim());
+      const reportPasscode = dedicatedFeedback ? request.reportPasscode : undefined;
+      if (dedicatedFeedback && (typeof reportPasscode !== 'string' ||
+          Buffer.byteLength(reportPasscode, 'utf8') < 12 || Buffer.byteLength(reportPasscode, 'utf8') > 128)) {
+        return { success: false, error: 'A report passcode of 12–128 bytes is required' };
+      }
       try {
         const formData = new FormData();
+        const originals: FeedbackOriginal[] = [];
 
         formData.append('email', request.email);
         formData.append('message', request.message);
+        if (reportPasscode) formData.append('report_passcode', reportPasscode);
         formData.append('version', app.getVersion());
         formData.append('platform', process.platform);
         formData.append('arch', process.arch);
@@ -3459,11 +3561,13 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
               })),
             });
             if (feedbackLogAttachment) {
+              const logBlob = new Blob([feedbackLogAttachment.content], { type: 'text/plain' });
               formData.append(
                 'logs',
-                new Blob([feedbackLogAttachment.content], { type: 'text/plain' }),
+                logBlob,
                 feedbackLogAttachment.filename
               );
+              originals.push({ name: feedbackLogAttachment.filename, contentType: 'text/plain', blob: logBlob });
             }
           } catch {
             // Logs not available
@@ -3475,8 +3579,22 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
             const imageBuffer = Buffer.from(image.data, 'base64');
             const ext = image.name.split('.').pop()?.toLowerCase() || 'png';
             const contentType = ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : `image/${ext}`;
-            formData.append('images', new Blob([imageBuffer], { type: contentType }), image.name);
+            const imageBlob = new Blob([imageBuffer], { type: contentType });
+            formData.append('images', imageBlob, image.name);
+            originals.push({ name: image.name, contentType, blob: imageBlob });
           }
+        }
+
+        // Keep small multipart requests unchanged, but never proxy a large
+        // original if an older endpoint does not support direct signed uploads.
+        if (needsSignedFeedback(originals)) {
+          await requireSignedFeedback(FEEDBACK_URL);
+          const id = await submitSignedFeedback(FEEDBACK_URL, {
+            email: request.email, message: request.message, version: app.getVersion(),
+            platform: process.platform, arch: process.arch, reportPasscode,
+          }, originals);
+          console.log('[FEEDBACK] Submitted successfully:', id);
+          return { success: true, id };
         }
 
         const response = await fetch(FEEDBACK_URL, {
@@ -3485,6 +3603,7 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
         });
 
         if (!response.ok) {
+          if (dedicatedFeedback) return { success: false, error: `Feedback endpoint returned HTTP ${response.status}` };
           const errorText = await response.text();
           return { success: false, error: `HTTP ${response.status}: ${errorText.slice(0, 200)}` };
         }
@@ -3494,10 +3613,12 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
         try {
           result = JSON.parse(responseText);
         } catch {
+          if (dedicatedFeedback) return { success: false, error: 'Invalid feedback response' };
           return { success: false, error: `Invalid JSON response: ${responseText.slice(0, 100)}` };
         }
 
         if (!result.success) {
+          if (dedicatedFeedback) return { success: false, error: 'Feedback submission was not accepted' };
           let errorMsg = 'Unknown error';
           if (typeof result.error === 'string') {
             errorMsg = result.error;
@@ -3510,6 +3631,10 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
         console.log('[FEEDBACK] Submitted successfully:', result.id);
         return { success: true, id: result.id };
       } catch (error: any) {
+        if (dedicatedFeedback) {
+          console.error('[FEEDBACK] Submission failed');
+          return { success: false, error: 'Feedback could not be submitted' };
+        }
         const errorMsg = error.message || 'Unknown network error';
         console.error('[FEEDBACK] Submit error:', errorMsg);
         console.error('[FEEDBACK] Full error:', error.stack || error);
@@ -3697,6 +3822,54 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
         return { success: false, error: error.message };
       }
     }
+  );
+
+  registerHandle(
+    IPC_CHANNELS.SIMPLE_INTERFACE_AGENT_START,
+    async (
+      event,
+      request: import('./registry').SimpleInterfaceAgentStartRequest,
+    ): Promise<import('./registry').SimpleInterfaceAgentStartResponse> => {
+      try {
+        if (!request || typeof request.runId !== 'string' || !request.runId.trim()) {
+          throw new Error('A run id is required.');
+        }
+        const message = typeof request.message === 'string' ? request.message.trim() : '';
+        if (!message || message.length > 24_000) throw new Error('A focused agent message is required.');
+        const [{ startAgentTask }, { getActiveSimpleProject }] = await Promise.all([
+          import('../../server/agentTaskService'),
+          import('../../server/simpleProjects'),
+        ]);
+        const project = await getActiveSimpleProject();
+        const result = await startAgentTask({
+          mode: 'headless',
+          message,
+          system: typeof request.system === 'string' ? request.system.slice(0, 24_000) : undefined,
+          timeoutMs: Math.min(Math.max(request.timeoutMs ?? 300_000, 10_000), 1_800_000),
+          workspace: project.path,
+          notifyStarted: false,
+          onProgress: (progress) => {
+            if (!event.sender.isDestroyed()) {
+              event.sender.send(IPC_CHANNELS.SIMPLE_INTERFACE_AGENT_EVENT, {
+                runId: request.runId,
+                event: progress,
+              });
+            }
+          },
+        });
+        return {
+          success: true,
+          result: {
+            completed: result.completed,
+            threadId: result.threadId,
+            messages: result.messages,
+            error: result.error,
+          },
+        };
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+    },
   );
 
   registerHandle(

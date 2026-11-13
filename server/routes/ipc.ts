@@ -118,11 +118,46 @@ const handlers: Record<string, Record<string, HandlerFn>> = {
     },
   },
 
+  // ========== Simple primary conversation ==========
+  simplePrimaryThread: {
+    get: async () => {
+      const { getSimplePrimaryThread } = await import('../handlers/simplePrimaryThread');
+      return getSimplePrimaryThread();
+    },
+    bind: async ([request]: [{ threadId: string; expectedThreadId?: string | null }]) => {
+      const { bindSimplePrimaryThread } = await import('../handlers/simplePrimaryThread');
+      return bindSimplePrimaryThread(request);
+    },
+    clear: async ([request]: [{ expectedThreadId: string }]) => {
+      const { clearSimplePrimaryThread } = await import('../handlers/simplePrimaryThread');
+      return clearSimplePrimaryThread(request);
+    },
+  },
+
+  simpleLive: {
+    status: async () => {
+      const { getSimpleLiveStatus } = await import('../handlers/simpleLive');
+      return getSimpleLiveStatus();
+    },
+    createSession: async ([request]: [{ offerSdp: string }]) => {
+      const { createSimpleLiveSession } = await import('../handlers/simpleLive');
+      return createSimpleLiveSession(request);
+    },
+  },
+
   // ========== Workspace ==========
   workspace: {
     get: async () => {
       const { getWorkspace } = await import('../handlers/workspace');
       return getWorkspace();
+    },
+    getSimple: async () => {
+      const { getSimpleWorkspacePath } = await import('../simpleWorkspace');
+      return { workspacePath: await getSimpleWorkspacePath() };
+    },
+    setSimple: async ([arg]: [{ workspacePath: string }]) => {
+      const { setSimpleWorkspacePath } = await import('../simpleWorkspace');
+      return { workspacePath: await setSimpleWorkspacePath(arg.workspacePath) };
     },
     createSample: async () => {
       const { createSampleWorkspace } = await import('../handlers/workspace');

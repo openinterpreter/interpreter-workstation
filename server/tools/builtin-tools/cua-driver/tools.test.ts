@@ -16,6 +16,8 @@ import {
   macCuaDriverActivityExecOptionsForTest,
   macComputerUseScreenshotPathForTest,
   macComputerUseTreeHasWindowContentForTest,
+  macFocusWindowDriverToolForTest,
+  macWindowScopedInputArgsForTest,
   macToolMayRequireForegroundFocusForTest,
   nativeLaunchAppArgsForTest,
   parseComputerUseUiElementsForTest,
@@ -28,11 +30,14 @@ import {
   setCuaAccessPolicyProviderForCuaDriverTest,
   setWindowsCuaDriverToolProviderForTest,
   shutdownCuaDriverProcesses,
+  sortMacComputerUseWindowIdsForTest,
   withMacCuaDriverProcessLockForTest,
+  withMacCuaDriverApprovalAndProcessLock,
 } from './tools';
 import type { BrowserControlStatus } from '../../../../shared/types/browserControl';
 import type { BrowserAccessPolicy, BrowserAccessPolicyMode, BrowserAccessProfilePolicy } from '../../../../shared/browserAccessPolicy';
 import { approvalManager } from '../../../approvalManager';
+import { setConfigOverride } from '../../../configStore';
 import { isCuaDriverSupportedPlatform } from './index';
 
 function windowsToolResponse(data: unknown): { content: [{ type: 'text'; text: string }] } {
@@ -529,6 +534,89 @@ describe('macOS Computer Use wrapper behavior', () => {
     fs.rmSync(lockRoot, { recursive: true, force: true });
   });
 
+  test.skipIf(process.platform !== 'linux')('reclaims PID reuse without evicting a live legacy owner', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cua-driver-reuse-test-'));
+    const lock = path.join(root, 'driver.lock');
+    fs.mkdirSync(lock);
+    fs.writeFileSync(path.join(lock, 'owner'), JSON.stringify({ pid: process.pid, acquiredAt: 123 }));
+    await expect(withMacCuaDriverProcessLockForTest(lock, async () => 'unsafe'))
+      .rejects.toThrow('Another Computer Use action is already in progress.');
+    fs.writeFileSync(path.join(lock, 'owner'), JSON.stringify({
+      pid: process.pid, acquiredAt: 123, processStartTicks: '0', action: 'get_app_state',
+    }));
+    await expect(withMacCuaDriverProcessLockForTest(lock, async () => 'reclaimed'))
+      .resolves.toBe('reclaimed');
+    expect(fs.existsSync(lock)).toBe(false);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  test('denied foreground or discovery approval never acquires the desktop lock', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cua-denied-lock-test-'));
+    const lock = path.join(root, 'driver.lock');
+    await expect(withMacCuaDriverApprovalAndProcessLock(
+      async () => { throw new Error('permission denied'); },
+      async () => 'must-not-run', lock,
+    )).rejects.toThrow('permission denied');
+    expect(fs.existsSync(lock)).toBe(false);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  test('serializes approved calls in-process without locking the queued call', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cua-fifo-lock-test-'));
+    const lock = path.join(root, 'driver.lock');
+    const steps: string[] = [];
+    let enter!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => { enter = resolve; });
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    const first = withMacCuaDriverApprovalAndProcessLock(async () => {}, async () => {
+      steps.push('first'); enter(); await hold; steps.push('first-done');
+    }, lock, 'list_apps');
+    await entered;
+    const second = withMacCuaDriverApprovalAndProcessLock(async () => {}, async () => {
+      steps.push('second');
+    }, lock, 'get_app_state');
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(steps).toEqual(['first']);
+      release();
+      await Promise.all([first, second]);
+      expect(steps).toEqual(['first', 'first-done', 'second']);
+      expect(fs.existsSync(lock)).toBe(false);
+    } finally {
+      release();
+      await Promise.allSettled([first, second]);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('pending discovery approval never holds the desktop process lock', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cua-driver-approval-lock-test-'));
+    const lockDir = path.join(root, 'driver.lock');
+    let releaseApproval!: () => void;
+    const pendingApproval = new Promise<void>((resolve) => { releaseApproval = resolve; });
+    let started!: () => void;
+    const approvalStarted = new Promise<void>((resolve) => { started = resolve; });
+    const call = withMacCuaDriverApprovalAndProcessLock(
+      async () => { started(); await pendingApproval; },
+      async () => 'approved-call',
+      lockDir,
+    );
+    try {
+      await approvalStarted;
+      expect(fs.existsSync(lockDir)).toBe(false);
+      await expect(withMacCuaDriverProcessLockForTest(lockDir, async () => 'other-call'))
+        .resolves.toBe('other-call');
+      releaseApproval();
+      await expect(call).resolves.toBe('approved-call');
+      expect(fs.existsSync(lockDir)).toBe(false);
+    } finally {
+      releaseApproval();
+      await call;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('summarizes actionable indexed controls before the full accessibility tree', () => {
     const summary = buildComputerUseInteractiveElementsSummaryForTest([
       'application Chromium',
@@ -704,6 +792,125 @@ describe('macOS Computer Use wrapper behavior', () => {
         );
       } finally {
         setCuaAccessPolicyProviderForCuaDriverTest(null);
+      }
+    });
+  });
+
+  test('explicit local desktop inspect/control grant skips discovery while deny stays enforced', async () => {
+    await withPlatform('linux', async () => {
+      setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+        permissions: { inspect: { mode: 'all' }, control: { mode: 'all' } },
+        appPolicies: [],
+      }));
+      try {
+        await expect(requestApprovalForTest('list_apps', {})).resolves.toBeUndefined();
+        await expect(requestApprovalForTest('get_app_state', { app: 'LocalApp' })).resolves.toBeUndefined();
+        await expect(requestApprovalForTest('click', { app: 'LocalApp' })).resolves.toBeUndefined();
+      } finally {
+        setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+          permissions: { inspect: { mode: 'deny' }, control: { mode: 'deny' } },
+          appPolicies: [],
+        }));
+        try {
+          await expect(requestApprovalForTest('list_apps', {})).rejects.toThrow('denied by Settings');
+          await expect(requestApprovalForTest('click', { app: 'LocalApp' })).rejects.toThrow('denied by Settings');
+        } finally {
+          setCuaAccessPolicyProviderForCuaDriverTest(null);
+        }
+      }
+    });
+  });
+
+  test('headless ask denies discovery and control before creating an invisible approval', async () => {
+    await withPlatform('linux', async () => {
+      setConfigOverride({ agents: {}, headlessToolApprovalMode: 'fail-closed' } as any);
+      setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+        permissions: { inspect: { mode: 'ask' }, control: { mode: 'ask' } },
+        appPolicies: [],
+      }));
+      try {
+        await expect(requestApprovalForTest('list_apps', {})).rejects.toThrow('unattended approval was denied before acquiring the desktop lock');
+        await expect(requestApprovalForTest('click', { app: 'LocalApp' })).rejects.toThrow('unattended approval was denied before acquiring the desktop lock');
+        setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+          permissions: { inspect: { mode: 'all' }, control: { mode: 'all' } },
+          appPolicies: [],
+        }));
+        await expect(requestApprovalForTest('list_apps', {})).resolves.toBeUndefined();
+        await expect(requestApprovalForTest('get_app_state', { app: 'LocalApp' })).resolves.toBeUndefined();
+      } finally {
+        setCuaAccessPolicyProviderForCuaDriverTest(null);
+        setConfigOverride(null);
+      }
+    });
+  });
+
+  test('one operator headless mode permits ordinary CUA discovery, inspect and control but not Settings deny', async () => {
+    await withPlatform('linux', async () => {
+      setConfigOverride({ agents: {}, codexApprovalPolicy: 'never', headlessToolApprovalMode: 'ordinary-auto' } as any);
+      setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+        permissions: { inspect: { mode: 'ask' }, control: { mode: 'ask' } }, appPolicies: [],
+      }));
+      try {
+        const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+        const verified = { threadId, verifiedCallerThreadId: threadId };
+        for (const [tool, args] of [
+          ['list_apps', {}], ['get_app_state', { app: 'Google Chrome' }],
+          ['click', { app: 'Google Chrome', element_index: 3 }],
+        ] as const) await expect(requestApprovalForTest(tool, args, verified)).resolves.toBeUndefined();
+        await expect(requestApprovalForTest('list_apps', {})).rejects.toThrow('unattended approval was denied');
+        await expect(requestApprovalForTest('click', { app: 'Google Chrome' }, {
+          threadId, verifiedCallerThreadId: '00000000-0000-0000-0000-000000000000',
+        })).rejects.toThrow('unattended approval was denied');
+        setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+          permissions: { inspect: { mode: 'deny' }, control: { mode: 'deny' } }, appPolicies: [],
+        }));
+        await expect(requestApprovalForTest('list_apps', {}, verified)).rejects.toThrow('denied by Settings');
+        await expect(requestApprovalForTest('click', { app: 'Google Chrome' }, verified)).rejects.toThrow('denied by Settings');
+        setConfigOverride({ agents: {}, codexApprovalPolicy: 'on-request', headlessToolApprovalMode: 'ordinary-auto' } as any);
+        setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+          permissions: { inspect: { mode: 'ask' }, control: { mode: 'ask' } }, appPolicies: [],
+        }));
+        await expect(requestApprovalForTest('list_apps', {})).rejects.toThrow('unattended approval was denied');
+      } finally {
+        setCuaAccessPolicyProviderForCuaDriverTest(null);
+        setConfigOverride(null);
+      }
+    });
+  });
+
+  test('operator exact-thread app-list grant never broadens inspect, control or other threads', async () => {
+    await withPlatform('linux', async () => {
+      const owner = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+      const other = '01a0d435-bb2b-7047-afe7-0a639be8e5d5';
+      setConfigOverride({ agents: {}, headlessToolApprovalMode: 'fail-closed',
+        nativeCuaDiscoveryGrants: [{ threadId: owner, toolName: 'list_apps' }] } as any);
+      setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+        permissions: { inspect: { mode: 'ask' }, control: { mode: 'ask' } }, appPolicies: [],
+      }));
+      try {
+        await expect(requestApprovalForTest('list_apps', {}, { threadId: owner, verifiedCallerThreadId: owner })).resolves.toBeUndefined();
+        await expect(requestApprovalForTest('list_apps', {}, { threadId: owner }))
+          .rejects.toThrow('unattended approval was denied');
+        for (const context of [{ threadId: other }, {}, undefined]) {
+          await expect(requestApprovalForTest('list_apps', {}, context))
+            .rejects.toThrow('unattended approval was denied');
+        }
+        await expect(requestApprovalForTest('list_apps', { extra: true }, { threadId: owner, verifiedCallerThreadId: owner }))
+          .rejects.toThrow('unattended approval was denied');
+        await expect(requestApprovalForTest('list_windows', {}, { threadId: owner, verifiedCallerThreadId: owner }))
+          .rejects.toThrow('unattended approval was denied');
+        await expect(requestApprovalForTest('get_app_state', { app: 'LocalApp' }, { threadId: owner }))
+          .rejects.toThrow('unattended approval was denied');
+        await expect(requestApprovalForTest('click', { app: 'LocalApp' }, { threadId: owner }))
+          .rejects.toThrow('unattended approval was denied');
+        setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
+          permissions: { inspect: { mode: 'deny' }, control: { mode: 'ask' } }, appPolicies: [],
+        }));
+        await expect(requestApprovalForTest('list_apps', {}, { threadId: owner }))
+          .rejects.toThrow('denied by Settings');
+      } finally {
+        setCuaAccessPolicyProviderForCuaDriverTest(null);
+        setConfigOverride(null);
       }
     });
   });
@@ -1261,6 +1468,37 @@ describe('macOS Computer Use wrapper behavior', () => {
       '\tmenu bar',
       '\t\t15 menu bar item Role: status menu',
     ].join('\n'))).toBe(false);
+
+    expect(macComputerUseTreeHasWindowContentForTest([
+      '- [0] AXWindow "Docs - Google Chrome" bounds={x=10, y=20, width=1200, height=800}',
+      '    - [1] AXButton "Back"',
+      '    - [2] AXTextField "Address and search bar"',
+    ].join('\n'))).toBe(true);
+  });
+
+  test('prefers the most recently ordered titled main window over background and untitled helper windows', () => {
+    expect(sortMacComputerUseWindowIdsForTest([
+      { window_id: 1, title: '', on_current_space: true, layer: 0, z_index: 1, bounds: { width: 1600, height: 1000 } },
+      { window_id: 2, title: 'Background', on_current_space: true, layer: 0, z_index: 9, bounds: { width: 1800, height: 1100 } },
+      { window_id: 3, title: 'Front', on_current_space: true, layer: 0, z_index: 3, bounds: { width: 1200, height: 800 } },
+      { window_id: 4, title: 'Other Space', on_current_space: false, layer: 0, z_index: 0, bounds: { width: 2000, height: 1200 } },
+    ])).toEqual([2, 3, 4, 1]);
+  });
+
+  test('maps public macOS focus_window to the reviewed native operation', () => {
+    expect(macFocusWindowDriverToolForTest()).toBe('bring_to_front');
+  });
+
+  test('keeps every macOS keyboard action scoped to the selected window', () => {
+    expect(macWindowScopedInputArgsForTest({ pid: 951, windowId: 365 })).toEqual({
+      pid: 951,
+      window_id: 365,
+    });
+    expect(macWindowScopedInputArgsForTest({ pid: 951, windowId: 365 }, true)).toEqual({
+      pid: 951,
+      window_id: 365,
+      delivery_mode: 'foreground',
+    });
   });
 });
 

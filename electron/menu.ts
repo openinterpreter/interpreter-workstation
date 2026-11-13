@@ -11,8 +11,11 @@ import {
   emitNewSidebarAgent,
   emitOpenInbox,
   emitOpenSettings,
+  emitOpenFeedback,
+  emitSimpleProjectAction,
 } from './ipc/events';
-import { getRecentFolders, setZoomFactor } from '../server/configStore';
+import { getBooleanUISetting, getRecentFolders, setBooleanUISetting, setZoomFactor } from '../server/configStore';
+import { listSimpleProjects } from '../server/simpleProjects';
 import {
   clearWorkspaceForWindow,
   setWorkspaceWithConfirmation,
@@ -123,6 +126,8 @@ async function handleCloseFolder(): Promise<void> {
 export async function buildApplicationMenu(): Promise<void> {
   const isMac = process.platform === 'darwin';
   const isDev = !app.isPackaged;
+  const advancedMode = await getBooleanUISetting('advancedMode');
+  const showSimpleFeedback = await getBooleanUISetting('showSimpleFeedback');
 
   // Load recent folders from config
   const recentFolders = await getRecentFolders();
@@ -135,6 +140,43 @@ export async function buildApplicationMenu(): Promise<void> {
         click: () => handleOpenFolder(folder.path),
       }))
     : [{ label: t('menu.file.noRecentFolders'), enabled: false }];
+
+  const simpleProjects = advancedMode ? null : await listSimpleProjects();
+  const simpleRecentSubmenu: Electron.MenuItemConstructorOptions[] = simpleProjects?.recent.length
+    ? simpleProjects.recent.map(project => ({
+        label: project.metadata.name,
+        sublabel: project.path,
+        click: (_menuItem: MenuItem, browserWindow: BaseWindow | undefined) =>
+          emitSimpleProjectAction(toBrowserWindow(browserWindow), { action: 'recent', path: project.path }),
+      }))
+    : [{ label: 'No Recent Interfaces', enabled: false }];
+
+  const simpleFileSubmenu: Electron.MenuItemConstructorOptions[] = [
+    {
+      label: 'New Interface…',
+      accelerator: 'CmdOrCtrl+N',
+      click: (_menuItem: MenuItem, browserWindow: BaseWindow | undefined) =>
+        emitSimpleProjectAction(toBrowserWindow(browserWindow), { action: 'new' }),
+    },
+    {
+      label: 'Open Interface…',
+      accelerator: 'CmdOrCtrl+O',
+      click: (_menuItem: MenuItem, browserWindow: BaseWindow | undefined) =>
+        emitSimpleProjectAction(toBrowserWindow(browserWindow), { action: 'open' }),
+    },
+    { label: 'Open Recent Interface', submenu: simpleRecentSubmenu },
+    { type: 'separator' },
+    ...(!isMac ? [
+      {
+        label: t('menu.file.settings'),
+        accelerator: 'CmdOrCtrl+,',
+        click: (_menuItem: MenuItem, browserWindow: BaseWindow | undefined) =>
+          emitOpenSettings(toBrowserWindow(browserWindow)),
+      } satisfies Electron.MenuItemConstructorOptions,
+      { type: 'separator' as const },
+    ] : []),
+    { role: isMac ? 'close' : 'quit' },
+  ];
 
   const template: Electron.MenuItemConstructorOptions[] = [
     // App menu (macOS only)
@@ -172,7 +214,7 @@ export async function buildApplicationMenu(): Promise<void> {
     // File menu
     {
       label: t('menu.file.label'),
-      submenu: [
+      submenu: advancedMode ? [
         {
           label: t('menu.file.newWindow'),
           accelerator: 'CmdOrCtrl+N',
@@ -246,11 +288,11 @@ export async function buildApplicationMenu(): Promise<void> {
               { role: 'quit' as const },
             ]
           : []),
-      ],
+      ] satisfies Electron.MenuItemConstructorOptions[] : simpleFileSubmenu,
     },
 
     // Tab menu (Chrome-style tab navigation)
-    {
+    ...(advancedMode ? [{
       label: t('menu.tab.label'),
       submenu: [
         {
@@ -275,8 +317,8 @@ export async function buildApplicationMenu(): Promise<void> {
           accelerator: 'CmdOrCtrl+9',
           click: (_menuItem: MenuItem, browserWindow: BaseWindow | undefined) => emitTabGoTo(toBrowserWindow(browserWindow), -1), // -1 means last tab
         },
-      ],
-    },
+      ] satisfies Electron.MenuItemConstructorOptions[],
+    }] satisfies Electron.MenuItemConstructorOptions[] : []),
 
     // Edit menu
     {
@@ -293,11 +335,15 @@ export async function buildApplicationMenu(): Promise<void> {
               { role: 'pasteAndMatchStyle' as const },
               { role: 'delete' as const },
               { role: 'selectAll' as const },
-              { type: 'separator' as const },
-              {
-                label: t('menu.edit.speech'),
-                submenu: [{ role: 'startSpeaking' as const }, { role: 'stopSpeaking' as const }],
-              },
+              ...(advancedMode
+                ? [
+                    { type: 'separator' as const },
+                    {
+                      label: t('menu.edit.speech'),
+                      submenu: [{ role: 'startSpeaking' as const }, { role: 'stopSpeaking' as const }],
+                    },
+                  ]
+                : []),
             ]
           : [{ role: 'delete' as const }, { type: 'separator' as const }, { role: 'selectAll' as const }]),
       ],
@@ -307,6 +353,7 @@ export async function buildApplicationMenu(): Promise<void> {
     {
       label: t('menu.view.label'),
       submenu: [
+        ...(advancedMode ? [
         {
           label: t('menu.view.toggleExplorer'),
           accelerator: 'CmdOrCtrl+E',
@@ -318,6 +365,7 @@ export async function buildApplicationMenu(): Promise<void> {
           click: (_menuItem: MenuItem, browserWindow: BaseWindow | undefined) => emitFocusAgent(toBrowserWindow(browserWindow)),
         },
         { type: 'separator' },
+        ] satisfies Electron.MenuItemConstructorOptions[] : []),
         { role: 'reload' },
         { role: 'forceReload' },
         ...(isDev ? [{ role: 'toggleDevTools' as const }] : []),
@@ -364,6 +412,23 @@ export async function buildApplicationMenu(): Promise<void> {
     {
       role: 'help',
       submenu: [
+        ...(!advancedMode ? [
+          {
+            label: 'Leave Feedback…',
+            click: (_menuItem: MenuItem, browserWindow: BaseWindow | undefined) =>
+              emitOpenFeedback(toBrowserWindow(browserWindow) ?? BrowserWindow.getFocusedWindow()),
+          },
+          {
+            label: 'Show Feedback Button',
+            type: 'checkbox' as const,
+            checked: showSimpleFeedback,
+            click: async (item: MenuItem) => {
+              await setBooleanUISetting('showSimpleFeedback', item.checked);
+              await buildApplicationMenu();
+            },
+          },
+          { type: 'separator' as const },
+        ] : []),
         {
           label: t('menu.help.learnMore'),
           click: async () => {

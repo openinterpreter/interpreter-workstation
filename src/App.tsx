@@ -18,11 +18,13 @@ import { ConnectionOverlay } from "./components/ConnectionOverlay";
 import { MentionPreviewOverlay } from "./components/MentionPreviewOverlay";
 import { windowingAPI } from "./api/windowingAPI";
 import { AuthCallback } from "./components/auth/AuthCallback";
+import { UnboundCliApprovals } from "./components/UnboundCliApprovals";
 import { BrowserContextMenu } from "./components/BrowserContextMenu";
 import { BrowserSelect } from "./components/BrowserSelect";
 import { ResizeHandle } from "./components/ui/resize-handle";
 import { ExtensionDownloadBar } from "./components/onboarding/ExtensionDownloadBar";
 import { OnboardingFeedbackToast } from "./components/onboarding/OnboardingFeedbackToast";
+import { openFeedbackPopover } from "./utils/feedback";
 import { OnboardingOverlay } from "./components/onboarding/OnboardingOverlay";
 import { AppUpdateDialog } from "./components/AppUpdateDialog";
 import { ComputerUseSetupModalHost } from "./components/ComputerUseSetupModalHost";
@@ -62,6 +64,10 @@ import type {
 import { getMarketingDemoSurface, isMarketingDemoMode, isMarketingDemoWindowChromeEnabled } from "./demo/marketingDemo";
 import { isWorkstationReadOnly } from "./remote/workstationConnection";
 import { WorkstationConnectionGate } from './components/WorkstationConnectionGate';
+import { SimpleShell, sendSimpleMessage } from './components/simple/SimpleShell';
+import { SimpleInterface } from './components/simple/SimpleInterface';
+import { uiSettings, workspace as workspaceIpc, quickActions } from '@/ipc';
+import * as workstationIpc from '@/ipc';
 
 const FIRST_STARTUP_NUDGE_EVENT = 'onboarding:first-startup-nudge';
 const TITLEBAR_LAYOUT_CHANGED_EVENT = 'titlebar:layout-changed';
@@ -71,6 +77,100 @@ function AppContent() {
   "use no memo";
 
   const [theme, setTheme] = useState<'light' | 'dark' | 'system'>('system');
+  const [advancedMode, setAdvancedMode] = useState<boolean | null>(null);
+  const [simpleWorkspacePath, setSimpleWorkspacePath] = useState<string | null>(null);
+  const [simpleThreadId, setSimpleThreadId] = useState<string | null>(null);
+  const [simpleThreadWorkspacePath, setSimpleThreadWorkspacePath] = useState<string | null>(null);
+  const [simpleThreadLoaded, setSimpleThreadLoaded] = useState(false);
+  const [simpleError, setSimpleError] = useState<string | null>(null);
+  const [simpleSettingsOpen, setSimpleSettingsOpen] = useState(false);
+  const [firstRunSession, setFirstRunSession] = useState(false);
+  const [showSimpleFeedback, setShowSimpleFeedback] = useState(true);
+  const [feedbackRequested, setFeedbackRequested] = useState(false);
+
+  const requestFeedback = useCallback(() => {
+    if (advancedMode === true) {
+      // Advanced keeps its existing mounted feedback surface and event bridge.
+      openFeedbackPopover();
+    } else {
+      setFeedbackRequested(true);
+    }
+  }, [advancedMode]);
+
+  const changeFeedbackVisibility = useCallback(async (visible: boolean) => {
+    const result = await uiSettings.setShowSimpleFeedback(visible);
+    if (!result.success) throw new Error(result.error || 'Could not save Feedback visibility.');
+    setShowSimpleFeedback(visible);
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    void uiSettings.getShowSimpleFeedback().then(({ enabled }: { enabled: boolean }) => {
+      if (mounted) setShowSimpleFeedback(enabled);
+    });
+    const unsubscribe = uiSettings.onShowSimpleFeedbackChanged(({ enabled }: { enabled: boolean }) => {
+      setShowSimpleFeedback(enabled);
+    });
+    return () => { mounted = false; unsubscribe(); };
+  }, []);
+
+  useEffect(() => quickActions.onOpenFeedback(requestFeedback), [requestFeedback]);
+
+  useEffect(() => {
+    let alive = true;
+    void uiSettings.getAdvancedMode()
+      .then(({ enabled }: { enabled: boolean }) => { if (alive) setAdvancedMode(enabled); })
+      .catch(() => { if (alive) setSimpleError('Could not load your experience preference.'); });
+    const unsubscribe = uiSettings.onAdvancedModeChanged(({ enabled }: { enabled: boolean }) => setAdvancedMode(enabled));
+    return () => { alive = false; unsubscribe(); };
+  }, []);
+
+  useEffect(() => {
+    if (advancedMode !== false) return;
+    let alive = true;
+    const simpleWorkspace = workspaceIpc as typeof workspaceIpc & {
+      getSimple?: () => Promise<{ workspacePath: string }>;
+      onSimpleChanged?: (callback: (event: { workspacePath: string }) => void) => () => void;
+    };
+    if (!simpleWorkspace.getSimple) {
+      setSimpleError('Simple workspace is unavailable.');
+      return;
+    }
+    const load = () => {
+      void simpleWorkspace.getSimple!().then(({ workspacePath }: { workspacePath: string }) => {
+        if (alive) { setSimpleWorkspacePath(workspacePath); setSimpleError(null); }
+      }).catch((error: unknown) => {
+        if (alive) setSimpleError(error instanceof Error ? error.message : 'Could not open the Simple workspace.');
+      });
+    };
+    load();
+    const unsubscribe = simpleWorkspace.onSimpleChanged?.(({ workspacePath }: { workspacePath: string }) => {
+      if (alive) { setSimpleWorkspacePath(workspacePath); setSimpleError(null); }
+    });
+    window.addEventListener('simple-workspace:changed', load);
+    return () => { alive = false; unsubscribe?.(); window.removeEventListener('simple-workspace:changed', load); };
+  }, [advancedMode]);
+
+  useEffect(() => {
+    if (advancedMode !== false || !simpleWorkspacePath) return;
+    let alive = true;
+    setSimpleThreadLoaded(false);
+    // The backend is authoritative; a renderer remount never silently creates a new thread.
+    const primaryThread = (workstationIpc as typeof workstationIpc & {
+      simplePrimaryThread?: { get: () => Promise<{ threadId: string | null }> };
+    }).simplePrimaryThread;
+    if (!primaryThread) { setSimpleError('Primary conversation is unavailable.'); return; }
+    void primaryThread.get().then(({ threadId }) => {
+      if (alive) { setSimpleThreadId(threadId); setSimpleThreadWorkspacePath(simpleWorkspacePath); setSimpleThreadLoaded(true); }
+    }).catch((error) => {
+      if (alive) setSimpleError(error instanceof Error ? error.message : 'Could not restore the primary conversation.');
+    });
+    return () => { alive = false; };
+  }, [advancedMode, simpleWorkspacePath]);
+
+  useEffect(() => quickActions.onOpenSettings(() => {
+    if (advancedMode === false) setSimpleSettingsOpen(true);
+  }), [advancedMode]);
   const marketingDemoMode = isMarketingDemoMode();
   const readOnlyWorkstation = isWorkstationReadOnly();
   const marketingDemoWindowChrome = marketingDemoMode && isMarketingDemoWindowChromeEnabled();
@@ -125,9 +225,10 @@ function AppContent() {
     : null;
   const effectiveWindowOverlayOpacity = nativeMacTransparencyDisabled ? 1 : backgroundOpacity;
 
-  // Only warm onboarding videos while onboarding is actively visible.
+  // The old feature-tour videos belong to Advanced onboarding. Simple has its
+  // own short first-run path and must not download or initialize those assets.
   useEffect(() => {
-    if (marketingDemoMode || isOnboarding !== true || !showOnboardingOverlay) {
+    if (marketingDemoMode || isOnboarding !== true || !showOnboardingOverlay || advancedMode !== true) {
       return;
     }
 
@@ -136,7 +237,7 @@ function AppContent() {
     return () => {
       disposeOnboardingTourVideos();
     };
-  }, [isOnboarding, marketingDemoMode, showOnboardingOverlay]);
+  }, [advancedMode, isOnboarding, marketingDemoMode, showOnboardingOverlay]);
 
   useEffect(() => {
     if (!marketingDemoMode || typeof window === 'undefined' || window.parent === window) {
@@ -235,6 +336,7 @@ function AppContent() {
     getOnboardingState()
       .then(({ state }) => {
         const needsOnboarding = shouldShowOnboarding(state);
+        setFirstRunSession(needsOnboarding);
         setIsOnboarding(needsOnboarding);
         if (!needsOnboarding) {
           setShowOnboardingOverlay(false);
@@ -838,10 +940,15 @@ function AppContent() {
       {!isOnboarding && !marketingDemoMode && (
         <BrowserSplitOfferNotice />
       )}
-      <OnboardingFeedbackToast visible={isOnboarding === true} />
+      <OnboardingFeedbackToast
+        visible={isOnboarding === true || (advancedMode === false && (showSimpleFeedback || feedbackRequested))}
+        openRequested={feedbackRequested}
+        side={isMac ? 'right' : 'left'}
+        onClose={() => setFeedbackRequested(false)}
+      />
 
       <LowerLeftNoticeViewport
-        leftSidebarOpen={state.leftSidebar.isOpen}
+        leftSidebarOpen={advancedMode === true && state.leftSidebar.isOpen}
         leftSidebarWidth={state.leftSidebar.width || 300}
       />
 
@@ -853,7 +960,31 @@ function AppContent() {
         }`}
         style={{ transition: 'opacity 400ms ease' }}
       >
-        {/* Title bar - positioned on top */}
+        {shouldRenderMainSurfaces && advancedMode === false && simpleWorkspacePath && simpleThreadLoaded && simpleThreadWorkspacePath === simpleWorkspacePath && !simpleError ? (
+          <SimpleShell key={simpleWorkspacePath} workspacePath={simpleWorkspacePath} initialThreadId={simpleThreadId}
+            firstRunSession={firstRunSession}
+            onBindThread={async (threadId) => {
+              const primaryThread = (workstationIpc as typeof workstationIpc & {
+                simplePrimaryThread?: { bind: (request: { threadId: string; expectedThreadId?: string | null }) => Promise<{ threadId: string }> };
+              }).simplePrimaryThread;
+              if (!primaryThread) throw new Error('Primary conversation persistence is unavailable.');
+              await primaryThread.bind({ threadId, expectedThreadId: simpleThreadId });
+              setSimpleThreadId(threadId);
+            }}
+            settingsOpen={simpleSettingsOpen} onOpenSettings={() => setSimpleSettingsOpen(true)}
+            onCloseSettings={() => setSimpleSettingsOpen(false)}
+            feedbackVisible={showSimpleFeedback}
+            onFeedbackVisibilityChange={changeFeedbackVisibility}
+            onLeaveFeedback={requestFeedback}
+            canvas={<SimpleInterface onMessage={(text, source) => sendSimpleMessage(text, simpleWorkspacePath, source)} />} />
+        ) : advancedMode === false || advancedMode === null ? (
+          <div role={simpleError ? 'alert' : 'status'} className="flex h-full flex-col items-center justify-center gap-3 px-8 text-ui-sm text-muted-foreground">
+            <span>{simpleError ?? 'Opening Interpreter…'}</span>
+            {simpleError && <button type="button" className="rounded-md px-3 py-1.5" style={{ border: 'var(--border-width) solid var(--border)' }}
+              onClick={() => window.location.reload()}>Retry</button>}
+          </div>
+        ) : <>
+        {/* Title bar - positioned on top in Advanced mode */}
         <CustomTitleBar />
 
         {/* Full-height layout with JS-animated sidebars */}
@@ -925,6 +1056,7 @@ function AppContent() {
             </div>
           </div> : null}
         </div>
+        </>}
       </div>
 
       {/* Onboarding overlay -- renders above everything at z-50 */}
@@ -937,12 +1069,17 @@ function AppContent() {
             transition={{ duration: 0.3, ease: 'easeInOut' }}
             className="fixed inset-0 z-50"
           >
-            <OnboardingOverlay onComplete={handleOnboardingComplete} />
+            <OnboardingOverlay
+              onComplete={handleOnboardingComplete}
+              simpleMode={advancedMode !== true}
+            />
           </motion.div>
         )}
       </AnimatePresence>
 
       {marketingDemoMode ? <MarketingDemoShield /> : null}
+
+      {!marketingDemoMode ? <UnboundCliApprovals /> : null}
 
       {!marketingDemoMode ? <WorkspaceConfirmationModalHost /> : null}
       {!marketingDemoMode ? <ComputerUseSetupModalHost /> : null}

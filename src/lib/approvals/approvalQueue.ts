@@ -108,12 +108,29 @@ export function buildApprovalQueueItems(
 export function filterApprovalQueueItems(
   items: ApprovalQueueItem[],
   ownerAgentId?: string,
+  ownerThreadId?: string | null,
 ): ApprovalQueueItem[] {
+  if (ownerThreadId) {
+    return items.filter((item) => item.owner.threadId === ownerThreadId);
+  }
   if (!ownerAgentId) {
     return items;
   }
 
   return items.filter((item) => item.owner.agentId === ownerAgentId);
+}
+
+/** A CLI request without a thread belongs to its captured window, not to a tab.
+ * Never guess an owner when the native request has no window binding. */
+export function filterWindowCliApprovals(
+  items: ApprovalQueueItem[],
+  windowSessionKey: string | null,
+): ApprovalQueueItem[] {
+  if (!windowSessionKey) return [];
+  return items.filter((item) => item.owner.kind === 'cli'
+    && item.owner.agentId === null
+    && item.owner.threadId === null
+    && item.owner.windowSessionKey === windowSessionKey);
 }
 
 export function buildApprovalQueueGroups(items: ApprovalQueueItem[]): ApprovalQueueGroup[] {

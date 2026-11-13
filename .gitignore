@@ -8,6 +8,7 @@ node_modules
 
 # Build outputs
 dist
+dist-browser-project/
 dist-electron
 dist-server
 build/*

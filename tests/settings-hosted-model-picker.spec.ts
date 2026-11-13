@@ -68,6 +68,9 @@ test('Settings > Models smoke persists a hosted model selection', async ({ page 
     writeOpenRouterModelCache();
     await clearUserConfig(page);
     await waitForAppReady(page);
+    // The legacy sidebar is available in Advanced mode; Simple is the default.
+    await page.evaluate(() => (window as any).electron.uiSettings.setAdvancedMode(true));
+    await expect(page.locator('.app-workspace-shell')).toBeVisible();
 
     const createResponse = await apiCall(page, 'POST', '/api/profiles', {
       id: profileId,
@@ -82,11 +85,13 @@ test('Settings > Models smoke persists a hosted model selection', async ({ page 
 
     await page.locator(sel('agentSettingsButton')).click();
     await expect(page.locator(sel('settingsPopover'))).toBeVisible({ timeout: 5000 });
-    await page.locator(sel('settingsPopover')).getByText('Settings').click();
+    await page.locator(sel('settingsPopover')).getByRole('button', { name: 'Settings' }).press('Enter');
 
     await expect(page.locator(sel('settingsView'))).toBeVisible({ timeout: 10000 });
     const settingsView = page.locator(sel('settingsView'));
-    await page.locator(sel.settingsTab('models')).click();
+    const modelsTab = page.locator(sel.settingsTab('models'));
+    await modelsTab.focus();
+    await modelsTab.press('Enter');
     await expect(settingsView.getByText('API keys are set per model.')).toBeVisible();
     await settingsView.locator(sel.profileCard(profileId)).click();
 
@@ -102,9 +107,17 @@ test('Settings > Models smoke persists a hosted model selection', async ({ page 
       .locator('xpath=..');
     await expect(opusNameRow).toHaveClass(/gap-2\.5/);
 
-    await page.getByRole('button', { name: 'GPT-5.4-mini' }).click();
+    const desiredModel = page.getByRole('button', { name: 'GPT-5.4-mini' });
+    await desiredModel.focus();
+    await desiredModel.press('Enter');
+    await expect(page.locator(sel('hostedModelPickerTrigger'))).toContainText('GPT-5.4-mini');
 
     await page.getByRole('button', { name: 'Save Changes' }).click();
+    await expect.poll(async () => {
+      const response = await apiCall(page, 'GET', '/api/profiles');
+      const data = response.data as { profiles?: Array<{ id: string; modelId: string }> } | null;
+      return data?.profiles?.find((profile) => profile.id === profileId)?.modelId;
+    }, { timeout: 10000 }).toBe('openai/gpt-5.4-mini');
     await expect(settingsView.locator(sel.profileCard(profileId))).toBeVisible({ timeout: 10000 });
 
     await settingsView.locator(sel.profileCard(profileId)).click();
@@ -113,5 +126,6 @@ test('Settings > Models smoke persists a hosted model selection', async ({ page 
     if (profileCreated) {
       await deleteProfile(page, profileId);
     }
+    await page.evaluate(() => (window as any).electron.uiSettings.setAdvancedMode(false));
   }
 });

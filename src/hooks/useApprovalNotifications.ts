@@ -66,6 +66,9 @@ export function useApprovalNotifications() {
       const ownerAgentId = layoutState?.tabs
         ? resolveApprovalOwnerAgentId(approval, layoutState.tabs)
         : approval.agentId;
+      const simpleThreadId = document.querySelector('[data-simple-shell]')?.getAttribute('data-simple-thread-id');
+      const simpleOwnsApproval = !!simpleThreadId && simpleThreadId ===
+        (approval.owner?.identity.threadId ?? approval.context?.threadId);
 
       // Avoid duplicate notifications
       if (notifiedIds.current.has(approval.id)) return;
@@ -77,7 +80,7 @@ export function useApprovalNotifications() {
         notifiedIds.current = new Set(arr.slice(-50));
       }
 
-      if (!ownerAgentId) {
+      if (!ownerAgentId && !simpleOwnsApproval) {
         console.error('[Approvals] Failed to resolve owner agent for approval', {
           approvalId: approval.id,
           toolName: approval.toolName,
@@ -90,8 +93,11 @@ export function useApprovalNotifications() {
       }
 
       // Suppression: if window is focused AND the active tab is this agent, skip
-      if (document.hasFocus() && ownerAgentId) {
-        if (layoutState) {
+      if (document.hasFocus()) {
+        // Simple has no layout tab. Its primary thread is nevertheless visible
+        // through the attached approval drawer even while the conversation is folded.
+        if (simpleOwnsApproval) return;
+        if (ownerAgentId && layoutState) {
           const activePaneId = layoutState.activePaneId;
           if (activePaneId) {
             const findPane = (node: any): any => {

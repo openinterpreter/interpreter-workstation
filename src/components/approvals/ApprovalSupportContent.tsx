@@ -355,11 +355,7 @@ export function PermissionCardDraftFields({
 
   return (
     <div
-      className="space-y-3 rounded-[14px] px-3 py-3"
-      style={{
-        background: 'color-mix(in srgb, var(--oa-bg-subtle, var(--muted)) 62%, transparent)',
-        border: 'var(--border-width) solid color-mix(in srgb, var(--oa-border, var(--border)) 24%, transparent)',
-      }}
+      className="space-y-3 rounded-[14px] border border-foreground/[0.07] bg-foreground/[0.025] px-3 py-3"
     >
       {fields.map((field) => {
         const value = values[field.id] ?? field.value;
@@ -393,11 +389,7 @@ export function PermissionCardDraftFields({
               value={typeof value === 'string' ? value : ''}
               disabled={disabled}
               onChange={(event) => onChange({ ...values, [field.id]: event.target.value })}
-              className="h-9 w-full rounded-[10px] px-3 text-ui-sm text-[var(--oa-text)] outline-none"
-              style={{
-                background: 'color-mix(in srgb, var(--oa-bg-app, var(--background)) 78%, transparent)',
-                border: 'var(--border-width) solid color-mix(in srgb, var(--oa-border, var(--border)) 28%, transparent)',
-              }}
+              className="h-9 w-full rounded-[10px] border border-foreground/[0.1] bg-background/40 px-3 text-ui-sm text-[var(--oa-text)] outline-none focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring/50"
             />
             {field.description ? (
               <span className="block break-words text-ui-xs text-[var(--oa-text-muted)]">{field.description}</span>
@@ -421,11 +413,7 @@ function PermissionCardPreview({
 
   return (
     <div
-      className="space-y-3 rounded-[14px] px-3 py-3"
-      style={{
-        background: 'color-mix(in srgb, var(--oa-bg-subtle, var(--muted)) 62%, transparent)',
-        border: 'var(--border-width) solid color-mix(in srgb, var(--oa-border, var(--border)) 24%, transparent)',
-      }}
+      className="space-y-3 rounded-[14px] border border-foreground/[0.07] bg-foreground/[0.025] px-3 py-3"
     >
       {blocks.map((block, index) => {
         const type = nonEmptyString(block.type);
@@ -716,12 +704,8 @@ function ApprovalDetailField({
     <div className="space-y-1.5">
       <div className="text-ui-xs text-[var(--oa-text-faint)]">{label}</div>
       <div
-        className={inset ? 'rounded-[12px] px-3 py-2.5' : undefined}
-        style={inset
-          ? {
-              background: 'color-mix(in srgb, var(--oa-bg-subtle, var(--muted)) 56%, transparent)',
-              border: 'var(--border-width) solid color-mix(in srgb, var(--oa-border, var(--border)) 22%, transparent)',
-            }
+        className={inset
+          ? 'rounded-[12px] border border-foreground/[0.07] bg-foreground/[0.025] px-3 py-2.5'
           : undefined}
       >
         {children}
@@ -800,7 +784,7 @@ export function ApprovalSupportContent({
           }}
         >
           <div className="text-ui-xs text-[var(--oa-text-faint)]">Note</div>
-          <div className="mt-1 whitespace-pre-line text-ui-sm leading-6 text-[var(--oa-text)]">
+          <div className="mt-1 whitespace-pre-line text-pretty text-ui-sm leading-6 text-[var(--oa-text)]">
             {warningText}
           </div>
         </div>
@@ -810,7 +794,7 @@ export function ApprovalSupportContent({
         descriptionText === messageText
         || (hasCommand && isGenericCommandApprovalCopy(descriptionText))
       ) ? (
-        <div className="text-ui-sm leading-6 text-[var(--oa-text)]">
+        <div className="text-pretty text-ui-sm leading-6 text-[var(--oa-text)]">
           {descriptionText}
         </div>
       ) : null}
@@ -818,7 +802,7 @@ export function ApprovalSupportContent({
       {hasReason && reasonText && reasonText !== descriptionText && !(
         hasCommand && isGenericCommandApprovalCopy(reasonText)
       ) && (
-        <div className="text-ui-sm leading-6 text-[var(--oa-text-muted)]">
+        <div className="text-pretty text-ui-sm leading-6 text-[var(--oa-text-muted)]">
           {reasonText}
         </div>
       )}

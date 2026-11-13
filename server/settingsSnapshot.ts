@@ -6,6 +6,7 @@ import {
   validateSettingsSnapshot,
   type SettingsSnapshot,
 } from './configSchema';
+import { sanitizeInterpreterOverlaySettings } from '../apps/interpreter-overlay/shared/settings';
 
 export { DEFAULT_BACKGROUND_OPACITY } from '../shared/uiDefaults';
 
@@ -31,6 +32,8 @@ export function buildSettingsSnapshot(config: AppConfig): SettingsSnapshot {
     showHelpPanelPreview: config.showHelpPanelPreview ?? false,
     reviewMarkdownEdits: config.reviewMarkdownEdits ?? true,
     launchAtLogin: config.launchAtLogin ?? false,
+    advancedMode: config.advancedMode ?? false,
+    showSimpleFeedback: config.showSimpleFeedback ?? true,
     autoApproveLowRiskMediaCards: config.autoApproveLowRiskMediaCards ?? false,
     telemetryEnabled: config.telemetryEnabled ?? false,
     allowAgentAddTools: config.allowAgentAddTools ?? true,
@@ -57,6 +60,8 @@ export function applySettingsSnapshot(
     showHelpPanelPreview: snapshot.showHelpPanelPreview,
     reviewMarkdownEdits: snapshot.reviewMarkdownEdits,
     launchAtLogin: snapshot.launchAtLogin,
+    advancedMode: snapshot.advancedMode,
+    showSimpleFeedback: snapshot.showSimpleFeedback,
     autoApproveLowRiskMediaCards: snapshot.autoApproveLowRiskMediaCards,
     telemetryEnabled: snapshot.telemetryEnabled,
     allowAgentAddTools: snapshot.allowAgentAddTools,
@@ -77,7 +82,10 @@ export function assertValidSettingsSnapshot(
 }
 
 export function assertValidAppConfig(config: AppConfig): AppConfig {
-  const validatedConfig = validateConfig(config);
+  const normalizedConfig = config.interpreterOverlay
+    ? { ...config, interpreterOverlay: sanitizeInterpreterOverlaySettings(config.interpreterOverlay) }
+    : config;
+  const validatedConfig = validateConfig(normalizedConfig);
   if (!validatedConfig.success) {
     throw new Error(`Invalid app config: ${validatedConfig.error}`);
   }

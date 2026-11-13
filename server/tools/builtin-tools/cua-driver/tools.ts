@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { approvalManager } from '../../../approvalManager';
 import { waitForComputerUseSetupReady } from '../../../computerUseSetupGate';
 import { thumbnailService } from '../../../thumbnailService';
-import { getBrowserAccessPolicy, getCuaAccessPolicy } from '../../../configStore';
+import { autoApproveOrdinaryHeadlessToolsSync, failClosedOnHeadlessToolApprovalSync, getBrowserAccessPolicy, getCuaAccessPolicy, hasNativeCuaDiscoveryGrant } from '../../../configStore';
 import { getBrowserControlStatus } from '../../../utils/browserExtensionRelay';
 import {
   checkFileAccessPermission,
@@ -18,6 +18,7 @@ import type { BuiltinToolContext, BuiltinToolDefinition } from '../../builtinToo
 import type { ToolCallResponse } from '../../toolTypes';
 import { callWindowsCuaDriverTool } from './windowsUia';
 import type { BrowserControlStatus } from '../../../../shared/types/browserControl';
+import { CUA_PROCESS_LOCK_DIR, cuaLockOwnerDefinitelyGone, cuaLockOwnerForNewCall } from '../../../utils/cuaProcessLockMetadata';
 import {
   resolveCuaAccessPolicyMode,
   type CuaAccessPermissionKind,
@@ -51,8 +52,7 @@ const MAC_CUA_DRIVER_DAEMON_STARTUP_TIMEOUT_MS = 20_000;
 const MAC_CUA_DRIVER_TOOL_TIMEOUT_MS = 60_000;
 const MAC_CUA_DRIVER_ACTIVITY_TIMEOUT_MS = 5_000;
 const MAC_CUA_DRIVER_ACTIVITY_MAX_BUFFER = 10 * 1024 * 1024;
-const MAC_CUA_DRIVER_CALL_LOCK_DIR = path.join(os.tmpdir(), 'interpreter-desktop-driver-call.lock');
-const MAC_CUA_DRIVER_CALL_LOCK_STALE_MS = 3 * MAC_CUA_DRIVER_TOOL_TIMEOUT_MS;
+const MAC_CUA_DRIVER_CALL_LOCK_DIR = CUA_PROCESS_LOCK_DIR;
 const MAC_SELECT_OPTION_MENU_WAIT_MS = 3_000;
 const MAC_SELECT_OPTION_MENU_POLL_MS = 120;
 const MAC_CUA_DRIVER_CALL_BUSY_MESSAGE = [
@@ -75,6 +75,7 @@ type ComputerUseTarget = {
   };
 };
 const computerUseAppStateCache = new Map<string, ComputerUseTarget>();
+const macExplicitlyFocusedTargets = new Set<string>();
 
 function automationBackendName(): string {
   return process.platform === 'win32' ? 'Windows UI Automation' : 'native desktop driver';
@@ -788,6 +789,31 @@ function isContentWindowRecord(window: MacCuaWindowRecord): boolean {
   return width > 300 && height > 160;
 }
 
+function sortMacComputerUseWindows(windows: MacCuaWindowRecord[]): MacCuaWindowRecord[] {
+  return [...windows].sort((left, right) => {
+    const contentDelta = Number(isContentWindowRecord(right)) - Number(isContentWindowRecord(left));
+    if (contentDelta !== 0) return contentDelta;
+    const titledDelta = Number(Boolean(windowRecordTitle(right).trim())) - Number(Boolean(windowRecordTitle(left).trim()));
+    if (titledDelta !== 0) return titledDelta;
+    const currentSpaceDelta = Number(right.on_current_space === true) - Number(left.on_current_space === true);
+    if (currentSpaceDelta !== 0) return currentSpaceDelta;
+    const onScreenDelta = Number(right.is_on_screen === true) - Number(left.is_on_screen === true);
+    if (onScreenDelta !== 0) return onScreenDelta;
+    const normalLayerDelta = Number((right.layer ?? 0) === 0) - Number((left.layer ?? 0) === 0);
+    if (normalLayerDelta !== 0) return normalLayerDelta;
+    // Larger z-index values are closer to the front in the driver's macOS
+    // window inventory. Prefer the most recently active main window before
+    // using size as a final tiebreaker.
+    const zIndexDelta = (right.z_index ?? -1) - (left.z_index ?? -1);
+    if (zIndexDelta !== 0) return zIndexDelta;
+    return windowRecordArea(right) - windowRecordArea(left);
+  });
+}
+
+export function sortMacComputerUseWindowIdsForTest(windows: MacCuaWindowRecord[]): Array<number | string | null> {
+  return sortMacComputerUseWindows(windows).map(windowRecordId);
+}
+
 function extractWindowRecords(parsed: unknown): MacCuaWindowRecord[] {
   if (Array.isArray(parsed)) return parsed as MacCuaWindowRecord[];
   if (parsed && typeof parsed === 'object') {
@@ -817,21 +843,7 @@ async function resolveMacComputerUseTarget(
     throw new Error(`No windows found for "${app}".`);
   }
 
-  return [...windows].sort((left, right) => {
-    const contentDelta = Number(isContentWindowRecord(right)) - Number(isContentWindowRecord(left));
-    if (contentDelta !== 0) return contentDelta;
-    const currentSpaceDelta = Number(right.on_current_space === true) - Number(left.on_current_space === true);
-    if (currentSpaceDelta !== 0) return currentSpaceDelta;
-    const onScreenDelta = Number(right.is_on_screen === true) - Number(left.is_on_screen === true);
-    if (onScreenDelta !== 0) return onScreenDelta;
-    const layerDelta = Number((left.layer ?? 0) === 0) - Number((right.layer ?? 0) === 0);
-    if (layerDelta !== 0) return layerDelta;
-    const areaDelta = windowRecordArea(right) - windowRecordArea(left);
-    if (areaDelta !== 0) return areaDelta;
-    const zIndexDelta = (right.z_index ?? 0) - (left.z_index ?? 0);
-    if (zIndexDelta !== 0) return zIndexDelta;
-    return 0;
-  }).map((chosen) => {
+  return sortMacComputerUseWindows(windows).map((chosen) => {
     const bounds = chosen.bounds
       && typeof chosen.bounds.x === 'number'
       && typeof chosen.bounds.y === 'number'
@@ -860,12 +872,44 @@ async function resolveMacComputerUseTarget(
 
 function macComputerUseTreeHasWindowContent(markdown: string | undefined): boolean {
   if (!markdown) return false;
-  return /\n\t\d+ standard window\b/.test(markdown)
+  const normalizedTreeHasContent = /\n\t\d+ standard window\b/.test(markdown)
     && /\n\t\t+\d+ HTML content\b/.test(markdown);
+  const nativeDriverTreeHasContent = /(?:^|\n)\s*- \[\d+\] AXWindow\b/.test(markdown)
+    && /\n\s+- (?:\[\d+\]\s+)?AX(?:Button|CheckBox|ComboBox|Group|Link|MenuButton|PopUpButton|RadioButton|ScrollArea|StaticText|TabGroup|TextArea|TextField|Toolbar|WebArea)\b/.test(markdown);
+  return normalizedTreeHasContent || nativeDriverTreeHasContent;
 }
 
 export function macComputerUseTreeHasWindowContentForTest(markdown: string | undefined): boolean {
   return macComputerUseTreeHasWindowContent(markdown);
+}
+
+export function macFocusWindowDriverToolForTest(): 'bring_to_front' {
+  return 'bring_to_front';
+}
+
+export function macWindowScopedInputArgsForTest(
+  target: Pick<ComputerUseTarget, 'pid' | 'windowId'>,
+  explicitlyFocused = false,
+): { pid: number; window_id: number | string; delivery_mode?: 'foreground' } {
+  return {
+    pid: target.pid,
+    window_id: target.windowId,
+    ...(explicitlyFocused ? { delivery_mode: 'foreground' as const } : {}),
+  };
+}
+
+function macFocusedTargetKey(
+  target: Pick<ComputerUseTarget, 'pid' | 'windowId'>,
+  context?: BuiltinToolContext,
+): string {
+  return `${approvalAgentId(context) ?? 'default'}:${target.pid}:${String(target.windowId)}`;
+}
+
+function wasExplicitlyFocusedByAgent(
+  target: Pick<ComputerUseTarget, 'pid' | 'windowId'>,
+  context?: BuiltinToolContext,
+): boolean {
+  return macExplicitlyFocusedTargets.has(macFocusedTargetKey(target, context));
 }
 
 const INTERACTIVE_TREE_LINE_LIMIT = 120;
@@ -1660,10 +1704,17 @@ async function callMacComputerUseTool(
       throw new Error('target_identity.window.native_window_id must be an integer for macOS window focus.');
     }
     assertNotProtectedDesktopPid(pid);
-    return callCuaDriverCli('focus_window', {
+    // The native driver exposes the reviewed macOS operation as
+    // `bring_to_front`. Its older `focus_window` alias is intentionally
+    // unclassified and therefore fails closed before platform dispatch.
+    const response = await callCuaDriverCli(macFocusWindowDriverToolForTest(), {
       pid,
       window_id: windowId,
     }, context);
+    if (!response.isError) {
+      macExplicitlyFocusedTargets.add(macFocusedTargetKey({ pid, windowId }, context));
+    }
+    return response;
   }
 
   if (toolName === 'close_window') {
@@ -1848,17 +1899,16 @@ async function callMacComputerUseTool(
     const key = keyAndModifiers(args.key.trim());
     if (key.modifiers?.length) {
       return callCuaDriverCli('hotkey', {
-        pid: target.pid,
+        ...macWindowScopedInputArgsForTest(target, wasExplicitlyFocusedByAgent(target, context)),
         keys: [...key.modifiers, key.key],
       }, context, undefined, appApprovalArgs);
     }
     const pressArgs: Record<string, unknown> = {
-      pid: target.pid,
+      ...macWindowScopedInputArgsForTest(target, wasExplicitlyFocusedByAgent(target, context)),
       ...key,
       ...(args.skip_change_detection === true ? { skip_change_detection: true } : {}),
     };
     if (target.focusedElementIndex !== null) {
-      pressArgs.window_id = target.windowId;
       pressArgs.element_index = target.focusedElementIndex;
     }
     return callCuaDriverCli('press_key', pressArgs, context, undefined, appApprovalArgs);
@@ -1868,15 +1918,13 @@ async function callMacComputerUseTool(
     if (typeof args.text !== 'string') throw new Error('Missing required string field text.');
     const elementIndex = optionalElementIndex(args);
     const typeArgs: Record<string, unknown> = {
-      pid: target.pid,
+      ...macWindowScopedInputArgsForTest(target, wasExplicitlyFocusedByAgent(target, context)),
       text: args.text,
       ...(args.skip_change_detection === true ? { skip_change_detection: true } : {}),
     };
     if (elementIndex !== null) {
-      typeArgs.window_id = target.windowId;
       typeArgs.element_index = elementIndex;
     } else if (target.focusedElementIndex !== null) {
-      typeArgs.window_id = target.windowId;
       typeArgs.element_index = target.focusedElementIndex;
     }
     return callCuaDriverCli('type_text', typeArgs, context, undefined, appApprovalArgs);
@@ -3011,23 +3059,27 @@ async function withMacCuaDriverSerialized<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-async function acquireMacCuaDriverProcessLock(lockDir = MAC_CUA_DRIVER_CALL_LOCK_DIR): Promise<() => void> {
+async function acquireMacCuaDriverProcessLock(lockDir = MAC_CUA_DRIVER_CALL_LOCK_DIR, action = 'unknown', threadId?: string): Promise<() => void> {
   while (true) {
     try {
-      fs.mkdirSync(lockDir);
+      fs.mkdirSync(lockDir, { mode: 0o700 });
+      const directory = fs.lstatSync(lockDir);
+      const owner = cuaLockOwnerForNewCall(action, threadId);
       try {
-        fs.writeFileSync(path.join(lockDir, 'owner'), JSON.stringify({
-          pid: process.pid,
-          acquiredAt: Date.now(),
-        }));
+        fs.writeFileSync(path.join(lockDir, 'owner'), JSON.stringify(owner), { flag: 'wx', mode: 0o600 });
       } catch {
-        // The directory itself is the atomic lock; owner metadata is best-effort.
+        fs.rmdirSync(lockDir);
+        throw new Error('Computer Use lock owner metadata could not be written.');
       }
       return () => {
         try {
+          const currentDirectory = fs.lstatSync(lockDir);
+          const current = JSON.parse(fs.readFileSync(path.join(lockDir, 'owner'), 'utf8')) as { nonce?: unknown };
+          if (currentDirectory.ino !== directory.ino || currentDirectory.dev !== directory.dev
+            || current.nonce !== owner.nonce) return;
           fs.rmSync(lockDir, { recursive: true, force: true });
         } catch {
-          // Nothing actionable for a best-effort unlock during process teardown.
+          // Never remove a lock whose owner cannot be verified.
         }
       };
     } catch (error) {
@@ -3035,8 +3087,7 @@ async function acquireMacCuaDriverProcessLock(lockDir = MAC_CUA_DRIVER_CALL_LOCK
       if (err.code !== 'EEXIST') {
         throw error;
       }
-      if (macCuaDriverProcessLockIsStale(lockDir)) {
-        fs.rmSync(lockDir, { recursive: true, force: true });
+      if (reclaimDefinitelyDeadCuaLock(lockDir)) {
         continue;
       }
       throw new Error(MAC_CUA_DRIVER_CALL_BUSY_MESSAGE);
@@ -3044,33 +3095,23 @@ async function acquireMacCuaDriverProcessLock(lockDir = MAC_CUA_DRIVER_CALL_LOCK
   }
 }
 
-function macCuaDriverProcessLockIsStale(lockDir: string): boolean {
+function reclaimDefinitelyDeadCuaLock(lockDir: string): boolean {
+  // Only one reaper may inspect/remove a dead owner's directory. An owner with
+  // a live matching process identity cannot release while a reaper owns this
+  // guard; an abandoned reaper guard deliberately fails closed.
+  const guard = `${lockDir}.reaper`;
   try {
-    const owner = JSON.parse(fs.readFileSync(path.join(lockDir, 'owner'), 'utf8')) as { pid?: unknown };
-    if (typeof owner.pid === 'number' && Number.isInteger(owner.pid) && owner.pid > 0) {
-      try {
-        process.kill(owner.pid, 0);
-        return false;
-      } catch (error) {
-        const err = error as NodeJS.ErrnoException;
-        if (err.code === 'ESRCH') {
-          return true;
-        }
-      }
-    }
-  } catch {
-    // Fall through to age-based stale detection for old or corrupt lock dirs.
-  }
-
-  try {
-    const stat = fs.statSync(lockDir);
-    return Date.now() - stat.mtimeMs > MAC_CUA_DRIVER_CALL_LOCK_STALE_MS;
+    fs.mkdirSync(guard, { mode: 0o700 });
   } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') {
-      return false;
-    }
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
     throw error;
+  }
+  try {
+    if (!cuaLockOwnerDefinitelyGone(lockDir)) return false;
+    fs.rmSync(lockDir, { recursive: true, force: true });
+    return true;
+  } finally {
+    fs.rmdirSync(guard);
   }
 }
 
@@ -3086,13 +3127,24 @@ export async function withMacCuaDriverProcessLockForTest<T>(
   }
 }
 
-async function withMacCuaDriverProcessLock<T>(fn: () => Promise<T>): Promise<T> {
-  const release = await acquireMacCuaDriverProcessLock();
-  try {
-    return await fn();
-  } finally {
-    release();
-  }
+// An approval can wait indefinitely for a person. It must never own the
+// cross-process desktop lock while it waits: unrelated, already-authorized
+// desktop calls must remain responsive.
+export async function withMacCuaDriverApprovalAndProcessLock<T>(
+  approve: () => Promise<void>,
+  invoke: () => Promise<T>,
+  lockDir = MAC_CUA_DRIVER_CALL_LOCK_DIR,
+  action = 'unknown',
+  threadId?: string,
+): Promise<T> {
+  await approve();
+  // FIFO within this process. No call holds the cross-process lock while it
+  // waits for another approved call (or any permission/daemon prompt).
+  return withMacCuaDriverSerialized(async () => {
+    const release = await acquireMacCuaDriverProcessLock(lockDir, action, threadId);
+    try { return await invoke(); }
+    finally { release(); }
+  });
 }
 
 async function getMacComputerUsePermissionStatus(): Promise<MacComputerUsePermissionStatus | null> {
@@ -3285,6 +3337,25 @@ async function requestApproval(
   }
 
   if (DISCOVERY_TOOLS.has(toolName)) {
+    const discoveryMode = resolveCuaAccessPolicyMode(
+      await cuaAccessPolicyProvider(),
+      null,
+      'inspect',
+    );
+    if (discoveryMode === 'all') return;
+    if (discoveryMode === 'deny') {
+      throw new Error('Computer Use inspect access to the desktop is denied by Settings > Permissions.');
+    }
+    if (autoApproveOrdinaryHeadlessToolsSync() && context?.threadId &&
+        context.verifiedCallerThreadId === context.threadId) return;
+    // Operator-owned, exact-thread read grant. No global inspect permission,
+    // target control, other discovery tool, or argument-bearing call is implied.
+    if (failClosedOnHeadlessToolApprovalSync() && Object.keys(args).length === 0 &&
+        context?.threadId && context.verifiedCallerThreadId === context.threadId &&
+        hasNativeCuaDiscoveryGrant(context.threadId, toolName)) return;
+    if (failClosedOnHeadlessToolApprovalSync()) {
+      throw new Error('Computer Use discovery requires an operator inspect grant; unattended approval was denied before acquiring the desktop lock.');
+    }
     const copy = process.platform === 'win32'
       ? windowsDiscoveryApprovalCopy(toolName)
       : {
@@ -3336,8 +3407,13 @@ async function requestApproval(
       `Computer Use ${kind} access to "${displayTarget}" is denied by Settings > Permissions.`,
     );
   }
+  if (autoApproveOrdinaryHeadlessToolsSync() && context?.threadId &&
+      context.verifiedCallerThreadId === context.threadId) return;
   if (kind === 'control' && context?.overlayReviewedAction === true) {
     return;
+  }
+  if (failClosedOnHeadlessToolApprovalSync()) {
+    throw new Error(`Computer Use ${kind} access to "${displayTarget}" requires an operator grant; unattended approval was denied before acquiring the desktop lock.`);
   }
 
   const copy = process.platform === 'win32'
@@ -3380,9 +3456,22 @@ async function callCuaDriverCli(
 ): Promise<ToolCallResponse> {
   assertNotProtectedDesktopAutomationTarget(toolName, args);
   if (process.platform === 'darwin' || process.platform === 'linux') {
-    return withMacCuaDriverProcessLock(() => (
-      withMacCuaDriverSerialized(() => callMacCuaDriverCli(toolName, args, context, imageOutputPath, approvalArgs))
-    ));
+    if (toolName === 'check_permissions' && !booleanArg(args, 'prompt')) {
+      return macPermissionStatusResponse(await getMacComputerUsePermissionStatus());
+    }
+    await ensureMacComputerUsePermissionsBeforeDaemon();
+    return withMacCuaDriverApprovalAndProcessLock(
+      async () => {
+        await requestApproval(toolName, approvalArgs ?? args, context);
+        const binary = resolveCuaDriverBinary();
+        await ensureCuaDriverDaemon(binary);
+        await requestMacForegroundApprovalIfNeeded(toolName, args, context);
+      },
+      () => callMacCuaDriverCli(toolName, args, context, imageOutputPath),
+      MAC_CUA_DRIVER_CALL_LOCK_DIR,
+      toolName,
+      context?.threadId,
+    );
   }
   await requestApproval(toolName, approvalArgs ?? args, context);
   await requestWindowsForegroundApprovalForPointerIfNeeded(toolName, args, context);
@@ -3403,17 +3492,9 @@ async function callMacCuaDriverCli(
   args: Record<string, unknown>,
   context?: BuiltinToolContext,
   imageOutputPath?: string,
-  approvalArgs?: Record<string, unknown>,
 ): Promise<ToolCallResponse> {
-  if (toolName === 'check_permissions' && !booleanArg(args, 'prompt')) {
-    return macPermissionStatusResponse(await getMacComputerUsePermissionStatus());
-  }
-  await ensureMacComputerUsePermissionsBeforeDaemon();
-  await requestApproval(toolName, approvalArgs ?? args, context);
-
   const binary = resolveCuaDriverBinary();
-  await ensureCuaDriverDaemon(binary);
-  await requestMacForegroundApprovalIfNeeded(toolName, args, context);
+  // All permission/daemon waits completed before the cross-process lock.
   const jsonArgs = JSON.stringify(args ?? {});
   let saveToDiskPath = imageOutputPath;
   let userRequestedSaveToDisk = false;
@@ -3876,6 +3957,7 @@ export function setWindowsCuaDriverToolProviderForTest(
 
 export function clearComputerUseTargetCacheForTest(): void {
   computerUseAppStateCache.clear();
+  macExplicitlyFocusedTargets.clear();
 }
 
 export const callComputerUseToolForTest = callComputerUseTool;

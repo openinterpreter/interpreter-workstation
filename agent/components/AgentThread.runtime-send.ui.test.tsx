@@ -191,6 +191,7 @@ describe('AgentThread runtime sends', () => {
     expect(JSON.parse(String(request?.body))).toMatchObject({
       threadId: 'thread_active',
       turnId: 'turn_active',
+      clientUserMessageId: expect.stringMatching(/^[0-9a-f-]{36}$/),
       message: 'follow up while the model is still working',
       skills: [],
     });

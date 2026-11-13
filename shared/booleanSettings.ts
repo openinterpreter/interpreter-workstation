@@ -4,6 +4,8 @@ export const BOOLEAN_UI_SETTINGS = {
   showHelpPanelPreview: { default: false },
   reviewMarkdownEdits:  { default: true },
   launchAtLogin:        { default: false },
+  advancedMode:         { default: false }, // Simple is the first-run/default experience.
+  showSimpleFeedback:  { default: true },
   autoApproveLowRiskMediaCards: { default: false },
 } as const satisfies Record<string, { default: boolean }>;
 

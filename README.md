@@ -84,6 +84,8 @@ services.
 
 ## Use Workstation on the web
 
+An isolated [browser-local project proof](docs/browser-local-projects.md) also demonstrates visitor-owned origin-private files, approved edits, a sandboxed live preview, and a same-origin Web Worker without an operator-run project backend. It is not the native agent runtime or an authenticated browser model connection.
+
 The repository includes a static browser renderer for the complete Workstation
 shell, the maintained conversation-only viewer, and seeded demos. Host that
 renderer on any static HTTPS service and point it at either an authenticated
