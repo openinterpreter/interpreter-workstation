@@ -1,14 +1,14 @@
 import type { Application } from 'express';
 import type { EnterpriseDirectory, VerifiedIdentity } from './controlPlane';
 import type { ServerDirectory } from './serverDirectory';
-import { createEnterpriseAdminMutationRouter, createEnterpriseBrowserRouter } from './oidcHttp';
+import { createEnterpriseAdminMutationRouter, createEnterpriseBrowserRouter, createEnterpriseLogoutRouter } from './oidcHttp';
 
 type ScopedAdminMount = Readonly<{
   enabled: true;
   applicationOrigin: string;
   organizationId: string;
   issuer: string;
-  directory: EnterpriseDirectory & Pick<ServerDirectory, 'deactivateMember'>;
+  directory: EnterpriseDirectory & Pick<ServerDirectory, 'deactivateMember' | 'revokeMemberSessions' | 'revokeOrganizationSessions' | 'revokeSession' | 'listAudit' | 'recordTenantDenial'>;
   verifySession: (token: string) => Promise<VerifiedIdentity | null>;
   /** Only an explicitly isolated test process may permit plaintext loopback. */
   allowInsecureLoopbackForTests?: boolean;
@@ -31,10 +31,12 @@ export function mountEnterpriseAdminRoutes(app: Application, options?: ScopedAdm
   const scoped = { applicationOrigin: options.applicationOrigin,
     allowInsecureLoopbackForTests: options.allowInsecureLoopbackForTests,
     verifySession, directory: options.directory };
-  // Build both routers before mounting either; invalid origins cannot leave a partial API.
+  // Build every router before mounting; invalid origins cannot leave a partial API.
   const read = createEnterpriseBrowserRouter(scoped);
   const write = createEnterpriseAdminMutationRouter(scoped);
+  const logout = createEnterpriseLogoutRouter(scoped);
   app.use('/api/enterprise', read);
   app.use('/api/enterprise', write);
+  app.use('/api/enterprise', logout);
   return true;
 }

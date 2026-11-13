@@ -110,10 +110,18 @@ test('publishing authority is not exposed at job scope', () => {
   assert.doesNotMatch(jobEnvironment, /\$\{\{ secrets\./);
   assert.doesNotMatch(jobEnvironment, /GH_TOKEN:/);
 
-  assert.equal((publish.match(/AWS_ACCESS_KEY_ID:/g) ?? []).length, 3);
-  assert.equal((publish.match(/AWS_SECRET_ACCESS_KEY:/g) ?? []).length, 3);
-  assert.equal((publish.match(/GH_TOKEN:/g) ?? []).length, 3);
+  assert.equal((publish.match(/AWS_ACCESS_KEY_ID:/g) ?? []).length, 4);
+  assert.equal((publish.match(/AWS_SECRET_ACCESS_KEY:/g) ?? []).length, 4);
+  assert.equal((publish.match(/GH_TOKEN:/g) ?? []).length, 5);
   assert.equal((publish.match(/GITHUB_TOKEN:/g) ?? []).length, 1);
+});
+
+test('failed publish retries reuse the first exact-run metadata, never regenerate a different draft identity', () => {
+  const publish = section('  publish:');
+  assert.match(publish, /id: metadata[\s\S]*?reconcile-release-metadata\.mjs release/);
+  assert.match(publish, /reconcile-release-metadata\.mjs release/);
+  assert.match(publish, /if: steps\.metadata\.outputs\.created == 'true'[\s\S]*?name: official-release-metadata/);
+  assert.ok(publish.indexOf('Preserve first-attempt release metadata') < publish.indexOf('Attest build provenance'));
 });
 
 test('passwordless Apple certificate is protected before electron-builder imports it', () => {
@@ -178,13 +186,16 @@ test('partial publication requires verified current-run Windows and Linux jobs, 
   assert.match(publishedVerifier, /Partial release unexpectedly includes macOS package/);
 });
 
-test('a failed publication can reuse only its exact commit', () => {
+test('a failed publication can reuse only its exact unpublished commit and immutable assets', () => {
   const authorize = section('  authorize:', '  verify:');
   const publish = section('  publish:');
   assert.match(authorize, /--json isDraft,targetCommitish/);
   assert.match(authorize, /"\$target" != "\$GITHUB_SHA"/);
-  assert.doesNotMatch(authorize, /"\$draft" != "true"/);
-  assert.match(publish, /gh release upload "\$RELEASE_TAG" release\/\* --repo "\$GITHUB_REPOSITORY" --clobber/);
+  assert.match(authorize, /"\$draft" != true/);
+  assert.match(publish, /node scripts\/ci\/reconcile-release-draft\.mjs release/);
+  assert.match(publish, /node scripts\/ci\/reconcile-immutable-uploads\.mjs/);
+  assert.match(publish, /--checksums release\/SHA256SUMS/);
+  assert.doesNotMatch(publish, /--clobber/);
 });
 
 test('SBOM attestation scans bounded locked source dependencies, not recursive binaries', () => {

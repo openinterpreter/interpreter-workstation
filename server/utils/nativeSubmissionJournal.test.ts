@@ -25,7 +25,10 @@ describe('forward native submission journal', () => {
       expect((await new NativeSubmissionJournal(root).lookup(thread, 'owner_input_1'))?.phase).toBe('received');
       expect(await new NativeSubmissionJournal(root).begin(thread, 'owner_input_1')).toBeNull();
       await journal.advance(received!, 'turn_started', 'turn_1');
+      await expect(journal.advance(received!, 'turn_started', 'turn_1')).rejects.toThrow('transition');
+      await expect(journal.advance(received!, 'terminal_success', 'turn_other')).rejects.toThrow('transition');
       await journal.advance(received!, 'terminal_failure', 'turn_1');
+      await expect(journal.advance(received!, 'terminal_success', 'turn_1')).rejects.toThrow('transition');
       expect((await new NativeSubmissionJournal(root).lookup(thread, 'owner_input_1'))).toMatchObject({
         phase: 'terminal_failure', turnId: 'turn_1', requestId: received!.requestId,
       });
@@ -43,6 +46,13 @@ describe('forward native submission journal', () => {
       await journal.begin(thread, 'owned_2');
       await expect(journal.begin(thread, 'owned_2')).resolves.toBeNull();
       await expect(journal.begin('wrong', 'owned_3')).rejects.toThrow();
+      const [filename] = await readdir(path.join(root, 'native-submission-receipts'));
+      const claim = path.join(root, 'native-submission-receipts', filename);
+      const received = JSON.parse((await readFile(claim, 'utf8')).trim());
+      await writeFile(claim, `${JSON.stringify({ ...received, phase: 'terminal_success', turnId: 'turn_1' })}\n` +
+        `${JSON.stringify({ ...received, phase: 'terminal_failure', turnId: 'turn_1' })}\n`, { flag: 'a' });
+      await expect(journal.lookup(thread, 'owned_2')).rejects.toThrow('transition');
+      await expect(journal.begin(thread, 'owned_2')).resolves.toBeNull();
     } finally { await rm(root, { recursive: true, force: true }); }
   });
   test('exclusive claim survives two competing processes and one abnormal receipt does not exhaust other IDs', async () => {

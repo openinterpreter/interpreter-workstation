@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -19,6 +20,8 @@ mock.module('../utils/mcpServiceBridge', () => ({
 
 import JSZip from 'jszip';
 import { agentTabManager } from '../agentTabManager';
+import { getCodexService } from '../../src/lib/codex/service';
+import { ManagedGoalDocumentError } from '../../src/lib/codex/goal-document';
 import { approvalManager } from '../approvalManager';
 import { clearConfigCache, setConfigOverride } from '../configStore';
 import { calculatorTool } from '../tools/builtin-tools/utility/calculatorTool';
@@ -93,6 +96,279 @@ describe('interpreterCli handlers', () => {
     setConfigOverride(null);
     setReadToolPromptInjectionGuardRunnerForTests(null);
     clearConfigCache();
+  });
+
+  test('Goal revision CLI read requires the authenticated same-thread binding and selected tool scope', async () => {
+    const threadId = '00000000-0000-4000-8000-000000000077';
+    const otherThread = '00000000-0000-4000-8000-000000000078';
+    const service = getCodexService();
+    const original = service.getThreadGoalWithRevision;
+    const calls: string[] = [];
+    setConfigOverride({ agents: {}, mcpServers: {} } as any);
+    setToolManager(new ToolManager());
+    agentTabManager.bindThread({ agentId: 'goal-owner', threadId,
+      callerToken: 'agtok_goal_owner', allowedToolNames: [
+        'builtin-interpreter__interpreter_goal_revision_get',
+      ] });
+    agentTabManager.bindThread({ agentId: 'goal-no-tool', threadId: otherThread,
+      callerToken: 'agtok_goal_no_tool', allowedToolNames: ['builtin-utility__calculate'] });
+    service.getThreadGoalWithRevision = async (id) => {
+      calls.push(id);
+      return { goal: null, revision: null };
+    };
+    try {
+      const tool = { serverId: 'builtin-interpreter',
+        toolName: 'interpreter_goal_revision_get', args: {} };
+      const result = await callInterpreterCliTool({ callerToken: 'agtok_goal_owner', ...tool }) as {
+        content: Array<{ text: string }>; isError?: boolean;
+      };
+      expect(result.isError).toBeUndefined();
+      expect(JSON.parse(result.content[0]!.text)).toEqual({ available: true,
+        goalPresent: false, revision: null });
+      expect(calls).toEqual([threadId]);
+      await expect(callInterpreterCliTool({ callerToken: 'agtok_goal_no_tool', ...tool }))
+        .rejects.toThrow();
+      await expect(callInterpreterCliTool({ callerToken: 'unknown-goal-caller', ...tool }))
+        .rejects.toThrow();
+      expect(calls).toEqual([threadId]);
+    } finally {
+      service.getThreadGoalWithRevision = original;
+    }
+  });
+
+  test('current-task CLI reads only the selected same-thread native snapshot, not stale preview or command text', async () => {
+    const threadId = '00000000-0000-4000-8000-000000000077';
+    const otherThread = '00000000-0000-4000-8000-000000000078';
+    const service = getCodexService();
+    const originalRead = service.readSupervisorThreadSnapshot;
+    const calls: string[] = [];
+    setConfigOverride({ agents: {}, mcpServers: {} } as any);
+    setToolManager(new ToolManager());
+    agentTabManager.bindThread({ agentId: 'current-owner', threadId,
+      callerToken: 'agtok_current_owner', allowedToolNames: [
+        'builtin-interpreter__interpreter_task_current',
+      ] });
+    agentTabManager.bindThread({ agentId: 'other-owner', threadId: otherThread,
+      callerToken: 'agtok_other_owner', allowedToolNames: ['builtin-utility__calculate'] });
+    service.readSupervisorThreadSnapshot = async id => {
+      calls.push(id);
+      return { id, turns: [
+        { id: 'previous-turn', status: 'completed', itemsView: 'full', items: [
+          { type: 'agentMessage', id: 'previous-message', text: 'PRIVATE previous answer' },
+        ] },
+        { id: 'current-turn', status: 'inProgress', itemsView: 'full', items: [
+          { type: 'commandExecution', id: 'command-item', status: 'completed', exitCode: 0,
+            processId: 'opaque-process', command: 'PRIVATE command', aggregatedOutput: 'PRIVATE output' },
+        ] },
+      ] } as any;
+    };
+    try {
+      const discovered = await findInterpreterCliTools('agtok_current_owner', 'current task');
+      expect(discovered.matches.some(match =>
+        match.qualifiedName === 'builtin-interpreter__interpreter_task_current')).toBe(true);
+      const foreignDiscovery = await findInterpreterCliTools('agtok_other_owner', 'current task');
+      expect(foreignDiscovery.matches.some(match =>
+        match.qualifiedName === 'builtin-interpreter__interpreter_task_current')).toBe(false);
+      const tool = { serverId: 'builtin-interpreter', toolName: 'interpreter_task_current', args: {} };
+      const result = await callInterpreterCliTool({ callerToken: 'agtok_current_owner', ...tool }) as {
+        content: Array<{ text: string }>; isError?: boolean;
+      };
+      expect(result.isError).toBeUndefined();
+      const observed = JSON.parse(result.content[0]!.text);
+      expect(observed.turn).toMatchObject({ id: 'current-turn', status: 'inProgress' });
+      expect(observed.latestMessage).toEqual({ turnId: 'previous-turn', relation: 'historical' });
+      expect(observed.command).toMatchObject({ itemId: 'command-item', exitCode: 0,
+        observation: 'saved-command-item-not-os-process-custody' });
+      expect(observed.preview.relation).toBe('initial-thread-historical-non-authoritative');
+      expect(observed.modelPhase).toEqual({ available: false,
+        category: 'native_model_phase_unavailable' });
+      expect(JSON.stringify(result)).not.toContain('PRIVATE');
+      expect(calls).toEqual([threadId]);
+      await expect(callInterpreterCliTool({ callerToken: 'agtok_other_owner', ...tool })).rejects.toThrow();
+      await expect(callInterpreterCliTool({ callerToken: 'unknown-caller', ...tool })).rejects.toThrow();
+      expect(calls).toEqual([threadId]);
+    } finally { service.readSupervisorThreadSnapshot = originalRead; }
+  });
+
+  test('Goal document CLI creates and reads only the bound thread; an unrelated blocked Goal is untouched', async () => {
+    const threadId = '00000000-0000-4000-8000-000000000077';
+    const blockedId = '00000000-0000-4000-8000-000000000078';
+    const document = `# Full mission\n${'Retain the entire instruction.\n'.repeat(170)}`;
+    const objective = 'A distinct full mission';
+    const creationId = 'stable_creation_1';
+    const precondition = { kind: 'absent' as const, admissionState: 'noGoal' as const };
+    const digest = createHash('sha256').update(document).digest('hex');
+    const stored = { path: `managed-goals/${threadId}/mission-1-${digest}.md`,
+      sha256: digest, byteLength: Buffer.byteLength(document), missionRevision: 1 };
+    const activeGoal = { threadId, status: 'active' as const, objective };
+    const revision = { goalId: '00000000-0000-4000-8000-000000000088',
+      status: 'active' as const, missionRevision: 1, lifecycleRevision: 1 };
+    const service = getCodexService();
+    const originalRead = service.getThreadGoalDocument;
+    const originalGoal = service.getThreadGoalWithRevision;
+    const originalCreate = service.createThreadGoalDocument;
+    let writes = 0;
+    let created = false;
+    setConfigOverride({ agents: {}, mcpServers: {} } as any);
+    setToolManager(new ToolManager());
+    for (const [agentId, owner] of [['document-owner', threadId],
+      ['blocked-owner', blockedId]]) {
+      agentTabManager.bindThread({ agentId, threadId: owner,
+        callerToken: `agtok_${agentId}`, allowedToolNames: [
+          'builtin-interpreter__interpreter_goal_document_get',
+          'builtin-interpreter__interpreter_goal_document_create',
+        ] });
+    }
+    service.getThreadGoalWithRevision = async id => ({ goal: id === blockedId
+      ? { threadId: blockedId, status: 'blocked' } as any
+      : created ? activeGoal as any : null, revision: created ? revision : null });
+    service.getThreadGoalDocument = async id => ({ goal: created && id === threadId
+      ? activeGoal as any : null, document: created && id === threadId ? stored : null,
+    content: created && id === threadId ? document : null });
+    service.createThreadGoalDocument = async input => {
+      if (input.threadId === blockedId) throw new ManagedGoalDocumentError('stale_predecessor');
+      expect(input).toEqual({ threadId, creationId, objective, document,
+        status: 'active', precondition });
+      writes++;
+      created = true;
+      return { creationId, goal: activeGoal as any, document: stored,
+        previousRevision: null, revision, replayed: false };
+    };
+    try {
+      const call = (token: string, toolName: string, args: unknown) =>
+        callInterpreterCliTool({ callerToken: token, serverId: 'builtin-interpreter',
+          toolName, args }) as Promise<{ content: Array<{ text: string }>; isError?: boolean }>;
+      const denied = await call('agtok_blocked-owner', 'interpreter_goal_document_create',
+        { creationId, objective, document, precondition });
+      expect(JSON.parse(denied.content[0]!.text).category).toBe('stale_predecessor');
+      expect(writes).toBe(0);
+      const success = await call('agtok_document-owner', 'interpreter_goal_document_create',
+        { creationId, objective, document, precondition });
+      const created = JSON.parse(success.content[0]!.text);
+      expect(created).toMatchObject({ created: true, creationId, replayed: false,
+        previousRevision: null, revision });
+      expect(created.document).toEqual({ content: document, sha256: digest,
+        byteLength: stored.byteLength, missionRevision: 1 });
+      const full = await call('agtok_document-owner', 'interpreter_goal_document_get', {});
+      expect(JSON.parse(full.content[0]!.text).document.content).toBe(document);
+      expect(writes).toBe(1);
+      await expect(call('unbound-caller', 'interpreter_goal_document_get', {})).rejects.toThrow();
+      expect(writes).toBe(1);
+    } finally {
+      service.getThreadGoalDocument = originalRead;
+      service.getThreadGoalWithRevision = originalGoal;
+      service.createThreadGoalDocument = originalCreate;
+    }
+  });
+
+  test('Goal document edit CLI carries the exact bound thread and native revision once', async () => {
+    const threadId = '00000000-0000-4000-8000-000000000077';
+    const expected = { goalId: '00000000-0000-4000-8000-000000000088',
+      status: 'active' as const, missionRevision: 1, lifecycleRevision: 2 };
+    const document = `# Edited mission\n${'Preserve the full existing task.\n'.repeat(150)}`;
+    const digest = createHash('sha256').update(document).digest('hex');
+    const metadata = { path: `managed-goals/${threadId}/mission-2-${digest}.md`,
+      sha256: digest, byteLength: Buffer.byteLength(document), missionRevision: 2 };
+    const service = getCodexService();
+    const previousUpdate = service.setThreadGoalDocumentWithRevision;
+    const previousRead = service.getThreadGoalDocument;
+    const calls: unknown[] = [];
+    setConfigOverride({ agents: {}, mcpServers: {} } as any);
+    setToolManager(new ToolManager());
+    agentTabManager.bindThread({ agentId: 'goal-document-editor', threadId,
+      callerToken: 'agtok_goal_document_editor', allowedToolNames: [
+        'builtin-interpreter__interpreter_goal_document_update',
+      ] });
+    service.setThreadGoalDocumentWithRevision = async (input, revision) => {
+      calls.push([input, revision]);
+      return { goal: { threadId, status: 'active' } as any, document: metadata,
+        revision: { ...expected, missionRevision: 2, lifecycleRevision: 3 } };
+    };
+    service.getThreadGoalDocument = async () => ({ goal: { threadId } as any,
+      document: metadata, content: document });
+    try {
+      const result = await callInterpreterCliTool({ callerToken: 'agtok_goal_document_editor',
+        serverId: 'builtin-interpreter', toolName: 'interpreter_goal_document_update',
+        args: { document, expected } }) as { content: Array<{ text: string }> };
+      expect(JSON.parse(result.content[0]!.text)).toMatchObject({ updated: true,
+        revision: { goalId: expected.goalId, missionRevision: 2 } });
+      expect(calls).toEqual([[{ threadId, document }, expected]]);
+    } finally {
+      service.setThreadGoalDocumentWithRevision = previousUpdate;
+      service.getThreadGoalDocument = previousRead;
+    }
+  });
+
+  test('Goal resume CLI delegates one exact expected-state write to native without retry', async () => {
+    const threadId = '00000000-0000-4000-8000-000000000077';
+    const expected = { goalId: '00000000-0000-4000-8000-000000000088',
+      status: 'paused' as const, missionRevision: 2, lifecycleRevision: 5 };
+    const service = getCodexService();
+    const original = service.setThreadGoalWithRevision;
+    const calls: unknown[] = [];
+    setConfigOverride({ agents: {}, mcpServers: {} } as any);
+    setToolManager(new ToolManager());
+    agentTabManager.bindThread({ agentId: 'goal-resumer', threadId,
+      callerToken: 'agtok_goal_resumer', allowedToolNames: [
+        'builtin-interpreter__interpreter_goal_resume',
+      ] });
+    agentTabManager.bindThread({ agentId: 'goal-delegate',
+      threadId: '00000000-0000-4000-8000-000000000079',
+      callerToken: 'agtok_goal_delegate', allowedToolNames: [
+        'builtin-interpreter__interpreter_goal_resume',
+      ], parentOwner: { approvalOwnerKind: 'normal-agent', agentId: 'goal-resumer',
+        threadId, windowSessionKey: null, workspacePath: null } });
+    service.setThreadGoalWithRevision = async (owner, revision, change) => {
+      calls.push([owner, revision, change]);
+      return { goal: { threadId: owner, status: 'active' } as any,
+        revision: { ...revision, status: 'active', lifecycleRevision: 6 } };
+    };
+    try {
+      const result = await callInterpreterCliTool({ callerToken: 'agtok_goal_resumer',
+        serverId: 'builtin-interpreter', toolName: 'interpreter_goal_resume',
+        args: { expected } }) as { content: Array<{ text: string }> };
+      expect(JSON.parse(result.content[0]!.text)).toEqual({ resumed: true,
+        revision: { ...expected, status: 'active', lifecycleRevision: 6 } });
+      expect(calls).toEqual([[threadId, expected, { status: 'active' }]]);
+      const delegated = await callInterpreterCliTool({ callerToken: 'agtok_goal_delegate',
+        serverId: 'builtin-interpreter', toolName: 'interpreter_goal_resume',
+        args: { expected } }) as { content: Array<{ text: string }>; isError?: boolean };
+      expect(delegated.isError).toBe(true);
+      expect(JSON.parse(delegated.content[0]!.text).category).toBe('caller_unavailable');
+      await expect(callInterpreterCliTool({ callerToken: 'not-a-caller',
+        serverId: 'builtin-interpreter', toolName: 'interpreter_goal_resume',
+        args: { expected } })).rejects.toThrow();
+      expect(calls).toHaveLength(1);
+    } finally { service.setThreadGoalWithRevision = original; }
+  });
+
+  test('native terminal CLI observation carries only the bound thread and content-free result', async () => {
+    const threadId = '00000000-0000-4000-8000-000000000077';
+    const service = getCodexService();
+    const original = service.readNativeTerminalStatus;
+    const requests: unknown[] = [];
+    setConfigOverride({ agents: {}, mcpServers: {} } as any);
+    setToolManager(new ToolManager());
+    agentTabManager.bindThread({ agentId: 'terminal-owner', threadId,
+      callerToken: 'agtok_terminal_owner', allowedToolNames: [
+        'builtin-interpreter__interpreter_native_terminal_status',
+      ] });
+    service.readNativeTerminalStatus = async request => {
+      requests.push(request);
+      return { phase: 'exited', outputBytes: 4, outputSha256: 'a'.repeat(64),
+        outputCapReached: false, exitCode: 0, terminalGeneration: 9,
+        observationTimedOut: false };
+    };
+    const args = { turnId: 'turn_1', itemId: 'item_1', nativeProcessId: 'process_1',
+      terminalGeneration: 9, maxWaitMs: 500 };
+    try {
+      const result = await callInterpreterCliTool({ callerToken: 'agtok_terminal_owner',
+        serverId: 'builtin-interpreter', toolName: 'interpreter_native_terminal_status',
+        args }) as { content: Array<{ text: string }> };
+      expect(JSON.parse(result.content[0]!.text)).toMatchObject({ available: true,
+        phase: 'exited', outputBytes: 4, exitCode: 0 });
+      expect(requests).toEqual([{ threadId, ...args }]);
+    } finally { service.readNativeTerminalStatus = original; }
   });
 
   test('lists visible servers for a bound caller token', async () => {

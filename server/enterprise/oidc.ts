@@ -45,19 +45,49 @@ async function boundedJSON(response: Response, maximum: number): Promise<Record<
   return parsed as Record<string, unknown>;
 }
 
+/** OIDC Discovery 1.0 appends this path to the issuer, including issuer paths.
+ * Never discover from an email, an untrusted callback, or a redirect. */
+export function providerMetadataUri(issuer: string): string {
+  return `${issuer.replace(/\/$/, '')}/.well-known/openid-configuration`;
+}
+
 /** Authorization-code + S256 PKCE client; does not itself mount any HTTP route. */
 export class OidcIntegration {
   private readonly config: OidcConfiguration;
 
   constructor(config: OidcConfiguration, private readonly directory: ServerDirectory, private readonly request: Fetch = fetch) {
     const loopback = config.allowInsecureLoopbackForTests === true;
+    if (loopback && process.env.NODE_ENV !== 'test') throw new Error('Insecure OIDC loopback requires an isolated test process');
     for (const value of [config.issuer, config.authorizationEndpoint, config.tokenEndpoint, config.jwksUri, config.redirectUri]) validatedURL(value, loopback);
     if (!config.organizationId || !config.clientId || new URL(config.issuer).search ||
         new URL(config.redirectUri).search) throw new Error('Invalid pinned OIDC configuration');
     this.config = config;
   }
 
+  private async verifyProvider(): Promise<void> {
+    const response = await this.request(providerMetadataUri(this.config.issuer), {
+      method: 'GET', redirect: 'error', signal: AbortSignal.timeout(5000), headers: { Accept: 'application/json' },
+    });
+    if (!/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type') ?? '')) {
+      throw new Error('Invalid OIDC provider metadata type');
+    }
+    const metadata = await boundedJSON(response, 65_536);
+    if (metadata.issuer !== this.config.issuer ||
+        metadata.authorization_endpoint !== this.config.authorizationEndpoint ||
+        metadata.token_endpoint !== this.config.tokenEndpoint || metadata.jwks_uri !== this.config.jwksUri ||
+        !Array.isArray(metadata.response_types_supported) || !metadata.response_types_supported.includes('code') ||
+        !Array.isArray(metadata.id_token_signing_alg_values_supported) ||
+        !metadata.id_token_signing_alg_values_supported.some((alg) => alg === 'RS256' || alg === 'ES256') ||
+        !Array.isArray(metadata.token_endpoint_auth_methods_supported) ||
+        !metadata.token_endpoint_auth_methods_supported.includes('none') ||
+        !Array.isArray(metadata.code_challenge_methods_supported) ||
+        !metadata.code_challenge_methods_supported.includes('S256')) {
+      throw new Error('OIDC provider metadata does not match pinned public client');
+    }
+  }
+
   async begin(): Promise<{ authorizationUrl: string; state: string; browserBinding: string }> {
+    await this.verifyProvider();
     const state = randomBytes(32).toString('base64url');
     const nonce = randomBytes(32).toString('base64url');
     const verifier = randomBytes(32).toString('base64url');
@@ -82,6 +112,7 @@ export class OidcIntegration {
     if (!input.code || input.code.length > 2048 || !input.state || !input.browserBinding) throw new Error('Invalid OIDC callback');
     const attempt = await this.directory.takeAttempt(input.state, input.browserBinding);
     if (!attempt || attempt.organizationId !== this.config.organizationId || attempt.issuer !== this.config.issuer) throw new Error('OIDC state invalid or expired');
+    await this.verifyProvider(); // Recheck before exchanging the one-time code; an outage consumes the attempt.
     const response = await this.request(this.config.tokenEndpoint, {
       method: 'POST', redirect: 'error', signal: AbortSignal.timeout(5000),
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
