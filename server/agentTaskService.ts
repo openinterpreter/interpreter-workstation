@@ -141,6 +141,15 @@ export async function resumeAgentTaskThread(
     resolveCodexProfileFromModelConfig(modelConfig),
     buildGroqProxyBaseUrl(getServerPort()),
   );
+  // A loaded native thread keeps its original shell environment. A newly
+  // minted caller here would be registered in Workstation but absent from the
+  // native shell; a failed resume would also leave that false binding behind.
+  const binding = agentTabManager.getBindingForThread(options.threadId);
+  if (!binding || binding.workspacePath !== workspace ||
+      (binding.modelConfig && (binding.modelConfig.provider !== modelConfig.provider ||
+        binding.modelConfig.modelId !== modelConfig.modelId))) {
+    throw new Error('Existing thread caller is unavailable or its owner scope differs; use guarded cold bind only when eligible');
+  }
   const service = getCodexService();
   await ensureOpenAIOAuthAccountReady(
     service,
@@ -150,24 +159,6 @@ export async function resumeAgentTaskThread(
   // as Goal. Provision the provider in OIX first so those later turns retain
   // environment-backed auth after the request-scoped resume overrides are gone.
   await service.ensureProvider(profile, true);
-  const callerToken = `agtok_${nanoid()}`;
-  const agentId = `resumed-${nanoid()}`;
-  const shellEnvironmentPolicy = buildInterpreterCliShellEnvironmentPolicy(
-    callerToken,
-    process.env,
-    process.platform,
-    workspace,
-    buildInterpreterCliServerConnection(getServerPort(), {
-      transport: resolveAgentInterpreterCliTransport(process.platform),
-    }),
-  );
-  agentTabManager.bindThread({
-    agentId,
-    callerToken,
-    threadId: options.threadId,
-    workspacePath: workspace,
-    modelConfig,
-  });
   const threadId = await service.resumeThread({
     threadId: options.threadId,
     model: modelConfig.modelId,
@@ -178,11 +169,9 @@ export async function resumeAgentTaskThread(
       ...(modelConfig.reasoningEffort
         ? { model_reasoning_effort: modelConfig.reasoningEffort }
         : {}),
-      // A resumed thread may immediately continue an active native Goal without
-      // another Workstation request. Reapply the model-facing app-tool bridge
-      // here so those autonomous turns retain interpreter-app and js_repl.
+      // Preserve the verified original native caller and bridge on loaded
+      // Goal continuations; changing shell keys is not a supported resume.
       mcp_servers: {},
-      shell_environment_policy: shellEnvironmentPolicy,
     },
   });
 
@@ -198,7 +187,7 @@ export async function coldBindAgentTaskThread(options: { threadId: string; works
   const custody = await service.readNativeCustody(options.threadId);
   const global = await service.readGlobalNativeCustody();
   if (thread.id !== options.threadId || thread.cwd !== workspace ||
-      custody.status !== 'idle' || custody.queuedSubmissionCount !== 0 ||
+      !['idle', 'notLoaded'].includes(custody.status) || custody.queuedSubmissionCount !== 0 ||
       global.queuedSubmissionCount !== 0 || global.loadedThreadIds.includes(options.threadId) ||
       !global.threads.some(row => row.threadId === options.threadId)) {
     throw new Error('Cold caller bind requires the exact unloaded idle thread, workspace and empty native queues');

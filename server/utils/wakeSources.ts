@@ -54,6 +54,13 @@ export class WakeAdmissionFailure extends Error {
     this.name = 'WakeAdmissionFailure';
   }
 }
+export class WakeRecoveryError extends Error {
+  constructor(readonly category: 'invalid_request' | 'stale_revision' | 'refused_ambiguous' |
+    'native_unavailable') {
+    super(category);
+    this.name = 'WakeRecoveryError';
+  }
+}
 function nativeFailure(error: unknown, phase: NonNullable<WakeEvent['failure']>['phase']): NonNullable<WakeEvent['failure']> {
   const original = error instanceof WakeAdmissionFailure ? error.original : error;
   const name = original instanceof Error && /^(?:Error|[A-Za-z]{1,60}Error)$/.test(original.name)
@@ -294,6 +301,94 @@ export class WakeSources {
       sources: this.state.sources.filter(s => s.threadId === threadId),
       events: this.state.events.filter(e => e.threadId === threadId),
     });
+  }
+
+  /** A content-free, deterministic CAS token for one source and its unadmitted
+   * events. It changes whenever custody relevant to recovery changes. */
+  recoverySnapshot(threadId: string, id: string) {
+    const source = this.state.sources.find(s => s.threadId === threadId && s.id === id);
+    if (!source) throw new WakeRecoveryError('invalid_request');
+    const events = this.state.events.filter(e => e.threadId === threadId && e.sourceId === id);
+    const revision = createHash('sha256').update(JSON.stringify({ source, events })).digest('hex');
+    return { source: structuredClone(source), events: structuredClone(events), revision };
+  }
+
+  /** Rearm only future civil occurrences. The historical held event is kept
+   * byte-for-byte, and an unresolved offer always refuses the operation. */
+  async recoverDailyFuture(threadId: string, id: string, expectedRevision: string,
+    expectedHeldEventId: string): Promise<ReturnType<WakeSources['recoverySnapshot']>> {
+    if (this.stopping || ![threadId, id, expectedHeldEventId].every(x => ID.test(x)) ||
+        !/^[0-9a-f]{64}$/.test(expectedRevision)) throw new WakeRecoveryError('invalid_request');
+    return this.exclusive(async () => {
+      const snapshot = this.recoverySnapshot(threadId, id);
+      if (snapshot.revision !== expectedRevision) throw new WakeRecoveryError('stale_revision');
+      const { source, events } = snapshot;
+      if (source.kind !== 'schedule' || !source.dailyAt || !source.timeZone || source.paused ||
+          source.status !== 'error' || source.nextAt !== undefined ||
+          events.some(e => e.status === 'pending' || e.status === 'offered') ||
+          !events.some(e => e.eventId === expectedHeldEventId && e.status === 'held' &&
+            e.eventId === `${id}-${source.sequence}`)) {
+        throw new WakeRecoveryError('refused_ambiguous');
+      }
+      const current = this.state.sources.find(s => s.threadId === threadId && s.id === id)!;
+      current.nextAt = nextCivilDaily(Date.now(), current.timeZone!, current.dailyAt!);
+      current.status = 'waiting';
+      delete current.error;
+      await this.save();
+      return this.recoverySnapshot(threadId, id);
+    });
+  }
+
+  /** Explicit own-thread read of an ambiguous offer. A positive native marker
+   * alone establishes admission; absence or a failed read is never replayed. */
+  async reconcileOffered(threadId: string, id: string, eventId: string,
+    expectedRevision: string): Promise<ReturnType<WakeSources['recoverySnapshot']>> {
+    if (this.stopping || ![threadId, id, eventId].every(x => ID.test(x)) ||
+        !/^[0-9a-f]{64}$/.test(expectedRevision)) throw new WakeRecoveryError('invalid_request');
+    const key = `${threadId}:${eventId}`;
+    if (this.ticking || this.inFlight.has(key)) throw new WakeRecoveryError('refused_ambiguous');
+    this.inFlight.add(key);
+    try {
+      const before = this.recoverySnapshot(threadId, id);
+      if (before.revision !== expectedRevision) throw new WakeRecoveryError('stale_revision');
+      if (before.source.kind !== 'schedule' || !before.source.dailyAt || !before.source.timeZone)
+        throw new WakeRecoveryError('invalid_request');
+      const event = before.events.find(e => e.eventId === eventId && e.status === 'offered');
+      if (!event) throw new WakeRecoveryError('refused_ambiguous');
+      let native;
+      try { native = await this.inspectWithDeadline(threadId); }
+      catch { throw new WakeRecoveryError('native_unavailable'); }
+      if (!native.clientIds?.includes(wakeClientId(event)) &&
+          !native.messages.some(m => m === wakeInput(event) || m.startsWith(`${wakeInput(event)}\n`))) {
+        throw new WakeRecoveryError('refused_ambiguous');
+      }
+      return this.exclusive(async () => {
+        const current = this.recoverySnapshot(threadId, id);
+        if (current.revision !== expectedRevision) throw new WakeRecoveryError('stale_revision');
+        const owned = this.state.events.find(e => e.threadId === threadId && e.sourceId === id &&
+          e.eventId === eventId && e.status === 'offered')!;
+        this.admitObserved(owned, Date.now());
+        await this.save();
+        return this.recoverySnapshot(threadId, id);
+      });
+    } finally { this.inFlight.delete(key); }
+  }
+
+  private admitObserved(event: WakeEvent, now: number): void {
+    event.status = 'admitted'; event.message = '';
+    delete event.error; delete event.failure; delete event.offeredAt; delete event.nextAttemptAt;
+    const source = this.state.sources.find(s => s.id === event.sourceId && s.threadId === event.threadId);
+    if (source && source.status !== 'cancelled') {
+      delete source.error;
+      source.status = 'delivered';
+      if (source.kind === 'schedule' && source.dailyAt && source.timeZone) {
+        source.nextAt = nextCivilDaily(now, source.timeZone, source.dailyAt); source.status = 'waiting';
+      } else if (source.kind === 'schedule' && source.everyMs) {
+        source.nextAt = new Date(now + source.everyMs).toISOString(); source.status = 'waiting';
+      } else if (source.kind === 'command') {
+        source.nextAt = new Date(now + COMMAND_REARM_MS).toISOString(); source.status = 'waiting';
+      }
+    }
   }
 
   /** Stop new command launches and native offers without retracting any event.
@@ -647,27 +742,7 @@ export class WakeSources {
       if (state.clientIds?.includes(wakeClientId(event)) ||
         state.messages.some(message => message === wakeInput(event) || message.startsWith(`${wakeInput(event)}\n`))) {
         await this.exclusive(async () => {
-          event.status = 'admitted';
-          event.message = '';
-          delete event.error;
-          delete event.failure;
-          delete event.offeredAt;
-          delete event.nextAttemptAt;
-          const source = this.state.sources.find(s => s.id === event.sourceId && s.threadId === event.threadId);
-          if (source && source.status !== 'cancelled') {
-            delete source.error;
-            source.status = 'delivered';
-            if (source.kind === 'schedule' && source.dailyAt && source.timeZone) {
-              source.nextAt = nextCivilDaily(now, source.timeZone, source.dailyAt);
-              source.status = 'waiting';
-            } else if (source.kind === 'schedule' && source.everyMs) {
-              source.nextAt = new Date(now + source.everyMs).toISOString();
-              source.status = 'waiting';
-            } else if (source.kind === 'command') {
-              source.nextAt = new Date(now + COMMAND_REARM_MS).toISOString();
-              source.status = 'waiting';
-            }
-          }
+          this.admitObserved(event, now);
           await this.save();
         });
         return;

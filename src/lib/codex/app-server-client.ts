@@ -20,6 +20,7 @@ import {
   isValidNotificationShape,
 } from "../validators/index";
 import type { v2 } from "../../../server/handlers/codex-generated-types/index";
+import { boundedSupervisorThread } from "../../../server/utils/boundedSupervisorThread";
 import type { JsonValue } from "../../../server/handlers/codex-generated-types/serde_json/JsonValue";
 import type {
   StreamImageAttachment,
@@ -2364,6 +2365,22 @@ export class CodexAppServerClient {
     return this.rpcRequest(CLIENT_METHOD.threadRead, params);
   }
 
+  async threadTurnsList(params: v2.ThreadTurnsListParams): Promise<v2.ThreadTurnsListResponse> {
+    return this.rpcRequest(CLIENT_METHOD.threadTurnsList, params);
+  }
+
+  async threadSupervisorSnapshot(threadId: string): Promise<v2.Thread> {
+    const generation = await this.assertNativeTerminalStatusAvailable();
+    const thread = await boundedSupervisorThread(threadId,
+      params => this.rpcRequest(CLIENT_METHOD.threadRead, params, { skipEnsureConnected: true }),
+      params => this.rpcRequest(CLIENT_METHOD.threadTurnsList, params, { skipEnsureConnected: true }),
+      () => this.initialized && this.disconnectSequence === generation);
+    if (!this.initialized || this.disconnectSequence !== generation) {
+      throw new Error('Native supervisor observation crossed a runtime disconnect.');
+    }
+    return thread;
+  }
+
   async threadQueueList(params: RequestMap[typeof CLIENT_METHOD.threadQueueList]['params']): Promise<RequestMap[typeof CLIENT_METHOD.threadQueueList]['result']> {
     return this.rpcRequest(CLIENT_METHOD.threadQueueList, params);
   }
@@ -2382,6 +2399,77 @@ export class CodexAppServerClient {
 
   async threadGoalGet(params: v2.ThreadGoalGetParams): Promise<v2.ThreadGoalGetResponse> {
     return this.rpcRequest(CLIENT_METHOD.threadGoalGet, params);
+  }
+
+  /** Owner inspection is read-only and must not launch or reconnect a native runtime. */
+  async threadGoalRevisionGet(params: v2.ThreadGoalGetParams): Promise<v2.ThreadGoalGetResponse> {
+    if (!this.initialized) throw new Error('Native Goal revision read is unavailable.');
+    const generation = this.disconnectSequence;
+    const result = await this.rpcRequest(CLIENT_METHOD.threadGoalGet, params, { skipEnsureConnected: true });
+    if (!this.initialized || this.disconnectSequence !== generation) {
+      throw new Error('Native Goal revision observation crossed a runtime disconnect.');
+    }
+    return result;
+  }
+
+  /** A CAS mutation must never be retried or reconnect a torn-down native owner. */
+  async threadGoalRevisionSet(params: v2.ThreadGoalSetParams): Promise<v2.ThreadGoalSetResponse> {
+    if (!this.initialized) throw new Error('Native Goal CAS is unavailable.');
+    const generation = this.disconnectSequence;
+    const result = await this.rpcRequest(CLIENT_METHOD.threadGoalSet, params, { skipEnsureConnected: true });
+    if (!this.initialized || this.disconnectSequence !== generation) {
+      throw new Error('Native Goal CAS result crossed a runtime disconnect.');
+    }
+    return result;
+  }
+
+  async threadGoalDocumentGet(params: RequestMap[typeof CLIENT_METHOD.threadGoalDocumentGet]['params']) {
+    if (!this.initialized) throw new Error('Native Goal document read is unavailable.');
+    const generation = this.disconnectSequence;
+    const result = await this.rpcRequest(CLIENT_METHOD.threadGoalDocumentGet, params,
+      { skipEnsureConnected: true });
+    if (!this.initialized || generation !== this.disconnectSequence) {
+      throw new Error('Native Goal document read crossed a runtime disconnect.');
+    }
+    return result;
+  }
+
+  async threadGoalDocumentSet(params: RequestMap[typeof CLIENT_METHOD.threadGoalDocumentSet]['params']) {
+    // A document update is still a mutation. A lost receipt is uncertain,
+    // and reconnecting could create an unrelated second native owner.
+    if (!this.initialized) throw new Error('Native Goal document update is unavailable.');
+    const generation = this.disconnectSequence;
+    const result = await this.rpcRequest(CLIENT_METHOD.threadGoalDocumentSet, params,
+      { skipEnsureConnected: true });
+    if (!this.initialized || generation !== this.disconnectSequence) {
+      throw new Error('Native Goal document update crossed a runtime disconnect.');
+    }
+    return result;
+  }
+
+  /** A creation-id retry belongs to the caller after exact receipt reconciliation;
+   * this transport never reconnects, reissues, or treats a late response as success. */
+  async threadGoalDocumentCreate(params: RequestMap[typeof CLIENT_METHOD.threadGoalDocumentCreate]['params']) {
+    if (!this.initialized) throw new Error('Native Goal creation is unavailable.');
+    const generation = this.disconnectSequence;
+    const result = await this.rpcRequest(CLIENT_METHOD.threadGoalDocumentCreate, params,
+      { skipEnsureConnected: true });
+    if (!this.initialized || generation !== this.disconnectSequence) {
+      throw new Error('Native Goal creation crossed a runtime disconnect.');
+    }
+    return result;
+  }
+
+  /** Full document CAS must not start or reconnect a native runtime after owner teardown. */
+  async threadGoalDocumentRevisionSet(params: RequestMap[typeof CLIENT_METHOD.threadGoalDocumentSet]['params']) {
+    if (!this.initialized) throw new Error('Native Goal document CAS is unavailable.');
+    const generation = this.disconnectSequence;
+    const result = await this.rpcRequest(CLIENT_METHOD.threadGoalDocumentSet, params,
+      { skipEnsureConnected: true });
+    if (!this.initialized || generation !== this.disconnectSequence) {
+      throw new Error('Native Goal document CAS crossed a runtime disconnect.');
+    }
+    return result;
   }
 
   async threadGoalClear(params: v2.ThreadGoalClearParams): Promise<v2.ThreadGoalClearResponse> {
@@ -3109,7 +3197,8 @@ export class CodexAppServerClient {
       return typedResult;
     } catch (error) {
       if (
-        remainingReconnectAttempts <= 0
+        skipEnsureConnected
+        || remainingReconnectAttempts <= 0
         || !RETRYABLE_RPC_METHODS.has(method)
         || disconnectSequence === this.disconnectSequence
       ) {

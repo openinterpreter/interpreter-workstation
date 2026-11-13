@@ -8,6 +8,9 @@ import type {
   v2,
 } from "../../../server/handlers/codex-generated-types/index";
 import type { JsonValue } from "../../../server/handlers/codex-generated-types/serde_json/JsonValue";
+import type { ThreadGoalDocumentCreateParams, ThreadGoalDocumentCreateResponse,
+  ThreadGoalDocumentGetResponse, ThreadGoalDocumentSetParams,
+  ThreadGoalDocumentSetResponse } from './goal-document';
 
 type ClientMethod =
   | ClientRequest["method"]
@@ -15,6 +18,9 @@ type ClientMethod =
   | "thread/backgroundTerminals/clean"
   | "thread/backgroundTerminals/status"
   | "thread/backgroundTerminals/list"
+  | "thread/goal/document/get"
+  | "thread/goal/document/set"
+  | "thread/goal/document/create"
   | "mcpServer/tool/call"
   | "mcpServer/resource/read";
 type ServerMethod = ServerNotification["method"];
@@ -30,6 +36,9 @@ export const CLIENT_METHOD = {
   threadGoalSet: "thread/goal/set",
   threadGoalGet: "thread/goal/get",
   threadGoalClear: "thread/goal/clear",
+  threadGoalDocumentGet: "thread/goal/document/get",
+  threadGoalDocumentSet: "thread/goal/document/set",
+  threadGoalDocumentCreate: "thread/goal/document/create",
   threadArchive: "thread/archive",
   threadUnarchive: "thread/unarchive",
   threadBackgroundTerminalsClean: "thread/backgroundTerminals/clean",
@@ -51,6 +60,7 @@ export const CLIENT_METHOD = {
   mcpResourceRead: "mcpServer/resource/read",
   threadList: "thread/list",
   threadRead: "thread/read",
+  threadTurnsList: "thread/turns/list",
   threadQueueList: "thread/queue/list",
   threadLoadedList: "thread/loaded/list",
   modelList: "model/list",
@@ -173,6 +183,18 @@ export type RequestMap = {
     params: v2.ThreadGoalClearParams;
     result: v2.ThreadGoalClearResponse;
   };
+  [CLIENT_METHOD.threadGoalDocumentGet]: {
+    params: { threadId: string };
+    result: ThreadGoalDocumentGetResponse;
+  };
+  [CLIENT_METHOD.threadGoalDocumentSet]: {
+    params: ThreadGoalDocumentSetParams;
+    result: ThreadGoalDocumentSetResponse;
+  };
+  [CLIENT_METHOD.threadGoalDocumentCreate]: {
+    params: ThreadGoalDocumentCreateParams;
+    result: ThreadGoalDocumentCreateResponse;
+  };
   [CLIENT_METHOD.threadArchive]: {
     params: v2.ThreadArchiveParams;
     result: v2.ThreadArchiveResponse;
@@ -263,6 +285,10 @@ export type RequestMap = {
   [CLIENT_METHOD.threadRead]: {
     params: v2.ThreadReadParams;
     result: v2.ThreadReadResponse;
+  };
+  [CLIENT_METHOD.threadTurnsList]: {
+    params: v2.ThreadTurnsListParams;
+    result: v2.ThreadTurnsListResponse;
   };
   [CLIENT_METHOD.threadQueueList]: {
     params: { threadId: string; cursor?: string | null; limit?: number | null };
