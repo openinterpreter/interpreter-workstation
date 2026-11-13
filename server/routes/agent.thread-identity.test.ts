@@ -9,6 +9,20 @@ app.use('/api/agent', agentRouter);
 const id = '00000000-0000-4000-8000-000000000001';
 
 describe('exact saved-thread identity HTTP', () => {
+  test('rejects cross-origin browser reads before accessing saved identity', async () => {
+    const service = getCodexService();
+    const original = service.readSavedThreadIdentity;
+    let reads = 0;
+    service.readSavedThreadIdentity = async () => { reads++; throw new Error('must not read'); };
+    try {
+      const response = await request(app).get(`/api/agent/threads/${id}/identity`)
+        .set('Origin', 'https://untrusted.example');
+      expect(response.status).toBe(403);
+      expect(response.body).toEqual({ error: 'Local same-origin request required.' });
+      expect(reads).toBe(0);
+    } finally { service.readSavedThreadIdentity = original; }
+  });
+
   test('projects only metadata, without turn text or an active/idle admission decision', async () => {
     const service = getCodexService();
     const original = service.readSavedThreadIdentity;
