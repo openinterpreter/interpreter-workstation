@@ -23,6 +23,37 @@ describe('exact saved-thread identity HTTP', () => {
     } finally { service.readSavedThreadIdentity = original; }
   });
 
+  test('rejects matching attacker-controlled Host and Origin before reading identity', async () => {
+    const service = getCodexService();
+    const original = service.readSavedThreadIdentity;
+    let reads = 0;
+    service.readSavedThreadIdentity = async () => { reads++; throw new Error('must not read'); };
+    try {
+      for (const host of ['attacker.example:3000', 'localhost.attacker.example:3000']) {
+        const response = await request(app).get(`/api/agent/threads/${id}/identity`)
+          .set('Host', host).set('Origin', `http://${host}`);
+        expect(response.status).toBe(403);
+        expect(response.body).toEqual({ error: 'Local same-origin request required.' });
+      }
+      expect(reads).toBe(0);
+    } finally { service.readSavedThreadIdentity = original; }
+  });
+
+  test('allows the supported loopback Host and matching Origin', async () => {
+    const service = getCodexService();
+    const original = service.readSavedThreadIdentity;
+    service.readSavedThreadIdentity = async threadId => ({ threadId, cwd: '/local/example',
+      path: '/local/example.jsonl', archived: false });
+    try {
+      for (const host of ['localhost:3000', '127.0.0.1:3000', '[::1]:3000']) {
+        const response = await request(app).get(`/api/agent/threads/${id}/identity`)
+          .set('Host', host).set('Origin', `http://${host}`);
+        expect(response.status).toBe(200);
+        expect(response.body.threadId).toBe(id);
+      }
+    } finally { service.readSavedThreadIdentity = original; }
+  });
+
   test('projects only metadata, without turn text or an active/idle admission decision', async () => {
     const service = getCodexService();
     const original = service.readSavedThreadIdentity;
