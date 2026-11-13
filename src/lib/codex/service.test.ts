@@ -2817,6 +2817,7 @@ describe("CodexService", () => {
     for (const changed of [
       { id: '00000000-0000-4000-8000-000000000002' },
       { path: `/workspace/home/archived_sessions/turn-${id}.jsonl` },
+      { archived: true }, { status: { type: 'unrecognized' } },
       { cwd: '/tmp/private' }, { ephemeral: true },
       { turns: [{ id: 'private', items: [{ text: 'PRIVATE TRANSCRIPT' }] }] },
     ]) {

@@ -1263,7 +1263,10 @@ export class CodexService {
     const { thread } = await this.client.threadRead({ threadId, includeTurns: false });
     const sessionPath = thread.path;
     const cwd = thread.cwd;
+    const archived = (thread as v2.Thread & { archived?: unknown }).archived;
     if (thread.id !== threadId || !Array.isArray(thread.turns) || thread.turns.length !== 0 ||
+        (archived !== undefined && archived !== false) ||
+        !['notLoaded', 'idle', 'active', 'systemError'].includes(thread.status?.type) ||
         thread.ephemeral === true || typeof sessionPath !== 'string' ||
         !/^\/workspace\/home\/(?:sessions|\.codex\/sessions)\/.+\.jsonl$/.test(sessionPath) ||
         !sessionPath.endsWith(`-${threadId}.jsonl`) || sessionPath.split('/').includes('..') ||
