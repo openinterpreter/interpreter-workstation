@@ -1255,6 +1255,7 @@ router.post('/threads/:threadId/fork', async (req: Request, res: Response) => {
 /** Metadata-only exact binding for authenticated/local saved-thread sends.
  * No transcript, queue observation, or application active/idle gate. */
 router.get('/threads/:threadId/identity', async (req: Request, res: Response) => {
+  if (!wakeMutationAllowed(req)) return res.status(403).json({ error: 'Local same-origin request required.' });
   const threadId = req.params.threadId;
   if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId)) {
     return res.status(400).json({ error: 'Exact native thread ID required.' });
