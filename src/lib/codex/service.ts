@@ -209,6 +209,10 @@ export const THREAD_LIST_DEFAULTS: v2.ThreadListParams = {
   archived: false,
 };
 
+export class SavedThreadIdentityError extends Error {
+  constructor() { super('Exact durable saved-thread identity unavailable.'); }
+}
+
 export type StreamEvent =
   | { kind: "thread"; threadId: string }
   | { kind: "turn"; threadId: string; turnId: string; status: v2.TurnStatus }
@@ -1248,6 +1252,30 @@ export class CodexService {
   async readThread(threadId: string): Promise<v2.Thread> {
     const result = await this.client.threadRead({ threadId, includeTurns: true });
     return result.thread;
+  }
+
+  /** Exact durable saved-thread binding for a caller that already has access
+   * to the ordinary local agent HTTP surface. Never hydrate turn history or
+   * use the observed active/idle status to decide whether input is admissible. */
+  async readSavedThreadIdentity(threadId: string): Promise<{
+    threadId: string; cwd: string; path: string; archived: false;
+  }> {
+    const { thread } = await this.client.threadRead({ threadId, includeTurns: false });
+    const sessionPath = thread.path;
+    const cwd = thread.cwd;
+    const archived = (thread as v2.Thread & { archived?: unknown }).archived;
+    if (thread.id !== threadId || !Array.isArray(thread.turns) || thread.turns.length !== 0 ||
+        (archived !== undefined && archived !== false) ||
+        !['notLoaded', 'idle', 'active'].includes(thread.status?.type) ||
+        thread.ephemeral === true || typeof sessionPath !== 'string' ||
+        !/^\/workspace\/home\/(?:sessions|\.codex\/sessions)\/.+\.jsonl$/.test(sessionPath) ||
+        !sessionPath.endsWith(`-${threadId}.jsonl`) || sessionPath.split('/').includes('..') ||
+        typeof cwd !== 'string' || !cwd.startsWith('/workspace/') || cwd.split('/').includes('..')) {
+      throw new SavedThreadIdentityError();
+    }
+    // A native thread archived out of the active session tree cannot satisfy
+    // the exact durable active-session path predicate above.
+    return { threadId, cwd, path: sessionPath, archived: false };
   }
 
   /** A bounded saved-turn shell for supervisor observation. Never hydrate the
