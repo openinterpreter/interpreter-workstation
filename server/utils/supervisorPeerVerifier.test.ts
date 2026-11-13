@@ -59,6 +59,20 @@ describe('optional enrolled target peer verifier', () => {
     expect(await verify(req(`/threads/${threadId}/goal/status`))).toEqual(selfGrant);
     expect(calls).toEqual(['goal:status-update']);
   });
+  it('requires separate exact Objective and Document amendment capabilities', async () => {
+    const capabilities: string[] = [];
+    const verify = createSupervisorPeerVerifier(config, {
+      identity: async () => 'a.b.c',
+      fetcher: (async (_url: URL, init: RequestInit) => {
+        const capability = JSON.parse(String(init.body)).capability;
+        capabilities.push(capability);
+        return new Response(JSON.stringify({ ...grant, capabilities: [capability] }));
+      }) as typeof fetch,
+    });
+    expect(await verify(req(`/threads/${threadId}/goal/objective`))).not.toBeNull();
+    expect(await verify(req(`/threads/${threadId}/goal/document`))).not.toBeNull();
+    expect(capabilities).toEqual(['goal:objective-update', 'goal:document-update']);
+  });
   it('rejects unconfigured or unsafe verification destinations', () => {
     expect(() => createSupervisorPeerVerifier({ ...config, verifyUrl: 'http://localhost:3000/' })).toThrow();
     expect(() => createSupervisorPeerVerifier({ ...config,

@@ -116,6 +116,12 @@ const app = express();
 // CORS to configured origins and enables credentialed sessions.
 app.use(workstationCorsMiddleware);
 
+if (process.env.INTERPRETER_SUPERVISOR_VERIFY_URL &&
+    process.env.INTERPRETER_SUPERVISOR_VERIFY_AUDIENCE &&
+    process.env.INTERPRETER_SUPERVISOR_TARGET_COMPUTER) {
+  app.use('/api/interpreter-peer/threads/:threadId/goal/document',
+    express.json({ limit: '6292000b' }));
+}
 app.use(express.json({ limit: '50mb' }));
 
 // NOTE(victor): express.json() throws a SyntaxError with status 400 for malformed
@@ -297,6 +303,10 @@ if (process.env.INTERPRETER_SUPERVISOR_VERIFY_URL &&
       (await getCodexService().setThreadGoalWithRevision(id, expected, { status: 'active' })).revision,
     updateGoalStatus: async (id, expected, status) =>
       (await getCodexService().setThreadGoalWithRevision(id, expected, { status })).revision,
+    updateGoalObjective: async (id, expected, objective) =>
+      (await getCodexService().setThreadGoalWithRevision(id, expected, { objective })).revision,
+    updateGoalDocument: async (id, expected, document) =>
+      getCodexService().setThreadGoalDocumentWithRevision({ threadId: id, document }, expected),
     readTerminal: (request) => getCodexService().readNativeTerminalStatus(request),
   }));
 }

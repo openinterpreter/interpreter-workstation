@@ -12,6 +12,7 @@ import { nativeSubmissionJournal } from '../utils/nativeSubmissionJournal';
 import { getCodexService } from '../../src/lib/codex/service';
 import { createSupervisorGoal, SupervisorGoalCreateError,
   type SupervisorGoalCreateInput } from '../utils/supervisorGoalCreate';
+import { ManagedGoalDocumentError, type ThreadGoalDocument } from '../../src/lib/codex/goal-document';
 import { projectSupervisorTurn } from '../utils/supervisorTurnObservation';
 
 type Capability = SupervisorPeerTarget['capability'];
@@ -29,6 +30,10 @@ export function createSupervisorPeerRouter(options: Readonly<{
   resumeGoal: (threadId: string, expected: ThreadGoalRevision) => Promise<ThreadGoalRevision>;
   updateGoalStatus?: (threadId: string, expected: ThreadGoalRevision,
     status: 'paused' | 'blocked') => Promise<ThreadGoalRevision>;
+  updateGoalObjective?: (threadId: string, expected: ThreadGoalRevision,
+    objective: string) => Promise<ThreadGoalRevision>;
+  updateGoalDocument?: (threadId: string, expected: ThreadGoalRevision,
+    document: string) => Promise<{ revision: ThreadGoalRevision; document: ThreadGoalDocument }>;
   readTerminal: (request: NativeTerminalStatusRequest) => Promise<NativeTerminalStatusResponse>;
   listTerminalOwners?: (threadId: string, cursor?: string | null) =>
     ReturnType<ReturnType<typeof getCodexService>['listNativeTerminalOwners']>;
@@ -122,13 +127,9 @@ export function createSupervisorPeerRouter(options: Readonly<{
   router.post('/threads/:threadId/goal/status', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     try {
-      // Lifecycle status changes are self-scoped only. A cross-host supervisor
-      // grant, even with this capability, cannot pause somebody else's Goal.
-      const grant = await options.verify(req);
-      const scope = authorizeSupervisorPeer(grant, {
-        sourceComputer: options.targetComputer, targetComputer: options.targetComputer,
-        threadId: req.params.threadId, capability: 'goal:status-update',
-      });
+      // An exact enrolled source/target/thread/capability grant, not HTTP input,
+      // owns this change. Native CAS still decides the current revision.
+      const scope = await authorize(req, 'goal:status-update');
       if (scope !== 'allowed') return void res.status(403).json(denied(scope));
       const expected = req.body?.expected as ThreadGoalRevision;
       const status = req.body?.status;
@@ -145,6 +146,62 @@ export function createSupervisorPeerRouter(options: Readonly<{
       return void res.json({ available: true, revision });
     } catch (error) {
       if (error instanceof GoalRevisionConflictError) {
+        return void res.status(409).json(denied('stale_revision'));
+      }
+      return void res.status(503).json(denied('mutation_unconfirmed'));
+    }
+  });
+  router.post('/threads/:threadId/goal/objective', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const scope = await authorize(req, 'goal:objective-update');
+      if (scope !== 'allowed') return void res.status(403).json(denied(scope));
+      const expected = req.body?.expected as ThreadGoalRevision;
+      const objective = req.body?.objective;
+      try { goalCasExpectedParams(expected); } catch {
+        return void res.status(400).json(denied('invalid_revision'));
+      }
+      if (typeof objective !== 'string' || !objective.trim() ||
+          [...objective.trim()].length > 4_000 ||
+          Object.keys(req.body).some(key => key !== 'expected' && key !== 'objective')) {
+        return void res.status(400).json(denied('invalid_request'));
+      }
+      if (!options.updateGoalObjective) return void res.status(503).json(denied('mutation_unconfirmed'));
+      const revision = await options.updateGoalObjective(req.params.threadId, expected, objective.trim());
+      return void res.json({ available: true, revision });
+    } catch (error) {
+      if (error instanceof GoalRevisionConflictError) return void res.status(409).json(denied('stale_revision'));
+      return void res.status(503).json(denied('mutation_unconfirmed'));
+    }
+  });
+  router.post('/threads/:threadId/goal/document', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    try {
+      const scope = await authorize(req, 'goal:document-update');
+      if (scope !== 'allowed') return void res.status(403).json(denied(scope));
+      const expected = req.body?.expected as ThreadGoalRevision;
+      const document = req.body?.document;
+      try { goalCasExpectedParams(expected); } catch {
+        return void res.status(400).json(denied('invalid_revision'));
+      }
+      if (typeof document !== 'string' || !document.trim() ||
+          Buffer.byteLength(document, 'utf8') > 1_048_576 ||
+          Object.keys(req.body).some(key => key !== 'expected' && key !== 'document')) {
+        return void res.status(400).json(denied('invalid_request'));
+      }
+      if (!options.updateGoalDocument) return void res.status(503).json(denied('mutation_unconfirmed'));
+      const result = await options.updateGoalDocument(req.params.threadId, expected, document);
+      if (result.document.missionRevision !== result.revision.missionRevision ||
+          result.document.byteLength !== Buffer.byteLength(document, 'utf8') ||
+          result.document.sha256 !== createHash('sha256').update(document, 'utf8').digest('hex')) {
+        throw Error('invalid native document receipt');
+      }
+      // The mission is read back only through the separately scoped Goal read.
+      return void res.json({ available: true, revision: result.revision,
+        document: { sha256: result.document.sha256, byteLength: result.document.byteLength,
+          missionRevision: result.document.missionRevision } });
+    } catch (error) {
+      if (error instanceof ManagedGoalDocumentError && error.category === 'stale_revision') {
         return void res.status(409).json(denied('stale_revision'));
       }
       return void res.status(503).json(denied('mutation_unconfirmed'));
