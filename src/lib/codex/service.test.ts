@@ -43,6 +43,44 @@ function terminalPage(turns: v2.Turn[]) {
 }
 
 describe('native custody metadata', () => {
+  test('inspects only metadata and the latest full turn, never hydrated history', async () => {
+    const client = createFakeClient({}).client;
+    const reads: Array<{ includeTurns?: boolean; itemsView?: string; limit?: number }> = [];
+    const original = client.threadRead.bind(client);
+    client.threadRead = async (params) => {
+      reads.push({ includeTurns: params.includeTurns });
+      return original(params);
+    };
+    client.threadTurnsList = async (params) => {
+      reads.push({ itemsView: params.itemsView, limit: params.limit });
+      return { data: [{ ...createTurn('latest', 'completed'), itemsView: 'full' } as v2.Turn],
+        nextCursor: 'older', backwardsCursor: null };
+    };
+    const result = await new CodexService(client).readNativeCustody('thr_new');
+    assert.equal(result.lastTurnId, 'latest');
+    assert.deepEqual(reads, [
+      { includeTurns: false }, { itemsView: 'full', limit: 1 },
+      { includeTurns: false }, { itemsView: 'full', limit: 1 },
+    ]);
+  });
+  test('fails closed when latest native turn advances during queue observation', async () => {
+    const client = createFakeClient({}).client;
+    let pageNumber = 0;
+    client.threadTurnsList = async () => ({ data: [
+      { ...createTurn(++pageNumber === 1 ? 'prior' : 'advanced', 'completed'), itemsView: 'full' } as v2.Turn,
+    ], nextCursor: null, backwardsCursor: null });
+    await assert.rejects(new CodexService(client).readNativeCustody('thr_new'),
+      { phase: 'thread_read', category: 'native_unavailable' });
+  });
+  test('fails closed when the native queue changes after latest-turn verification', async () => {
+    const client = createFakeClient({}).client;
+    let queueReads = 0;
+    client.threadQueueList = async () => ({ data: [
+      { id: ++queueReads === 1 ? 'pending' : 'new_pending', clientUserMessageId: 'stable', input: [] },
+    ], nextCursor: null });
+    await assert.rejects(new CodexService(client).readNativeCustody('thr_new'),
+      { phase: 'queue_read', category: 'native_unavailable' });
+  });
   test('exact historical turn receipt times out without claiming failure or cancelling late native read', async () => {
     const id = '00000000-0000-4000-8000-000000000042';
     const client = createFakeClient({}).client;
@@ -59,12 +97,14 @@ describe('native custody metadata', () => {
   });
   test('binds active command observation to the exact current native thread read, never an OS PID assertion', async () => {
     const id = '00000000-0000-4000-8000-000000000042';
-    const client = createFakeClient({ threadRead: async () => ({ thread: {
-      id, status: { type: 'active', activeFlags: [] }, turns: [{ ...createTurn('turn_active'), items: [
-        { type: 'commandExecution', id: 'cmd_1', processId: 'native_process_1',
-          status: 'inProgress', aggregatedOutput: 'PRIVATE OUTPUT', exitCode: null },
-      ] }],
-    } as unknown as v2.Thread }) }).client;
+    const client = createFakeClient({}).client;
+    client.threadRead = async () => ({ thread: {
+      id, status: { type: 'active', activeFlags: [] }, turns: [],
+    } as v2.Thread });
+    client.threadTurnsList = async () => ({ data: [{ ...createTurn('turn_active'), itemsView: 'full', items: [
+      { type: 'commandExecution', id: 'cmd_1', processId: 'native_process_1',
+        status: 'inProgress', aggregatedOutput: 'PRIVATE OUTPUT', exitCode: null },
+    ] } as v2.Turn], nextCursor: null, backwardsCursor: null });
     client.threadQueueList = async () => ({ data: [], nextCursor: null });
     const result = await new CodexService(client).readNativeCustody(id);
     assert.deepEqual(result.commandSessionSnapshot.sessions.map(({ itemId, processId, nativeTurnActiveAtRead }) =>
@@ -249,7 +289,7 @@ describe('native custody metadata', () => {
         : { data: [{ id: 'queue_1', clientUserMessageId: 'message_1', input: [{ text: 'private-one' }] }], nextCursor: '1' };
     };
     const result = await new CodexService(client).readNativeCustody('thr_new');
-    assert.deepEqual(requested, [null, '1']);
+    assert.deepEqual(requested, [null, '1', null, '1']);
     assert.equal(result.queuedSubmissionCount, 2);
     assert.deepEqual(result.queuedSubmissions, [
       { id: 'queue_1', clientUserMessageId: 'message_1' },
@@ -294,7 +334,7 @@ describe('native custody metadata', () => {
       { phase: 'thread_read', category: 'deadline' });
     assert.equal(queueCalls, 0);
     assert.deepEqual(phases, ['thread_read:started']);
-    resolveRead?.({ thread: { ...createFakeClient({}).thread, id: 'thr_new' } });
+    resolveRead?.({ thread: { id: 'thr_new', status: { type: 'idle' }, turns: [] } as v2.Thread });
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(queueCalls, 0);
     assert.deepEqual(phases, ['thread_read:started', 'thread_read:late_completed']);
@@ -332,9 +372,11 @@ describe('native custody metadata', () => {
       return { thread: {
         ...result.thread,
         status: { type: 'active', activeFlags: ['waitingOnApproval'] },
-        turns: [{ ...createTurn('turn_1'), items: [] }],
+        turns: [],
       } };
     };
+    client.threadTurnsList = async () => ({ data: [{ ...createTurn('turn_1'),
+      itemsView: 'full', items: [] } as v2.Turn], nextCursor: null, backwardsCursor: null });
     const result = await new CodexService(client).readNativeCustody('thr_new');
     assert.equal(result.status, 'active');
     assert.deepEqual(result.activeFlags, ['waitingOnApproval']);
