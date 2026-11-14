@@ -1206,7 +1206,12 @@ export class CodexService {
           ? await read(verify ? 'verify_loaded_list' : 'loaded_list',
             () => this.client.threadLoadedList({ cursor, limit: 100 }))
           : await read(verify ? 'verify_thread_list' : 'thread_list',
-            () => this.client.threadList({ sourceKinds, modelProviders: [], archived: false, cursor, limit: 100 }));
+            // Custody must enumerate the durable state DB, including threads
+            // whose rollout is absent or not yet indexed. The ordinary list
+            // can scan/repair rollouts and omit DB rows; it is not a complete
+            // inventory for a guarded host transition.
+            () => this.client.threadList({ sourceKinds, modelProviders: [], archived: false,
+              useStateDbOnly: true, cursor, limit: 100 }));
         if (!Array.isArray(page.data) || page.data.length > 100)
           throw new NativeGlobalInventoryError('invalid_page', 'Invalid native inventory page');
         ids.push(...page.data.map((item) => loaded ? item as string : (item as v2.Thread).id));
