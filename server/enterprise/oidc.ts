@@ -136,7 +136,8 @@ export class OidcIntegration {
     // The token's organization/group claims are intentionally not authority.
     // Membership is provisioned independently in the server-owned directory.
     const expiresAt = Math.min(payload.exp * 1000, Date.now() + 8 * 60 * 60_000);
-    const session = await this.directory.createSession(this.config.issuer, this.config.organizationId, payload.sub, expiresAt);
+    const session = await this.directory.createSession(this.config.issuer, this.config.organizationId, payload.sub, expiresAt,
+      attempt.authEpoch ?? 0);
     return { token: session.token, expiresAt };
   }
 }
