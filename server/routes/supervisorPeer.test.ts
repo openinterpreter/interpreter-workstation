@@ -105,7 +105,7 @@ describe('enrolled supervisor peer route seam', () => {
       { expected: { ...expected, status: 'blocked' }, status: 'paused' },
       { expected, status: 'active' }, { expected, status: 'complete' },
       { expected, status: 'paused', objective: 'overreach' },
-      { expected: { ...expected, lifecycleRevision: 0 }, status: 'paused' },
+      { expected: { ...expected, lifecycleRevision: -1 }, status: 'paused' },
     ]) expect((await post(base, body)).status).toBe(400);
     expect(calls.update).toBe(0);
     const result = await post(base, { expected, status: 'paused' });

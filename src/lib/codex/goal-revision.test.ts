@@ -23,6 +23,18 @@ describe('exact native Goal revision read', () => {
     assert.equal(calls, 1);
   });
 
+  test('preserves native zero revisions on migrated existing Goals for exact CAS', async () => {
+    const migrated = { ...revision, missionRevision: 0, lifecycleRevision: 0 };
+    const client = { subscribe: () => () => {}, threadGoalRevisionGet: async () =>
+      ({ goal, revision: migrated }) } as unknown as CodexClient;
+    assert.deepEqual(await new CodexService(client).getThreadGoalWithRevision(threadId),
+      { goal, revision: migrated });
+    assert.deepEqual(goalCasExpectedParams(migrated), {
+      expectedGoalId: goalId, expectedStatus: 'active',
+      expectedMissionRevision: 0, expectedLifecycleRevision: 0,
+    });
+  });
+
   test('returns a genuinely absent Goal only with a matching absent revision', () => {
     assert.equal(verifyThreadGoalRevision(null, null, threadId), null);
     assert.throws(() => verifyThreadGoalRevision(null, null, 'wrong-owner'), GoalRevisionUnavailableError);
@@ -44,7 +56,7 @@ describe('exact native Goal revision read', () => {
   test('old runtime and contradictory owner, status, or revisions fail closed', async () => {
     const cases = [undefined, { ...revision, goalId: 'not-an-id' },
       { ...revision, status: 'paused' }, { ...revision, status: 'invalid' },
-      { ...revision, missionRevision: 0 },
+      { ...revision, missionRevision: -1 },
       { ...revision, lifecycleRevision: Number.MAX_SAFE_INTEGER + 1 }];
     for (const value of cases) {
       const client = { subscribe: () => () => {}, threadGoalRevisionGet: async () =>
@@ -110,7 +122,7 @@ describe('exact native Goal revision read', () => {
     const service = new CodexService(client);
     for (const [owner, expected, change] of [
       ['wrong-owner', revision, { status: 'paused' }],
-      [threadId, { ...revision, lifecycleRevision: 0 }, { status: 'paused' }],
+      [threadId, { ...revision, lifecycleRevision: -1 }, { status: 'paused' }],
       [threadId, revision, {}],
       [threadId, revision, { status: undefined }],
       [threadId, revision, { tokenBudget: -1 }],

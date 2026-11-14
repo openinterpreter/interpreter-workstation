@@ -67,6 +67,23 @@ describe('authenticated loopback Goal CAS bridge', () => {
     }
   });
 
+  test('CAS resume carries native zero revisions from a migrated Goal', async () => {
+    const service = getCodexService();
+    const original = service.setThreadGoalWithRevision;
+    const migrated = { ...expected, missionRevision: 0, lifecycleRevision: 0 };
+    service.setThreadGoalWithRevision = async (id, revision, change) => {
+      expect({ id, revision, change }).toEqual({ id: threadId, revision: migrated,
+        change: { status: 'active' } });
+      return { goal: { ...goal, status: 'active' },
+        revision: { ...migrated, status: 'active', lifecycleRevision: 1 } } as any;
+    };
+    try {
+      const response = await request(app).put(url).send({ expected: migrated, status: 'active' });
+      expect(response.status).toBe(200);
+      expect(response.body.revision.lifecycleRevision).toBe(1);
+    } finally { service.setThreadGoalWithRevision = original; }
+  });
+
   test('malformed, wrong-origin, conflict and unknown effect fail closed without fallback', async () => {
     const service = getCodexService();
     const original = service.setThreadGoalWithRevision;
@@ -78,7 +95,7 @@ describe('authenticated loopback Goal CAS bridge', () => {
       expect((await request(app).put(url).send({ expected, status: 'active' })
         .set('Origin', 'https://attacker.example')).status).toBe(403);
       for (const body of [
-        { expected: { ...expected, lifecycleRevision: 0 }, status: 'active' },
+        { expected: { ...expected, lifecycleRevision: -1 }, status: 'active' },
         { expected, status: 'complete' },
         { expected, status: 'active', objective: 'unexpected' },
         { expected: { ...expected, invented: true }, status: 'active' },
