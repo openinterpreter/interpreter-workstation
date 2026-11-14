@@ -72,6 +72,8 @@ import {
   getSteerErrorCode,
   THREAD_LIST_DEFAULTS,
 } from '../../src/lib/codex/service';
+import { GoalRevisionConflictError, goalCasExpectedParams,
+  type ThreadGoalRevision } from '../../src/lib/codex/goal-revision';
 import { enrichThreadWithReasoning } from '../../src/lib/codex/enrich-thread-reasoning';
 import {
   buildProfileFromPreset,
@@ -1346,6 +1348,20 @@ router.put('/threads/:threadId/name', async (req: Request, res: Response) => {
   }
 });
 
+/** An exact native CAS identity for the existing authenticated loopback
+ * operator path. A legacy /goal read must never be promoted to a revision. */
+router.get('/threads/:threadId/goal/revision', async (req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (!savedThreadIdentityReadAllowed(req)) return res.status(403).json({ error: 'Local same-origin request required.' });
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(req.params.threadId))
+    return res.status(400).json({ error: 'Exact native thread ID required.' });
+  try {
+    return res.json(await getCodexService().getThreadGoalWithRevision(req.params.threadId));
+  } catch {
+    return res.status(503).json({ error: 'Native Goal revision unavailable.' });
+  }
+});
+
 router.get('/threads/:threadId/goal', async (req: Request, res: Response) => {
   try {
     const goal = await getCodexService().getThreadGoal(req.params.threadId);
@@ -1363,6 +1379,34 @@ router.get('/threads/:threadId/goal', async (req: Request, res: Response) => {
 });
 
 router.put('/threads/:threadId/goal', async (req: Request, res: Response) => {
+  if (req.body && Object.prototype.hasOwnProperty.call(req.body, 'expected')) {
+    res.setHeader('Cache-Control', 'no-store');
+    if (!savedThreadIdentityReadAllowed(req)) return res.status(403).json({ error: 'Local same-origin request required.' });
+    const expected = req.body.expected as ThreadGoalRevision;
+    const status = req.body.status;
+    try {
+      if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(req.params.threadId) ||
+          Object.keys(req.body).sort().join() !== 'expected,status' ||
+          !expected || typeof expected !== 'object' || Array.isArray(expected) ||
+          Object.keys(expected).sort().join() !== 'goalId,lifecycleRevision,missionRevision,status' ||
+          !((expected.status === 'paused' || expected.status === 'blocked') && status === 'active' ||
+            expected.status === 'active' && (status === 'paused' || status === 'blocked'))) {
+        return res.status(400).json({ error: 'Exact native Goal transition required.' });
+      }
+      goalCasExpectedParams(expected);
+    } catch {
+      return res.status(400).json({ error: 'Exact native Goal revision required.' });
+    }
+    try {
+      const result = await getCodexService().setThreadGoalWithRevision(req.params.threadId,
+        expected, { status });
+      return res.json(result);
+    } catch (error) {
+      return res.status(error instanceof GoalRevisionConflictError ? 409 : 503)
+        .json({ error: error instanceof GoalRevisionConflictError ?
+          'Native Goal revision changed.' : 'Native Goal mutation unconfirmed.' });
+    }
+  }
   const objective = typeof req.body?.objective === 'string'
     ? req.body.objective.trim()
     : undefined;
