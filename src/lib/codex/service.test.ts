@@ -209,6 +209,31 @@ describe('native custody metadata', () => {
     assert.doesNotMatch(JSON.stringify(result), /PRIVATE/);
   });
 
+  test('global custody enumerates durable DB-only threads rather than omitting unindexed rollouts', async () => {
+    const loadedId = '00000000-0000-4000-8000-000000000123';
+    const unindexedId = '00000000-0000-4000-8000-000000000124';
+    const client = createFakeClient({}).client;
+    client.threadLoadedList = async () => ({ data: [loadedId], nextCursor: null });
+    let listCalls = 0;
+    client.threadList = async (params) => {
+      listCalls++;
+      // The non-DB list omits a durable row, as an incomplete rollout index can.
+      const ids = params.useStateDbOnly ? [loadedId, unindexedId] : [loadedId];
+      return { data: ids.map((id) => ({ id }) as v2.Thread), nextCursor: null, backwardsCursor: null };
+    };
+    const queueReads: string[] = [];
+    client.threadQueueList = async ({ threadId }) => {
+      queueReads.push(threadId);
+      return { data: [], nextCursor: null };
+    };
+    const custody = await new CodexService(client).readGlobalNativeCustody();
+    assert.equal(listCalls, 2); // initial and stable verification pass
+    assert.equal(custody.threadCount, 2);
+    assert.deepEqual(custody.threads.map((thread) => thread.threadId), [loadedId, unindexedId]);
+    assert.deepEqual(queueReads, [loadedId, unindexedId, loadedId, unindexedId]);
+    assert.equal(custody.atomic, false);
+  });
+
   test('rejects a changing native queue rather than claiming safe custody', async () => {
     const id = '00000000-0000-4000-8000-000000000123';
     const client = createFakeClient({}).client;
