@@ -65,6 +65,7 @@ import {
 import {
   NativeCustodyPhaseError,
   NativeGlobalInventoryError,
+  SavedThreadIdentityError,
   NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS,
   NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS,
   getCodexService,
@@ -252,6 +253,21 @@ function wakeMutationAllowed(req: Request): boolean {
   if (!origin) return true; // local CLI; remote hosts remain subject to workstationAccessMiddleware
   try { return new URL(origin).host === req.get('host'); }
   catch { return false; }
+}
+
+// Saved-thread identity includes local filesystem paths. Matching Origin to an
+// arbitrary Host is not sufficient: a rebinding hostname can supply both.
+function savedThreadIdentityReadAllowed(req: Request): boolean {
+  if (!wakeMutationAllowed(req)) return false;
+  const host = req.get('host');
+  if (!host) return false;
+  try {
+    const parsed = new URL(`http://${host}`);
+    return parsed.host.toLowerCase() === host.toLowerCase() &&
+      ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
 }
 
 // Inbound producers know the explicit secret; a normal browser session never
@@ -1248,6 +1264,22 @@ router.post('/threads/:threadId/fork', async (req: Request, res: Response) => {
     return res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to fork thread.',
     });
+  }
+});
+
+/** Metadata-only exact binding for authenticated/local saved-thread sends.
+ * No transcript, queue observation, or application active/idle gate. */
+router.get('/threads/:threadId/identity', async (req: Request, res: Response) => {
+  if (!savedThreadIdentityReadAllowed(req)) return res.status(403).json({ error: 'Local same-origin request required.' });
+  const threadId = req.params.threadId;
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId)) {
+    return res.status(400).json({ error: 'Exact native thread ID required.' });
+  }
+  try {
+    return res.json(await getCodexService().readSavedThreadIdentity(threadId));
+  } catch (error) {
+    return res.status(error instanceof SavedThreadIdentityError ? 404 : 503)
+      .json({ error: 'Exact saved-thread identity unavailable.' });
   }
 });
 

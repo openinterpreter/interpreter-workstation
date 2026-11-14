@@ -56,6 +56,8 @@ if (process.env.INTERPRETER_SUPERVISOR_VERIFY_URL &&
     process.env.INTERPRETER_SUPERVISOR_TARGET_COMPUTER) {
   app.use('/api/interpreter-peer/threads/:threadId/goal/create',
     express.json({ limit: '6292000b' }));
+  app.use('/api/interpreter-peer/threads/:threadId/goal/document',
+    express.json({ limit: '6292000b' }));
 }
 app.use(express.json());
 
@@ -190,6 +192,12 @@ if (process.env.INTERPRETER_SUPERVISOR_VERIFY_URL &&
     readGoal: (id) => readStableSupervisorGoal(getCodexService(), id),
     resumeGoal: async (id, expected) =>
       (await getCodexService().setThreadGoalWithRevision(id, expected, { status: 'active' })).revision,
+    updateGoalStatus: async (id, expected, status) =>
+      (await getCodexService().setThreadGoalWithRevision(id, expected, { status })).revision,
+    updateGoalObjective: async (id, expected, objective) =>
+      (await getCodexService().setThreadGoalWithRevision(id, expected, { objective })).revision,
+    updateGoalDocument: async (id, expected, document) =>
+      getCodexService().setThreadGoalDocumentWithRevision({ threadId: id, document }, expected),
     readTerminal: (request) => getCodexService().readNativeTerminalStatus(request),
   }));
 }

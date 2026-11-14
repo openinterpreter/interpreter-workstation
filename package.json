@@ -2,7 +2,7 @@
   "name": "interpreter",
   "version": "0.1.24",
   "internalVersion": "0.2.171",
-  "publicVersion": "0.2.224",
+  "publicVersion": "0.2.226",
   "private": true,
   "license": "Apache-2.0",
   "repository": {
@@ -296,7 +296,7 @@
     "lucide-react": "0.468.0",
     "mammoth": "1.12.3",
     "marked": "17.0.3",
-    "minimatch": "10.2.6",
+    "minimatch": "11.0.1",
     "motion": "12.23.26",
     "music-metadata": "11.16.0",
     "nanoid": "5.1.16",
