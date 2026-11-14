@@ -28,9 +28,17 @@ export function decidePlatformMode(jobs, { runId, sha, attempt, requestedMode = 
   if (selected[0].conclusion === 'success' && selected[1].conclusion === 'success') return 'all';
   for (const job of selected.slice(0, 2)) {
     assert.equal(job.conclusion, 'failure', 'Unresolved macOS job status');
-    assert.equal(job.steps?.filter((step) => step.number === 14).length, 1, 'Unknown macOS package step');
-    assert.equal(job.steps.find((step) => step.number === 13)?.conclusion, 'success', 'macOS certificate preparation failed');
-    assert.equal(job.steps.find((step) => step.number === 14)?.conclusion, 'failure', 'macOS failure is outside packaging');
+    assert.ok(Array.isArray(job.steps), 'Unknown macOS build steps');
+    const certificate = job.steps.filter((step) => step.name === 'Prepare the passwordless macOS signing certificate');
+    const packageStep = job.steps.filter((step) => step.name === 'Build signed and notarized macOS package');
+    assert.equal(certificate.length, 1, 'Unknown macOS certificate preparation step');
+    assert.equal(packageStep.length, 1, 'Unknown macOS package step');
+    assert.ok(Number.isInteger(certificate[0].number) && Number.isInteger(packageStep[0].number)
+      && certificate[0].number < packageStep[0].number, 'Unexpected macOS step order');
+    assert.equal(certificate[0].conclusion, 'success', 'macOS certificate preparation failed');
+    assert.equal(packageStep[0].conclusion, 'failure', 'macOS failure is outside packaging');
+    assert.deepEqual(job.steps.filter((step) => step.conclusion === 'failure'), packageStep,
+      'Another macOS build step failed');
   }
   return 'windows-linux';
 }

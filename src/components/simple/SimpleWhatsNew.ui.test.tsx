@@ -25,7 +25,8 @@ describe('Simple versioned update note', () => {
     const visible = vi.fn();
     const rendered = render(<SimpleWhatsNew firstRunSession={false} onVisibilityChange={visible} />);
     expect(await screen.findByRole('region', { name: "What's New" })).toBeVisible();
-    expect(visible).toHaveBeenCalledWith(true);
+    // The region can commit before its passive visibility notification runs.
+    await waitFor(() => expect(visible).toHaveBeenCalledWith(true));
     expect(screen.getByText(/Switch to Advanced/i)).toBeVisible();
     await user.click(screen.getByRole('button', { name: "Dismiss What's New" }));
     await waitFor(() => expect(topNotices.dismiss).toHaveBeenCalledWith('simple-whats-new'));
