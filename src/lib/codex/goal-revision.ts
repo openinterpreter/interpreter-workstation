@@ -23,8 +23,10 @@ const GOAL_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 function validRevision(value: Partial<ThreadGoalRevision>): value is ThreadGoalRevision {
   return typeof value.goalId === 'string' && GOAL_ID.test(value.goalId) &&
     typeof value.status === 'string' && GOAL_STATUSES.includes(value.status) &&
-    Number.isSafeInteger(value.missionRevision) && (value.missionRevision ?? 0) >= 1 &&
-    Number.isSafeInteger(value.lifecycleRevision) && (value.lifecycleRevision ?? 0) >= 1;
+    // OIX backfills pre-existing Goals with revision zero. Zero is native CAS
+    // identity, not an absent revision; only negative/non-integral values are invalid.
+    Number.isSafeInteger(value.missionRevision) && (value.missionRevision ?? -1) >= 0 &&
+    Number.isSafeInteger(value.lifecycleRevision) && (value.lifecycleRevision ?? -1) >= 0;
 }
 
 export class GoalRevisionUnavailableError extends Error {

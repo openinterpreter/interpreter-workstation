@@ -121,7 +121,7 @@ describe('exact same-Goal conditional resume', () => {
       expect(JSON.parse(result.content[0]!.text).category).toBe('caller_unavailable');
     }
     for (const input of [undefined, { ...paused, goalId: 'bad' },
-      { ...paused, missionRevision: 0 }, { ...paused, status: 'complete' }]) {
+      { ...paused, missionRevision: -1 }, { ...paused, status: 'complete' }]) {
       const result = await resumeGoalForCaller({ threadId, verifiedCallerThreadId: threadId },
         input, resume);
       expect(JSON.parse(result.content[0]!.text).category).toBe('invalid_revision');
