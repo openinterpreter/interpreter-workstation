@@ -1293,17 +1293,50 @@ export class CodexService {
       throw new Error('Invalid native custody deadline.');
     }
     onPhase?.('thread_read', 'started');
-    const thread = await nativeCustodyPhase('thread_read', () => this.readThread(threadId), deadlineMs,
+    // A saved thread may contain hundreds of megabytes of prior turns. Read
+    // only its status and the latest full turn; never hydrate its history just
+    // to inspect a current command. A missing/mismatched page is unknown, not
+    // evidence that the thread has no active work.
+    const readLatest = async () => {
+      const { thread } = await this.client.threadRead({ threadId, includeTurns: false });
+      if (thread.id !== threadId || thread.turns.length !== 0) throw new Error('Invalid native thread metadata');
+      const page = await this.client.threadTurnsList({ threadId, limit: 1,
+        sortDirection: 'desc', itemsView: 'full' });
+      if (page.data.length > 1 || page.data.some(turn => turn.itemsView !== 'full')) {
+        throw new Error('Invalid latest native turn page');
+      }
+      if (page.data.length === 0 && page.nextCursor !== null) throw new Error('Incomplete native turn page');
+      if (page.data.length === 0 && thread.status.type === 'active') {
+        throw new Error('Active native thread without a saved turn');
+      }
+      return { thread, lastTurn: page.data[0] };
+    };
+    const initial = await nativeCustodyPhase('thread_read', readLatest, deadlineMs,
       (phase, status) => onPhase?.(phase, status === 'completed' ? 'late_completed' : 'late_failed'));
     onPhase?.('thread_read', 'completed');
-    if (thread.id !== threadId) throw new Error('Native thread ID mismatch');
     onPhase?.('queue_read', 'started');
     const submissions = await nativeCustodyPhase('queue_read',
       () => this.readNativeQueuedSubmissions(threadId), deadlineMs,
       (phase, status) => onPhase?.(phase, status === 'completed' ? 'late_completed' : 'late_failed'));
     onPhase?.('queue_read', 'completed');
-    const lastTurn = thread.turns[thread.turns.length - 1];
-    const status = thread.status;
+    // A turn or queue may advance during observation. Do not turn a stale
+    // idle/empty snapshot into an affirmative installation fence.
+    const checked = await nativeCustodyPhase('thread_read', readLatest, deadlineMs,
+      (phase, status) => onPhase?.(phase, status === 'completed' ? 'late_completed' : 'late_failed'));
+    if (JSON.stringify(initial.thread.status) !== JSON.stringify(checked.thread.status) ||
+        initial.lastTurn?.id !== checked.lastTurn?.id ||
+        initial.lastTurn?.status !== checked.lastTurn?.status ||
+        JSON.stringify(initial.lastTurn?.items) !== JSON.stringify(checked.lastTurn?.items)) {
+      throw new NativeCustodyPhaseError('thread_read', 'native_unavailable');
+    }
+    const verifiedQueue = await nativeCustodyPhase('queue_read',
+      () => this.readNativeQueuedSubmissions(threadId), deadlineMs,
+      (phase, status) => onPhase?.(phase, status === 'completed' ? 'late_completed' : 'late_failed'));
+    if (JSON.stringify(submissions) !== JSON.stringify(verifiedQueue)) {
+      throw new NativeCustodyPhaseError('queue_read', 'native_unavailable');
+    }
+    const lastTurn = checked.lastTurn;
+    const status = checked.thread.status;
     return {
       threadId,
       status: status.type,
