@@ -1203,6 +1203,9 @@ describe('interpreterCliRuntime', () => {
       const launcherPath = ensureInterpreterCliLauncher('win32');
       const powershellScriptPath = path.join(path.dirname(launcherPath), 'interpreter-app.ps1');
       const powershellScript = readFileSync(powershellScriptPath, 'utf8');
+      expect(powershellScript).toContain(
+        'Add-Type -AssemblyName System.Net.Http',
+      );
 
       expect(powershellScript).toContain(
         'Invoke-InterpreterCliToolStream "$transportTarget/api/interpreter-cli/tools/$serverId/$($toolName)/stream?$query" $argsJson',
