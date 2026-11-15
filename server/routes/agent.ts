@@ -1,8 +1,8 @@
 import { Router, Request, Response, raw } from 'express';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { nativeSubmissionJournal, submissionTerminalPhase, SUBMISSION_ID } from '../utils/nativeSubmissionJournal';
-import { wakeTokenValid } from '../utils/wakeSources';
+import { PausedCommandConflictError, wakeTokenValid } from '../utils/wakeSources';
 import { readyWakeSources, wakeSources } from '../utils/wakeSourcesRuntime';
 import { stat } from 'node:fs/promises';
 import { getCustomInstructions } from '../configStore';
@@ -468,6 +468,38 @@ router.put('/threads/:threadId/wake-sources/:sourceId', async (req: Request, res
     const source = await wakeSources.put({ ...req.body, id: req.params.sourceId, threadId: req.params.threadId });
     res.json({ source });
   } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid source.' }); }
+});
+
+router.get('/threads/:threadId/wake-sources/:sourceId/paused-command', async (req: Request, res: Response) => {
+  if (!savedThreadIdentityReadAllowed(req)) return res.status(403).json({ error: 'Local same-origin request required.' });
+  try {
+    await readyWakeSources();
+    await getCodexService().readSavedThreadIdentity(req.params.threadId);
+    return res.json(await wakeSources.pausedCommandMetadata(req.params.threadId, req.params.sourceId));
+  } catch {
+    return res.status(503).json({ error: 'Exact command source metadata unavailable.' });
+  }
+});
+
+router.patch('/threads/:threadId/wake-sources/:sourceId/paused-command', async (req: Request, res: Response) => {
+  if (!savedThreadIdentityReadAllowed(req)) return res.status(403).json({ error: 'Local same-origin request required.' });
+  try {
+    await readyWakeSources();
+    await getCodexService().readSavedThreadIdentity(req.params.threadId);
+    const body = req.body;
+    if (!body || Object.keys(body).sort().join(',') !== 'expectedArgvSha256,pathComponentFrom,pathComponentTo') {
+      return res.status(400).json({ error: 'Expected command arguments required.' });
+    }
+    const source = await wakeSources.retargetPausedCommand(req.params.threadId, req.params.sourceId,
+      body.expectedArgvSha256, body.pathComponentFrom, body.pathComponentTo);
+    return res.json({ sourceId: source.id, threadId: source.threadId, paused: source.paused === true,
+      status: source.status, sequence: source.sequence,
+      argvSha256: createHash('sha256').update(JSON.stringify(source.argv)).digest('hex') });
+  } catch (error) {
+    return res.status(error instanceof PausedCommandConflictError ? 409 : 503)
+      .json({ error: error instanceof PausedCommandConflictError
+        ? 'Paused command precondition rejected.' : 'Paused command outcome unavailable; inspect custody before retry.' });
+  }
 });
 
 for (const action of ['pause', 'resume'] as const) {
