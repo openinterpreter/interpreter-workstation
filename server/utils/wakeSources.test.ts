@@ -40,7 +40,7 @@ describe('durable thread wake sources', () => {
       await wake.put({ id: 'provider', threadId: 'thread-1', kind: 'command', argv: oldArgv });
       await wake.ingest('thread-1', 'provider', 'original-event', 'unadmitted input');
       await expect(wake.retargetPausedCommand('thread-1', 'provider', argvHash(oldArgv), '/old/bin', '/usr/local/lib/interpreterwork-world/bin'))
-        .rejects.toThrow('changed or is not drained');
+        .rejects.toThrow('Paused command precondition rejected');
       const receipt = await wake.pause('thread-1', 'provider');
       expect(receipt.drain.pendingEvents).toBe(1);
       expect(await wake.pausedCommandMetadata('thread-1', 'provider')).toEqual({
@@ -49,27 +49,50 @@ describe('durable thread wake sources', () => {
       });
       const before = wake.list('thread-1');
       await expect(wake.retargetPausedCommand('thread-1', 'provider', argvHash(newArgv), '/old/bin', '/usr/local/lib/interpreterwork-world/bin'))
-        .rejects.toThrow('changed or is not drained');
+        .rejects.toThrow('Paused command precondition rejected');
       const changed = await wake.retargetPausedCommand('thread-1', 'provider', argvHash(oldArgv), '/old/bin', '/usr/local/lib/interpreterwork-world/bin');
       expect(changed).toEqual({ ...before.sources[0], argv: newArgv });
       expect((await wake.pausedCommandMetadata('thread-1', 'provider')).argvSha256)
         .toBe(argvHash(newArgv));
       expect(wake.list('thread-1').events).toEqual(before.events);
       await expect(wake.retargetPausedCommand('thread-1', 'provider', argvHash(oldArgv), '/old/bin', '/another/bin'))
-        .rejects.toThrow('changed or is not drained');
+        .rejects.toThrow('Paused command precondition rejected');
       await expect(wake.retargetPausedCommand('thread-2', 'provider', argvHash(newArgv), '/usr/local/lib/interpreterwork-world/bin', '/another/bin'))
-        .rejects.toThrow('changed or is not drained');
+        .rejects.toThrow('Paused command precondition rejected');
       await expect(wake.retargetPausedCommand('thread-1', 'provider', argvHash(newArgv), '/not-present', '/another/bin'))
-        .rejects.toThrow('PATH custody changed');
+        .rejects.toThrow('Paused command precondition rejected');
       await expect(wake.retargetPausedCommand('thread-1', 'provider', argvHash(newArgv),
         '/usr/local/lib/interpreterwork-world/bin', '/usr/bin'))
-        .rejects.toThrow('PATH custody changed');
+        .rejects.toThrow('Paused command precondition rejected');
       await wake.tick(Date.now() + 60_000);
       expect(f.counts().starts).toBe(0);
       await wake.stop();
       const recovered = await f.make();
       expect(recovered.list('thread-1').sources[0]?.argv).toEqual(newArgv);
       expect(recovered.list('thread-1').events).toEqual(before.events);
+    } finally { await f.cleanup(); }
+  });
+  test('a failed persistence phase fences retarget, read and resume without losing input', async () => {
+    const f = await fixture();
+    try {
+      const wake = await f.make();
+      const argv = ['/usr/bin/env', 'PATH=/old/bin:/usr/bin', '/bin/echo', 'old'];
+      await wake.put({ id: 'provider', threadId: 'thread-1', kind: 'command', argv });
+      await wake.ingest('thread-1', 'provider', 'event-1', 'held input');
+      await wake.pause('thread-1', 'provider');
+      const before = wake.list('thread-1').events;
+      const save = (wake as any).save;
+      (wake as any).save = async () => { throw new Error('simulated uncertain fsync'); };
+      await expect(wake.retargetPausedCommand('thread-1', 'provider',
+        createHash('sha256').update(JSON.stringify(argv)).digest('hex'),
+        '/old/bin', '/usr/local/lib/interpreterwork-world/bin'))
+        .rejects.toThrow('simulated uncertain fsync');
+      (wake as any).save = save;
+      await expect(wake.pausedCommandMetadata('thread-1', 'provider'))
+        .rejects.toThrow('Paused command persistence uncertain');
+      await expect(wake.resume('thread-1', 'provider'))
+        .rejects.toThrow('Paused command persistence uncertain');
+      expect(wake.list('thread-1').events).toEqual(before);
     } finally { await f.cleanup(); }
   });
   test('a stalled native history inspection preserves pending custody and does not pin other threads', async () => {
