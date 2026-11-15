@@ -64,7 +64,7 @@ test('Apple keychain patch matches the locked builder source and edits only a te
   const version = manifest.devDependencies['electron-builder'];
   const patchPath = path.resolve('scripts/ci/patch-electron-builder-keychain.mjs');
   const patchSource = await readFile(patchPath, 'utf8');
-  assert.ok(patchSource.includes(`app-builder-lib@${version}_`));
+  assert.ok(patchSource.includes('app-builder-lib@${version}_'));
 
   const pnpmStore = path.resolve('node_modules/.pnpm');
   const directory = (await readdir(pnpmStore)).find((entry) =>
@@ -74,11 +74,15 @@ test('Apple keychain patch matches the locked builder source and edits only a te
     'node_modules/app-builder-lib/out/codeSign/macCodeSign.js');
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'workstation-keychain-patch-'));
   try {
+    await copyFile('package.json', path.join(temporary, 'package.json'));
     const copied = path.join(temporary, relative);
     await mkdir(path.dirname(copied), { recursive: true });
     await copyFile(path.resolve(relative), copied);
     execFileSync(process.execPath, [patchPath], { cwd: temporary, encoding: 'utf8' });
     const patched = await readFile(copied, 'utf8');
+    if (version === '26.18.0') {
+      assert.equal(patched, await readFile(path.resolve(relative), 'utf8'));
+    }
     assert.match(patched, /importCerts\(keychainFile, certPaths, cscPasswords, keychainPassword\)/);
     assert.match(patched, /"set-key-partition-list"[^\n]+"-k", keychainPassword, keychainFile/);
   } finally {
