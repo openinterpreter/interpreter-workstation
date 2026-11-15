@@ -521,6 +521,58 @@ export class WakeSources {
     });
   }
 
+  /** Retarget only a drained, paused command. Its ID, status, sequence and
+   * durable input ledger remain untouched; this never admits or polls input. */
+  async pausedCommandMetadata(threadId: string, id: string) {
+    if (![threadId, id].every(value => ID.test(value))) throw new Error('Invalid source ID');
+    return this.exclusive(async () => {
+      const source = this.state.sources.find(item => item.threadId === threadId && item.id === id);
+      if (!source || source.kind !== 'command' || !Array.isArray(source.argv))
+        throw new Error('Command source unavailable');
+      const events = this.state.events.filter(item => item.threadId === threadId && item.sourceId === id);
+      return { sourceId: id, threadId, status: source.status, paused: source.paused === true,
+        sequence: source.sequence, argvSha256: createHash('sha256').update(JSON.stringify(source.argv)).digest('hex'),
+        pendingEvents: events.filter(item => item.status === 'pending').length,
+        offeredEvents: events.filter(item => item.status === 'offered').length };
+    });
+  }
+
+  async retargetPausedCommand(threadId: string, id: string, expectedArgvSha256: string,
+    pathComponentFrom: string, pathComponentTo: string): Promise<WakeSource> {
+    if (this.stopping) throw new Error('Wake admission is draining for restart');
+    if (![threadId, id].every(value => ID.test(value)) ||
+      !/^[a-f0-9]{64}$/.test(expectedArgvSha256) ||
+      ![pathComponentFrom, pathComponentTo].every(value => typeof value === 'string' &&
+        value.length <= 4096 && path.isAbsolute(value) && !value.includes(path.delimiter) && !value.includes('\0')) ||
+      pathComponentFrom === pathComponentTo) {
+      throw new Error('Invalid command source retarget');
+    }
+    return this.exclusive(async () => {
+      const source = this.state.sources.find(item => item.threadId === threadId && item.id === id);
+      const key = `${threadId}:${id}`;
+      if (!source || source.kind !== 'command' || !source.paused || source.status === 'cancelled' ||
+          source.status === 'running' || !Array.isArray(source.argv) ||
+          createHash('sha256').update(JSON.stringify(source.argv)).digest('hex') !== expectedArgvSha256 ||
+          this.commands.has(key) || this.commandTasksBySource.has(key) || this.inFlight.has(key) ||
+          this.state.events.some(event => event.threadId === threadId && event.sourceId === id &&
+            this.inFlight.has(`${threadId}:${event.eventId}`))) {
+        throw new Error('Paused command source changed or is not drained');
+      }
+      const pathArgs = source.argv.map((value, index) => ({ value, index }))
+        .filter(item => item.value.startsWith('PATH='));
+      if (pathArgs.length !== 1) throw new Error('Paused command PATH custody unavailable');
+      const { value, index } = pathArgs[0];
+      const components = value.slice(5).split(path.delimiter);
+      if (components.filter(component => component === pathComponentFrom).length !== 1 ||
+          components.includes(pathComponentTo)) throw new Error('Paused command PATH custody changed');
+      source.argv = source.argv.map((arg, position) => position === index
+        ? `PATH=${components.map(component => component === pathComponentFrom ? pathComponentTo : component).join(path.delimiter)}`
+        : arg);
+      await this.save();
+      return structuredClone(source);
+    });
+  }
+
   async cancel(threadId: string, id: string): Promise<void> {
     if (this.stopping) throw new Error('Wake admission is draining for restart');
     await this.exclusive(async () => {
