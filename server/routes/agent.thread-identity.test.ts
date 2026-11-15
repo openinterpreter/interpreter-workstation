@@ -9,6 +9,31 @@ app.use('/api/agent', agentRouter);
 const id = '00000000-0000-4000-8000-000000000001';
 
 describe('exact saved-thread identity HTTP', () => {
+  test('paused-command mutation rejects a cross-origin caller before native access', async () => {
+    const service = getCodexService();
+    const original = service.readSavedThreadIdentity;
+    let reads = 0;
+    service.readSavedThreadIdentity = async () => { reads++; throw new Error('must not read'); };
+    try {
+      const response = await request(app).patch(`/api/agent/threads/${id}/wake-sources/provider/paused-command`)
+        .set('Origin', 'https://untrusted.example').send({ expectedArgv: ['/bin/true'], argv: ['/bin/false'] });
+      expect(response.status).toBe(403);
+      expect(reads).toBe(0);
+    } finally { service.readSavedThreadIdentity = original; }
+  });
+
+  test('paused-command metadata read rejects a cross-origin caller before native access', async () => {
+    const service = getCodexService();
+    const original = service.readSavedThreadIdentity;
+    let reads = 0;
+    service.readSavedThreadIdentity = async () => { reads++; throw new Error('must not read'); };
+    try {
+      const response = await request(app).get(`/api/agent/threads/${id}/wake-sources/provider/paused-command`)
+        .set('Origin', 'https://untrusted.example');
+      expect(response.status).toBe(403);
+      expect(reads).toBe(0);
+    } finally { service.readSavedThreadIdentity = original; }
+  });
   test('rejects cross-origin browser reads before accessing saved identity', async () => {
     const service = getCodexService();
     const original = service.readSavedThreadIdentity;
