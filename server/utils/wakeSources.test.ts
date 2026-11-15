@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
@@ -29,6 +30,48 @@ async function fixture() {
 }
 
 describe('durable thread wake sources', () => {
+  test('retargets only a drained paused command with exact prior argv, preserving pending custody', async () => {
+    const f = await fixture();
+    try {
+      const wake = await f.make();
+      const argvHash = (argv: string[]) => createHash('sha256').update(JSON.stringify(argv)).digest('hex');
+      const oldArgv = ['/usr/bin/env', 'PATH=/old/bin:/usr/bin:/bin', '/bin/echo', 'old'];
+      const newArgv = ['/usr/bin/env', 'PATH=/usr/local/lib/interpreterwork-world/bin:/usr/bin:/bin', '/bin/echo', 'old'];
+      await wake.put({ id: 'provider', threadId: 'thread-1', kind: 'command', argv: oldArgv });
+      await wake.ingest('thread-1', 'provider', 'original-event', 'unadmitted input');
+      await expect(wake.retargetPausedCommand('thread-1', 'provider', argvHash(oldArgv), '/old/bin', '/usr/local/lib/interpreterwork-world/bin'))
+        .rejects.toThrow('changed or is not drained');
+      const receipt = await wake.pause('thread-1', 'provider');
+      expect(receipt.drain.pendingEvents).toBe(1);
+      expect(await wake.pausedCommandMetadata('thread-1', 'provider')).toEqual({
+        sourceId: 'provider', threadId: 'thread-1', status: 'waiting', paused: true,
+        sequence: 0, argvSha256: argvHash(oldArgv), pendingEvents: 1, offeredEvents: 0,
+      });
+      const before = wake.list('thread-1');
+      await expect(wake.retargetPausedCommand('thread-1', 'provider', argvHash(newArgv), '/old/bin', '/usr/local/lib/interpreterwork-world/bin'))
+        .rejects.toThrow('changed or is not drained');
+      const changed = await wake.retargetPausedCommand('thread-1', 'provider', argvHash(oldArgv), '/old/bin', '/usr/local/lib/interpreterwork-world/bin');
+      expect(changed).toEqual({ ...before.sources[0], argv: newArgv });
+      expect((await wake.pausedCommandMetadata('thread-1', 'provider')).argvSha256)
+        .toBe(argvHash(newArgv));
+      expect(wake.list('thread-1').events).toEqual(before.events);
+      await expect(wake.retargetPausedCommand('thread-1', 'provider', argvHash(oldArgv), '/old/bin', '/another/bin'))
+        .rejects.toThrow('changed or is not drained');
+      await expect(wake.retargetPausedCommand('thread-2', 'provider', argvHash(newArgv), '/usr/local/lib/interpreterwork-world/bin', '/another/bin'))
+        .rejects.toThrow('changed or is not drained');
+      await expect(wake.retargetPausedCommand('thread-1', 'provider', argvHash(newArgv), '/not-present', '/another/bin'))
+        .rejects.toThrow('PATH custody changed');
+      await expect(wake.retargetPausedCommand('thread-1', 'provider', argvHash(newArgv),
+        '/usr/local/lib/interpreterwork-world/bin', '/usr/bin'))
+        .rejects.toThrow('PATH custody changed');
+      await wake.tick(Date.now() + 60_000);
+      expect(f.counts().starts).toBe(0);
+      await wake.stop();
+      const recovered = await f.make();
+      expect(recovered.list('thread-1').sources[0]?.argv).toEqual(newArgv);
+      expect(recovered.list('thread-1').events).toEqual(before.events);
+    } finally { await f.cleanup(); }
+  });
   test('a stalled native history inspection preserves pending custody and does not pin other threads', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'wake-inspect-deadline-'));
     const messages: string[] = [];
