@@ -2,7 +2,7 @@ import { Router, Request, Response, raw } from 'express';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { nativeSubmissionJournal, submissionTerminalPhase, SUBMISSION_ID } from '../utils/nativeSubmissionJournal';
-import { wakeTokenValid } from '../utils/wakeSources';
+import { PausedCommandConflictError, wakeTokenValid } from '../utils/wakeSources';
 import { readyWakeSources, wakeSources } from '../utils/wakeSourcesRuntime';
 import { stat } from 'node:fs/promises';
 import { getCustomInstructions } from '../configStore';
@@ -495,8 +495,10 @@ router.patch('/threads/:threadId/wake-sources/:sourceId/paused-command', async (
     return res.json({ sourceId: source.id, threadId: source.threadId, paused: source.paused === true,
       status: source.status, sequence: source.sequence,
       argvSha256: createHash('sha256').update(JSON.stringify(source.argv)).digest('hex') });
-  } catch {
-    return res.status(409).json({ error: 'Paused command changed, is not drained, or native thread is unavailable.' });
+  } catch (error) {
+    return res.status(error instanceof PausedCommandConflictError ? 409 : 503)
+      .json({ error: error instanceof PausedCommandConflictError
+        ? 'Paused command precondition rejected.' : 'Paused command outcome unavailable; inspect custody before retry.' });
   }
 });
 

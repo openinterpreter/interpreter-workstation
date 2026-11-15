@@ -61,6 +61,9 @@ export class WakeRecoveryError extends Error {
     this.name = 'WakeRecoveryError';
   }
 }
+export class PausedCommandConflictError extends Error {
+  constructor() { super('Paused command precondition rejected'); this.name = 'PausedCommandConflictError'; }
+}
 function nativeFailure(error: unknown, phase: NonNullable<WakeEvent['failure']>['phase']): NonNullable<WakeEvent['failure']> {
   const original = error instanceof WakeAdmissionFailure ? error.original : error;
   const name = original instanceof Error && /^(?:Error|[A-Za-z]{1,60}Error)$/.test(original.name)
@@ -160,6 +163,9 @@ export class WakeSources {
   private commands = new Map<string, ReturnType<typeof spawn>>();
   private commandTasks = new Set<Promise<void>>();
   private commandTasksBySource = new Map<string, Promise<void>>();
+  /** A failed fsync may have followed rename. Do not claim either durable argv
+   * version or allow resume until a controlled process reload reads the file. */
+  private pausedRetargetUncertain = new Set<string>();
   private ticking = false;
   private stopping = false;
   private tickFinished?: Promise<void>;
@@ -444,6 +450,8 @@ export class WakeSources {
     if (this.stopping) throw new Error('Wake admission is draining for restart');
     if (![threadId, id].every(value => ID.test(value))) throw new Error('Invalid source ID');
     return this.exclusive(async () => {
+      if (this.pausedRetargetUncertain.has(`${threadId}:${id}`))
+        throw new Error('Paused command persistence uncertain; source remains paused');
       const source = this.state.sources.find(item => item.threadId === threadId && item.id === id);
       if (!source || source.status === 'cancelled') throw new Error('Source not found');
       source.paused = false;
@@ -526,6 +534,8 @@ export class WakeSources {
   async pausedCommandMetadata(threadId: string, id: string) {
     if (![threadId, id].every(value => ID.test(value))) throw new Error('Invalid source ID');
     return this.exclusive(async () => {
+      if (this.pausedRetargetUncertain.has(`${threadId}:${id}`))
+        throw new Error('Paused command persistence uncertain');
       const source = this.state.sources.find(item => item.threadId === threadId && item.id === id);
       if (!source || source.kind !== 'command' || !Array.isArray(source.argv))
         throw new Error('Command source unavailable');
@@ -545,30 +555,33 @@ export class WakeSources {
       ![pathComponentFrom, pathComponentTo].every(value => typeof value === 'string' &&
         value.length <= 4096 && path.isAbsolute(value) && !value.includes(path.delimiter) && !value.includes('\0')) ||
       pathComponentFrom === pathComponentTo) {
-      throw new Error('Invalid command source retarget');
+      throw new PausedCommandConflictError();
     }
     return this.exclusive(async () => {
       const source = this.state.sources.find(item => item.threadId === threadId && item.id === id);
       const key = `${threadId}:${id}`;
+      if (this.pausedRetargetUncertain.has(key))
+        throw new Error('Paused command persistence uncertain');
       if (!source || source.kind !== 'command' || !source.paused || source.status === 'cancelled' ||
           source.status === 'running' || !Array.isArray(source.argv) ||
           createHash('sha256').update(JSON.stringify(source.argv)).digest('hex') !== expectedArgvSha256 ||
           this.commands.has(key) || this.commandTasksBySource.has(key) || this.inFlight.has(key) ||
           this.state.events.some(event => event.threadId === threadId && event.sourceId === id &&
             this.inFlight.has(`${threadId}:${event.eventId}`))) {
-        throw new Error('Paused command source changed or is not drained');
+        throw new PausedCommandConflictError();
       }
       const pathArgs = source.argv.map((value, index) => ({ value, index }))
         .filter(item => item.value.startsWith('PATH='));
-      if (pathArgs.length !== 1) throw new Error('Paused command PATH custody unavailable');
+      if (pathArgs.length !== 1) throw new PausedCommandConflictError();
       const { value, index } = pathArgs[0];
       const components = value.slice(5).split(path.delimiter);
       if (components.filter(component => component === pathComponentFrom).length !== 1 ||
-          components.includes(pathComponentTo)) throw new Error('Paused command PATH custody changed');
+          components.includes(pathComponentTo)) throw new PausedCommandConflictError();
       source.argv = source.argv.map((arg, position) => position === index
         ? `PATH=${components.map(component => component === pathComponentFrom ? pathComponentTo : component).join(path.delimiter)}`
         : arg);
-      await this.save();
+      try { await this.save(); }
+      catch (error) { this.pausedRetargetUncertain.add(key); throw error; }
       return structuredClone(source);
     });
   }
@@ -576,6 +589,8 @@ export class WakeSources {
   async cancel(threadId: string, id: string): Promise<void> {
     if (this.stopping) throw new Error('Wake admission is draining for restart');
     await this.exclusive(async () => {
+      if (this.pausedRetargetUncertain.has(`${threadId}:${id}`))
+        throw new Error('Paused command persistence uncertain');
       const source = this.state.sources.find(s => s.threadId === threadId && s.id === id);
       if (!source) throw new Error('Source not found');
       source.status = 'cancelled';
