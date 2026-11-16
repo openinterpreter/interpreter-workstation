@@ -164,3 +164,48 @@ process ID, saved status, exit code, and bounded output digest/size from its
 Neither a previous conversational message nor that saved snapshot is a live
 process observation. A consumer displaying a previous message must label it
 historical rather than presenting it as the result of a newer turn.
+
+## Enrolled supervisor peers
+
+An operator can let an enrolled peer machine read and conditionally control
+native Goals on this machine through `/api/interpreter-peer/threads/:threadId/…`.
+The route is mounted only when all of these service environment settings are
+present:
+
+- `INTERPRETER_SUPERVISOR_VERIFY_URL`: the HTTPS verification endpoint, for
+  example `https://verifier.example/v1/peer-supervisor-claim`.
+- `INTERPRETER_SUPERVISOR_VERIFY_AUDIENCE`: the exact origin of that URL, for
+  example `https://verifier.example`.
+- `INTERPRETER_SUPERVISOR_TARGET_COMPUTER`: this machine's enrolled name, for
+  example `example-computer`.
+
+For every peer request, Workstation forwards the caller's assertion to the
+verifier and accepts only an exact grant for this machine, thread, and
+capability. By default it proves its own machine identity with the host's cloud
+instance identity.
+
+A machine without a cloud instance identity can instead set
+`INTERPRETER_SUPERVISOR_SIGNER_COMMAND` to a JSON array of 1 to 8 non-empty
+strings: an argv with an absolute executable path, run without a shell, at most
+1024 characters in total. When it is set, the cloud identity is never
+requested. For each verification the command runs once and receives on
+standard input:
+
+```json
+{"path":"/v1/peer-supervisor-claim","bodyBase64":"<base64 of the exact request body>"}
+```
+
+It must exit 0 within 8 seconds and print at most 2048 bytes: one JSON object
+with exactly the keys `version` (1), `sourceComputer` (the target computer
+name above), `instanceId`, `controlGeneration`, `audience` (the audience above),
+`method` (`POST`), `path` (the verification URL path), `bodySha256` (lowercase
+hex SHA-256 of the body bytes), `issuedAtMs`, `nonce`, and `signature` (86
+base64url characters). Workstation validates the object against the exact
+request, then sends the same body with the proof in a request header and no
+`Authorization` header. Proofs are single-use; any signer failure denies the
+request. The header that carries the proof is named by
+`INTERPRETER_SUPERVISOR_PROOF_HEADER`, a lowercase `x-` extension header name
+of at most 64 characters chosen by the verifier's operator. The two settings
+are required together. A present but invalid value of either, or one without
+the other, disables the supervisor peer route entirely rather than falling
+back to the cloud identity. An empty value is treated as unset.

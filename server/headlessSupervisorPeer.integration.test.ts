@@ -15,7 +15,7 @@ afterEach(async () => {
 });
 
 async function start(home: string, config: 'complete' | 'missing' | 'wrong-target' |
-  'wrong-audience' = 'complete',
+  'wrong-audience' | 'invalid-signer' = 'complete',
   standalone = false) {
   const child = Bun.spawn([process.execPath, join(import.meta.dir, '__tests__',
     'headlessSupervisorPeer.fixture.ts')], {
@@ -29,6 +29,8 @@ async function start(home: string, config: 'complete' | 'missing' | 'wrong-targe
         ? 'https://different.example.test' : 'https://verifier.example.test',
       INTERPRETER_SUPERVISOR_TARGET_COMPUTER: config === 'missing' ? '' :
         config === 'wrong-target' ? 'other-target' : 'fixture-target',
+      ...(config === 'invalid-signer'
+        ? { INTERPRETER_SUPERVISOR_SIGNER_COMMAND: '["relative-signer"]' } : {}),
       INTERPRETER_DISABLE_FILE_WATCHER: '1' },
   });
   children.push(child);
@@ -90,6 +92,14 @@ describe('actual headless server peer mount', () => {
     writeFileSync(join(home, 'goal.json'), JSON.stringify({ status: 'blocked', lifecycleRevision: 7 }));
     const base = await start(home, 'missing');
     expect((await fetch(`${base}/api/interpreter-peer/threads/${threadId}/goal`)).status).toBe(404);
+  }, 60_000);
+  test('a present but invalid request-signer setting leaves the peer route unmounted', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'headless-peer-'));
+    homes.push(home);
+    writeFileSync(join(home, 'goal.json'), JSON.stringify({ status: 'blocked', lifecycleRevision: 7 }));
+    const base = await start(home, 'invalid-signer');
+    expect((await fetch(`${base}/api/interpreter-peer/threads/${threadId}/goal`, {
+      headers: { 'x-interpreter-supervisor-assertion': 'fixture-assertion' } })).status).toBe(404);
   }, 60_000);
   test('wrong target and audience never confer peer authority', async () => {
     const home = mkdtempSync(join(tmpdir(), 'headless-peer-'));

@@ -16,6 +16,7 @@ import os from 'node:os';
 import agentRouter from "./routes/agent";
 import { createSupervisorPeerRouter } from './routes/supervisorPeer';
 import { createSupervisorPeerVerifier } from './utils/supervisorPeerVerifier';
+import { supervisorSignerSetting } from './utils/supervisorPeerSigner';
 import { getCodexService } from '../src/lib/codex/service';
 import { readStableSupervisorGoal } from './utils/supervisorGoalRead';
 import mcpRouter from "./routes/mcp";
@@ -51,9 +52,12 @@ app.use((req, res, next) => {
 // Parse only managed-document creation before the global JSON limit. Escaping
 // can expand a valid 1 MiB UTF-8 document by six times; native validation
 // still bounds the decoded document to 1 MiB.
+// The request-signer setting is parsed once. A present but invalid value
+// mounts no peer route at all; it never falls back to the cloud instance identity.
+const SUPERVISOR_SIGNER = supervisorSignerSetting();
 if (process.env.INTERPRETER_SUPERVISOR_VERIFY_URL &&
     process.env.INTERPRETER_SUPERVISOR_VERIFY_AUDIENCE &&
-    process.env.INTERPRETER_SUPERVISOR_TARGET_COMPUTER) {
+    process.env.INTERPRETER_SUPERVISOR_TARGET_COMPUTER && SUPERVISOR_SIGNER !== 'invalid') {
   app.use('/api/interpreter-peer/threads/:threadId/goal/create',
     express.json({ limit: '6292000b' }));
   app.use('/api/interpreter-peer/threads/:threadId/goal/document',
@@ -180,7 +184,7 @@ app.use("/api/agent", agentRouter);
 // verifier configuration, no peer authority is mounted.
 if (process.env.INTERPRETER_SUPERVISOR_VERIFY_URL &&
     process.env.INTERPRETER_SUPERVISOR_VERIFY_AUDIENCE &&
-    process.env.INTERPRETER_SUPERVISOR_TARGET_COMPUTER) {
+    process.env.INTERPRETER_SUPERVISOR_TARGET_COMPUTER && SUPERVISOR_SIGNER !== 'invalid') {
   const targetComputer = process.env.INTERPRETER_SUPERVISOR_TARGET_COMPUTER;
   app.use('/api/interpreter-peer', createSupervisorPeerRouter({
     targetComputer,
@@ -188,6 +192,7 @@ if (process.env.INTERPRETER_SUPERVISOR_VERIFY_URL &&
       verifyUrl: process.env.INTERPRETER_SUPERVISOR_VERIFY_URL,
       audience: process.env.INTERPRETER_SUPERVISOR_VERIFY_AUDIENCE,
       targetComputer,
+      ...(SUPERVISOR_SIGNER ?? {}),
     }),
     readGoal: (id) => readStableSupervisorGoal(getCodexService(), id),
     resumeGoal: async (id, expected) =>
