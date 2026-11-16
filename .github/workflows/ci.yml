@@ -71,9 +71,16 @@ jobs:
           path: production-license-inventory.json
           if-no-files-found: error
 
-  electron-e2e:
+  # The Electron suite runs its spec files one at a time. Split the files over
+  # parallel runners so the suite no longer sets the length of every CI run.
+  electron-e2e-shard:
+    name: electron-e2e (shard ${{ matrix.shard }}/3)
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     runs-on: macos-26
-    timeout-minutes: 75
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
@@ -94,6 +101,19 @@ jobs:
       - run: pnpm run download:oix -- --current-platform
       - run: node scripts/ci/retry-transient-download.mjs node_modules/electron/install.js
       - run: pnpm run test:e2e:ci
+        env:
+          E2E_SHARD: ${{ matrix.shard }}/3
+
+  # One stable result for the whole Electron suite: it passes only when every
+  # shard passed.
+  electron-e2e:
+    needs: electron-e2e-shard
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every Electron shard to pass
+        run: test "${{ needs.electron-e2e-shard.result }}" = "success"
 
   voice-e2e:
     runs-on: windows-latest

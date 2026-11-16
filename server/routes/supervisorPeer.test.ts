@@ -428,6 +428,14 @@ describe('enrolled supervisor peer route seam', () => {
     expect(await accepted.json()).toEqual({ available: true,
       revision: { ...expected, status: 'active' } });
     expect(calls.resume).toBe(1);
+    // A usage-limited Goal resumes the same way; active and complete do not.
+    const limited = await request({ ...expected, status: 'usageLimited' });
+    expect(limited.status).toBe(200);
+    expect(calls.resume).toBe(2);
+    for (const status of ['active', 'complete', 'budgetLimited']) {
+      expect((await request({ ...expected, status })).status).toBe(400);
+    }
+    expect(calls.resume).toBe(2);
   });
   it('reports only an authoritative native CAS conflict as stale, never private text or a successful resume', async () => {
     const expected = { goalId: '00000000-0000-4000-8000-000000000004',
