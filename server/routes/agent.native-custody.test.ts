@@ -70,6 +70,10 @@ describe('native custody diagnostic authentication', () => {
       clientUserMessageId: 'slow_1', phase: 'received', turnId: null, at: '2026-11-12T00:00:00Z' }) : null;
     nativeSubmissionJournal.advance = async () => ({} as any);
     service.submitSavedThreadInput = async () => { entered(); return pending; };
+    const lookup = nativeSubmissionJournal.lookup;
+    let recorded: any = { requestId: 'slow_1', threadId: id, clientUserMessageId: 'slow_1',
+      phase: 'received', turnId: null, at: '2026-11-12T00:00:00Z' };
+    nativeSubmissionJournal.lookup = async () => recorded;
     try {
       const body = { mode: 'headless', threadId: id, clientUserMessageId: 'slow_1',
         message: 'single input', workspace: '/workspace/projects/interpreter' };
@@ -78,13 +82,20 @@ describe('native custody diagnostic authentication', () => {
       await started;
       const repeated = await request(app).post('/api/agent/tasks/stream').send(body);
       expect(repeated.status).toBe(409);
+      // A retry learns what the first attempt became, and nothing else.
+      expect(repeated.body.recorded).toEqual({ phase: 'received', turnId: null });
       release('turn_1');
       expect((await firstResult).text).toContain('turn_1');
-      expect(submitted).toBe(2);
+      recorded = { ...recorded, phase: 'turn_started', turnId: 'turn_1' };
+      const later = await request(app).post('/api/agent/tasks/stream').send(body);
+      expect(later.status).toBe(409);
+      expect(later.body.recorded).toEqual({ phase: 'turn_started', turnId: 'turn_1' });
+      expect(submitted).toBe(3);
     } finally {
       release('turn_1');
       agentTabManager.getBindingForThread = binding;
       nativeSubmissionJournal.begin = begin;
+      nativeSubmissionJournal.lookup = lookup;
       nativeSubmissionJournal.advance = advance;
       service.submitSavedThreadInput = start;
     }

@@ -794,7 +794,13 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
   try {
     if (threadId) {
       receipt = await nativeSubmissionJournal.begin(threadId, clientUserMessageId, sender);
-      if (!receipt) return res.status(409).json({ error: 'Submission client ID already recorded; inspect exact custody.' });
+      if (!receipt) {
+        // Tell a retrying caller what its first attempt became, so a lost
+        // response is not mistaken for a message that never arrived.
+        const recorded = await nativeSubmissionJournal.lookup(threadId, clientUserMessageId).catch(() => null);
+        return res.status(409).json({ error: 'Submission client ID already recorded; inspect exact custody.',
+          ...(recorded && { recorded: { phase: recorded.phase, turnId: recorded.turnId } }) });
+      }
     }
   } catch {
     return res.status(503).json({ error: 'Submission receipt unavailable; native input not started.' });
