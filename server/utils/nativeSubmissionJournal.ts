@@ -10,8 +10,27 @@ export type SubmissionPhase = 'received' | 'turn_started' | 'terminal_success' |
 export const submissionTerminalPhase = (completed: boolean, observedTurn: boolean):
   'terminal_success' | 'terminal_failure' | 'terminal_no_turn' =>
   !observedTurn ? 'terminal_no_turn' : completed ? 'terminal_success' : 'terminal_failure';
+/** The host and optional thread that handed this work to the receiving thread. */
+export type SubmissionSender = { computer: string; thread?: string };
+const SENDER_COMPUTER = /^[a-z][a-z0-9-]{1,62}$/;
+/** An exact sender object, or null when the value has any other shape. */
+export function parseSubmissionSender(value: unknown): SubmissionSender | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).some(key => key !== 'computer' && key !== 'thread')) return null;
+  if (typeof record.computer !== 'string' || !SENDER_COMPUTER.test(record.computer)) return null;
+  if (record.thread !== undefined && (typeof record.thread !== 'string' || !SUBMISSION_ID.test(record.thread))) {
+    return null;
+  }
+  return record.thread === undefined ? { computer: record.computer }
+    : { computer: record.computer, thread: record.thread };
+}
+/** The single header line placed before a sender-attributed message. */
+export function senderHeader(sender: SubmissionSender): string {
+  return sender.thread ? `[Sender: ${sender.computer} thread ${sender.thread}]` : `[Sender: ${sender.computer}]`;
+}
 type Entry = { requestId: string; threadId: string; clientUserMessageId: string;
-  phase: SubmissionPhase; turnId: string | null; at: string };
+  phase: SubmissionPhase; turnId: string | null; at: string; sender?: SubmissionSender };
 const THREAD_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const MAX_RECEIPT_BYTES = 16_384;
 
@@ -52,7 +71,8 @@ export class NativeSubmissionJournal {
         if (entry.threadId !== threadId || entry.clientUserMessageId !== clientUserMessageId ||
             !SUBMISSION_ID.test(entry.requestId) ||
             !['received', 'turn_started', 'terminal_success', 'terminal_failure', 'terminal_no_turn'].includes(entry.phase) ||
-            (entry.turnId !== null && !SUBMISSION_ID.test(entry.turnId))) {
+            (entry.turnId !== null && !SUBMISSION_ID.test(entry.turnId)) ||
+            (entry.sender !== undefined && !parseSubmissionSender(entry.sender))) {
           throw new Error('Invalid submission receipt');
         }
       }
@@ -80,7 +100,9 @@ export class NativeSubmissionJournal {
     } finally { await file.close(); }
   }
 
-  async begin(threadId: string, clientUserMessageId = `task_${randomUUID().replace(/-/g, '')}`) {
+  async begin(threadId: string, clientUserMessageId = `task_${randomUUID().replace(/-/g, '')}`,
+    sender?: SubmissionSender) {
+    if (sender !== undefined && !parseSubmissionSender(sender)) throw new Error('Invalid submission sender');
     const filename = this.filename(threadId, clientUserMessageId);
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     let file;
@@ -91,7 +113,7 @@ export class NativeSubmissionJournal {
       throw error;
     }
     const entry: Entry = { requestId: randomUUID(), threadId, clientUserMessageId,
-      phase: 'received', turnId: null, at: new Date().toISOString() };
+      phase: 'received', turnId: null, at: new Date().toISOString(), ...(sender && { sender }) };
     try {
       await file.writeFile(`${JSON.stringify(entry)}\n`);
       await file.sync();
@@ -127,7 +149,10 @@ export class NativeSubmissionJournal {
 
   async lookup(threadId: string, clientUserMessageId: string) {
     const entries = await this.read(threadId, clientUserMessageId);
-    return entries ? entries[entries.length - 1] : null;
+    if (!entries) return null;
+    // The sender is claimed once, on the initial received record.
+    const last = entries[entries.length - 1];
+    return entries[0].sender ? { ...last, sender: entries[0].sender } : last;
   }
 }
 

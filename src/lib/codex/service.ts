@@ -565,16 +565,55 @@ export function extractNotificationTurnId(notification: AppServerNotification) {
     .otherwise(() => null);
 }
 
+export type TurnEndedOutcome = "completed" | "failed" | "interrupted";
+export type TurnEndedEvent = {
+  threadId: string;
+  turnId: string;
+  outcome: TurnEndedOutcome;
+  /** Final assistant message text of the turn, or "" when none was seen. */
+  summary: string;
+};
+const turnEndedListeners = new Set<(event: TurnEndedEvent) => void>();
+
+/** Observe every native turn ending, independent of which path started it.
+ * Listeners survive a runtime restart because they are process-wide. */
+export function onTurnEnded(listener: (event: TurnEndedEvent) => void): () => void {
+  turnEndedListeners.add(listener);
+  return () => { turnEndedListeners.delete(listener); };
+}
+
+export function turnEndedOutcome(status: unknown): TurnEndedOutcome | null {
+  return status === "completed" || status === "failed" || status === "interrupted" ? status : null;
+}
+
+/** The text of the last agent message among native turn items, read defensively. */
+export function lastAgentMessageText(items: unknown): string {
+  if (!Array.isArray(items)) return "";
+  for (let index = items.length - 1; index >= 0; index--) {
+    const item = items[index] as { type?: unknown; text?: unknown } | null;
+    if (item && typeof item === "object" && item.type === "agentMessage" && typeof item.text === "string") {
+      return item.text;
+    }
+  }
+  return "";
+}
+
+const MAX_TRACKED_AGENT_MESSAGES = 256;
+
 export class CodexService {
   private readonly activeTurns = new Map<string, string | null>();
   private readonly provisionedProviders = new Set<string>();
   private reservedLocalOverridesCleared = false;
   private reservedLocalOverrideCleanup: Promise<void> | null = null;
+  /** Last completed agent message per live turn, for turn-ended listeners. A
+   * `turn/completed` notification does not necessarily carry its items. */
+  private readonly lastAgentMessages = new Map<string, string>();
 
   constructor(private readonly client: CodexClient) {
     // Native OIX features can start turns without going through runTurn(), so
     // keep their terminal failures visible in the service journal as well.
     this.client.subscribe((notification) => {
+      if (turnEndedListeners.size > 0) this.observeTurnEnding(notification);
       if (
         notification.method === SERVER_METHOD.streamError
         && !notification.params.willRetry
@@ -593,6 +632,37 @@ export class CodexService {
         );
       }
     });
+  }
+
+  private observeTurnEnding(notification: AppServerNotification): void {
+    if (notification.method === SERVER_METHOD.itemCompleted) {
+      const params = notification.params as { threadId?: unknown; turnId?: unknown; item?: unknown };
+      const text = lastAgentMessageText([params.item]);
+      if (text && typeof params.threadId === "string" && typeof params.turnId === "string") {
+        const key = `${params.threadId}:${params.turnId}`;
+        this.lastAgentMessages.delete(key);
+        this.lastAgentMessages.set(key, text);
+        if (this.lastAgentMessages.size > MAX_TRACKED_AGENT_MESSAGES) {
+          const oldest = this.lastAgentMessages.keys().next().value;
+          if (oldest !== undefined) this.lastAgentMessages.delete(oldest);
+        }
+      }
+      return;
+    }
+    if (notification.method !== SERVER_METHOD.turnCompleted) return;
+    const { threadId, turn } = notification.params as { threadId?: unknown;
+      turn?: { id?: unknown; status?: unknown; items?: unknown } };
+    if (typeof threadId !== "string" || !turn || typeof turn.id !== "string") return;
+    const key = `${threadId}:${turn.id}`;
+    const tracked = this.lastAgentMessages.get(key) ?? "";
+    this.lastAgentMessages.delete(key);
+    const outcome = turnEndedOutcome(turn.status);
+    if (!outcome) return;
+    const event: TurnEndedEvent = { threadId, turnId: turn.id, outcome,
+      summary: lastAgentMessageText(turn.items) || tracked };
+    for (const listener of turnEndedListeners) {
+      try { listener(event); } catch (error) { console.error("[codex-native-turn] turn-ended listener failed", error); }
+    }
   }
 
   /** All ordinary ingress converges on the same native turn/start or

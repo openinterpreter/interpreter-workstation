@@ -7,7 +7,8 @@ import { nextCivilDaily } from './civilSchedule';
 
 // A wake source belongs to an ordinary conversation. These records only keep
 // custody until the native transcript contains the input; they do not track
-// completion or outbound delivery.
+// completion or outbound delivery. Only sender-attributed programmatic tasks
+// have their outcome returned, by the separate store in outcomeReturns.ts.
 export type WakeSource = {
   id: string;
   threadId: string;

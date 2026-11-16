@@ -1,9 +1,11 @@
 import { Router, Request, Response, raw } from 'express';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { nativeSubmissionJournal, submissionTerminalPhase, SUBMISSION_ID } from '../utils/nativeSubmissionJournal';
+import { nativeSubmissionJournal, parseSubmissionSender, senderHeader, submissionTerminalPhase, SUBMISSION_ID,
+  type SubmissionSender } from '../utils/nativeSubmissionJournal';
 import { PausedCommandConflictError, wakeTokenValid } from '../utils/wakeSources';
 import { readyWakeSources, wakeSources } from '../utils/wakeSourcesRuntime';
+import { outcomeReturns, readyOutcomeReturns, watchOutcomeReturn } from '../utils/outcomeReturnsRuntime';
 import { stat } from 'node:fs/promises';
 import { getCustomInstructions } from '../configStore';
 import { getServerJWT } from '../lib/jwtStore';
@@ -460,6 +462,12 @@ router.get('/threads/:threadId/wake-sources', async (req: Request, res: Response
   catch { res.status(503).json({ error: 'Wake sources unavailable.' }); }
 });
 
+// Outcome-return status only; summaries are never listed.
+router.get('/outcome-returns', async (_req: Request, res: Response) => {
+  try { await readyOutcomeReturns(); res.json({ entries: outcomeReturns.list() }); }
+  catch { res.status(503).json({ error: 'Outcome returns unavailable.' }); }
+});
+
 router.put('/threads/:threadId/wake-sources/:sourceId', async (req: Request, res: Response) => {
   if (!wakeMutationAllowed(req)) return res.status(403).json({ error: 'Local same-origin request required.' });
   try {
@@ -733,6 +741,8 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
   if (getProgrammaticClientIdError((req.body ?? {}).clientUserMessageId)) {
     return res.status(400).json({ error: 'Invalid clientUserMessageId.' });
   }
+  const senderError = getProgrammaticSenderError((req.body ?? {}) as Record<string, unknown>);
+  if (senderError) return res.status(400).json({ error: senderError });
   const {
     message,
     system,
@@ -741,6 +751,7 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
     workspace,
     threadId,
     clientUserMessageId,
+    sender,
     mode,
     modelConfig,
     model,
@@ -782,12 +793,18 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
   let receipt: Awaited<ReturnType<typeof nativeSubmissionJournal.begin>> = null;
   try {
     if (threadId) {
-      receipt = await nativeSubmissionJournal.begin(threadId, clientUserMessageId);
+      receipt = await nativeSubmissionJournal.begin(threadId, clientUserMessageId, sender);
       if (!receipt) return res.status(409).json({ error: 'Submission client ID already recorded; inspect exact custody.' });
     }
   } catch {
     return res.status(503).json({ error: 'Submission receipt unavailable; native input not started.' });
   }
+  // The receiving thread sees who handed it this work; the body is unchanged.
+  const submittedMessage = withSenderHeader(sender, message);
+  // Only sender-attributed work is returned to its sender when the turn ends.
+  const watchOutcome = (turnId: string) => {
+    if (sender && receipt) watchOutcomeReturn(receipt.threadId, turnId, sender, receipt.clientUserMessageId);
+  };
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -832,11 +849,12 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
       admissionPhase = 'task_start';
       admissionEvent('started');
       const native = getCodexService();
-      const turnId = await native.submitSavedThreadInput(threadId!, message, savedBinding.workspacePath,
+      const turnId = await native.submitSavedThreadInput(threadId!, submittedMessage, savedBinding.workspacePath,
         receipt?.clientUserMessageId ?? clientUserMessageId!);
       observedTurn = true;
       observedTurnId = turnId;
       if (receipt) await nativeSubmissionJournal.advance(receipt, 'turn_started', turnId);
+      watchOutcome(turnId);
       admissionEvent('completed');
       emit('thread', { threadId });
       emit('turn', { threadId, turnId, status: 'inProgress' });
@@ -858,7 +876,7 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
 
     const result = await startAgentTask({
       mode: 'headless',
-      message,
+      message: submittedMessage,
       system,
       timeoutMs,
       idleTimeoutMs,
@@ -877,6 +895,7 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
           if (receipt) {
             receiptProgress = receiptProgress.then(async () => {
               await nativeSubmissionJournal.advance(receipt!, 'turn_started', progress.turnId);
+              watchOutcome(progress.turnId);
               for (const event of toProgrammaticTaskProgressSseEvents(progress)) emit(event.event, event.payload);
             });
             return;
@@ -1115,6 +1134,7 @@ export function parseProgrammaticTaskBody(body: Record<string, unknown>) {
     : undefined;
   const clientUserMessageId = typeof body.clientUserMessageId === 'string'
     ? body.clientUserMessageId : undefined;
+  const sender = body.sender === undefined ? undefined : parseSubmissionSender(body.sender) ?? undefined;
   const mode = body.mode === undefined ? 'headless' : body.mode;
   const modelConfig = body.modelConfig && typeof body.modelConfig === 'object'
     ? body.modelConfig as AgentModelConfig
@@ -1137,6 +1157,7 @@ export function parseProgrammaticTaskBody(body: Record<string, unknown>) {
     workspace,
     threadId,
     clientUserMessageId,
+    sender,
     mode,
     modelConfig,
     model,
@@ -1147,6 +1168,23 @@ export function parseProgrammaticTaskBody(body: Record<string, unknown>) {
 
 export function getProgrammaticClientIdError(value: unknown): boolean {
   return value !== undefined && (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(value));
+}
+
+/** A sender is attribution for exact work on an existing thread; reject any
+ * other shape before a receipt is claimed or native input is attempted. */
+export function getProgrammaticSenderError(body: Record<string, unknown>): string | null {
+  if (body.sender === undefined) return null;
+  if (!parseSubmissionSender(body.sender)) return 'Invalid sender.';
+  // A client ID stays optional, as it is without a sender: the receipt assigns
+  // one, so senders that omit it are still recorded and still get an outcome.
+  const threadId = typeof body.threadId === 'string' ? body.threadId.trim() : '';
+  if (!threadId) return 'sender requires threadId.';
+  return null;
+}
+
+/** The exact text submitted to the native thread for a sender-attributed task. */
+export function withSenderHeader(sender: SubmissionSender | undefined, message: string): string {
+  return sender ? `${senderHeader(sender)}\n${message}` : message;
 }
 function toGroqProxyBaseUrl(): string {
   return `http://localhost:${getServerPort()}/api/agent/groq-proxy`;

@@ -57,13 +57,38 @@ For a host-wide pre-restart check, GET `/api/agent/custody/global` on loopback w
 
 To locate the owner of **one already-pending** approval without changing it, GET `/api/agent/custody/approvals/:approvalId?threadId=:threadId` using that bearer token and loopback. An exact pending ID and matching captured owner thread are required; other threads yield 404, regardless of window. If the owner was captured as CLI with no thread binding, use `?cliUnbound=1` with that exact ID instead. A non-CLI unbound request cannot use that exception. The result contains only approval ID, pending status, registered tool name, and captured owner kind/thread/window session/workspace; never tool arguments, questions, provider data, or a disposition capability. Missing/resolved IDs return 404; invalid scope returns 400; unavailable inspection fails 503. The operator must still find the legitimate owner UI/session and obtain its normal approval—these metadata routes cannot approve or deny it.
 
-The input begins with `[Wake event source/id]`. On restart, the dispatcher checks native history for this marker. If a submission remains ambiguous without a native receipt, it stays offered for operator inspection rather than risking a duplicate user turn; elapsed time alone does not prove rejection. It does not promise exactly-once tool side effects or message delivery. The provider-specific reply tool remains the way to answer; scheduling and input custody are not an outbound queue.
+The input begins with `[Wake event source/id]`. On restart, the dispatcher checks native history for this marker. If a submission remains ambiguous without a native receipt, it stays offered for operator inspection rather than risking a duplicate user turn; elapsed time alone does not prove rejection. It does not promise exactly-once tool side effects or message delivery. The provider-specific reply tool remains the way to answer; scheduling and input custody are not an outbound queue. The only automatic outbound path is the outcome return for a sender-attributed programmatic task, described below.
 
 New wake submissions also carry a stable native `clientUserMessageId` derived from their thread/source/event identity. Either that ID on a persisted native user message or the exact text marker is an admission receipt; an accepted RPC, a completed turn, or a queue count alone is not. A legacy offered input without either receipt must **not** be retried automatically. For a truly terminal, queue-empty ambiguous offer, the local operator can explicitly choose **not to replay** it: POST `/api/agent/threads/:threadId/wake-events/:sourceId/:eventId/hold` with the same loopback bearer authorization and `{ "turnId": "exact-offered-turn-id", "confirmedNoReplay": true }`. The server rechecks the exact offered event, terminal native turn, idle thread, empty native queue and absence of either receipt before preserving it as `held` (not admitted) and letting later inputs proceed. The held source remains in error for separate review; this operation never acknowledges the upstream provider, restarts the application, or resubmits the held text. If any check fails, stop and reconcile the native receipt rather than calling hold repeatedly. Do not use this endpoint to waive ordinary provider input or skip work without a documented operator decision.
 
 Once admitted, the original message body and transient error are erased from the wake-source state; the compact `(thread, source, event ID)` receipt remains for durable deduplication and status queries. The 10,000-event guard applies only to inputs still awaiting admission, not lifetime admitted messages. Receipts intentionally remain until the thread's data is retired; the private state file grows with unique IDs and should be included in normal Workstation backups. Do not hand-edit it to clear a limit: removing IDs can cause old upstream redeliveries to appear as new input.
 
 An operator-held event is likewise retained with its original text and ID for separate review, but it is **not** an admission or an upstream acknowledgement and cannot be automatically replayed. Its source remains in error; after resolving the missing work, the operator may explicitly re-save that source for future runs without erasing the held ID. Only pending/offered inputs count toward the awaiting-admission limit.
+
+## Work handed over by another agent host
+
+Another agent host can hand work to an existing thread with `POST /api/agent/tasks/stream` and an optional `sender` object, `{ "computer": "peer-host", "thread": "origin-thread-id" }`. `computer` must match `^[a-z][a-z0-9-]{1,62}$`; the optional `thread` uses the client-ID alphabet (letters, digits, `_`, `-`, at most 160). No other keys are accepted. A sender is only accepted together with `threadId`; `clientUserMessageId` stays optional and the receipt assigns one when it is omitted. Any invalid shape returns 400 before a submission receipt is claimed or native input is attempted. The sender is recorded on the initial `received` record of the native submission receipt and returned by its custody lookup. The thread receives exactly one header line before the unchanged message:
+
+```text
+[Sender: peer-host thread origin-thread-id]
+Original message text
+```
+
+(`[Sender: peer-host]` when no thread was given.) A request without `sender` is submitted exactly as before.
+
+### Outcome returns
+
+When a sender-attributed submission starts its native turn, the server records it in a separate private file, `outcome-returns.json`, next to `wake-sources.json` (atomically replaced, mode 0600). Entries are `watching` until the core reports that turn ended, then `pending` with its outcome (`completed`, `failed` or `interrupted`) and the turn's final assistant message, truncated to 3,000 characters. On startup, each `watching` entry is checked once against native thread history in case its turn ended while the server was down.
+
+Delivery uses a host command configured in the Workstation service environment: `WORKSTATION_OUTCOME_RETURN_COMMAND` holds a JSON array of strings (argv, executed without a shell). For each due pending entry, the command receives one JSON object on standard input:
+
+```json
+{"version":1,"id":"<sha256 of threadId:turnId>","to":{"computer":"peer-host","thread":"origin-thread-id"},"from":{"threadId":"...","turnId":"..."},"clientUserMessageId":"...","outcome":"completed","summary":"..."}
+```
+
+Exit 0 marks the entry `delivered` (its summary text is then dropped). Any other exit, a spawn failure, or the two-minute timeout counts an attempt and schedules the next one after 1, 2, 4, 8 and then every 15 minutes; after 40 attempts the entry stays visible as `failed`. Delivery is at least once: a restart while a command runs retries it, so the receiving side should deduplicate on `id`. Only add a command you trust.
+
+If the variable is unset or not a non-empty JSON string array, nothing is spawned and entries simply remain `pending`; this is logged once at startup. `GET /api/agent/outcome-returns` lists entries with `id`, `threadId`, `turnId`, `sender`, `status`, `outcome`, `attempts`, `nextAttemptAt` and `updatedAt`, never the summary text. The newest 500 entries are kept; delivered or failed entries are dropped first, and a new watch is refused (and logged) rather than dropping an undelivered one.
 
 ## Headless operation
 

@@ -3,7 +3,8 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
-import { NativeSubmissionJournal, submissionTerminalPhase } from './nativeSubmissionJournal';
+import { NativeSubmissionJournal, parseSubmissionSender, senderHeader, submissionTerminalPhase }
+  from './nativeSubmissionJournal';
 
 const thread = '00000000-0000-4000-8000-000000000001';
 describe('forward native submission journal', () => {
@@ -37,6 +38,26 @@ describe('forward native submission journal', () => {
       const bytes = await readFile(path.join(root, 'native-submission-receipts', files[0]), 'utf8');
       expect(bytes).not.toMatch(/PRIVATE|message|output|token/);
       expect((await new NativeSubmissionJournal(root).lookup(thread, 'different_input'))).toBeNull();
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+  test('records an optional sender on the claim and keeps sender-less receipts readable', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'native-receipt-sender-'));
+    try {
+      const journal = new NativeSubmissionJournal(root);
+      const sender = { computer: 'peer-host', thread: 'origin_1' };
+      const claimed = await journal.begin(thread, 'handoff_1', sender);
+      expect(claimed).toMatchObject({ phase: 'received', sender });
+      await journal.advance(claimed!, 'turn_started', 'turn_1');
+      expect(await new NativeSubmissionJournal(root).lookup(thread, 'handoff_1'))
+        .toMatchObject({ phase: 'turn_started', turnId: 'turn_1', sender });
+      const plain = await journal.begin(thread, 'plain_1');
+      expect(plain).not.toHaveProperty('sender');
+      expect(await journal.lookup(thread, 'plain_1')).not.toHaveProperty('sender');
+      await expect(journal.begin(thread, 'bad_1', { computer: 'Bad Host' })).rejects.toThrow('sender');
+      expect(await journal.lookup(thread, 'bad_1')).toBeNull();
+      expect(senderHeader(sender)).toBe('[Sender: peer-host thread origin_1]');
+      expect(senderHeader({ computer: 'peer-host' })).toBe('[Sender: peer-host]');
+      expect(parseSubmissionSender({ computer: 'peer-host', thread: 'origin_1', more: 1 })).toBeNull();
     } finally { await rm(root, { recursive: true, force: true }); }
   });
   test('does not turn an invalid persisted row into verified custody or admit a duplicate', async () => {
