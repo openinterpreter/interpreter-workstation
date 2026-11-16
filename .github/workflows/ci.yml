@@ -100,9 +100,29 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run download:oix -- --current-platform
       - run: node scripts/ci/retry-transient-download.mjs node_modules/electron/install.js
+      # The Electron build compiles the native macOS helpers from source, which
+      # takes about nine minutes when nothing is cached. The build already
+      # keys each helper by a hash of its inputs, so restoring its cache
+      # directory is safe: a changed input simply misses and is rebuilt.
+      - name: Restore native build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .cache/trycua-cua-driver
+            .cache/native-builds
+          key: native-builds-${{ runner.os }}-${{ runner.arch }}-restore
+          restore-keys: native-builds-${{ runner.os }}-${{ runner.arch }}-
       - run: pnpm run test:e2e:ci
         env:
           E2E_SHARD: ${{ matrix.shard }}/3
+      - name: Save native build cache
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .cache/trycua-cua-driver
+            .cache/native-builds
+          key: native-builds-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.cache/trycua-cua-driver/*/build-info.json', '.cache/native-builds/**') }}
 
   # One stable result for the whole Electron suite: it passes only when every
   # shard passed.
@@ -200,6 +220,15 @@ jobs:
       - run: node scripts/ci/retry-transient-download.mjs scripts/download-pdfcpu.mjs --current-platform
       - run: pnpm run download:qwen-asr -- --current-platform
       - run: pnpm run build:js-repl-runtime
+      - name: Restore native build cache
+        if: runner.os == 'macOS'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .cache/trycua-cua-driver
+            .cache/native-builds
+          key: native-builds-${{ runner.os }}-${{ runner.arch }}-restore
+          restore-keys: native-builds-${{ runner.os }}-${{ runner.arch }}-
       - run: pnpm run build
       - run: node scripts/ci/retry-transient-download.mjs node_modules/electron/install.js
       # Exercise the distribution wrapper on every supported runner. This is
