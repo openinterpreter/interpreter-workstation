@@ -797,7 +797,8 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
       if (!receipt) {
         // Tell a retrying caller what its first attempt became, so a lost
         // response is not mistaken for a message that never arrived.
-        const recorded = await nativeSubmissionJournal.lookup(threadId, clientUserMessageId).catch(() => null);
+        const recorded = clientUserMessageId
+          ? await nativeSubmissionJournal.lookup(threadId, clientUserMessageId).catch(() => null) : null;
         return res.status(409).json({ error: 'Submission client ID already recorded; inspect exact custody.',
           ...(recorded && { recorded: { phase: recorded.phase, turnId: recorded.turnId } }) });
       }
