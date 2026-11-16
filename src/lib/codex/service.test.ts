@@ -15,8 +15,10 @@ import {
   CodexService,
   extractNotificationTurnId,
   NativeCustodyPhaseError,
+  onTurnEnded,
   type StreamEvent,
   THREAD_LIST_DEFAULTS,
+  type TurnEndedEvent,
 } from "@/lib/codex/service";
 import type { v2 } from "@/schemas";
 import type { JsonValue } from "@/schemas/serde_json/JsonValue";
@@ -744,6 +746,32 @@ function createConfigReadResponseWithUserLayer(
 }
 
 describe("CodexService", () => {
+  test("reports every native turn ending with its last agent message", () => {
+    const fake = createFakeClient({});
+    new CodexService(fake.client);
+    const ended: TurnEndedEvent[] = [];
+    const stop = onTurnEnded((event) => ended.push(event));
+    try {
+      fake.emit({ method: SERVER_METHOD.itemCompleted, params: { threadId: "thr_1", turnId: "turn_1",
+        item: { type: "agentMessage", id: "msg_1", text: "Draft.", phase: null } } } as AppServerNotification);
+      fake.emit({ method: SERVER_METHOD.itemCompleted, params: { threadId: "thr_1", turnId: "turn_1",
+        item: { type: "agentMessage", id: "msg_2", text: "Final answer.", phase: "final_answer" } } } as AppServerNotification);
+      fake.emit({ method: SERVER_METHOD.turnCompleted, params: {
+        threadId: "thr_1", turn: createTurn("turn_1", "completed") } } as AppServerNotification);
+      fake.emit({ method: SERVER_METHOD.turnCompleted, params: {
+        threadId: "thr_1", turn: { ...createTurn("turn_2", "interrupted"),
+          items: [{ type: "agentMessage", id: "msg_3", text: "From items.", phase: null }] } } } as AppServerNotification);
+      fake.emit({ method: SERVER_METHOD.turnCompleted, params: {
+        threadId: "thr_1", turn: createTurn("turn_3", "inProgress") } } as AppServerNotification);
+    } finally { stop(); }
+    fake.emit({ method: SERVER_METHOD.turnCompleted, params: {
+      threadId: "thr_1", turn: createTurn("turn_4", "failed") } } as AppServerNotification);
+    assert.deepEqual(ended, [
+      { threadId: "thr_1", turnId: "turn_1", outcome: "completed", summary: "Final answer." },
+      { threadId: "thr_1", turnId: "turn_2", outcome: "interrupted", summary: "From items." },
+    ]);
+  });
+
   test('does not confuse an old pre-ack completion with the newly acknowledged native turn', async () => {
     let fake!: ReturnType<typeof createFakeClient>;
     fake = createFakeClient({ startTurn: async () => {

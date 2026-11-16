@@ -54,6 +54,7 @@ import { createSupervisorPeerVerifier } from './utils/supervisorPeerVerifier';
 import { getCodexService } from '../src/lib/codex/service';
 import { readStableSupervisorGoal } from './utils/supervisorGoalRead';
 import { startWakeSources } from './utils/wakeSourcesRuntime';
+import { startOutcomeReturns } from './utils/outcomeReturnsRuntime';
 import authRouter from "./routes/auth";
 import { ENTERPRISE_READINESS } from './enterprise/controlPlane';
 import workspaceRouter from "./routes/workspace";
@@ -77,6 +78,8 @@ import { refreshImportedAiSetup } from './handlers/importedAiSetup';
 import { PRELAUNCH_SECURITY_DISABLE_HTTP_TOOL_EXECUTION } from './securityFlags';
 // Resume due schedules and retained inputs even with no conversation tab open.
 if (process.env.NODE_ENV !== 'test') startWakeSources();
+// Return sender-attributed turn outcomes through the configured command.
+if (process.env.NODE_ENV !== 'test') startOutcomeReturns();
 // normalizePath intentionally not used here - it converts Unicode chars to ASCII,
 // breaking paths with smart quotes etc. Use path.normalize (pathNormalize) instead.
 import { enterWorkspaceOverride } from "./utils/workspace";
