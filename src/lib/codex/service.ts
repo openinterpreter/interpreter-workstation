@@ -1656,7 +1656,7 @@ export class CodexService {
       const result = await Promise.race([
         this.client.threadGoalRevisionSet(params as v2.ThreadGoalSetParams),
         new Promise<never>((_, reject) => {
-          deadline = setTimeout(() => reject(new GoalMutationUnconfirmedError()), maxWaitMs);
+          deadline = setTimeout(() => reject(new GoalMutationUnconfirmedError('deadline')), maxWaitMs);
         }),
       ]);
       const revision = verifyThreadGoalRevision(result.goal,
@@ -1675,7 +1675,16 @@ export class CodexService {
       if (error && typeof error === 'object' && 'code' in error && error.code === -32009) {
         throw new GoalRevisionConflictError();
       }
-      throw new GoalMutationUnconfirmedError();
+      // Keep why the outcome is unknown. Only the numeric code is recorded;
+      // the runtime's message text never leaves this process.
+      const unconfirmed = error instanceof GoalMutationUnconfirmedError ? error :
+        error instanceof GoalRevisionUnavailableError ? new GoalMutationUnconfirmedError('unverified_result') :
+        new GoalMutationUnconfirmedError('native_error',
+          error && typeof error === 'object' && 'code' in error && Number.isSafeInteger(error.code)
+            ? error.code as number : undefined);
+      console.info('[Goal revision set]', JSON.stringify({ threadId, outcome: 'unconfirmed',
+        cause: unconfirmed.cause, nativeCode: unconfirmed.nativeCode ?? null }));
+      throw unconfirmed;
     } finally {
       if (deadline) clearTimeout(deadline);
     }
