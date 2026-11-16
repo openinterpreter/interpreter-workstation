@@ -111,7 +111,9 @@ export function createSupervisorPeerRouter(options: Readonly<{
       if (scope !== 'allowed') return void res.status(403).json(denied(scope));
       const expected = req.body?.expected as ThreadGoalRevision;
       goalCasExpectedParams(expected);
-      if (expected.status !== 'paused' && expected.status !== 'blocked') {
+      // A usage-limited Goal has no way back on its own once the allowance
+      // returns; an authorized supervisor resumes it like a paused one.
+      if (expected.status !== 'paused' && expected.status !== 'blocked' && expected.status !== 'usageLimited') {
         return void res.status(400).json(denied('invalid_revision'));
       }
       // Native CAS owns the mutation. A transport failure is UNKNOWN, never a retry authorization.
