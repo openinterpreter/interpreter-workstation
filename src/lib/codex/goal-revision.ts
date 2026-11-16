@@ -42,7 +42,13 @@ export class GoalRevisionUnavailableError extends Error {
 export class GoalMutationUnconfirmedError extends Error {
   readonly category = 'mutation_unconfirmed';
 
-  constructor() {
+  /** Why the outcome is unknown: the runtime did not answer in time, it
+   * answered with an error, or it answered with a result that did not verify.
+   * `nativeCode` is the runtime's numeric error code when it gave one. */
+  constructor(
+    readonly cause: 'deadline' | 'native_error' | 'unverified_result' = 'native_error',
+    readonly nativeCode?: number,
+  ) {
     super('Native Goal mutation outcome is unconfirmed.');
     this.name = 'GoalMutationUnconfirmedError';
   }
