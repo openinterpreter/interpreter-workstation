@@ -100,7 +100,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run download:oix -- --current-platform
       - run: node scripts/ci/retry-transient-download.mjs node_modules/electron/install.js
-      - run: pnpm run test:e2e:ci -- --shard=${{ matrix.shard }}/3
+      - run: pnpm run test:e2e:ci
+        env:
+          E2E_SHARD: ${{ matrix.shard }}/3
 
   # One stable result for the whole Electron suite: it passes only when every
   # shard passed.
