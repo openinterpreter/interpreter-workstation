@@ -1697,8 +1697,11 @@ export class CodexService {
     try {
       const result = await this.client.threadGoalDocumentGet({ threadId });
       verifyGoalDocument(threadId, result.document, result.content);
+      // A Goal that has never had a managed mission has no document; the
+      // runtime reports that as a Goal with a null document. Only a document
+      // without a Goal, or a Goal owned by another thread, is invalid.
       if (result.goal !== null && result.goal?.threadId !== threadId ||
-          (result.goal === null) !== (result.document === null)) {
+          (result.goal === null && result.document !== null)) {
         throw new Error('Invalid managed Goal document owner.');
       }
       return result;
