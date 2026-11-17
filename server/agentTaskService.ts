@@ -3,7 +3,14 @@ import { getDefaultProfile } from './configStore';
 import { agentTabManager } from './agentTabManager';
 import { broadcastEvent } from './handlers/broadcast';
 import { runCodexSubagent } from './tools/builtin-tools/agents/codexSubagentRunnerBridge';
-import { getCodexService } from '../src/lib/codex/service';
+import {
+  getCodexService,
+  setUnloadedThreadCarrierProvider,
+  type CodexService,
+  type UnloadedThreadCarrier,
+  type UnloadedThreadCarrierProvider,
+} from '../src/lib/codex/service';
+import type { JsonValue } from './handlers/codex-generated-types/serde_json/JsonValue';
 import {
   ensureOpenAIOAuthAccountReady,
   resolveAgentInterpreterCliTransport,
@@ -178,49 +185,98 @@ export async function resumeAgentTaskThread(
   return { threadId };
 }
 
+const COLD_BIND_CUSTODY_ERROR =
+  'Cold caller bind requires the exact unloaded idle thread, workspace and empty native queues';
+
+function buildFreshCallerShellPolicy(callerToken: string, workspace: string) {
+  return buildInterpreterCliShellEnvironmentPolicy(
+    callerToken, process.env, process.platform, workspace,
+    buildInterpreterCliServerConnection(getServerPort(), {
+      transport: resolveAgentInterpreterCliTransport(process.platform),
+    }),
+  );
+}
+
+/** A thread may only receive an open fresh caller when no prior caller of it
+ * is narrower. Covers the live binding and private on-disk scopes, so a
+ * process restart cannot turn a restricted caller into an open one. */
+function assertOpenCallerScope(threadId: string, workspace: string, callerToken: string) {
+  const oldBinding = agentTabManager.getBindingForThread(threadId);
+  if (oldBinding && (oldBinding.workspacePath !== workspace || oldBinding.windowSessionKey ||
+      oldBinding.parentOwner || oldBinding.allowedToolNames?.length || oldBinding.toolProfileId)) {
+    throw new Error('Existing caller owner or tool scope differs');
+  }
+  revokeOtherNativeCallerBindingsForThread(threadId, callerToken, undefined, true);
+  return oldBinding;
+}
+
+/** Register a fresh app CLI caller for an exact unloaded idle thread. The
+ * caller must resume the thread with `shellPolicy` as its cold shell policy,
+ * then `commit` on success or `rollback` on failure. */
+async function assertColdBindCustody(service: CodexService, threadId: string) {
+  const custody = await service.readNativeCustody(threadId);
+  const global = await service.readGlobalNativeCustody();
+  if (!['idle', 'notLoaded'].includes(custody.status) || custody.queuedSubmissionCount !== 0 ||
+      global.queuedSubmissionCount !== 0 || global.loadedThreadIds.includes(threadId) ||
+      !global.threads.some(row => row.threadId === threadId)) {
+    throw new Error(COLD_BIND_CUSTODY_ERROR);
+  }
+}
+
+function prepareColdCallerCarrier(
+  threadId: string, workspace: string,
+): UnloadedThreadCarrier & { callerToken: string; commit(): number } {
+  const callerToken = `agtok_${nanoid()}`;
+  const oldBinding = assertOpenCallerScope(threadId, workspace, callerToken);
+  const shellPolicy = buildFreshCallerShellPolicy(callerToken, workspace);
+  // Register before native resume so autonomous native turns cannot race the
+  // caller binding.
+  agentTabManager.bindThread({ agentId: `cold-${nanoid()}`, callerToken, threadId, workspacePath: workspace });
+  return {
+    callerToken,
+    shellPolicy: shellPolicy as unknown as JsonValue,
+    rollback() {
+      agentTabManager.disposeBinding(callerToken);
+      if (oldBinding) agentTabManager.bindThread({ ...oldBinding, threadId });
+    },
+    commit() {
+      if (oldBinding) agentTabManager.disposeBinding(oldBinding.callerToken);
+      return revokeOtherNativeCallerBindingsForThread(threadId, callerToken);
+    },
+  };
+}
+
+/** Input to a saved thread that is not loaded resumes it with a fresh caller
+ * under the caller scope rules of an operator cold bind. The service checks
+ * that the exact thread is not loaded before it uses the carrier. */
+export const prepareUnloadedThreadCarrier: UnloadedThreadCarrierProvider = async ({ threadId, cwd }) => {
+  const workspace = normalizeHeadlessTaskWorkspace(cwd);
+  if (!workspace || workspace !== cwd) throw new Error(COLD_BIND_CUSTODY_ERROR);
+  return prepareColdCallerCarrier(threadId, workspace);
+};
+
+export function installUnloadedThreadCarrier(): () => void {
+  return setUnloadedThreadCarrierProvider(prepareUnloadedThreadCarrier);
+}
+
 /** Operator-only cold rebind: no input, model change, token export or loaded-shell mutation. */
 export async function coldBindAgentTaskThread(options: { threadId: string; workspace: string }) {
   const workspace = normalizeHeadlessTaskWorkspace(options.workspace);
   if (!workspace) throw new Error(HEADLESS_TASK_WORKSPACE_ERROR);
   const service = getCodexService();
   const thread = await service.readThread(options.threadId);
-  const custody = await service.readNativeCustody(options.threadId);
-  const global = await service.readGlobalNativeCustody();
-  if (thread.id !== options.threadId || thread.cwd !== workspace ||
-      !['idle', 'notLoaded'].includes(custody.status) || custody.queuedSubmissionCount !== 0 ||
-      global.queuedSubmissionCount !== 0 || global.loadedThreadIds.includes(options.threadId) ||
-      !global.threads.some(row => row.threadId === options.threadId)) {
-    throw new Error('Cold caller bind requires the exact unloaded idle thread, workspace and empty native queues');
-  }
-  const oldBinding = agentTabManager.getBindingForThread(options.threadId);
-  if (oldBinding && (oldBinding.workspacePath !== workspace || oldBinding.windowSessionKey ||
-      oldBinding.parentOwner || oldBinding.allowedToolNames?.length || oldBinding.toolProfileId)) {
-    throw new Error('Existing caller owner or tool scope differs');
-  }
-  const callerToken = `agtok_${nanoid()}`;
-  // Inventory the private on-disk scopes before native resume; a process
-  // restart must not turn a previously restricted caller into an open one.
-  revokeOtherNativeCallerBindingsForThread(options.threadId, callerToken, undefined, true);
-  const agentId = `cold-${nanoid()}`;
-  const policy = buildInterpreterCliShellEnvironmentPolicy(
-    callerToken, process.env, process.platform, workspace,
-    buildInterpreterCliServerConnection(getServerPort(), {
-      transport: resolveAgentInterpreterCliTransport(process.platform),
-    }),
-  );
-  // Register before native resume so autonomous native turns cannot race the
-  // caller binding. If resume rejects, restore the prior exact owner.
-  agentTabManager.bindThread({ agentId, callerToken, threadId: options.threadId, workspacePath: workspace });
+  if (thread.id !== options.threadId || thread.cwd !== workspace) throw new Error(COLD_BIND_CUSTODY_ERROR);
+  await assertColdBindCustody(service, options.threadId);
+  const carrier = prepareColdCallerCarrier(options.threadId, workspace);
   try {
     await service.resumeThread({ threadId: options.threadId, model: null, cwd: workspace,
-      config: { mcp_servers: {}, shell_environment_policy: policy }, coldShellPolicy: true });
+      config: { mcp_servers: {}, shell_environment_policy: carrier.shellPolicy }, coldShellPolicy: true });
   } catch (error) {
-    agentTabManager.disposeBinding(callerToken);
-    if (oldBinding) agentTabManager.bindThread({ ...oldBinding, threadId: options.threadId });
+    // Restore the prior exact owner.
+    carrier.rollback();
     throw error;
   }
-  if (oldBinding) agentTabManager.disposeBinding(oldBinding.callerToken);
-  const revokedPriorBindings = revokeOtherNativeCallerBindingsForThread(options.threadId, callerToken);
+  const revokedPriorBindings = carrier.commit();
   return { threadId: options.threadId, carrier: 'cold-bound' as const, revokedPriorBindings };
 }
 
@@ -243,6 +299,13 @@ export async function forkAgentTaskThread(
     service,
     modelConfig.provider === 'openai-oauth',
   );
+  // The fork is a new native thread with its own shell environment; give it
+  // a fresh app CLI caller when the source thread's caller scope is open.
+  // A narrower source forks as before, without a new caller.
+  const callerToken = `agtok_${nanoid()}`;
+  let openScope = true;
+  try { assertOpenCallerScope(options.threadId, workspace, callerToken); }
+  catch { openScope = false; }
   await service.ensureProvider(profile, true);
   const threadId = await service.forkThread({
     threadId: options.threadId,
@@ -251,10 +314,20 @@ export async function forkAgentTaskThread(
     modelProvider: profile.modelProvider,
     providerConfig: profile.providerConfig,
     cwd: workspace,
-    ...(modelConfig.reasoningEffort
-      ? { config: { model_reasoning_effort: modelConfig.reasoningEffort } }
-      : {}),
+    config: {
+      ...(modelConfig.reasoningEffort
+        ? { model_reasoning_effort: modelConfig.reasoningEffort }
+        : {}),
+      ...(openScope
+        ? { shell_environment_policy: buildFreshCallerShellPolicy(callerToken, workspace) as unknown as JsonValue }
+        : {}),
+    },
   });
+  if (openScope) {
+    agentTabManager.bindThread({
+      agentId: `fork-${nanoid()}`, callerToken, threadId, workspacePath: workspace, modelConfig,
+    });
+  }
 
   return { threadId };
 }

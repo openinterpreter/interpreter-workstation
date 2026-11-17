@@ -16,6 +16,7 @@ import {
   extractNotificationTurnId,
   NativeCustodyPhaseError,
   onTurnEnded,
+  setUnloadedThreadCarrierProvider,
   type StreamEvent,
   THREAD_LIST_DEFAULTS,
   type TurnEndedEvent,
@@ -1918,22 +1919,110 @@ describe("CodexService", () => {
     assert.equal(fake.calls.steerTurn.length, 0);
   });
 
-  test('saved unloaded thread resumes without changing identity, and unknown scope fails closed', async () => {
+  test('saved unloaded thread resumes with a supplied fresh shell carrier, and unknown scope fails closed', async () => {
     const id = '00000000-0000-4000-8000-000000000123';
     let cwd = '/workspace';
     let status = 'notLoaded';
     const fake = createFakeClient({ async threadRead() { return { thread: {
       id, cwd, status: { type: status }, turns: [],
     } as v2.Thread }; } });
+    fake.client.threadList = async () => ({ data: [{ id } as v2.Thread], nextCursor: null });
+    const policy = { set: { INTERPRETER_CALLER_TOKEN: 'agtok_fresh_caller' } };
+    const carrierEvents: string[] = [];
+    const restore = setUnloadedThreadCarrierProvider(async (request) => {
+      carrierEvents.push(`prepare:${request.threadId}:${request.cwd}`);
+      return { shellPolicy: policy, commit: () => carrierEvents.push('commit'),
+        rollback: () => carrierEvents.push('rollback') };
+    });
     const service = new CodexService(fake.client);
-    assert.equal(await service.submitSavedThreadInput(id, 'message', '/workspace', 'stable_3'), 'turn_1');
+    try {
+      assert.equal(await service.submitSavedThreadInput(id, 'message', '/workspace', 'stable_3'), 'turn_1');
+    } finally {
+      restore();
+    }
     assert.equal(fake.calls.resumeThread, 1);
-    assert.deepEqual(fake.calls.resumeThreadConfig[0], { mcp_servers: {} });
+    assert.deepEqual(fake.calls.resumeThreadConfig[0], { mcp_servers: {}, shell_environment_policy: policy });
+    assert.deepEqual(carrierEvents, [`prepare:${id}:/workspace`, 'commit']);
     cwd = '/other';
     await assert.rejects(service.submitSavedThreadInput(id, 'message', '/workspace', 'stable_4'), /identity or state unavailable/);
     cwd = '/workspace'; status = 'systemError';
     await assert.rejects(service.submitSavedThreadInput(id, 'message', '/workspace', 'stable_5'), /identity or state unavailable/);
     assert.equal(fake.calls.startTurn, 1);
+  });
+
+  test('unloaded existing-thread input rolls back its fresh carrier when the resume fails', async () => {
+    const id = '00000000-0000-4000-8000-000000000124';
+    const fake = createFakeClient({
+      async threadRead() { return { thread: { id, cwd: '/workspace', status: { type: 'notLoaded' },
+        turns: [] } as v2.Thread }; },
+      async resumeThread() { throw new Error('native resume rejected'); },
+    });
+    fake.client.threadList = async () => ({ data: [{ id } as v2.Thread], nextCursor: null });
+    const carrierEvents: string[] = [];
+    const restore = setUnloadedThreadCarrierProvider(async () => ({
+      shellPolicy: { set: { INTERPRETER_CALLER_TOKEN: 'agtok_fresh_caller' } },
+      commit: () => carrierEvents.push('commit'), rollback: () => carrierEvents.push('rollback'),
+    }));
+    const service = new CodexService(fake.client);
+    try {
+      await assert.rejects(service.startExistingThreadTurn(id, 'wake input', '/workspace', { mcp_servers: {} }),
+        /native resume rejected/);
+    } finally {
+      restore();
+    }
+    assert.deepEqual(carrierEvents, ['rollback']);
+    assert.equal(fake.calls.startTurn, 0);
+  });
+
+  test('unloaded existing-thread turn resumes with the caller-bound policy, loaded keeps it stripped', async () => {
+    const id = '00000000-0000-4000-8000-000000000125';
+    let status = 'notLoaded';
+    const fake = createFakeClient({
+      async threadRead() { return { thread: { id, cwd: '/workspace', status: { type: status },
+        turns: [] } as v2.Thread }; },
+    });
+    fake.client.threadList = async () => ({ data: [{ id } as v2.Thread], nextCursor: null });
+    let prepared = 0;
+    const restore = setUnloadedThreadCarrierProvider(async () => {
+      prepared++;
+      throw new Error('a bound caller policy needs no new carrier');
+    });
+    const service = new CodexService(fake.client);
+    const policy = { set: { INTERPRETER_CALLER_TOKEN: 'agtok_bound_caller' } };
+    const runOnce = async (expectedStarts: number) => {
+      const run = service.runTurn({ threadId: id, message: 'input', model: 'test-model', cwd: '/workspace',
+        config: { mcp_servers: {}, shell_environment_policy: policy }, onEvent: () => {} });
+      await waitFor(() => fake.calls.startTurn === expectedStarts);
+      fake.emit({ method: SERVER_METHOD.turnCompleted,
+        params: { threadId: id, turn: createTurn('turn_1', 'completed') } });
+      return run;
+    };
+    try {
+      assert.equal((await runOnce(1)).turnId, 'turn_1');
+      status = 'idle';
+      assert.equal((await runOnce(2)).turnId, 'turn_1');
+    } finally {
+      restore();
+    }
+    assert.equal(prepared, 0);
+    assert.deepEqual(fake.calls.resumeThreadConfig[0]?.shell_environment_policy, policy);
+    assert.equal(fake.calls.resumeThreadConfig[1]?.shell_environment_policy, undefined);
+  });
+
+  test('unloaded existing-thread input without a registered carrier keeps the ordinary resume', async () => {
+    const id = '00000000-0000-4000-8000-000000000126';
+    const fake = createFakeClient({
+      async threadRead() { return { thread: { id, cwd: '/workspace', status: { type: 'notLoaded' },
+        turns: [] } as v2.Thread }; },
+    });
+    const restore = setUnloadedThreadCarrierProvider(null);
+    const service = new CodexService(fake.client);
+    try {
+      assert.equal(await service.startExistingThreadTurn(id, 'wake input', '/workspace', { mcp_servers: {} }), 'turn_1');
+    } finally {
+      restore();
+    }
+    assert.deepEqual(fake.calls.resumeThreadConfig[0], { mcp_servers: {} });
   });
 
   test("loaded native wake preserves its original shell keys and stable client ID", async () => {
@@ -2389,7 +2478,8 @@ describe("CodexService", () => {
     });
 
     await waitFor(() => fake.calls.startTurn === 1);
-    assert.equal(fake.calls.threadReadParams.length, 0);
+    // Only the metadata load-state probe; saved history is never hydrated.
+    assert.deepEqual(fake.calls.threadReadParams, [{ threadId: "thr_existing", includeTurns: false }]);
     assert.equal(fake.calls.resumeThread, 1);
     assert.equal(fake.calls.resumeThreadModelProvider[0], "interpreter");
     assert.equal(fake.calls.resumeThreadModel[0], "interpreter-smart");

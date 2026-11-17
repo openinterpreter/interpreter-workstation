@@ -255,6 +255,20 @@ type ResumeThreadOptions = {
   coldShellPolicy?: boolean;
 };
 
+type ExistingThreadResumeOptions = {
+  threadId: string;
+  modelProvider?: string | null;
+  model?: string | null;
+  cwd?: string | null;
+  config?: Record<string, JsonValue> | null;
+  baseInstructions?: string | null;
+  developerInstructions?: string | null;
+  additionalWritableRoots?: string[];
+  coldShellPolicy?: boolean;
+  /** Keep the shell policy when the exact thread is verified not loaded. */
+  unloadedShellPolicy?: boolean;
+};
+
 type ForkThreadOptions = ResumeThreadOptions & {
   lastTurnId: string;
 };
@@ -484,6 +498,34 @@ function configForExistingThread(config?: Record<string, JsonValue> | null): Rec
   return rest;
 }
 
+/** A fresh app CLI shell carrier for a saved thread that is not loaded. The
+ * provider registers its caller before returning; `rollback` restores the
+ * prior caller if the resume fails and `commit` retires it after success. */
+export type UnloadedThreadCarrier = {
+  shellPolicy: JsonValue;
+  commit(): void;
+  rollback(): void;
+};
+
+export type UnloadedThreadCarrierProvider = (request: {
+  service: CodexService;
+  threadId: string;
+  /** Working directory reported by the saved native thread. */
+  cwd: string;
+}) => Promise<UnloadedThreadCarrier>;
+
+let unloadedThreadCarrierProvider: UnloadedThreadCarrierProvider | null = null;
+
+/** Register the carrier used when input resumes an unloaded saved thread.
+ * Returns a function that restores the previous registration. */
+export function setUnloadedThreadCarrierProvider(
+  provider: UnloadedThreadCarrierProvider | null,
+): () => void {
+  const previous = unloadedThreadCarrierProvider;
+  unloadedThreadCarrierProvider = provider;
+  return () => { unloadedThreadCarrierProvider = previous; };
+}
+
 export function extractNotificationThreadId(notification: AppServerNotification) {
   return match(notification)
     .with({ method: SERVER_METHOD.threadStarted }, (n) => n.params.thread.id)
@@ -677,6 +719,8 @@ export class CodexService {
         model?: string | null; modelProvider?: string | null;
         baseInstructions?: string; developerInstructions?: string;
         additionalWritableRoots?: string[];
+        /** The config's shell policy names a caller this producer has bound. */
+        callerBoundShellPolicy?: boolean;
         /** UI observers already own the null reservation before turn/start. */
         preReserved?: boolean;
         onPhase?: (phase: 'resume' | 'start') => void } }
@@ -698,13 +742,14 @@ export class CodexService {
       try {
         if (input.existingThread) {
           input.existingThread.onPhase?.('resume');
-          await this.resumeExistingInputThread({ threadId,
+          await this.resumeExistingThreadForInput({ threadId,
             modelProvider: input.existingThread.modelProvider ?? null,
             model: input.existingThread.model ?? null,
             cwd: input.params.cwd, config: input.existingThread.config,
             baseInstructions: input.existingThread.baseInstructions,
             developerInstructions: input.existingThread.developerInstructions,
-            additionalWritableRoots: input.existingThread.additionalWritableRoots });
+            additionalWritableRoots: input.existingThread.additionalWritableRoots },
+          input.existingThread.callerBoundShellPolicy === true);
           input.existingThread.onPhase?.('start');
         }
         const turn = await this.client.startTurn(input.params);
@@ -724,17 +769,7 @@ export class CodexService {
    * inputs. Producers choose their own auth and durable custody; none may
    * replace a loaded thread's shell scope or silently change its identity.
    */
-  private async resumeExistingInputThread(options: {
-    threadId: string;
-    modelProvider?: string | null;
-    model?: string | null;
-    cwd?: string | null;
-    config?: Record<string, JsonValue> | null;
-    baseInstructions?: string | null;
-    developerInstructions?: string | null;
-    additionalWritableRoots?: string[];
-    coldShellPolicy?: boolean;
-  }): Promise<string> {
+  private async resumeExistingInputThread(options: ExistingThreadResumeOptions): Promise<string> {
     if (options.coldShellPolicy) {
       const custody = await this.readNativeCustody(options.threadId);
       const global = await this.readGlobalNativeCustody();
@@ -745,13 +780,74 @@ export class CodexService {
         throw new Error('Cold caller bind requires an unloaded idle thread and empty native queues');
       }
     }
+    if (options.unloadedShellPolicy) {
+      // Only a thread with no live shell environment may receive new shell
+      // keys. Its own queued input does not matter: it is what resumes it.
+      const custody = await this.readNativeCustody(options.threadId);
+      if (custody.status !== 'notLoaded' || !options.config?.shell_environment_policy) {
+        throw new Error('Thread is loaded; its shell environment is kept');
+      }
+    }
     const resumedId = await this.client.resumeThread(
       options.threadId, options.modelProvider, options.model, options.cwd,
-      options.coldShellPolicy ? options.config : configForExistingThread(options.config), options.baseInstructions,
+      options.coldShellPolicy || options.unloadedShellPolicy
+        ? options.config : configForExistingThread(options.config), options.baseInstructions,
       options.developerInstructions, options.additionalWritableRoots,
     );
     if (resumedId !== options.threadId) throw new Error('Existing thread identity changed');
     return resumedId;
+  }
+
+  /** Resume an existing thread before admitting input to it. A loaded thread
+   * keeps its original shell scope. A saved thread that is not loaded has no
+   * live shell environment, so it is resumed with a fresh app CLI carrier:
+   * the producer's own bound policy, or one from the registered provider.
+   * When the load state cannot be read, the ordinary resume is used.
+   */
+  private async resumeExistingThreadForInput(
+    options: ExistingThreadResumeOptions,
+    callerBoundShellPolicy = false,
+    unloaded?: { cwd: string },
+  ): Promise<string> {
+    const observed = unloaded ?? await this.observeUnloadedThread(options.threadId);
+    if (!observed) return this.resumeExistingInputThread(options);
+    // A carrier is an improvement, never a condition for the turn: when one
+    // cannot be given, the thread resumes exactly as it did before.
+    if (callerBoundShellPolicy && options.config?.shell_environment_policy) {
+      try {
+        return await this.resumeExistingInputThread({ ...options, unloadedShellPolicy: true });
+      } catch {
+        return this.resumeExistingInputThread(options);
+      }
+    }
+    const provider = unloadedThreadCarrierProvider;
+    if (!provider) return this.resumeExistingInputThread(options);
+    let carrier: UnloadedThreadCarrier;
+    try {
+      carrier = await provider({ service: this, threadId: options.threadId, cwd: observed.cwd });
+    } catch {
+      return this.resumeExistingInputThread(options);
+    }
+    let resumedId: string;
+    try {
+      resumedId = await this.resumeExistingInputThread({ ...options,
+        config: { ...configForExistingThread(options.config), shell_environment_policy: carrier.shellPolicy },
+        unloadedShellPolicy: true });
+    } catch {
+      carrier.rollback();
+      return this.resumeExistingInputThread(options);
+    }
+    carrier.commit();
+    return resumedId;
+  }
+
+  private async observeUnloadedThread(threadId: string): Promise<{ cwd: string } | null> {
+    try {
+      const { thread } = await this.client.threadRead({ threadId, includeTurns: false });
+      return thread.id === threadId && thread.status.type === 'notLoaded' ? { cwd: thread.cwd } : null;
+    } catch {
+      return null;
+    }
   }
 
   private assertNoActiveTurn(threadId: string): void {
@@ -1206,6 +1302,7 @@ export class CodexService {
         baseInstructions: options.baseInstructions,
         developerInstructions: options.developerInstructions,
         additionalWritableRoots: options.additionalWritableRoots,
+        callerBoundShellPolicy: Boolean(runConfig.shell_environment_policy),
       } } : {}) });
 
       turnId = turn.turnId;
@@ -1597,7 +1694,8 @@ export class CodexService {
         !['idle', 'active', 'notLoaded'].includes(thread.status.type))
       throw new Error('Saved native thread identity or state unavailable');
     if (thread.status.type === 'notLoaded') {
-      await this.resumeExistingInputThread({ threadId, cwd, config: { mcp_servers: {} } });
+      await this.resumeExistingThreadForInput({ threadId, cwd, config: { mcp_servers: {} } },
+        false, { cwd: thread.cwd });
     }
     // OIX turn/start calls start_or_steer_turn. Never speculate about active
     // ownership here or turn a stale app observation into a second queue.
