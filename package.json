@@ -339,6 +339,11 @@
     "zod": "4.6.7"
   },
   "pnpm": {
+    "auditConfig": {
+      "ignoreGhsas": [
+        "GHSA-fc5q-39xc-vjpf"
+      ]
+    },
     "packageExtensions": {
       "@oxidezap/baileyrs@0.0.32": {
         "dependencies": {
