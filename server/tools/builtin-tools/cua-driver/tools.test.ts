@@ -851,7 +851,7 @@ describe('macOS Computer Use wrapper behavior', () => {
         permissions: { inspect: { mode: 'ask' }, control: { mode: 'ask' } }, appPolicies: [],
       }));
       try {
-        const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+        const threadId = '00000000-0000-7000-8000-0000000000a1';
         const verified = { threadId, verifiedCallerThreadId: threadId };
         for (const [tool, args] of [
           ['list_apps', {}], ['get_app_state', { app: 'Google Chrome' }],
@@ -880,8 +880,8 @@ describe('macOS Computer Use wrapper behavior', () => {
 
   test('operator exact-thread app-list grant never broadens inspect, control or other threads', async () => {
     await withPlatform('linux', async () => {
-      const owner = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
-      const other = '01a0d435-bb2b-7047-afe7-0a639be8e5d5';
+      const owner = '00000000-0000-7000-8000-0000000000a1';
+      const other = '00000000-0000-7000-8000-0000000000a2';
       setConfigOverride({ agents: {}, headlessToolApprovalMode: 'fail-closed',
         nativeCuaDiscoveryGrants: [{ threadId: owner, toolName: 'list_apps' }] } as any);
       setCuaAccessPolicyProviderForCuaDriverTest(async () => ({

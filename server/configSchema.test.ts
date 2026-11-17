@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { AppConfigSchema } from './configSchema';
 
 describe('operator-scoped Computer Use discovery grants', () => {
-  const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+  const threadId = '00000000-0000-7000-8000-0000000000a1';
   test('accepts only exact-thread list_apps entries within the bound', () => {
     expect(AppConfigSchema.safeParse({ agents: {}, nativeCuaDiscoveryGrants: [{ threadId, toolName: 'list_apps' }] }).success).toBe(true);
     for (const entry of [
