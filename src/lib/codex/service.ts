@@ -50,6 +50,8 @@ const NATIVE_CUSTODY_PHASE_DEADLINE_MS = 12_000;
 export const NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS = 3_000;
 export const NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS = 6_000;
 const NATIVE_CUSTODY_GLOBAL_MAX_DEADLINE_MS = 30_000;
+/** Queue reads in flight at once during one global inspection pass. */
+const NATIVE_CUSTODY_GLOBAL_QUEUE_CONCURRENCY = 16;
 
 export type NativeCustodyPhase = 'thread_read' | 'queue_read' | 'loaded_list' | 'thread_list'
   | 'terminal_status'
@@ -1301,21 +1303,32 @@ export class CodexService {
     const threadIds = await collect(false);
     if (loadedBefore.some((id) => !threadIds.includes(id)))
       throw new NativeGlobalInventoryError('loaded_missing', 'Loaded native thread missing from inventory');
-    const rows = [];
-    for (const threadId of threadIds) {
+    // A host can hold hundreds of saved threads. Reading their queues one at
+    // a time cannot finish inside the single inspection budget, so each pass
+    // runs a bounded number of reads at once. Results keep inventory order,
+    // and the first failed read still fails the whole inspection.
+    const inBatches = async <T, R>(items: readonly T[], operation: (item: T) => Promise<R>): Promise<R[]> => {
+      const results: R[] = [];
+      for (let index = 0; index < items.length; index += NATIVE_CUSTODY_GLOBAL_QUEUE_CONCURRENCY) {
+        results.push(...await Promise.all(
+          items.slice(index, index + NATIVE_CUSTODY_GLOBAL_QUEUE_CONCURRENCY).map(operation)));
+      }
+      return results;
+    };
+    const rows = await inBatches(threadIds, async (threadId) => {
       const queuedSubmissions = await read('global_queue_read', () => this.readNativeQueuedSubmissions(threadId));
-      rows.push({ threadId, queuedSubmissionCount: queuedSubmissions.length, queuedSubmissions });
-    }
+      return { threadId, queuedSubmissionCount: queuedSubmissions.length, queuedSubmissions };
+    });
     const [loadedAfter, threadIdsAfter] = await Promise.all([collect(true, true), collect(false, true)]);
     if (JSON.stringify(loadedBefore) !== JSON.stringify(loadedAfter) ||
         JSON.stringify(threadIds) !== JSON.stringify(threadIdsAfter)) {
       throw new NativeGlobalInventoryError('inventory_changed', 'Native inventory changed during inspection');
     }
-    for (const row of rows) {
-      if (JSON.stringify(row.queuedSubmissions) !==
-          JSON.stringify(await read('verify_queue_read', () => this.readNativeQueuedSubmissions(row.threadId)))) {
-        throw new NativeGlobalInventoryError('queue_changed', 'Native queue changed during inspection');
-      }
+    const verified = await inBatches(rows, (row) =>
+      read('verify_queue_read', () => this.readNativeQueuedSubmissions(row.threadId)));
+    if (rows.some((row, index) =>
+      JSON.stringify(row.queuedSubmissions) !== JSON.stringify(verified[index]))) {
+      throw new NativeGlobalInventoryError('queue_changed', 'Native queue changed during inspection');
     }
     // This is an enumerated snapshot, not an atomic freeze: the operator must
     // repeat it at a quiescent boundary immediately before the service stop.

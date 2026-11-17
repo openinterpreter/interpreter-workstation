@@ -305,6 +305,56 @@ describe('native custody metadata', () => {
       'global_queue_read:late_failed']);
     assert.doesNotMatch(JSON.stringify(phases), /private native queue failure/);
   });
+  test('inspects hundreds of threads inside one budget by reading queues a bounded number at a time', async () => {
+    const ids = Array.from({ length: 300 }, (_, index) =>
+      `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
+    const client = createFakeClient({}).client;
+    client.threadLoadedList = async () => ({ data: [], nextCursor: null });
+    client.threadList = async ({ cursor }) => {
+      const start = cursor ? Number(cursor) : 0;
+      const next = start + 100;
+      return { data: ids.slice(start, next).map((id) => ({ id } as v2.Thread)),
+        nextCursor: next < ids.length ? String(next) : null, backwardsCursor: null };
+    };
+    let inFlight = 0;
+    let peak = 0;
+    let reads = 0;
+    client.threadQueueList = async () => {
+      reads++;
+      peak = Math.max(peak, ++inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      inFlight--;
+      return { data: [], nextCursor: null };
+    };
+    // One at a time, 600 reads of 20 ms each would take 12 s; the budget is 6 s.
+    const result = await new CodexService(client).readGlobalNativeCustody(6_000);
+    assert.equal(result.threadCount, 300);
+    assert.deepEqual(result.threads.map((row) => row.threadId), [...ids].sort());
+    assert.equal(result.queuedSubmissionCount, 0);
+    assert.equal(reads, 600);
+    assert.ok(peak > 1 && peak <= 16, `peak concurrency ${peak}`);
+  });
+
+  test('a queue that changes between the two passes still fails the whole inspection', async () => {
+    const ids = Array.from({ length: 40 }, (_, index) =>
+      `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`);
+    const client = createFakeClient({}).client;
+    client.threadLoadedList = async () => ({ data: [], nextCursor: null });
+    client.threadList = async () => ({ data: ids.map((id) => ({ id } as v2.Thread)),
+      nextCursor: null, backwardsCursor: null });
+    const seen = new Map<string, number>();
+    client.threadQueueList = async ({ threadId }) => {
+      const count = (seen.get(threadId) ?? 0) + 1;
+      seen.set(threadId, count);
+      // The 30th thread gains a queued item between the read and verify passes.
+      return { data: threadId === ids[29] && count === 2
+        ? [{ id: 'queue_1', clientUserMessageId: 'message_1', input: [{ text: 'new' }] } as never]
+        : [], nextCursor: null };
+    };
+    await assert.rejects(new CodexService(client).readGlobalNativeCustody(6_000),
+      { name: 'NativeGlobalInventoryError', category: 'queue_changed' });
+  });
+
   test('pages native queue through the existing client without returning input', async () => {
     const fake = createFakeClient({});
     const client = fake.client;
