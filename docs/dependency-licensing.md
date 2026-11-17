@@ -75,7 +75,9 @@ Audit exception (added 2026-11-17):
 
 - `GHSA-fc5q-39xc-vjpf` (picomatch, regular-expression denial of service
   through repeated extglob patterns, affects every release up to 4.0.7) is
-  listed in `pnpm.auditConfig.ignoreGhsas`. No patched release exists, so the
+  listed in `pnpm.auditConfig.ignoreGhsas` of the root package and of
+  `shadcn-preset/preset-app`, which is audited separately and reaches
+  picomatch only through its lint tooling. No patched release exists, so the
   advisory cannot be cleared by an upgrade. The flaw needs an
   attacker-controlled glob pattern; the application's only direct use is the
   file watcher's fixed ignore list, and the other dependents are build and
