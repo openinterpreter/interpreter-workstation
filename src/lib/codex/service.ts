@@ -48,8 +48,13 @@ const NATIVE_CUSTODY_PHASE_DEADLINE_MS = 12_000;
 // with an eight-second HTTP deadline; this cannot diagnose a request that
 // never reaches this route. An expired native RPC may still complete later.
 export const NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS = 3_000;
-export const NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS = 6_000;
-const NATIVE_CUSTODY_GLOBAL_MAX_DEADLINE_MS = 30_000;
+// The global inspection reads every saved thread's queue twice, and the
+// runtime answers those reads one after another. One pass over about ninety
+// threads takes five seconds, so a budget sized for a handful of threads can
+// never finish on a host with many. Callers of this route wait longer than
+// this budget.
+export const NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS = 40_000;
+const NATIVE_CUSTODY_GLOBAL_MAX_DEADLINE_MS = 60_000;
 /** Queue reads in flight at once during one global inspection pass. */
 const NATIVE_CUSTODY_GLOBAL_QUEUE_CONCURRENCY = 16;
 
