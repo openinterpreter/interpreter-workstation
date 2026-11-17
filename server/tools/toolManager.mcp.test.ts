@@ -959,7 +959,7 @@ describe('ToolManager MCP integration', () => {
   });
 
   test('direct Sites read uses only the operator grant for an authenticated caller bound to the exact thread', async () => {
-    const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    const threadId = '00000000-0000-7000-8000-0000000000a1';
     const agentId = 'agent-sites-read';
     agentTabManager.bindThread({ agentId, callerToken: 'private-test-caller', threadId });
     setConfigOverride({
@@ -979,7 +979,7 @@ describe('ToolManager MCP integration', () => {
   });
 
   test('direct Sites read accepts a token-authenticated native caller recovered after host restart', async () => {
-    const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    const threadId = '00000000-0000-7000-8000-0000000000a1';
     const agentId = 'agent-sites-recovered';
     // Native caller token validation happens in interpreterCli before it passes
     // this binding. The in-memory agent map need not survive the host restart.
@@ -998,7 +998,7 @@ describe('ToolManager MCP integration', () => {
   });
 
   test('ordinary-auto direct MCP accepts bound metadata reads but never creation or an unbound caller', async () => {
-    const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    const threadId = '00000000-0000-7000-8000-0000000000a1';
     const agentId = 'agent-ordinary-read';
     agentTabManager.bindThread({ agentId, callerToken: 'private-test-caller', threadId });
     setConfigOverride({ agents: {}, mcpServers: {}, codexApprovalPolicy: 'never',
@@ -1016,8 +1016,8 @@ describe('ToolManager MCP integration', () => {
   });
 
   test('direct headless grant fails closed for missing binding, another thread, another tool, or mismatched native item', async () => {
-    const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
-    const otherThreadId = '01a0d50a-0038-73d0-8f71-0f1815786fdf';
+    const threadId = '00000000-0000-7000-8000-0000000000a1';
+    const otherThreadId = '00000000-0000-7000-8000-0000000000b1';
     const agentId = 'agent-sites-scoped';
     agentTabManager.bindThread({ agentId, callerToken: 'private-test-caller', threadId });
     setConfigOverride({
@@ -1051,7 +1051,7 @@ describe('ToolManager MCP integration', () => {
   });
 
   test('direct read grant does not override an explicit per-tool approval mode', async () => {
-    const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    const threadId = '00000000-0000-7000-8000-0000000000a1';
     const agentId = 'agent-sites-explicit-approval';
     agentTabManager.bindThread({ agentId, callerToken: 'private-test-caller', threadId });
     setConfigOverride({

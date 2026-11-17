@@ -11,9 +11,9 @@ import { parseSupervisorSignerCommand, runSignerCommand,
 const SUPERVISOR_PROOF_HEADER = 'x-example-request-proof';
 
 const threadId = '00000000-0000-4000-8000-000000000001';
-const config = { verifyUrl: 'https://verifier.example.test/v1/peer-supervisor-claim',
+const config = { verifyUrl: 'https://verifier.example.test/v1/supervisor-verify',
   audience: 'https://verifier.example.test', targetComputer: 'target-1' };
-const grant = { issuer: 'interpreter-blue-enrolled-peer', subject: 'source-1',
+const grant = { issuer: 'enrolled-issuer', subject: 'source-1',
   sourceComputer: 'source-1', targetComputer: 'target-1', threadId,
   capabilities: ['goal:read'], expiresAt: Date.now() + 30_000 };
 function req(path = `/threads/${threadId}/goal`, assertion = 'owned.assertion') {
@@ -91,7 +91,7 @@ describe('optional enrolled target peer verifier', () => {
 
 const signerArgv = ['/opt/example/signer', '--peer'];
 const signedConfig = { ...config, signerCommand: signerArgv, proofHeader: SUPERVISOR_PROOF_HEADER };
-const verifyPath = '/v1/peer-supervisor-claim';
+const verifyPath = '/v1/supervisor-verify';
 const expectedBody = JSON.stringify({ action: 'verify', assertion: 'owned.assertion',
   targetComputer: 'target-1', threadId, capability: 'goal:read' });
 const sha256 = (text: string) => createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex');

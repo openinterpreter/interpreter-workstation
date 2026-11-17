@@ -554,8 +554,8 @@ describe('codexServerRequestApprovals', () => {
   });
 
   test('exact operator-owned native read grants are thread-bound and never broaden to creation or providers', async () => {
-    const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
-    agentTabManager.bindThread({ agentId: 'agent-sandra', threadId, callerToken: 'agtok_sandra' });
+    const threadId = '00000000-0000-7000-8000-0000000000a1';
+    agentTabManager.bindThread({ agentId: 'agent-example', threadId, callerToken: 'agtok_example' });
     setConfigOverride({
       agents: {}, codexApprovalPolicy: 'never',
       nativeMcpReadGrants: [{ threadId, serverName: 'codex_apps', toolName: 'sites.list_sites' }],
@@ -580,7 +580,7 @@ describe('codexServerRequestApprovals', () => {
       { action: 'accept', content: null, _meta: null });
     assert.equal(sessionApprovalCalls.length, 0);
     for (const input of [
-      request('01a0d50a-0038-73d0-8f71-0f1815786fdf', 'codex_apps', 'sites.list_sites'),
+      request('00000000-0000-7000-8000-0000000000b1', 'codex_apps', 'sites.list_sites'),
       request(threadId, 'codex_apps', 'sites.create_site'),
       request(threadId, 'world', 'sites.list_sites'),
       request(threadId, 'codex_apps', 'sites.list_sites', 'sites.create_site'),
@@ -589,8 +589,8 @@ describe('codexServerRequestApprovals', () => {
   });
 
   test('unattended policy declines ungranted native calls without queuing', async () => {
-    const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
-    agentTabManager.bindThread({ agentId: 'agent-sandra', threadId, callerToken: 'agtok_sandra' });
+    const threadId = '00000000-0000-7000-8000-0000000000a1';
+    agentTabManager.bindThread({ agentId: 'agent-example', threadId, callerToken: 'agtok_example' });
     setConfigOverride({ agents: {}, headlessToolApprovalMode: 'fail-closed',
       nativeMcpReadGrants: [{ threadId, serverName: 'codex_apps', toolName: 'sites.get_site' }],
     } as any);
@@ -598,7 +598,7 @@ describe('codexServerRequestApprovals', () => {
     for (const [serverName, toolName, action] of [
       ['codex_apps', 'sites.get_site', 'accept'],
       ['codex_apps', 'sites.create_site', 'decline'],
-      ['world', 'linq.send', 'decline'],
+      ['messaging', 'sms.send', 'decline'],
     ]) {
       let response: any;
       await handleCodexServerRequest({ id: 1202, method: SERVER_REQUEST_METHOD.mcpServerElicitationRequest,
@@ -613,7 +613,7 @@ describe('codexServerRequestApprovals', () => {
   });
 
   test('ordinary-auto native MCP accepts only bound first-party reads, never create or provider', async () => {
-    const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+    const threadId = '00000000-0000-7000-8000-0000000000a1';
     agentTabManager.bindThread({ agentId: 'agent-ordinary', threadId, callerToken: 'agtok_ordinary' });
     setConfigOverride({ agents: {}, codexApprovalPolicy: 'never', headlessToolApprovalMode: 'ordinary-auto' } as any);
     const { deps, sessionApprovalCalls } = createDeps(true);
@@ -630,8 +630,8 @@ describe('codexServerRequestApprovals', () => {
     assert.equal(await call('codex_apps', 'sites.list_sites'), 'accept');
     assert.equal(await call('codex_apps', 'sites.get_site'), 'accept');
     assert.equal(await call('codex_apps', 'sites.create_site'), 'decline');
-    assert.equal(await call('world', 'linq.send'), 'decline');
-    assert.equal(await call('codex_apps', 'sites.list_sites', '01a0d50a-0038-73d0-8f71-0f1815786fdf'), 'decline');
+    assert.equal(await call('messaging', 'sms.send'), 'decline');
+    assert.equal(await call('codex_apps', 'sites.list_sites', '00000000-0000-7000-8000-0000000000b1'), 'decline');
     assert.equal(sessionApprovalCalls.length, 0);
   });
 
