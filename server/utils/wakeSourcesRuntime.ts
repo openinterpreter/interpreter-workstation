@@ -15,6 +15,8 @@ export async function startWakeThreadTurn(
   // keys during resume is rejected for loaded threads, while minting a token
   // here would not rotate the token already held by that native thread. The
   // original scoped caller remains recoverable through its persisted hash.
+  // A saved thread that is not loaded has no live shell; the service resumes
+  // it with a fresh caller from the registered unloaded-thread carrier.
   let phase: 'resume' | 'start' = 'resume';
   try { return await service.startExistingThreadTurn(threadId, message, thread.cwd ?? undefined, {
     mcp_servers: {},

@@ -1,9 +1,16 @@
 import { afterEach, describe, test } from 'bun:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 
 import { clearConfigCache, setConfigOverride } from './configStore';
-import { resumeAgentTaskThread, startAgentTask } from './agentTaskService';
+import { forkAgentTaskThread, resumeAgentTaskThread, startAgentTask } from './agentTaskService';
 import { agentTabManager } from './agentTabManager';
+import { getCodexService } from '../src/lib/codex/service';
+import {
+  INTERPRETER_CALLER_TOKEN_ENV,
+  INTERPRETER_CLI_PATH_ENV,
+  INTERPRETER_CLI_SERVER_CONNECTION_ENV,
+} from './utils/interpreterCliRuntime';
 
 type CreateHeadedTask = NonNullable<Parameters<typeof startAgentTask>[0]['createHeadedTask']>;
 
@@ -34,6 +41,65 @@ describe('resumeAgentTaskThread caller ownership', () => {
       workspace: '/tmp/owned-workspace', modelConfig: { ...modelConfig, modelId: 'other-model' } }),
     /owner scope differs/);
     assert.equal(agentTabManager.getBindingForThread('thr_bound'), original);
+  });
+});
+
+describe('forkAgentTaskThread caller carrier', () => {
+  const modelConfig = { provider: 'api' as const, modelId: 'test-model',
+    apiFormat: 'openai' as const, baseURL: 'https://example.test/v1' };
+
+  async function withStubbedFork<T>(run: (forks: Array<Record<string, unknown>>) => Promise<T>): Promise<T> {
+    const service = getCodexService();
+    const original = { ensureProvider: service.ensureProvider, forkThread: service.forkThread };
+    const forks: Array<Record<string, unknown>> = [];
+    service.ensureProvider = async () => {};
+    service.forkThread = async (options) => {
+      forks.push(options as unknown as Record<string, unknown>);
+      return '00000000-0000-4000-8000-0000000000f2';
+    };
+    try { return await run(forks); }
+    finally { Object.assign(service, original); }
+  }
+
+  test('gives the new forked thread a fresh app CLI shell policy and registers its caller', async () => {
+    await withStubbedFork(async (forks) => {
+      const result = await forkAgentTaskThread({ threadId: '00000000-0000-4000-8000-0000000000f1',
+        lastTurnId: 'turn_source', workspace: '/tmp/owned-workspace', modelConfig });
+      assert.equal(result.threadId, '00000000-0000-4000-8000-0000000000f2');
+      const binding = agentTabManager.getBindingForThread(result.threadId);
+      assert.ok(binding);
+      try {
+        assert.equal(binding.workspacePath, '/tmp/owned-workspace');
+        const policy = (forks[0]?.config as { shell_environment_policy: { set: Record<string, string> } })
+          .shell_environment_policy;
+        assert.equal(policy.set[INTERPRETER_CALLER_TOKEN_ENV], binding.callerToken);
+        assert.ok(policy.set[INTERPRETER_CLI_SERVER_CONNECTION_ENV]);
+        const launcherDir = path.dirname(policy.set[INTERPRETER_CLI_PATH_ENV]);
+        const pathKey = Object.keys(policy.set).find(key => key.toUpperCase() === 'PATH')!;
+        assert.equal(policy.set[pathKey].split(path.delimiter)[0], launcherDir);
+      } finally {
+        agentTabManager.disposeBinding(binding.callerToken);
+      }
+    });
+  });
+
+  test('forks a source whose caller has a narrower tool scope without a new caller', async () => {
+    const sourceThreadId = '00000000-0000-4000-8000-0000000000f3';
+    const callerToken = 'agtok_restricted_source_caller';
+    agentTabManager.bindThread({ agentId: 'restricted-agent', callerToken, threadId: sourceThreadId,
+      workspacePath: '/tmp/owned-workspace', allowedToolNames: ['builtin-interpreter.interpreter_goal_revision_get'] });
+    try {
+      await withStubbedFork(async (forks) => {
+        const forked = await forkAgentTaskThread({ threadId: sourceThreadId, lastTurnId: 'turn_source',
+          workspace: '/tmp/owned-workspace', modelConfig });
+        assert.equal(forks.length, 1);
+        const config = (forks[0]?.config ?? {}) as Record<string, unknown>;
+        assert.equal('shell_environment_policy' in config, false);
+        assert.equal(agentTabManager.getBindingForThread(forked.threadId), undefined);
+      });
+    } finally {
+      agentTabManager.disposeBinding(callerToken);
+    }
   });
 });
 

@@ -77,6 +77,9 @@ import { broadcastEvent } from './handlers/broadcast';
 import { initializeWhatsAppBridge } from './services/whatsappBridge';
 import { refreshImportedAiSetup } from './handlers/importedAiSetup';
 import { PRELAUNCH_SECURITY_DISABLE_HTTP_TOOL_EXECUTION } from './securityFlags';
+import { installUnloadedThreadCarrier } from './agentTaskService';
+// Input to a saved thread that is not loaded gives it a fresh app CLI caller.
+installUnloadedThreadCarrier();
 // Resume due schedules and retained inputs even with no conversation tab open.
 if (process.env.NODE_ENV !== 'test') startWakeSources();
 // Return sender-attributed turn outcomes through the configured command.

@@ -2,7 +2,7 @@
   "name": "interpreter",
   "version": "0.1.24",
   "internalVersion": "0.2.171",
-  "publicVersion": "0.2.235",
+  "publicVersion": "0.2.236",
   "private": true,
   "license": "Apache-2.0",
   "repository": {
@@ -339,6 +339,11 @@
     "zod": "4.6.7"
   },
   "pnpm": {
+    "auditConfig": {
+      "ignoreGhsas": [
+        "GHSA-fc5q-39xc-vjpf"
+      ]
+    },
     "packageExtensions": {
       "@oxidezap/baileyrs@0.0.32": {
         "dependencies": {
