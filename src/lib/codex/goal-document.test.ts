@@ -238,7 +238,12 @@ describe('Workstation consumer for OIX-owned managed Goal documents', () => {
     }) } as unknown as CodexClient;
     await assert.rejects(new CodexService(client).getThreadGoalDocument(threadId),
       { category: 'read_unavailable' });
+    // A Goal that has never had a managed mission reads back with no document.
     client.threadGoalDocumentGet = async () => ({ goal, document: null, content: null });
+    assert.deepEqual(await new CodexService(client).getThreadGoalDocument(threadId),
+      { goal, document: null, content: null });
+    // A document without a Goal is never valid.
+    client.threadGoalDocumentGet = async () => ({ goal: null, document: metadata(), content: documentText });
     await assert.rejects(new CodexService(client).getThreadGoalDocument(threadId),
       { category: 'read_unavailable' });
     client.threadGoalDocumentGet = async () => ({ goal: null, document: null, content: null });
