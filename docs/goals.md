@@ -173,7 +173,7 @@ The route is mounted only when all of these service environment settings are
 present:
 
 - `INTERPRETER_SUPERVISOR_VERIFY_URL`: the HTTPS verification endpoint, for
-  example `https://verifier.example/v1/peer-supervisor-claim`.
+  example `https://verifier.example/v1/supervisor-verify`.
 - `INTERPRETER_SUPERVISOR_VERIFY_AUDIENCE`: the exact origin of that URL, for
   example `https://verifier.example`.
 - `INTERPRETER_SUPERVISOR_TARGET_COMPUTER`: this machine's enrolled name, for
@@ -192,7 +192,7 @@ requested. For each verification the command runs once and receives on
 standard input:
 
 ```json
-{"path":"/v1/peer-supervisor-claim","bodyBase64":"<base64 of the exact request body>"}
+{"path":"/v1/supervisor-verify","bodyBase64":"<base64 of the exact request body>"}
 ```
 
 It must exit 0 within 8 seconds and print at most 2048 bytes: one JSON object

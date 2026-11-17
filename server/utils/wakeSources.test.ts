@@ -36,10 +36,10 @@ describe('durable thread wake sources', () => {
       const wake = await f.make();
       const argvHash = (argv: string[]) => createHash('sha256').update(JSON.stringify(argv)).digest('hex');
       const oldArgv = ['/usr/bin/env', 'PATH=/old/bin:/usr/bin:/bin', '/bin/echo', 'old'];
-      const newArgv = ['/usr/bin/env', 'PATH=/usr/local/lib/interpreterwork-world/bin:/usr/bin:/bin', '/bin/echo', 'old'];
+      const newArgv = ['/usr/bin/env', 'PATH=/opt/example-tools/bin:/usr/bin:/bin', '/bin/echo', 'old'];
       await wake.put({ id: 'provider', threadId: 'thread-1', kind: 'command', argv: oldArgv });
       await wake.ingest('thread-1', 'provider', 'original-event', 'unadmitted input');
-      await expect(wake.retargetPausedCommand('thread-1', 'provider', argvHash(oldArgv), '/old/bin', '/usr/local/lib/interpreterwork-world/bin'))
+      await expect(wake.retargetPausedCommand('thread-1', 'provider', argvHash(oldArgv), '/old/bin', '/opt/example-tools/bin'))
         .rejects.toThrow('Paused command precondition rejected');
       const receipt = await wake.pause('thread-1', 'provider');
       expect(receipt.drain.pendingEvents).toBe(1);
@@ -48,21 +48,21 @@ describe('durable thread wake sources', () => {
         sequence: 0, argvSha256: argvHash(oldArgv), pendingEvents: 1, offeredEvents: 0,
       });
       const before = wake.list('thread-1');
-      await expect(wake.retargetPausedCommand('thread-1', 'provider', argvHash(newArgv), '/old/bin', '/usr/local/lib/interpreterwork-world/bin'))
+      await expect(wake.retargetPausedCommand('thread-1', 'provider', argvHash(newArgv), '/old/bin', '/opt/example-tools/bin'))
         .rejects.toThrow('Paused command precondition rejected');
-      const changed = await wake.retargetPausedCommand('thread-1', 'provider', argvHash(oldArgv), '/old/bin', '/usr/local/lib/interpreterwork-world/bin');
+      const changed = await wake.retargetPausedCommand('thread-1', 'provider', argvHash(oldArgv), '/old/bin', '/opt/example-tools/bin');
       expect(changed).toEqual({ ...before.sources[0], argv: newArgv });
       expect((await wake.pausedCommandMetadata('thread-1', 'provider')).argvSha256)
         .toBe(argvHash(newArgv));
       expect(wake.list('thread-1').events).toEqual(before.events);
       await expect(wake.retargetPausedCommand('thread-1', 'provider', argvHash(oldArgv), '/old/bin', '/another/bin'))
         .rejects.toThrow('Paused command precondition rejected');
-      await expect(wake.retargetPausedCommand('thread-2', 'provider', argvHash(newArgv), '/usr/local/lib/interpreterwork-world/bin', '/another/bin'))
+      await expect(wake.retargetPausedCommand('thread-2', 'provider', argvHash(newArgv), '/opt/example-tools/bin', '/another/bin'))
         .rejects.toThrow('Paused command precondition rejected');
       await expect(wake.retargetPausedCommand('thread-1', 'provider', argvHash(newArgv), '/not-present', '/another/bin'))
         .rejects.toThrow('Paused command precondition rejected');
       await expect(wake.retargetPausedCommand('thread-1', 'provider', argvHash(newArgv),
-        '/usr/local/lib/interpreterwork-world/bin', '/usr/bin'))
+        '/opt/example-tools/bin', '/usr/bin'))
         .rejects.toThrow('Paused command precondition rejected');
       await wake.tick(Date.now() + 60_000);
       expect(f.counts().starts).toBe(0);
@@ -85,7 +85,7 @@ describe('durable thread wake sources', () => {
       (wake as any).save = async () => { throw new Error('simulated uncertain fsync'); };
       await expect(wake.retargetPausedCommand('thread-1', 'provider',
         createHash('sha256').update(JSON.stringify(argv)).digest('hex'),
-        '/old/bin', '/usr/local/lib/interpreterwork-world/bin'))
+        '/old/bin', '/opt/example-tools/bin'))
         .rejects.toThrow('simulated uncertain fsync');
       (wake as any).save = save;
       await expect(wake.pausedCommandMetadata('thread-1', 'provider'))

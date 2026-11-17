@@ -83,6 +83,34 @@ async function fixture(verified: VerifiedSupervisorGrant | null = grant, altered
 }
 
 describe('enrolled supervisor peer route seam', () => {
+  it('reads a Goal without a document only at mission revision zero', async () => {
+    const read = async (missionRevision: number) => {
+      const app = express();
+      const revision = { goalId: '00000000-0000-4000-8000-000000000004', status: 'active' as const,
+        missionRevision, lifecycleRevision: 7 };
+      app.use('/peer', createSupervisorPeerRouter({
+        targetComputer: 'target-1', verify: async () => grant,
+        readGoal: async () => ({ goal: { threadId, status: 'active', objective: 'retained' } as never,
+          revision, document: null }),
+        resumeGoal: async () => { throw new Error('unused'); },
+        readTerminal: async () => { throw new Error('unused'); },
+      }));
+      server = createServer(app);
+      await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('No listener');
+      const response = await fetch(`http://127.0.0.1:${address.port}/peer/threads/${threadId}/goal`);
+      server.close();
+      return { status: response.status, body: await response.json(), revision };
+    };
+    const initial = await read(0);
+    expect(initial.status).toBe(200);
+    expect(initial.body).toEqual({ available: true,
+      goal: { threadId, status: 'active', objective: 'retained' }, revision: initial.revision, document: null });
+    const later = await read(4);
+    expect(later.status).toBe(503);
+    expect(later.body).toEqual({ available: false, category: 'read_unavailable' });
+  });
   it('status update requires exact enrolled grant, active CAS, and a paused/blocked-only change', async () => {
     const expected = { goalId: '00000000-0000-4000-8000-000000000004',
       status: 'active', missionRevision: 4, lifecycleRevision: 7 };

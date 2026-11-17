@@ -77,7 +77,9 @@ export function createSupervisorPeerRouter(options: Readonly<{
       const state = await options.readGoal(req.params.threadId);
       if (!state || (state.goal === null) !== (state.revision === null)) throw new Error('unavailable');
       verifyThreadGoalRevision(state.goal, state.revision, req.params.threadId);
-      if ((state.goal === null) !== (state.document === null) ||
+      // Only a Goal at mission revision zero may be read without a document.
+      if ((state.goal === null && state.document !== null) ||
+          (state.goal !== null && state.document === null && state.revision?.missionRevision !== 0) ||
           state.document && (state.document.missionRevision !== state.revision?.missionRevision ||
             Buffer.byteLength(state.document.content, 'utf8') !== state.document.byteLength ||
             state.document.byteLength > 1_048_576 ||

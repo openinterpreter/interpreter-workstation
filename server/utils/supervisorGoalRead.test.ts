@@ -53,6 +53,22 @@ describe('stable managed supervisor Goal read', () => {
         document: managed, content }),
     }), threadId)).rejects.toThrow('unavailable');
   });
+  it('reads a Goal at mission revision zero without a document, and only that one', async () => {
+    const initial = { ...revision, missionRevision: 0 };
+    const unmanaged = (rev: typeof revision) => reader({
+      getThreadGoalWithRevision: async () => ({ goal, revision: rev }),
+      getThreadGoalDocument: async () => ({ goal, document: null, content: null }),
+    });
+    expect(await readStableSupervisorGoal(unmanaged(initial), threadId))
+      .toEqual({ goal, revision: initial, document: null });
+    // A later mission revision must come with its document.
+    await expect(readStableSupervisorGoal(unmanaged(revision), threadId)).rejects.toThrow('unavailable');
+    // No Goal never has a document.
+    await expect(readStableSupervisorGoal(reader({
+      getThreadGoalWithRevision: async () => ({ goal: null, revision: null }),
+      getThreadGoalDocument: async () => ({ goal: null, document: managed, content }),
+    }), threadId)).rejects.toThrow();
+  });
   it('times out without claiming an absent or cancelled native read; late result is not returned', async () => {
     let finish!: (value: unknown) => void;
     let reads = 0;

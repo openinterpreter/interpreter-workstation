@@ -555,7 +555,7 @@ describe('codexServerRequestApprovals', () => {
 
   test('exact operator-owned native read grants are thread-bound and never broaden to creation or providers', async () => {
     const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
-    agentTabManager.bindThread({ agentId: 'agent-sandra', threadId, callerToken: 'agtok_sandra' });
+    agentTabManager.bindThread({ agentId: 'agent-example', threadId, callerToken: 'agtok_example' });
     setConfigOverride({
       agents: {}, codexApprovalPolicy: 'never',
       nativeMcpReadGrants: [{ threadId, serverName: 'codex_apps', toolName: 'sites.list_sites' }],
@@ -590,7 +590,7 @@ describe('codexServerRequestApprovals', () => {
 
   test('unattended policy declines ungranted native calls without queuing', async () => {
     const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
-    agentTabManager.bindThread({ agentId: 'agent-sandra', threadId, callerToken: 'agtok_sandra' });
+    agentTabManager.bindThread({ agentId: 'agent-example', threadId, callerToken: 'agtok_example' });
     setConfigOverride({ agents: {}, headlessToolApprovalMode: 'fail-closed',
       nativeMcpReadGrants: [{ threadId, serverName: 'codex_apps', toolName: 'sites.get_site' }],
     } as any);

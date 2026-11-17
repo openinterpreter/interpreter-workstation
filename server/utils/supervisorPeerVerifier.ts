@@ -6,6 +6,9 @@ import { encodeSignerProof, parseSignerProof, runSignerCommand, SIGNER_BODY_LIMI
   validateProofHeader, validateSignerCommand, type SignerRunner } from './supervisorPeerSigner';
 
 const ASSERTION_HEADER = 'x-interpreter-supervisor-assertion';
+/** A remote verifier may be starting from idle; a short deadline turns that
+ * into a refusal. The request is refused, never retried, when this elapses. */
+const VERIFY_TIMEOUT_MS = 8_000;
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const TOKEN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
@@ -102,7 +105,7 @@ export function createSupervisorPeerVerifier(config: SupervisorVerifierConfig,
         if (!headers) return null;
         // No Authorization header: the signed proof is the only machine evidence.
         const response = await fetcher(url, { method: 'POST', redirect: 'error',
-          signal: AbortSignal.timeout(4_000), headers, body });
+          signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS), headers, body });
         return await acceptGrant(response, threadId, capability);
       } catch { return null; }
     }
@@ -110,7 +113,7 @@ export function createSupervisorPeerVerifier(config: SupervisorVerifierConfig,
       const token = await identity(config.audience);
       if (token.length > 8_192 || !TOKEN.test(token)) return null;
       const response = await fetcher(url, { method: 'POST', redirect: 'error',
-        signal: AbortSignal.timeout(4_000),
+        signal: AbortSignal.timeout(VERIFY_TIMEOUT_MS),
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ action: 'verify', assertion, targetComputer: config.targetComputer,
           threadId, capability }) });
