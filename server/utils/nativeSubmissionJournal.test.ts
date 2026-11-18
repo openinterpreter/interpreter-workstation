@@ -60,6 +60,63 @@ describe('forward native submission journal', () => {
       expect(parseSubmissionSender({ computer: 'peer-host', thread: 'origin_1', more: 1 })).toBeNull();
     } finally { await rm(root, { recursive: true, force: true }); }
   });
+  test('records a sub-agent refusal as its own terminal phase and keeps older receipts readable', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'native-receipt-refused-'));
+    const parent = '00000000-0000-4000-8000-000000000002';
+    try {
+      const journal = new NativeSubmissionJournal(root);
+      const claimed = await journal.begin(thread, 'refused_1', { computer: 'peer-host' });
+      await expect(journal.advance(claimed!, 'terminal_refused', null)).rejects.toThrow('refusal');
+      await expect(journal.advance(claimed!, 'terminal_no_turn', null,
+        { reason: 'subagent_direct_input_unsupported' })).rejects.toThrow('refusal');
+      await expect(journal.advance(claimed!, 'terminal_refused', 'turn_1',
+        { reason: 'subagent_direct_input_unsupported' })).rejects.toThrow('transition');
+      await journal.advance(claimed!, 'terminal_refused', null,
+        { reason: 'subagent_direct_input_unsupported', parentThreadId: parent });
+      expect(await new NativeSubmissionJournal(root).lookup(thread, 'refused_1')).toMatchObject({
+        phase: 'terminal_refused', turnId: null, reason: 'subagent_direct_input_unsupported',
+        parentThreadId: parent, sender: { computer: 'peer-host' },
+      });
+      await expect(journal.advance(claimed!, 'terminal_no_turn', null)).rejects.toThrow('transition');
+      const unknownParent = await journal.begin(thread, 'refused_2');
+      await journal.advance(unknownParent!, 'terminal_refused', null,
+        { reason: 'subagent_direct_input_unsupported', parentThreadId: null });
+      expect(await journal.lookup(thread, 'refused_2')).not.toHaveProperty('parentThreadId');
+
+      // A receipt written before the refusal phase existed still parses unchanged.
+      const older = await journal.begin(thread, 'older_1');
+      await journal.advance(older!, 'terminal_no_turn', null);
+      const files = await readdir(path.join(root, 'native-submission-receipts'));
+      for (const file of files) {
+        const text = await readFile(path.join(root, 'native-submission-receipts', file), 'utf8');
+        if (!text.includes('older_1')) continue;
+        expect(text).not.toContain('reason');
+        expect(text).not.toContain('parentThreadId');
+      }
+      expect(await journal.lookup(thread, 'older_1')).toMatchObject({ phase: 'terminal_no_turn', turnId: null });
+      expect(await journal.lookup(thread, 'older_1')).not.toHaveProperty('reason');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+  test('rejects a refusal reason on any other phase or an unknown reason', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'native-receipt-refused-'));
+    try {
+      const journal = new NativeSubmissionJournal(root);
+      await journal.begin(thread, 'forged_1');
+      const [filename] = await readdir(path.join(root, 'native-submission-receipts'));
+      const claim = path.join(root, 'native-submission-receipts', filename);
+      const received = JSON.parse((await readFile(claim, 'utf8')).trim());
+      await writeFile(claim, `${JSON.stringify({ ...received, phase: 'terminal_refused', reason: 'other' })}\n`,
+        { flag: 'a' });
+      await expect(journal.lookup(thread, 'forged_1')).rejects.toThrow('Invalid submission receipt');
+      await journal.begin(thread, 'forged_2');
+      const second = (await readdir(path.join(root, 'native-submission-receipts'))).find(name => name !== filename)!;
+      const secondClaim = path.join(root, 'native-submission-receipts', second);
+      const secondReceived = JSON.parse((await readFile(secondClaim, 'utf8')).trim());
+      await writeFile(secondClaim, `${JSON.stringify({ ...secondReceived, phase: 'terminal_no_turn',
+        reason: 'subagent_direct_input_unsupported' })}\n`, { flag: 'a' });
+      await expect(journal.lookup(thread, 'forged_2')).rejects.toThrow('Invalid submission receipt');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
   test('does not turn an invalid persisted row into verified custody or admit a duplicate', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'native-receipt-'));
     try {

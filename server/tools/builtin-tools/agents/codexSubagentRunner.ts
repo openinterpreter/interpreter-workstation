@@ -14,6 +14,7 @@ import { buildGroqProxyBaseUrl, routeGroqProfileThroughProxy } from '../../../ut
 import { getServerPort } from '../../../utils/serverPort';
 import { getCurrentWorkspace } from '../../../utils/workspace';
 import type { StreamSkillReference } from '../../../../src/lib/codex/api-types';
+import { SubagentDirectInputError } from '../../../../src/lib/codex/subagent-input';
 
 export interface RunCodexSubagentOptions {
   message: string;
@@ -291,6 +292,10 @@ export async function runCodexSubagent(options: RunCodexSubagentOptions): Promis
       completed: false,
       timestamp: new Date().toISOString(),
       error: error?.message || String(error),
+      // A sub-agent thread refuses direct input; its caller must address the parent.
+      ...(error instanceof SubagentDirectInputError && {
+        refusal: { code: error.code, threadId: error.threadId, parentThreadId: error.parentThreadId },
+      }),
       hitMaxSteps: false,
     };
   } finally {

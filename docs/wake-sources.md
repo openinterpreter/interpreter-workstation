@@ -76,6 +76,8 @@ Original message text
 
 (`[Sender: peer-host]` when no thread was given.) A request without `sender` is submitted exactly as before.
 
+The core decides whether a thread spawned by another agent thread accepts direct input; the server does not refuse a submission on its own reading of the thread. When the core refuses one (on resume or on turn start), the stream ends with an SSE `error` event carrying `code: "subagent_direct_input_unsupported"`, the `threadId` and its `parentThreadId` (`null` when the thread cannot be read), so the work can be sent to the parent thread instead. The submission receipt records the terminal phase `terminal_refused` with that `reason` and the parent thread ID; nothing was delivered and no outcome is returned.
+
 ### Outcome returns
 
 When a sender-attributed submission starts its native turn, the server records it in a separate private file, `outcome-returns.json`, next to `wake-sources.json` (atomically replaced, mode 0600). Entries are `watching` until the core reports that turn ended, then `pending` with its outcome (`completed`, `failed` or `interrupted`) and the turn's final assistant message, truncated to 3,000 characters. On startup, each `watching` entry is checked once against native thread history in case its turn ended while the server was down.

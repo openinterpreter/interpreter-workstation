@@ -11,6 +11,7 @@ import {
   type UnloadedThreadCarrierProvider,
 } from '../src/lib/codex/service';
 import type { JsonValue } from './handlers/codex-generated-types/serde_json/JsonValue';
+import type { SubagentInputRefusal } from '../src/lib/codex/subagent-input';
 import {
   ensureOpenAIOAuthAccountReady,
   resolveAgentInterpreterCliTransport,
@@ -80,6 +81,8 @@ export interface AgentTaskResult {
   messageCount: number;
   messages: any[];
   error?: string;
+  /** Set when the target thread refused the input before any native turn. */
+  refusal?: SubagentInputRefusal;
   agentId?: string;
   requestId?: string;
   threadId?: string;
@@ -424,6 +427,7 @@ async function startHeadlessAgentTask(
     messageCount: Array.isArray(result.messages) ? result.messages.length : 0,
     messages: Array.isArray(result.messages) ? result.messages : [],
     error: result.error,
+    ...(result.refusal && { refusal: result.refusal }),
     hitMaxSteps: result.hitMaxSteps,
     threadPath: result.threadPath,
   };

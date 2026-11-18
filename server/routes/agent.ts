@@ -3,6 +3,8 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { nativeSubmissionJournal, parseSubmissionSender, senderHeader, submissionTerminalPhase, SUBMISSION_ID,
   type SubmissionSender } from '../utils/nativeSubmissionJournal';
+import { SUBAGENT_DIRECT_INPUT_UNSUPPORTED, SubagentDirectInputError, type SubagentInputRefusal }
+  from '../../src/lib/codex/subagent-input';
 import { PausedCommandConflictError, wakeTokenValid } from '../utils/wakeSources';
 import { readyWakeSources, wakeSources } from '../utils/wakeSourcesRuntime';
 import { outcomeReturns, readyOutcomeReturns, watchOutcomeReturn } from '../utils/outcomeReturnsRuntime';
@@ -800,7 +802,9 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
         const recorded = clientUserMessageId
           ? await nativeSubmissionJournal.lookup(threadId, clientUserMessageId).catch(() => null) : null;
         return res.status(409).json({ error: 'Submission client ID already recorded; inspect exact custody.',
-          ...(recorded && { recorded: { phase: recorded.phase, turnId: recorded.turnId } }) });
+          ...(recorded && { recorded: { phase: recorded.phase, turnId: recorded.turnId,
+            ...(recorded.reason && { reason: recorded.reason }),
+            ...(recorded.parentThreadId && { parentThreadId: recorded.parentThreadId }) } }) });
       }
     }
   } catch {
@@ -840,9 +844,10 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
   // Fixed, content-free milestones make a lost pre-turn receipt diagnosable.
   // The forward receipt remains authoritative; these are not admission claims.
   let admissionPhase: 'runtime_config' | 'model_config' | 'task_start' | 'native_turn' = 'runtime_config';
-  const admissionEvent = (status: 'started' | 'completed' | 'failed') => {
+  const admissionEvent = (status: 'started' | 'completed' | 'failed' | 'refused') => {
     if (receipt) console.info(JSON.stringify({ event: 'programmatic_task_admission',
-      requestId: receipt.requestId, phase: admissionPhase, status }));
+      requestId: receipt.requestId, phase: admissionPhase, status,
+      ...(status === 'refused' && { code: SUBAGENT_DIRECT_INPUT_UNSUPPORTED }) }));
   };
   try {
     // An established saved caller already has a scoped OIX shell and model.
@@ -915,16 +920,22 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
     });
 
     await receiptProgress;
-    if (!observedTurn) admissionEvent('failed');
-    else admissionEvent('completed');
-    if (receipt) await nativeSubmissionJournal.advance(receipt,
-      submissionTerminalPhase(result.completed, observedTurn), observedTurnId);
+    const refusal = !observedTurn ? result.refusal : undefined;
+    admissionEvent(observedTurn ? 'completed' : refusal ? 'refused' : 'failed');
+    if (receipt) {
+      if (refusal) await recordSubagentRefusal(receipt, refusal);
+      else await nativeSubmissionJournal.advance(receipt,
+        submissionTerminalPhase(result.completed, observedTurn), observedTurnId);
+    }
     emit('result', result);
-    const unacknowledged = getUnacknowledgedTaskError(result, observedTurn);
-    if (unacknowledged) emit('error', unacknowledged);
+    if (refusal) emit('error', { message: result.error, ...subagentRefusalFields(refusal) });
+    else {
+      const unacknowledged = getUnacknowledgedTaskError(result, observedTurn);
+      if (unacknowledged) emit('error', unacknowledged);
+    }
     res.end();
   } catch (error) {
-    admissionEvent('failed');
+    admissionEvent(!observedTurn && error instanceof SubagentDirectInputError ? 'refused' : 'failed');
     if (receipt && observedTurn) {
       try {
         await receiptProgress;
@@ -932,7 +943,10 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
       } catch { /* Unknown receipt state: never imply absent native admission. */ }
     }
     const message = error instanceof Error ? error.message : String(error);
-    emit('error', { message });
+    if (!observedTurn && error instanceof SubagentDirectInputError) {
+      if (receipt) await recordSubagentRefusal(receipt, error);
+      emit('error', { message, ...subagentRefusalFields(error) });
+    } else emit('error', { message });
     res.end();
   }
 });
@@ -967,6 +981,24 @@ router.get('/threads/:threadId/submissions/:clientUserMessageId/custody', async 
       custodyVerified: false });
   }
 });
+
+/** Fixed, content-free fields of a sub-agent input refusal. The parent thread
+ * ID lets the caller send the work to the thread that can take it. */
+function subagentRefusalFields(refusal: SubagentInputRefusal) {
+  return { code: refusal.code, threadId: refusal.threadId, parentThreadId: refusal.parentThreadId };
+}
+
+/** Record the runtime's refusal: the input was never delivered to a native turn.
+ * An unwritable receipt leaves it at `received`, never implying admission. */
+async function recordSubagentRefusal(
+  receipt: NonNullable<Awaited<ReturnType<typeof nativeSubmissionJournal.begin>>>,
+  refusal: SubagentInputRefusal,
+): Promise<void> {
+  try {
+    await nativeSubmissionJournal.advance(receipt, 'terminal_refused', null,
+      { reason: refusal.code, parentThreadId: refusal.parentThreadId });
+  } catch { /* The caller still receives the refusal. */ }
+}
 
 /** A terminal result is not an admission receipt unless a native turn was observed. */
 export function getUnacknowledgedTaskError(
