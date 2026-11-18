@@ -150,6 +150,21 @@ function writeInterpreterCliStreamLines(
   }
 }
 
+/**
+ * Aborts when the client goes away before the response finished, so tools can
+ * withdraw approval requests nobody is waiting for. Listens on the response:
+ * the request's close event can fire as soon as its body has been read.
+ */
+export function abortWhenCallerLeaves(
+  res: Pick<Response, 'on'> & { readonly writableFinished: boolean },
+): AbortController {
+  const callerGone = new AbortController();
+  res.on('close', () => {
+    if (!res.writableFinished) callerGone.abort();
+  });
+  return callerGone;
+}
+
 function writeInterpreterCliStreamResult(res: Response, result: unknown): void {
   res.write(`result ${JSON.stringify(result ?? null)}\n`);
 }
@@ -275,6 +290,8 @@ router.post('/tools/:serverId/:toolName/stream', async (req: Request, res: Respo
   res.setHeader('X-Accel-Buffering', 'no');
   (res as FlushableResponse).flushHeaders?.();
 
+  const callerGone = abortWhenCallerLeaves(res);
+
   try {
     const { callInterpreterCliTool } = await loadInterpreterCliHandlers();
     const result = await callInterpreterCliTool({
@@ -284,6 +301,7 @@ router.post('/tools/:serverId/:toolName/stream', async (req: Request, res: Respo
       args: req.body,
       saveToDisk,
       saveToDiskPath,
+      approvalAbortSignal: callerGone.signal,
       // Keep the stream line-oriented so the generated shell launchers can
       // surface progress without depending on jq, node, or other parsers.
       onProgress: (text) => {
