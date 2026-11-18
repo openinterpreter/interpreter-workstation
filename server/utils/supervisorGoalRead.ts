@@ -30,11 +30,11 @@ export async function readStableSupervisorGoal(reader: Reader, threadId: string,
   if (!isDeepStrictEqual(first, last) ||
       !isDeepStrictEqual(first.goal, document.goal) ||
       (first.goal === null && document.document !== null) ||
-      // A Goal that has never had a managed mission is at mission revision
-      // zero and has no document; any later revision must carry its own.
-      (first.goal !== null && (document.document === null
-        ? first.revision?.missionRevision !== 0
-        : document.document.missionRevision !== first.revision?.missionRevision))) {
+      // An objective change advances the mission revision without writing a
+      // document, so a Goal may have none, or one from an earlier revision.
+      // A document can never be newer than the Goal it belongs to.
+      (first.goal !== null && document.document !== null &&
+        document.document.missionRevision > (first.revision?.missionRevision ?? -1))) {
     throw Error('Goal read unavailable.');
   }
   verifyGoalDocument(threadId, document.document, document.content);
