@@ -25,6 +25,11 @@ const realCodexService = await import('../../src/lib/codex/service');
 mock.module('../../src/lib/codex/service', () => ({
   ...realCodexService,
   getCodexService: () => ({
+    async resumeThreadGoalWithRevision(id: string, expected: State & { goalId: string;
+      missionRevision: number }) {
+      const { revision } = await this.setThreadGoalWithRevision(id, expected);
+      return { revision, continuation: 'already_loaded' };
+    },
     getThreadGoalWithRevision: async () => {
       const state = read();
       return { goal: { threadId, status: state.status, objective: 'fixture goal' },

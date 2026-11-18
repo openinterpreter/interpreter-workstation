@@ -317,8 +317,10 @@ if (process.env.INTERPRETER_SUPERVISOR_VERIFY_URL &&
       ...(SUPERVISOR_SIGNER ?? {}),
     }),
     readGoal: (id) => readStableSupervisorGoal(getCodexService(), id),
-    resumeGoal: async (id, expected) =>
-      (await getCodexService().setThreadGoalWithRevision(id, expected, { status: 'active' })).revision,
+    resumeGoal: async (id, expected) => {
+      const { revision, continuation } = await getCodexService().resumeThreadGoalWithRevision(id, expected);
+      return { revision, continuation };
+    },
     updateGoalStatus: async (id, expected, status) =>
       (await getCodexService().setThreadGoalWithRevision(id, expected, { status })).revision,
     updateGoalObjective: async (id, expected, objective) =>

@@ -9,7 +9,7 @@ import { authorizeSupervisorPeer, type VerifiedSupervisorGrant,
   type SupervisorPeerTarget } from '../utils/supervisorPeerScope';
 import { threadArtifactReceipts } from '../utils/threadArtifactReceipts';
 import { nativeSubmissionJournal } from '../utils/nativeSubmissionJournal';
-import { getCodexService } from '../../src/lib/codex/service';
+import { getCodexService, type GoalContinuation } from '../../src/lib/codex/service';
 import { createSupervisorGoal, SupervisorGoalCreateError,
   type SupervisorGoalCreateInput } from '../utils/supervisorGoalCreate';
 import { ManagedGoalDocumentError, type ThreadGoalDocument } from '../../src/lib/codex/goal-document';
@@ -27,7 +27,8 @@ export function createSupervisorPeerRouter(options: Readonly<{
   readGoal: (threadId: string) => Promise<GoalState>;
   createGoal?: (threadId: string, input: SupervisorGoalCreateInput) =>
     ReturnType<typeof createSupervisorGoal>;
-  resumeGoal: (threadId: string, expected: ThreadGoalRevision) => Promise<ThreadGoalRevision>;
+  resumeGoal: (threadId: string, expected: ThreadGoalRevision) =>
+    Promise<{ revision: ThreadGoalRevision; continuation: GoalContinuation }>;
   updateGoalStatus?: (threadId: string, expected: ThreadGoalRevision,
     status: 'paused' | 'blocked') => Promise<ThreadGoalRevision>;
   updateGoalObjective?: (threadId: string, expected: ThreadGoalRevision,
@@ -119,8 +120,10 @@ export function createSupervisorPeerRouter(options: Readonly<{
         return void res.status(400).json(denied('invalid_revision'));
       }
       // Native CAS owns the mutation. A transport failure is UNKNOWN, never a retry authorization.
-      const revision = await options.resumeGoal(req.params.threadId, expected);
-      return void res.json({ available: true, revision });
+      // After a confirmed CAS the Goal is active; `continuation` says whether a
+      // live thread owns it, and `not_started` is still a successful resume.
+      const { revision, continuation } = await options.resumeGoal(req.params.threadId, expected);
+      return void res.json({ available: true, revision, continuation });
     } catch (error) {
       if (error instanceof GoalRevisionConflictError) {
         return void res.status(409).json(denied('stale_revision'));

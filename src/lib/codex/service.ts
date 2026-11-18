@@ -261,6 +261,17 @@ type ResumeThreadOptions = {
   coldShellPolicy?: boolean;
 };
 
+/** Whether a live thread owns an active Goal after it was resumed.
+ * - `loaded`: the thread was not loaded and has now been loaded; the runtime
+ *   starts the Goal's continuation turn once the thread is idle.
+ * - `already_loaded`: the thread was loaded and idle; the runtime applies the
+ *   status change itself and continues the Goal.
+ * - `already_running`: a turn was running; no other turn is started and the
+ *   Goal continues after it.
+ * - `not_started`: the thread could not be confirmed loaded. The Goal is
+ *   active, but nothing runs it until the thread is loaded. */
+export type GoalContinuation = 'loaded' | 'already_loaded' | 'already_running' | 'not_started';
+
 type ExistingThreadResumeOptions = {
   threadId: string;
   modelProvider?: string | null;
@@ -1832,6 +1843,51 @@ export class CodexService {
     } finally {
       if (deadline) clearTimeout(deadline);
     }
+  }
+
+  /** Resume a stopped Goal with native CAS, then make sure the runtime can
+   * continue it. A CAS conflict or unknown outcome throws before any thread is
+   * touched. After a confirmed CAS the Goal is active whatever happens next;
+   * `continuation` only reports whether a live thread now owns it. */
+  async resumeThreadGoalWithRevision(threadId: string, expected: ThreadGoalRevision): Promise<{
+    goal: v2.ThreadGoal; revision: ThreadGoalRevision; continuation: GoalContinuation;
+  }> {
+    const result = await this.setThreadGoalWithRevision(threadId, expected, { status: 'active' });
+    return { ...result, continuation: await this.ensureGoalContinuation(threadId) };
+  }
+
+  /** The runtime continues an active Goal only in a loaded thread: a Goal
+   * status change on a thread that is not loaded is stored and nothing runs
+   * it. Loading the thread lets the runtime start the continuation turn when
+   * the thread is idle. A loaded thread is never resumed again, so this never
+   * adds a second turn beside one already running. */
+  async ensureGoalContinuation(threadId: string): Promise<GoalContinuation> {
+    const notStarted = (cause: string, nativeCode: number | null = null) => {
+      console.warn('[Goal continuation]', JSON.stringify({ threadId, continuation: 'not_started',
+        cause, nativeCode }));
+      return 'not_started' as const;
+    };
+    let thread: v2.Thread;
+    try {
+      ({ thread } = await this.client.threadRead({ threadId, includeTurns: false }));
+    } catch {
+      return notStarted('thread_read_unavailable');
+    }
+    if (thread.id !== threadId) return notStarted('thread_identity_mismatch');
+    if (thread.status.type === 'active') return 'already_running';
+    if (thread.status.type === 'idle') return 'already_loaded';
+    if (thread.status.type !== 'notLoaded') return notStarted('thread_unavailable');
+    try {
+      // The same resume ordinary input to a saved, unloaded thread uses.
+      await this.resumeExistingThreadForInput({ threadId, cwd: thread.cwd,
+        config: { mcp_servers: {} } }, false, { cwd: thread.cwd });
+    } catch (error) {
+      return notStarted('thread_resume_failed',
+        error && typeof error === 'object' && 'code' in error && Number.isSafeInteger(error.code)
+          ? error.code as number : null);
+    }
+    console.info('[Goal continuation]', JSON.stringify({ threadId, continuation: 'loaded' }));
+    return 'loaded';
   }
 
   /** Full mission bytes remain in OIX's owned state directory, not an app file. */

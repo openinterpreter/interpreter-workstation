@@ -24,7 +24,8 @@ let server: Server | undefined;
 afterEach(() => server?.close());
 
 async function fixture(verified: VerifiedSupervisorGrant | null = grant, alteredDocument = false,
-  resumeError?: Error) {
+  resumeError?: Error, continuation: 'loaded' | 'already_loaded' | 'already_running' |
+    'not_started' = 'loaded') {
   const calls = { goal: 0, create: 0, resume: 0, update: 0, objective: 0, document: 0,
     terminal: 0, terminalList: 0,
     artifact: 0, submission: 0 };
@@ -43,7 +44,7 @@ async function fixture(verified: VerifiedSupervisorGrant | null = grant, altered
     createGoal: async () => { calls.create++; throw new Error('creation outcome unknown'); },
     resumeGoal: async (_thread, expected) => { calls.resume++;
       if (resumeError) throw resumeError;
-      return { ...expected, status: 'active' }; },
+      return { revision: { ...expected, status: 'active' }, continuation }; },
     updateGoalStatus: async (_thread, expected, status) => { calls.update++;
       if (resumeError) throw resumeError;
       return { ...expected, status, lifecycleRevision: expected.lifecycleRevision + 1 }; },
@@ -456,7 +457,7 @@ describe('enrolled supervisor peer route seam', () => {
     const accepted = await request(expected);
     expect(accepted.status).toBe(200);
     expect(await accepted.json()).toEqual({ available: true,
-      revision: { ...expected, status: 'active' } });
+      revision: { ...expected, status: 'active' }, continuation: 'loaded' });
     expect(calls.resume).toBe(1);
     // A usage-limited Goal resumes the same way; active and complete do not.
     const limited = await request({ ...expected, status: 'usageLimited' });
@@ -466,6 +467,18 @@ describe('enrolled supervisor peer route seam', () => {
       expect((await request({ ...expected, status })).status).toBe(400);
     }
     expect(calls.resume).toBe(2);
+  });
+  it('reports a Goal that no live thread owns as resumed, with its continuation not started', async () => {
+    const { base, calls } = await fixture(grant, false, undefined, 'not_started');
+    const expected = { goalId: '00000000-0000-4000-8000-000000000004',
+      status: 'blocked', missionRevision: 4, lifecycleRevision: 7 };
+    const response = await fetch(`${base}/goal/resume`, { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify({ expected }) });
+    // The native Goal did change; a failed thread load is not a failed resume.
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ available: true,
+      revision: { ...expected, status: 'active' }, continuation: 'not_started' });
+    expect(calls.resume).toBe(1);
   });
   it('reports only an authoritative native CAS conflict as stale, never private text or a successful resume', async () => {
     const expected = { goalId: '00000000-0000-4000-8000-000000000004',
