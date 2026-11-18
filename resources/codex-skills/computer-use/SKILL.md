@@ -27,7 +27,7 @@ capture, and control.
 The tool surface is app-scoped and intentionally matches Computer Use:
 
 - `list_apps({})`
-- `launch_app({app?, name?, bundle_id?, path?, executable?, urls?})`
+- `launch_app({app?, name?, bundle_id?, path?, urls?})`
 - `get_app_state({app})`
 - `click({app, element_index?, x?, y?, click_count?, mouse_button?})`
 - `drag({app, from_x, from_y, to_x, to_y})`
@@ -41,6 +41,16 @@ Use `launch_app` only when the target app is not already open or the user asks
 to open it. Start ordinary interaction with `get_app_state({app})` when the
 target app is known. Use `list_apps({})` only when the target app name is
 unclear.
+
+`launch_app` arguments differ by platform:
+
+- macOS: identify the app with `bundle_id` (preferred) or `app`/`name` (the
+  installed app name). `urls` are files or URLs opened with that app. `path` is
+  not supported.
+- Linux: pass `path` with an absolute executable path, or `app`/`name` with a
+  command or app name. `path` is split on whitespace into a program and its
+  arguments, so it cannot contain spaces. `urls` are opened with their default
+  handlers instead of a named app. `bundle_id` is ignored.
 
 `get_app_state` returns a screenshot plus a text block shaped like:
 

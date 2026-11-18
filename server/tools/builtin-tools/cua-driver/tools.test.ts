@@ -8,6 +8,7 @@ import {
   classifyCuaDriverServeStartupOutputForTest,
   clearComputerUseTargetCacheForTest,
   computerUseToolContractForTest,
+  ensureCuaDriverDaemonForTest,
   enrichListWindowsResponseWithTargetIdentityForTest,
   filterProtectedDesktopTargetsFromTextForTest,
   formatComputerUseTreeMarkdownForModelForTest,
@@ -186,6 +187,26 @@ describe('Computer Use tool contract', () => {
     expect(isCuaDriverSupportedPlatform('freebsd')).toBe(false);
     expect(nativeLaunchAppArgsForTest({ app: 'Browser' })).toEqual({ name: 'Browser' });
     expect(nativeLaunchAppArgsForTest({ app: 'Browser', name: 'Other' })).toEqual({ name: 'Other' });
+  });
+
+  test('maps a launch_app path onto the argument each native driver accepts', () => {
+    expect(nativeLaunchAppArgsForTest({ path: '/opt/app/AppRun' }, 'linux'))
+      .toEqual({ launch_path: '/opt/app/AppRun' });
+    expect(nativeLaunchAppArgsForTest({ executable: '/usr/bin/gedit' }, 'linux'))
+      .toEqual({ launch_path: '/usr/bin/gedit' });
+    expect(nativeLaunchAppArgsForTest({ path: '/opt/a', executable: '/opt/b' }, 'linux'))
+      .toEqual({ launch_path: '/opt/a' });
+    expect(nativeLaunchAppArgsForTest({ path: '/opt/a', launch_path: '/opt/b' }, 'linux'))
+      .toEqual({ launch_path: '/opt/b' });
+    expect(nativeLaunchAppArgsForTest({ app: 'gedit', urls: ['https://example.com'] }, 'linux'))
+      .toEqual({ name: 'gedit', urls: ['https://example.com'] });
+
+    expect(nativeLaunchAppArgsForTest({ bundle_id: 'com.apple.TextEdit', path: '/Applications/TextEdit.app' }, 'darwin'))
+      .toEqual({ bundle_id: 'com.apple.TextEdit' });
+    expect(nativeLaunchAppArgsForTest({ app: 'TextEdit', executable: '/x' }, 'darwin'))
+      .toEqual({ name: 'TextEdit' });
+    expect(() => nativeLaunchAppArgsForTest({ path: '/Applications/TextEdit.app' }, 'darwin'))
+      .toThrow('launch_app on macOS identifies the app by bundle_id or name');
   });
   test('exposes the MCP-shaped app-scoped tool surface', () => {
     const contract = computerUseToolContractForTest();
@@ -1953,6 +1974,46 @@ describe('Computer Use calls never wait without bound', () => {
         .rejects.toThrow('Computer Use daemon did not become reachable within 1s.');
       expect(Date.now() - startedAt).toBeLessThan(3_000);
     } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(process.platform !== 'linux')('starts the driver daemon without Interpreter internal variables', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cua-daemon-env-test-'));
+    const driver = path.join(root, 'driver');
+    const envOut = path.join(root, 'daemon-env.txt');
+    fs.writeFileSync(driver, [
+      '#!/bin/sh',
+      'if [ "$1" = "serve" ]; then',
+      `  env > '${envOut}'`,
+      '  echo "daemon listening on test socket"',
+      '  exec sleep 30',
+      'fi',
+      'exit 0',
+      '',
+    ].join('\n'), { mode: 0o755 });
+    const names = ['INTERPRETER_USER_DATA_DIR', 'LOG_FILE', 'SENTRY_ENVIRONMENT', 'CUA_DRIVER_RS_ENABLE_WAYLAND'] as const;
+    const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    process.env.INTERPRETER_USER_DATA_DIR = path.join(root, 'user-data');
+    process.env.LOG_FILE = path.join(root, 'main.log');
+    process.env.SENTRY_ENVIRONMENT = 'test';
+    process.env.CUA_DRIVER_RS_ENABLE_WAYLAND = '1';
+    await shutdownCuaDriverProcesses();
+    try {
+      await ensureCuaDriverDaemonForTest(driver);
+      const daemonEnv = fs.readFileSync(envOut, 'utf-8').split('\n');
+      expect(daemonEnv.some((line) => line.startsWith('INTERPRETER_USER_DATA_DIR='))).toBe(false);
+      expect(daemonEnv.some((line) => line.startsWith('LOG_FILE='))).toBe(false);
+      expect(daemonEnv.some((line) => line.startsWith('SENTRY_ENVIRONMENT='))).toBe(false);
+      expect(daemonEnv).toContain('CUA_DRIVER_RS_ENABLE_WAYLAND=1');
+      expect(daemonEnv.some((line) => line.startsWith('PATH='))).toBe(true);
+      expect(process.env.INTERPRETER_USER_DATA_DIR).toBe(path.join(root, 'user-data'));
+    } finally {
+      await shutdownCuaDriverProcesses();
+      for (const name of names) {
+        if (previous[name] === undefined) delete process.env[name];
+        else process.env[name] = previous[name];
+      }
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
