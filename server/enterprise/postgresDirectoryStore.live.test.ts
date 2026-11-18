@@ -130,6 +130,10 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
           action: 'organization.member.deactivate', outcome: 'denied' });
         // A real PostgreSQL audit-write failure must roll back the session
         // mutation, not merely produce a 503 after revocation committed.
+        const rollbackBinding = 'audit-outage-browser';
+        await a.putAttempt('audit-outage-attempt', { organizationId: 'rls-a', issuer: 'https://issuer.invalid/a',
+          nonce: 'outage-nonce', verifier: 'outage-verifier',
+          bindingHash: createHash('sha256').update(rollbackBinding).digest('hex'), expiresAt: Date.now() + 60_000 });
         const auditBefore = (await poolA.query('SELECT id FROM public.interpreter_enterprise_rls_audit')).rowCount;
         const auditGrant = (verb: 'REVOKE' | 'GRANT') => spawnSync('/usr/lib/postgresql/14/bin/psql',
           ['-X', '-q', '-v', 'ON_ERROR_STOP=1', '-h', process.env.ENTERPRISE_TEST_DB_FIXTURE!,
@@ -149,6 +153,10 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
         expect(await a.verifySession(sessionA.token)).not.toBeNull();
         expect(await aOther.verifySession(worker.token)).not.toBeNull();
         expect((await b.verifySession(sessionB.token))?.organizationId).toBe('rls-b');
+        const preserved = await aOther.takeAttempt('audit-outage-attempt', rollbackBinding);
+        expect(preserved?.authEpoch).toBe(0); // Rollback must not advance the login fence or delete attempts.
+        expect((await a.createSession('https://issuer.invalid/a', 'rls-a', 'alice', Date.now() + 60_000,
+          preserved!.authEpoch ?? 0)).identity.organizationId).toBe('rls-a');
       } finally { httpA.close(); httpB.close(); }
       await aOther.revokeSession(sessionA.identity);
       expect(await a.verifySession(sessionA.token)).toBeNull();
@@ -714,16 +722,30 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
       expect((await activity('tenant-a', admin.token)).status).toBe(403);
       const freshAdmin = await a.createSession('https://synthetic.invalid/a', 'tenant-a', 'admin-a', Date.now() + 60_000);
       const secondAdmin = await b.createSession('https://synthetic.invalid/a', 'tenant-a', 'admin-a', Date.now() + 60_000);
+      const browserBinding = 'synthetic-browser-binding';
+      const attempt = { organizationId: 'tenant-a', issuer: 'https://synthetic.invalid/a',
+        nonce: 'synthetic-nonce', verifier: 'synthetic-verifier',
+        bindingHash: createHash('sha256').update(browserBinding).digest('hex'), expiresAt: Date.now() + 60_000 };
+      await a.putAttempt('pending-before-kill', attempt);
+      await a.putAttempt('inflight-before-kill', attempt);
+      const inFlight = await b.takeAttempt('inflight-before-kill', browserBinding);
+      expect(inFlight?.authEpoch).toBe(0); // Already consumed by a second host before revocation.
       const emergency = '/api/enterprise/organizations/tenant-a/sessions/revoke-all';
       const emergencyResult = await post(emergency, freshAdmin.token);
       expect(emergencyResult.status).toBe(204);
       expect(emergencyResult.headers['set-cookie'][0]).toContain('interpreter-enterprise-session=;');
       expect(await a.verifySession(freshAdmin.token)).toBeNull();
       expect(await b.verifySession(secondAdmin.token)).toBeNull(); // Independent TLS pool observes the kill.
+      expect(await b.takeAttempt('pending-before-kill', browserBinding)).toBeNull();
+      await expect(b.createSession('https://synthetic.invalid/a', 'tenant-a', 'admin-a', Date.now() + 60_000,
+        inFlight!.authEpoch ?? 0)).rejects.toThrow('login epoch mismatch');
       expect((await overview('tenant-a', secondAdmin.token)).status).toBe(403);
       expect((await request(httpB).get('/api/enterprise/organizations/tenant-b/overview')
         .set('Host', '127.0.0.1:39394').set('Cookie', `interpreter-enterprise-session=${other.token}`)).status).toBe(200);
-      expect((await b.listAudit((await b.createSession('https://synthetic.invalid/a', 'tenant-a', 'admin-a', Date.now() + 60_000)).identity))
+      await a.putAttempt('fresh-after-kill', attempt);
+      const freshAttempt = await b.takeAttempt('fresh-after-kill', browserBinding);
+      expect(freshAttempt?.authEpoch).toBe(1);
+      expect((await b.listAudit((await b.createSession('https://synthetic.invalid/a', 'tenant-a', 'admin-a', Date.now() + 60_000, 1)).identity))
         .some((event) => event.action === 'organization.sessions.revoke-all' && event.outcome === 'allowed')).toBe(true);
       // Stop the disposable server while both hosts still have session pools.
       await first.end();

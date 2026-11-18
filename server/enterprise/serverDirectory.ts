@@ -8,9 +8,9 @@ import { evaluateTenantPolicy } from './tenantPolicy';
 
 type Audit = { organizationId: string; subject: string; targetSubject?: string; targetOrganizationId?: string;
   action: string; outcome: 'allowed' | 'denied'; at: string };
-type Attempt = { organizationId: string; issuer: string; nonce: string; verifier: string; bindingHash: string; expiresAt: number };
+type Attempt = { organizationId: string; issuer: string; nonce: string; verifier: string; bindingHash: string; expiresAt: number; authEpoch?: number };
 type Session = { organizationId: string; issuer: string; subject: string; expiresAt: number; revoked: boolean };
-export type DirectoryState = { version: 1; organizations: Record<string, { name: string; issuer: string; members: Record<string, OrganizationMember> }>;
+export type DirectoryState = { version: 1; organizations: Record<string, { name: string; issuer: string; members: Record<string, OrganizationMember>; authEpoch?: number }>;
   attempts: Record<string, Attempt>; sessions: Record<string, Session>; audit: Audit[] };
 type Data = DirectoryState;
 export const MAX_DIRECTORY_BYTES = 8_000_000;
@@ -36,7 +36,8 @@ export function validateDirectoryState(data: Data): void {
       !record(data.attempts) || !Array.isArray(data.audit)) throw new Error('Directory state is invalid');
   for (const [id, org] of Object.entries(data.organizations)) {
     if (!key(id) || !record(org) || typeof org.name !== 'string' || !org.name.trim() ||
-        typeof org.issuer !== 'string' || !org.issuer || !record(org.members)) throw new Error('Directory organization is invalid');
+        typeof org.issuer !== 'string' || !org.issuer || !record(org.members) ||
+        (org.authEpoch !== undefined && (!Number.isSafeInteger(org.authEpoch) || org.authEpoch < 0))) throw new Error('Directory organization is invalid');
     for (const [subject, member] of Object.entries(org.members)) {
       if (!key(subject) || !record(member) || member.organizationId !== id || member.subject !== subject ||
           typeof member.displayName !== 'string' || !member.displayName.trim() ||
@@ -50,7 +51,8 @@ export function validateDirectoryState(data: Data): void {
         data.organizations[attempt.organizationId as string]?.issuer !== attempt.issuer ||
         typeof attempt.nonce !== 'string' || !attempt.nonce || typeof attempt.verifier !== 'string' || !attempt.verifier ||
         typeof attempt.bindingHash !== 'string' || !/^[a-f0-9]{64}$/.test(attempt.bindingHash) ||
-        typeof attempt.expiresAt !== 'number' || !Number.isFinite(attempt.expiresAt)) throw new Error('Directory attempt is invalid');
+        typeof attempt.expiresAt !== 'number' || !Number.isFinite(attempt.expiresAt) ||
+        (attempt.authEpoch !== undefined && (!Number.isSafeInteger(attempt.authEpoch) || attempt.authEpoch < 0))) throw new Error('Directory attempt is invalid');
   }
   for (const [hash, session] of Object.entries(data.sessions)) {
     if (!/^[a-f0-9]{64}$/.test(hash) || !record(session) || !key(session.organizationId as string) ||
@@ -162,7 +164,7 @@ export class ServerDirectory implements EnterpriseDirectory {
     if (!key(organizationId) || !key(admin.subject) || admin.organizationId !== organizationId || !admin.active || admin.role !== 'admin' || !name.trim() || !issuer) throw new Error('Invalid bootstrap');
     await this.change((data) => {
       if (data.organizations[organizationId]) throw new Error('Organization already exists');
-      data.organizations[organizationId] = { name: name.trim(), issuer, members: dictionary({ [admin.subject]: admin }) };
+      data.organizations[organizationId] = { name: name.trim(), issuer, members: dictionary({ [admin.subject]: admin }), authEpoch: 0 };
       data.audit.push({ organizationId, subject: admin.subject, action: 'organization.bootstrap', outcome: 'allowed', at: new Date().toISOString() });
     }, true);
   }
@@ -315,6 +317,14 @@ export class ServerDirectory implements EnterpriseDirectory {
           action: 'organization.sessions.revoke-all', outcome: 'denied', at: new Date().toISOString() });
         return null;
       }
+      const epoch = org.authEpoch ?? 0; // Legacy state without an epoch starts at zero.
+      if (!Number.isSafeInteger(epoch + 1)) throw new Error('Organization login epoch exhausted');
+      org.authEpoch = epoch + 1;
+      // A callback which already consumed its attempt is still fenced at
+      // createSession below, after its possibly slow IdP code exchange.
+      for (const [state, attempt] of Object.entries(data.attempts)) {
+        if (attempt.organizationId === actor.organizationId) delete data.attempts[state];
+      }
       let count = 0;
       for (const session of Object.values(data.sessions)) {
         if (session.organizationId === actor.organizationId && !session.revoked) {
@@ -330,11 +340,12 @@ export class ServerDirectory implements EnterpriseDirectory {
     return revoked;
   }
 
-  async putAttempt(state: string, attempt: Attempt): Promise<void> {
+  async putAttempt(state: string, attempt: Omit<Attempt, 'authEpoch'>): Promise<void> {
     if (!key(state) || !key(attempt.organizationId) || !attempt.nonce || !attempt.verifier || !attempt.bindingHash) throw new Error('Invalid attempt');
     await this.change((data) => {
-      if (data.organizations[attempt.organizationId]?.issuer !== attempt.issuer || data.attempts[state]) throw new Error('Unknown organization, issuer, or duplicate state');
-      data.attempts[state] = attempt;
+      const org = data.organizations[attempt.organizationId];
+      if (org?.issuer !== attempt.issuer || data.attempts[state]) throw new Error('Unknown organization, issuer, or duplicate state');
+      data.attempts[state] = { ...attempt, authEpoch: org.authEpoch ?? 0 };
     });
   }
 
@@ -343,7 +354,8 @@ export class ServerDirectory implements EnterpriseDirectory {
     return this.change((data) => {
       const attempt = data.attempts[state];
       delete data.attempts[state]; // consume even when binding is wrong
-      if (!attempt || attempt.expiresAt <= Date.now() || !eq(attempt.bindingHash, digest(binding))) return null;
+      if (!attempt || attempt.expiresAt <= Date.now() || !eq(attempt.bindingHash, digest(binding)) ||
+          (attempt.authEpoch ?? 0) !== (data.organizations[attempt.organizationId]?.authEpoch ?? 0)) return null;
       return attempt;
     });
   }
@@ -364,13 +376,16 @@ export class ServerDirectory implements EnterpriseDirectory {
     });
   }
 
-  async createSession(issuer: string, organizationId: string, subject: string, expiry: number): Promise<{ token: string; identity: VerifiedIdentity }> {
-    if (!key(organizationId) || !key(subject) || !issuer || expiry <= Date.now() || expiry > Date.now() + 8 * 60 * 60_000) throw new Error('Invalid session');
+  async createSession(issuer: string, organizationId: string, subject: string, expiry: number,
+    expectedAuthEpoch = 0): Promise<{ token: string; identity: VerifiedIdentity }> {
+    if (!key(organizationId) || !key(subject) || !issuer || expiry <= Date.now() || expiry > Date.now() + 8 * 60 * 60_000 ||
+        !Number.isSafeInteger(expectedAuthEpoch) || expectedAuthEpoch < 0) throw new Error('Invalid session');
     const token = randomBytes(32).toString('base64url');
     const sessionId = digest(token);
     await this.change((data) => {
       const member = data.organizations[organizationId]?.members[subject];
-      if (!member?.active || member.organizationId !== organizationId || data.organizations[organizationId]?.issuer !== issuer) throw new Error('Unprovisioned identity or issuer mismatch');
+      if (!member?.active || member.organizationId !== organizationId || data.organizations[organizationId]?.issuer !== issuer ||
+          (data.organizations[organizationId]?.authEpoch ?? 0) !== expectedAuthEpoch) throw new Error('Unprovisioned identity, issuer, or login epoch mismatch');
       data.sessions[sessionId] = { issuer, organizationId, subject, expiresAt: expiry, revoked: false };
       data.audit.push({ organizationId, subject, action: 'session.create', outcome: 'allowed', at: new Date().toISOString() });
     });
