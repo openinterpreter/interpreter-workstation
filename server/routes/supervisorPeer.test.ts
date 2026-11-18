@@ -83,7 +83,7 @@ async function fixture(verified: VerifiedSupervisorGrant | null = grant, altered
 }
 
 describe('enrolled supervisor peer route seam', () => {
-  it('reads a Goal without a document only at mission revision zero', async () => {
+  it('reads a Goal without a document at any mission revision', async () => {
     const read = async (missionRevision: number) => {
       const app = express();
       const revision = { goalId: '00000000-0000-4000-8000-000000000004', status: 'active' as const,
@@ -108,8 +108,10 @@ describe('enrolled supervisor peer route seam', () => {
     expect(initial.body).toEqual({ available: true,
       goal: { threadId, status: 'active', objective: 'retained' }, revision: initial.revision, document: null });
     const later = await read(4);
-    expect(later.status).toBe(503);
-    expect(later.body).toEqual({ available: false, category: 'read_unavailable' });
+    // An objective change advances the mission revision without a document.
+    expect(later.status).toBe(200);
+    expect(later.body).toEqual({ available: true,
+      goal: { threadId, status: 'active', objective: 'retained' }, revision: later.revision, document: null });
   });
   it('status update requires exact enrolled grant, active CAS, and a paused/blocked-only change', async () => {
     const expected = { goalId: '00000000-0000-4000-8000-000000000004',
