@@ -86,6 +86,8 @@ Delivery uses a host command configured in the Workstation service environment: 
 {"version":1,"id":"<sha256 of threadId:turnId>","to":{"computer":"peer-host","thread":"origin-thread-id"},"from":{"threadId":"...","turnId":"..."},"clientUserMessageId":"...","outcome":"completed","summary":"..."}
 ```
 
+A command that delivers the outcome as a message to the sender's thread must submit it with a client message ID of the form `outcome-<id>`. A submission with that prefix is the delivery of an outcome and is never itself watched; without this, two idle threads would return each other's outcome returns without end.
+
 Exit 0 marks the entry `delivered` (its summary text is then dropped). Any other exit, a spawn failure, or the two-minute timeout counts an attempt and schedules the next one after 1, 2, 4, 8 and then every 15 minutes; after 40 attempts the entry stays visible as `failed`. Delivery is at least once: a restart while a command runs retries it, so the receiving side should deduplicate on `id`. Only add a command you trust.
 
 If the variable is unset or not a non-empty JSON string array, nothing is spawned and entries simply remain `pending`; this is logged once at startup. `GET /api/agent/outcome-returns` lists entries with `id`, `threadId`, `turnId`, `sender`, `status`, `outcome`, `attempts`, `nextAttemptAt` and `updatedAt`, never the summary text. The newest 500 entries are kept; delivered or failed entries are dropped first, and a new watch is refused (and logged) rather than dropping an undelivered one.
