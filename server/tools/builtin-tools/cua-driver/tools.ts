@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { approvalManager } from '../../../approvalManager';
+import { approvalManager, type ApprovalWaitOptions } from '../../../approvalManager';
 import { waitForComputerUseSetupReady } from '../../../computerUseSetupGate';
 import { thumbnailService } from '../../../thumbnailService';
 import { autoApproveOrdinaryHeadlessToolsSync, failClosedOnHeadlessToolApprovalSync, getBrowserAccessPolicy, getCuaAccessPolicy, hasNativeCuaDiscoveryGrant } from '../../../configStore';
@@ -47,9 +47,23 @@ let browserControlStatusProvider: () => Promise<BrowserControlStatus> = getBrows
 let cuaAccessPolicyProvider: () => Promise<CuaAccessPolicy> = getCuaAccessPolicy;
 let browserAccessPolicyProvider: () => Promise<BrowserAccessPolicy> = getBrowserAccessPolicy;
 let windowsCuaDriverToolProvider: WindowsCuaDriverToolProvider = callWindowsCuaDriverTool;
+let cuaDriverBinaryResolver: () => string = () => resolveCuaDriverBinary();
 const macCuaDriverSocketPath = path.join(os.tmpdir(), `interpreter-desktop-driver-${process.pid}.sock`);
 const MAC_CUA_DRIVER_DAEMON_STARTUP_TIMEOUT_MS = 20_000;
 const MAC_CUA_DRIVER_TOOL_TIMEOUT_MS = 60_000;
+// One driver `status` probe; the daemon startup wait keeps its own overall deadline.
+const CUA_DRIVER_STATUS_POLL_TIMEOUT_MS = 2_000;
+// A queued call waits at most one tool timeout for the call ahead of it.
+const COMPUTER_USE_QUEUE_TIMEOUT_MS = MAC_CUA_DRIVER_TOOL_TIMEOUT_MS;
+export const COMPUTER_USE_QUEUE_TIMEOUT_LABEL = 'COMPUTER_USE_QUEUE_TIMEOUT';
+const COMPUTER_USE_UNANSWERABLE_HINT = [
+  'To use Computer Use without an attached client, allow it in the Computer Use access policy',
+  '(Settings > Permissions: cuaAccessPolicy inspect or control mode "all", globally or for this app).',
+  'On an unattended host an operator can instead set headlessToolApprovalMode:',
+  '"ordinary-auto" (with the native approval policy "never") permits ordinary Computer Use for the verified agent thread,',
+  'and "fail-closed" denies such requests immediately.',
+  'Otherwise open Interpreter and retry.',
+].join(' ');
 const MAC_CUA_DRIVER_ACTIVITY_TIMEOUT_MS = 5_000;
 const MAC_CUA_DRIVER_ACTIVITY_MAX_BUFFER = 10 * 1024 * 1024;
 const MAC_CUA_DRIVER_CALL_LOCK_DIR = CUA_PROCESS_LOCK_DIR;
@@ -83,6 +97,22 @@ function automationBackendName(): string {
 
 function approvalAgentId(context?: BuiltinToolContext): string | undefined {
   return context?.agentId || context?.callerTabId;
+}
+
+// Every Computer Use prompt is refused at once when nobody can answer it,
+// reports progress while it waits, and is withdrawn if the caller leaves.
+function computerUseApprovalWaitOptions(
+  context: BuiltinToolContext | undefined,
+  description: string,
+): ApprovalWaitOptions {
+  const reportProgress = context?.reportProgress;
+  return {
+    refuseWhenUnanswerable: { hint: COMPUTER_USE_UNANSWERABLE_HINT },
+    signal: context?.approvalAbortSignal,
+    onPending: reportProgress
+      ? () => reportProgress(`Waiting for user approval to ${description}. Do not retry; this command will continue after approval.`)
+      : undefined,
+  };
 }
 
 const DISCOVERY_TOOLS = new Set([
@@ -2882,6 +2912,7 @@ async function requestWindowsForegroundApprovalForPointerIfNeeded(
     0,
     context?.toolCallId,
     approvalAgentId(context),
+    computerUseApprovalWaitOptions(context, `bring ${quotedTarget} forward`),
   );
   if (!approved) {
     throw new Error(
@@ -2938,6 +2969,7 @@ async function requestMacForegroundApprovalIfNeeded(
     0,
     context?.toolCallId,
     approvalAgentId(context),
+    computerUseApprovalWaitOptions(context, `bring ${quotedTarget} forward`),
   );
   if (!approved) {
     throw new Error(
@@ -3053,10 +3085,36 @@ function wait(ms: number): Promise<void> {
 
 let macCuaDriverCallChain: Promise<void> = Promise.resolve();
 
-async function withMacCuaDriverSerialized<T>(fn: () => Promise<T>): Promise<T> {
-  const run = macCuaDriverCallChain.then(fn, fn);
-  macCuaDriverCallChain = run.then(() => undefined, () => undefined);
+// FIFO within this process. A queued call gives up after a fixed deadline
+// instead of waiting forever behind a call that never finishes; it does not
+// run, and later calls still wait for every call ahead of them.
+async function withMacCuaDriverSerialized<T>(
+  fn: () => Promise<T>,
+  queueTimeoutMs = COMPUTER_USE_QUEUE_TIMEOUT_MS,
+): Promise<T> {
+  const previous = macCuaDriverCallChain;
+  const run = (async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const turn = await Promise.race([
+      previous.then(() => true),
+      new Promise<false>((resolve) => { timer = setTimeout(() => resolve(false), queueTimeoutMs); }),
+    ]);
+    clearTimeout(timer);
+    if (!turn) {
+      throw new Error(
+        `${COMPUTER_USE_QUEUE_TIMEOUT_LABEL}: An earlier Computer Use action did not finish within `
+        + `${Math.round(queueTimeoutMs / 1000)}s, so this action was not sent. Retry after it completes.`,
+      );
+    }
+    return fn();
+  })();
+  const settled = run.then(() => undefined, () => undefined);
+  macCuaDriverCallChain = Promise.all([previous, settled]).then(() => undefined);
   return run;
+}
+
+export function withMacCuaDriverSerializedForTest<T>(fn: () => Promise<T>, queueTimeoutMs: number): Promise<T> {
+  return withMacCuaDriverSerialized(fn, queueTimeoutMs);
 }
 
 async function acquireMacCuaDriverProcessLock(lockDir = MAC_CUA_DRIVER_CALL_LOCK_DIR, action = 'unknown', threadId?: string): Promise<() => void> {
@@ -3290,12 +3348,20 @@ async function ensureCuaDriverDaemon(binary: string): Promise<void> {
   if (process.platform === 'darwin') await configureCuaDriverDaemon(binary);
 }
 
-async function waitForCuaDriverDaemon(binary: string): Promise<void> {
-  const deadline = Date.now() + MAC_CUA_DRIVER_DAEMON_STARTUP_TIMEOUT_MS;
+async function waitForCuaDriverDaemon(
+  binary: string,
+  overallTimeoutMs = MAC_CUA_DRIVER_DAEMON_STARTUP_TIMEOUT_MS,
+  pollTimeoutMs = CUA_DRIVER_STATUS_POLL_TIMEOUT_MS,
+): Promise<void> {
+  const deadline = Date.now() + overallTimeoutMs;
   let lastError = '';
   while (Date.now() < deadline) {
     try {
-      await execFileAsync(binary, ['status', '--socket', macCuaDriverSocketPath], { maxBuffer: 1024 * 1024 });
+      // Each probe is bounded so one hung `status` cannot outlast the deadline.
+      await execFileAsync(binary, ['status', '--socket', macCuaDriverSocketPath], {
+        maxBuffer: 1024 * 1024,
+        timeout: Math.max(1, Math.min(pollTimeoutMs, deadline - Date.now())),
+      });
       return;
     } catch (error) {
       const err = error as Error & { stdout?: string; stderr?: string };
@@ -3305,7 +3371,7 @@ async function waitForCuaDriverDaemon(binary: string): Promise<void> {
       await wait(100);
     }
   }
-  throw new Error(`Computer Use daemon did not become reachable within ${Math.round(MAC_CUA_DRIVER_DAEMON_STARTUP_TIMEOUT_MS / 1000)}s.${lastError ? ` Last status: ${lastError}` : ''}`);
+  throw new Error(`Computer Use daemon did not become reachable within ${Math.round(overallTimeoutMs / 1000)}s.${lastError ? ` Last status: ${lastError}` : ''}`);
 }
 
 async function configureCuaDriverDaemon(binary: string): Promise<void> {
@@ -3370,6 +3436,7 @@ async function requestApproval(
       0,
       context?.toolCallId,
       approvalAgentId(context),
+      computerUseApprovalWaitOptions(context, 'list running apps and windows'),
     );
     if (!approval.approved) {
       throw new Error(`User denied ${automationBackendName()} app discovery access.`);
@@ -3441,6 +3508,7 @@ async function requestApproval(
     0,
     context?.toolCallId,
     approvalAgentId(context),
+    computerUseApprovalWaitOptions(context, `${kind} "${displayTarget}"`),
   );
   if (!approval.approved) {
     throw new Error(`User denied ${automationBackendName()} ${kind} access to "${displayTarget}".`);
@@ -3459,11 +3527,13 @@ async function callCuaDriverCli(
     if (toolName === 'check_permissions' && !booleanArg(args, 'prompt')) {
       return macPermissionStatusResponse(await getMacComputerUsePermissionStatus());
     }
+    // A missing driver is reported before anyone is asked to approve a call
+    // that could not run anyway.
+    const binary = cuaDriverBinaryResolver();
     await ensureMacComputerUsePermissionsBeforeDaemon();
     return withMacCuaDriverApprovalAndProcessLock(
       async () => {
         await requestApproval(toolName, approvalArgs ?? args, context);
-        const binary = resolveCuaDriverBinary();
         await ensureCuaDriverDaemon(binary);
         await requestMacForegroundApprovalIfNeeded(toolName, args, context);
       },
@@ -3953,6 +4023,18 @@ export function setWindowsCuaDriverToolProviderForTest(
   provider: WindowsCuaDriverToolProvider | null,
 ): void {
   windowsCuaDriverToolProvider = provider ?? callWindowsCuaDriverTool;
+}
+
+export function setCuaDriverBinaryResolverForTest(resolver: (() => string) | null): void {
+  cuaDriverBinaryResolver = resolver ?? (() => resolveCuaDriverBinary());
+}
+
+export function waitForCuaDriverDaemonForTest(
+  binary: string,
+  overallTimeoutMs: number,
+  pollTimeoutMs: number,
+): Promise<void> {
+  return waitForCuaDriverDaemon(binary, overallTimeoutMs, pollTimeoutMs);
 }
 
 export function clearComputerUseTargetCacheForTest(): void {

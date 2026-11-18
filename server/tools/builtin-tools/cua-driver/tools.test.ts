@@ -33,7 +33,12 @@ import {
   sortMacComputerUseWindowIdsForTest,
   withMacCuaDriverProcessLockForTest,
   withMacCuaDriverApprovalAndProcessLock,
+  COMPUTER_USE_QUEUE_TIMEOUT_LABEL,
+  setCuaDriverBinaryResolverForTest,
+  waitForCuaDriverDaemonForTest,
+  withMacCuaDriverSerializedForTest,
 } from './tools';
+import { addClient, removeClient } from '../../../utils/sse';
 import type { BrowserControlStatus } from '../../../../shared/types/browserControl';
 import type { BrowserAccessPolicy, BrowserAccessPolicyMode, BrowserAccessProfilePolicy } from '../../../../shared/browserAccessPolicy';
 import { approvalManager } from '../../../approvalManager';
@@ -1838,5 +1843,140 @@ describe('Interpreter self-automation guard', () => {
         { pid: 5678, title: 'Calculator' },
       ],
     });
+  });
+});
+
+describe('Computer Use calls never wait without bound', () => {
+  const askPolicy = async () => ({
+    permissions: { inspect: { mode: 'ask' as const }, control: { mode: 'ask' as const } },
+    appPolicies: [],
+  });
+
+  async function withAskPolicyOnLinux<T>(fn: () => Promise<T>): Promise<T> {
+    const previousOperatorRoute = process.env.WORKSTATION_WAKE_TOKEN;
+    delete process.env.WORKSTATION_WAKE_TOKEN;
+    const previousAutoApprove = approvalManager.isAutoApproveEnabled();
+    approvalManager.setAutoApprove(false);
+    approvalManager.clearAll();
+    setConfigOverride({ agents: {} } as any);
+    setCuaAccessPolicyProviderForCuaDriverTest(askPolicy);
+    clearComputerUseTargetCacheForTest();
+    try {
+      return await withPlatform('linux', fn);
+    } finally {
+      setCuaDriverBinaryResolverForTest(null);
+      setCuaAccessPolicyProviderForCuaDriverTest(null);
+      setConfigOverride(null);
+      approvalManager.clearAll();
+      approvalManager.setAutoApprove(previousAutoApprove);
+      if (previousOperatorRoute !== undefined) process.env.WORKSTATION_WAKE_TOKEN = previousOperatorRoute;
+    }
+  }
+
+  test('refuses an approval at once when no interactive client is attached', async () => {
+    await withAskPolicyOnLinux(async () => {
+      setCuaDriverBinaryResolverForTest(() => '/nonexistent/test-driver');
+      const progress: string[] = [];
+      const startedAt = Date.now();
+      const call = callComputerUseToolForTest('get_app_state', { app: 'Notes' }, {
+        agentId: 'agent-no-client',
+        reportProgress: (text) => { progress.push(text); },
+      });
+      await expect(call).rejects.toThrow(/^APPROVAL_UNANSWERABLE: /);
+      await call.catch((error: Error) => {
+        expect(error.message).toContain('cuaAccessPolicy');
+        expect(error.message).toContain('headlessToolApprovalMode');
+      });
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+      expect(approvalManager.getGlobalPendingRequestIds()).toEqual([]);
+      expect(progress).toEqual([]);
+    });
+  });
+
+  test('reports progress while an answerable approval is pending', async () => {
+    await withAskPolicyOnLinux(async () => {
+      setCuaDriverBinaryResolverForTest(() => '/nonexistent/test-driver');
+      const client = { write: () => true } as unknown as Parameters<typeof addClient>[0];
+      addClient(client);
+      try {
+        let pendingSeen!: () => void;
+        const seen = new Promise<void>((resolve) => { pendingSeen = resolve; });
+        const progress: string[] = [];
+        const call = callComputerUseToolForTest('get_app_state', { app: 'Notes' }, {
+          agentId: 'agent-with-client',
+          reportProgress: (text) => { progress.push(text); pendingSeen(); },
+        });
+        await seen;
+        expect(progress).toEqual([
+          'Waiting for user approval to list running apps and windows. Do not retry; this command will continue after approval.',
+        ]);
+        const [pendingId] = approvalManager.getGlobalPendingRequestIds();
+        expect(pendingId).toBeDefined();
+        approvalManager.deny(pendingId!);
+        await expect(call).rejects.toThrow('User denied native desktop driver app discovery access.');
+        expect(approvalManager.getGlobalPendingRequestIds()).toEqual([]);
+      } finally {
+        removeClient(client);
+      }
+    });
+  });
+
+  test('reports a missing driver before any approval is requested', async () => {
+    await withAskPolicyOnLinux(async () => {
+      setCuaDriverBinaryResolverForTest(() => {
+        throw new Error('Computer Use driver binary not found. Checked: /nonexistent. Build the pinned driver or set CUA_DRIVER_PATH.');
+      });
+      const original = approvalManager.createSessionAwareApproval;
+      let approvalsRequested = 0;
+      approvalManager.createSessionAwareApproval = (async (...args: Parameters<typeof original>) => {
+        approvalsRequested += 1;
+        return original.apply(approvalManager, args);
+      }) as typeof original;
+      try {
+        await expect(callComputerUseToolForTest('get_app_state', { app: 'Notes' }, { agentId: 'agent-no-driver' }))
+          .rejects.toThrow('Computer Use driver binary not found.');
+        expect(approvalsRequested).toBe(0);
+        expect(approvalManager.getGlobalPendingRequestIds()).toEqual([]);
+      } finally {
+        approvalManager.createSessionAwareApproval = original;
+      }
+    });
+  });
+
+  test.skipIf(process.platform === 'win32')('bounds each driver status probe by its own deadline', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cua-status-probe-test-'));
+    const stuckDriver = path.join(root, 'stuck-driver');
+    fs.writeFileSync(stuckDriver, '#!/bin/sh\nexec sleep 30\n', { mode: 0o755 });
+    const startedAt = Date.now();
+    try {
+      await expect(waitForCuaDriverDaemonForTest(stuckDriver, 1_200, 200))
+        .rejects.toThrow('Computer Use daemon did not become reachable within 1s.');
+      expect(Date.now() - startedAt).toBeLessThan(3_000);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a queued call gives up after the queue deadline without running', async () => {
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    let entered!: () => void;
+    const firstEntered = new Promise<void>((resolve) => { entered = resolve; });
+    const steps: string[] = [];
+    const first = withMacCuaDriverSerializedForTest(async () => {
+      steps.push('first'); entered(); await hold; steps.push('first-done');
+    }, 1_000);
+    try {
+      await firstEntered;
+      await expect(withMacCuaDriverSerializedForTest(async () => { steps.push('queued'); }, 50))
+        .rejects.toThrow(new RegExp(`^${COMPUTER_USE_QUEUE_TIMEOUT_LABEL}: `));
+      const next = withMacCuaDriverSerializedForTest(async () => { steps.push('next'); }, 1_000);
+      release();
+      await Promise.all([first, next]);
+      expect(steps).toEqual(['first', 'first-done', 'next']);
+    } finally {
+      release();
+      await first.catch(() => undefined);
+    }
   });
 });

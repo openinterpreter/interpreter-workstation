@@ -1,8 +1,10 @@
-import { beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { approvalManager } from './approvalManager';
 import { agentTabManager } from './agentTabManager';
 import { clearPendingToolCalls, rememberToolCallMetadata } from './utils/codexMcpBridge';
 import { setConfigOverride } from './configStore';
+import { setElectronAudienceCounter } from './handlers/broadcast';
+import { addClient, removeClient } from './utils/sse';
 
 describe('approvalManager tool-call thread correlation', () => {
   beforeEach(() => {
@@ -760,5 +762,117 @@ describe('approvalManager tool-call thread correlation', () => {
 
     await expect(first).resolves.toEqual({ approved: true, mode: 'session' });
     await expect(second).resolves.toEqual({ approved: true, mode: 'once' });
+  });
+});
+
+describe('approvalManager unanswerable and withdrawn requests', () => {
+  const previousOperatorRoute = process.env.WORKSTATION_WAKE_TOKEN;
+
+  beforeEach(() => {
+    delete process.env.WORKSTATION_WAKE_TOKEN;
+    approvalManager.setAutoApprove(false);
+    approvalManager.clearAll();
+    agentTabManager.clearAll();
+    setElectronAudienceCounter(null);
+    setConfigOverride({ agents: {} } as any);
+  });
+
+  afterEach(() => {
+    setElectronAudienceCounter(null);
+    if (previousOperatorRoute !== undefined) process.env.WORKSTATION_WAKE_TOKEN = previousOperatorRoute;
+  });
+
+  test('refuses an opted-in request at once when no interactive client is attached', async () => {
+    let pendingCalls = 0;
+    await expect(approvalManager.createSessionAwareApproval(
+      'cua_driver:inspect:Notes',
+      'builtin-cua-driver',
+      { message: 'Inspect Notes' },
+      'Interpreter can inspect Notes.',
+      0,
+      'call_unanswerable',
+      'agent_unanswerable',
+      { refuseWhenUnanswerable: { hint: 'Allow it in settings.' }, onPending: () => { pendingCalls += 1; } },
+    )).rejects.toThrow(
+      'APPROVAL_UNANSWERABLE: No interactive client is attached to answer this approval request, so it was refused instead of waiting. Allow it in settings.',
+    );
+    expect(approvalManager.getGlobalPendingRequestIds()).toEqual([]);
+    expect(pendingCalls).toBe(0);
+  });
+
+  test('still waits for an answer when an interactive client is attached', async () => {
+    const client = { write: () => true } as unknown as Parameters<typeof addClient>[0];
+    addClient(client);
+    try {
+      const pendingIds: string[] = [];
+      const pending = approvalManager.createSessionAwareApproval(
+        'cua_driver:inspect:Notes',
+        'builtin-cua-driver',
+        { message: 'Inspect Notes' },
+        'Interpreter can inspect Notes.',
+        0,
+        'call_answerable',
+        'agent_answerable',
+        { refuseWhenUnanswerable: {}, onPending: (id) => { pendingIds.push(id); } },
+      );
+      const [id] = approvalManager.getGlobalPendingRequestIds();
+      expect(id).toBeDefined();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(pendingIds).toEqual([id!]);
+      approvalManager.approve(id!);
+      await expect(pending).resolves.toEqual({ approved: true, mode: 'once' });
+    } finally {
+      removeClient(client);
+    }
+  });
+
+  test('counts only app windows that receive the request scope', async () => {
+    setElectronAudienceCounter((scope) => (scope?.windowSessionKey === 'window-open' ? 1 : 0));
+    agentTabManager.bindThread({
+      agentId: 'agent-closed-window', callerToken: 'caller-closed-window',
+      threadId: 'thread-closed-window', windowSessionKey: 'window-closed',
+    });
+    const { runWithWindowSessionOverride } = await import('./utils/windowSessions');
+    await expect(runWithWindowSessionOverride('window-closed', () => approvalManager.createApproval(
+      'cua_driver:foreground:Notes', 'builtin-cua-driver', {}, 0, undefined, 'agent-closed-window',
+      { refuseWhenUnanswerable: {} },
+    ))).rejects.toThrow(/^APPROVAL_UNANSWERABLE: /);
+    expect(approvalManager.getGlobalPendingRequestIds()).toEqual([]);
+
+    agentTabManager.bindThread({
+      agentId: 'agent-open-window', callerToken: 'caller-open-window',
+      threadId: 'thread-open-window', windowSessionKey: 'window-open',
+    });
+    const pending = runWithWindowSessionOverride('window-open', () => approvalManager.createApproval(
+      'cua_driver:foreground:Notes', 'builtin-cua-driver', {}, 0, undefined, 'agent-open-window',
+      { refuseWhenUnanswerable: {} },
+    ));
+    const [id] = approvalManager.getGlobalPendingRequestIds();
+    expect(id).toBeDefined();
+    approvalManager.deny(id!);
+    await expect(pending).resolves.toBe(false);
+  });
+
+  test('withdraws a pending request when its signal aborts', async () => {
+    const controller = new AbortController();
+    const pending = approvalManager.createApproval(
+      'cua_driver:foreground:Notes',
+      'builtin-cua-driver',
+      { message: 'Bring Notes forward' },
+      0,
+      'call_withdrawn',
+      'agent_withdrawn',
+      { signal: controller.signal },
+    );
+    const [id] = approvalManager.getGlobalPendingRequestIds();
+    expect(id).toBeDefined();
+    controller.abort();
+    await expect(pending).rejects.toThrow(/^APPROVAL_WITHDRAWN: /);
+    expect(approvalManager.getGlobalPendingRequestIds()).toEqual([]);
+    expect(approvalManager.respond(id!, { answers: { '0': 'approve' } })).toEqual({
+      success: false,
+      error: 'Already resolved',
+    });
   });
 });

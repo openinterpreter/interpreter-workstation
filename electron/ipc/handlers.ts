@@ -229,7 +229,7 @@ import {
 } from '../services/office-extension';
 import { browserService } from '../services/browser';
 import { workstationService } from '../services/workstation';
-import { setElectronBroadcaster, type BroadcastScope } from '../../server/handlers/broadcast';
+import { setElectronAudienceCounter, setElectronBroadcaster, type BroadcastScope } from '../../server/handlers/broadcast';
 import * as settingsHandlers from '../../server/handlers/settings';
 import * as approvalsHandlers from '../../server/handlers/approvals';
 import * as agentTabsHandlers from '../../server/handlers/agentTabs';
@@ -624,6 +624,7 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
       workstationService.sendToWindowWhenReady(windowId, channel, data);
     });
   });
+  setElectronAudienceCounter((scope?: BroadcastScope) => getBroadcastWindowIds(scope).length);
 
   // ============================================================================
   // General Handlers

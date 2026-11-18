@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import express from 'express';
+import { EventEmitter } from 'node:events';
 import { createServer, type Server } from 'node:http';
 
-import interpreterCliRouter, { setInterpreterCliHandlersLoaderForTest } from './interpreterCli';
+import interpreterCliRouter, { abortWhenCallerLeaves, setInterpreterCliHandlersLoaderForTest } from './interpreterCli';
 import { INTERPRETER_CLI_CALLER_TOKEN_HEADER } from '../utils/interpreterCliRuntime';
+import { approvalManager } from '../approvalManager';
 
 type InterpreterCliHandlers = typeof import('../handlers/interpreterCli');
 
@@ -13,6 +15,7 @@ let callInterpreterCliToolImpl: ((args: {
   onProgress?: (text: string) => Promise<void> | void;
   saveToDisk?: boolean;
   saveToDiskPath?: string;
+  approvalAbortSignal?: AbortSignal;
 }) => Promise<unknown>) | null = null;
 
 beforeEach(() => {
@@ -27,6 +30,7 @@ beforeEach(() => {
       onProgress?: (text: string) => Promise<void> | void;
       saveToDisk?: boolean;
       saveToDiskPath?: string;
+      approvalAbortSignal?: AbortSignal;
     }) => {
       if (!callInterpreterCliToolImpl) {
         throw new Error('callInterpreterCliTool mock not configured for this test.');
@@ -169,4 +173,77 @@ describe('interpreterCli streaming tool route', () => {
       + 'error with details\n',
     );
   });
+
+  test('withdraws the call\'s pending approval when the client disconnects', async () => {
+    approvalManager.setAutoApprove(false);
+    approvalManager.clearAll();
+    let approvalPending!: () => void;
+    const pendingSeen = new Promise<void>((resolve) => { approvalPending = resolve; });
+    let approvalOutcome: Promise<unknown> | null = null;
+    const callTool = async ({ onProgress, approvalAbortSignal }: {
+      onProgress?: (text: string) => Promise<void> | void;
+      approvalAbortSignal?: AbortSignal;
+    }) => {
+      approvalOutcome = approvalManager.createApproval(
+        'cua_driver:foreground:Notes',
+        'builtin-cua-driver',
+        { message: 'Bring Notes forward' },
+        0,
+        undefined,
+        'agent_cli_disconnect',
+        { signal: approvalAbortSignal },
+      );
+      approvalOutcome.catch(() => undefined);
+      await onProgress?.('Waiting for user approval.');
+      approvalPending();
+      return await approvalOutcome;
+    };
+
+    // The route's response close handler, driven directly: a socket-level
+    // disconnect is not observable through every node:http implementation.
+    const res = Object.assign(new EventEmitter(), { writableFinished: false });
+    const callerGone = abortWhenCallerLeaves(res as unknown as Parameters<typeof abortWhenCallerLeaves>[0]);
+    const call = callTool({ approvalAbortSignal: callerGone.signal });
+    const callOutcome = call.then(() => 'resolved', (error: Error) => error.message);
+    await pendingSeen;
+    expect(approvalManager.getGlobalPendingRequestIds()).toHaveLength(1);
+
+    res.emit('close');
+    await expect(approvalOutcome!).rejects.toThrow(/^APPROVAL_WITHDRAWN: /);
+    expect(await callOutcome).toMatch(/^APPROVAL_WITHDRAWN: /);
+    expect(approvalManager.getGlobalPendingRequestIds()).toEqual([]);
+  });
+
+  test('does not signal a departed caller after the response finished', () => {
+    const res = Object.assign(new EventEmitter(), { writableFinished: true });
+    const callerGone = abortWhenCallerLeaves(res as unknown as Parameters<typeof abortWhenCallerLeaves>[0]);
+    res.emit('close');
+    expect(callerGone.signal.aborted).toBe(false);
+  });
+
+  test('passes a live caller signal into streamed tool calls', async () => {
+    let received: AbortSignal | undefined;
+    callInterpreterCliToolImpl = async ({ approvalAbortSignal }) => {
+      received = approvalAbortSignal;
+      return { ok: true };
+    };
+
+    const baseUrl = await startInterpreterCliTestServer();
+    const response = await fetch(
+      `${baseUrl}/api/interpreter-cli/tools/builtin-cua-driver/list_apps/stream?saveToDisk=false`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          [INTERPRETER_CLI_CALLER_TOKEN_HEADER]: 'agtok_stream',
+        },
+        body: JSON.stringify({}),
+      },
+    );
+
+    expect(await response.text()).toBe('result {"ok":true}\n');
+    expect(received).toBeInstanceOf(AbortSignal);
+    expect(received?.aborted).toBe(false);
+  });
 });
+
