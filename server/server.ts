@@ -56,6 +56,7 @@ import { getCodexService } from '../src/lib/codex/service';
 import { readStableSupervisorGoal } from './utils/supervisorGoalRead';
 import { startWakeSources } from './utils/wakeSourcesRuntime';
 import { startOutcomeReturns } from './utils/outcomeReturnsRuntime';
+import { startGoalAutoResume } from './utils/goalAutoResumeRuntime';
 import authRouter from "./routes/auth";
 import { ENTERPRISE_READINESS } from './enterprise/controlPlane';
 import workspaceRouter from "./routes/workspace";
@@ -84,6 +85,8 @@ installUnloadedThreadCarrier();
 if (process.env.NODE_ENV !== 'test') startWakeSources();
 // Return sender-attributed turn outcomes through the configured command.
 if (process.env.NODE_ENV !== 'test') startOutcomeReturns();
+// Resume Goals that a temporary model-capacity refusal blocked.
+if (process.env.NODE_ENV !== 'test') startGoalAutoResume();
 // normalizePath intentionally not used here - it converts Unicode chars to ASCII,
 // breaking paths with smart quotes etc. Use path.normalize (pathNormalize) instead.
 import { enterWorkspaceOverride } from "./utils/workspace";

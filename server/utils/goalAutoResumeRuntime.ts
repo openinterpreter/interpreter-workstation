@@ -1,0 +1,35 @@
+import { GoalAutoResume } from '../../src/lib/codex/goal-auto-resume';
+import { getCodexService, subscribeCodexNotifications } from '../../src/lib/codex/service';
+
+let autoResume: GoalAutoResume | undefined;
+let unsubscribe: (() => void) | undefined;
+
+/** Resume Goals blocked by a temporary model-capacity refusal. Started beside
+ * the wake-source runtime so headless agents recover without a person. */
+export function startGoalAutoResume(): void {
+  if (autoResume) return;
+  const instance = new GoalAutoResume({
+    now: () => Date.now(),
+    setTimer: (callback, delayMs) => {
+      const timer = setTimeout(callback, delayMs);
+      timer.unref?.();
+      return timer;
+    },
+    clearTimer: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
+    readRevision: async threadId => (await getCodexService().getThreadGoalWithRevision(threadId)).revision,
+    // The same exact-revision transition the operator resume path uses.
+    resume: async (threadId, expected) => {
+      await getCodexService().setThreadGoalWithRevision(threadId, expected, { status: 'active' });
+    },
+    log: line => console.info(line),
+  });
+  autoResume = instance;
+  unsubscribe = subscribeCodexNotifications(notification => instance.handleNotification(notification));
+}
+
+export function stopGoalAutoResume(): void {
+  unsubscribe?.();
+  unsubscribe = undefined;
+  autoResume?.stop();
+  autoResume = undefined;
+}

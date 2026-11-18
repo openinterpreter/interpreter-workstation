@@ -60,6 +60,7 @@ import {
 } from "./utils/browserExtensionRelay";
 import { stopWakeSources } from "./utils/wakeSourcesRuntime";
 import { stopOutcomeReturns } from "./utils/outcomeReturnsRuntime";
+import { stopGoalAutoResume } from "./utils/goalAutoResumeRuntime";
 
 const DEFAULT_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 5177;
 const DEFAULT_WORKSPACE = process.env.WORKSPACE || process.cwd();
@@ -84,6 +85,7 @@ async function shutdownServer(
   // their approved source while this sidecar is unavailable.
   await stopWakeSources();
   await stopOutcomeReturns();
+  stopGoalAutoResume();
 
   await deps.cleanupFileWatcher();
   await deps.cleanupSandbox();
