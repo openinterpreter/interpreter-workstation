@@ -9,7 +9,21 @@ const ASSERTION_HEADER = 'x-interpreter-supervisor-assertion';
 /** A remote verifier may be starting from idle; a short deadline turns that
  * into a refusal. The request is refused, never retried, when this elapses. */
 const VERIFY_TIMEOUT_MS = 8_000;
+/** The local machine-identity read. */
+const IDENTITY_TIMEOUT_MS = 4_000;
+/** A kept identity is replaced this long before it expires. */
+const IDENTITY_REFRESH_MARGIN_MS = 5 * 60_000;
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+
+/** Expiry stated inside a signed identity, in milliseconds, or null when it
+ * cannot be read. Only used to decide how long to keep the identity. */
+function identityExpiryMs(token: string): number | null {
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8')) as { exp?: unknown };
+    return typeof payload.exp === 'number' && Number.isFinite(payload.exp) && payload.exp > 0
+      ? payload.exp * 1000 : null;
+  } catch { return null; }
+}
 const TOKEN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
 export type SupervisorVerifierConfig = Readonly<{
@@ -69,17 +83,30 @@ export function createSupervisorPeerVerifier(config: SupervisorVerifierConfig,
     return authorizeSupervisorPeer(grant, { sourceComputer: grant.sourceComputer,
       targetComputer: config.targetComputer, threadId, capability }) === 'allowed' ? grant : null;
   };
-  const identity = deps.identity ?? (async (scope: string) => {
+  const readIdentity = deps.identity ?? (async (scope: string) => {
     const endpoint = new URL('http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity');
     endpoint.searchParams.set('audience', scope);
     endpoint.searchParams.set('format', 'full');
     const result = await fetcher(endpoint, { headers: { 'Metadata-Flavor': 'Google' },
-      signal: AbortSignal.timeout(2_000), redirect: 'error' });
+      signal: AbortSignal.timeout(IDENTITY_TIMEOUT_MS), redirect: 'error' });
     if (!result.ok || Number(result.headers.get('content-length') ?? 0) > 8_192) throw new Error('Identity unavailable.');
     const token = (await result.text()).trim();
     if (token.length > 8_192 || !TOKEN.test(token)) throw new Error('Identity unavailable.');
     return token;
   });
+  // The machine identity is valid for about an hour. Reading it afresh for
+  // every request made each verification depend on a slow local read; it is
+  // kept until shortly before its own stated expiry and never beyond it.
+  let held: { token: string; audience: string; refreshAtMs: number } | null = null;
+  const identity = async (scope: string) => {
+    const now = Date.now();
+    if (held && held.audience === scope && now < held.refreshAtMs) return held.token;
+    const token = await readIdentity(scope);
+    const expiresAtMs = identityExpiryMs(token);
+    held = expiresAtMs !== null && expiresAtMs - IDENTITY_REFRESH_MARGIN_MS > now
+      ? { token, audience: scope, refreshAtMs: expiresAtMs - IDENTITY_REFRESH_MARGIN_MS } : null;
+    return token;
+  };
   return async (request: Request): Promise<VerifiedSupervisorGrant | null> => {
     const assertion = request.get(ASSERTION_HEADER);
     if (!assertion || assertion.length > 4_096 || !/^[A-Za-z0-9._-]+$/.test(assertion)) return null;
@@ -117,6 +144,8 @@ export function createSupervisorPeerVerifier(config: SupervisorVerifierConfig,
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ action: 'verify', assertion, targetComputer: config.targetComputer,
           threadId, capability }) });
+      // A refused identity must not be presented again.
+      if (response.status === 401) held = null;
       return await acceptGrant(response, threadId, capability);
     } catch { return null; }
   };

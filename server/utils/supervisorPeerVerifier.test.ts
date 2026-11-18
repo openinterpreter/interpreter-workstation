@@ -53,6 +53,34 @@ describe('optional enrolled target peer verifier', () => {
       fetcher: (async () => { throw Error('private upstream text'); }) as typeof fetch });
     expect(await verify(req())).toBeNull();
   });
+  it('keeps a machine identity until shortly before its stated expiry and drops a refused one', async () => {
+    const signed = (expSeconds: number) =>
+      `a.${Buffer.from(JSON.stringify({ exp: expSeconds })).toString('base64url')}.c`;
+    let reads = 0;
+    let status = 200;
+    const longLived = signed(Math.floor(Date.now() / 1000) + 3600);
+    const verify = createSupervisorPeerVerifier(config, {
+      identity: async () => { reads++; return longLived; },
+      fetcher: (async () => new Response(JSON.stringify(grant), { status })) as typeof fetch });
+    expect(await verify(req())).toEqual(grant);
+    expect(await verify(req())).toEqual(grant);
+    expect(reads).toBe(1);
+    status = 401;
+    expect(await verify(req())).toBeNull();
+    status = 200;
+    expect(await verify(req())).toEqual(grant);
+    expect(reads).toBe(2);
+    // An identity about to expire, or one whose expiry cannot be read, is not kept.
+    for (const token of [signed(Math.floor(Date.now() / 1000) + 60), 'a.b.c']) {
+      let count = 0;
+      const fresh = createSupervisorPeerVerifier(config, {
+        identity: async () => { count++; return token; },
+        fetcher: (async () => new Response(JSON.stringify(grant))) as typeof fetch });
+      await fresh(req());
+      await fresh(req());
+      expect(count).toBe(2);
+    }
+  });
   it('asks enrolled verifier for status-update capability, not a generic Goal grant', async () => {
     const calls: string[] = [];
     const selfGrant = { ...grant, sourceComputer: 'target-1',
