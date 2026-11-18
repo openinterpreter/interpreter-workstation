@@ -17,6 +17,7 @@ import { getSandboxDir } from '../../../utils/sandboxManager';
 import type { BuiltinToolContext, BuiltinToolDefinition } from '../../builtinTools';
 import type { ToolCallResponse } from '../../toolTypes';
 import { callWindowsCuaDriverTool } from './windowsUia';
+import { cuaDriverProcessEnvironment } from './driverEnvironment';
 import type { BrowserControlStatus } from '../../../../shared/types/browserControl';
 import { CUA_PROCESS_LOCK_DIR, cuaLockOwnerDefinitelyGone, cuaLockOwnerForNewCall } from '../../../utils/cuaProcessLockMetadata';
 import {
@@ -1665,12 +1666,33 @@ function requireScreenshotCoordinate(
   return point;
 }
 
-export function nativeLaunchAppArgsForTest(args: Record<string, unknown>): Record<string, unknown> {
+/**
+ * Maps the documented launch_app arguments onto what the native driver
+ * accepts. macOS identifies apps by bundle_id or name only. Linux launches an
+ * executable or launcher command through `launch_path`.
+ */
+export function nativeLaunchAppArgsForTest(
+  args: Record<string, unknown>,
+  platform: NodeJS.Platform = process.platform,
+): Record<string, unknown> {
   const nextArgs = { ...args };
   if (typeof nextArgs.app === 'string' && typeof nextArgs.name !== 'string' && typeof nextArgs.bundle_id !== 'string') {
     nextArgs.name = nextArgs.app;
   }
   delete nextArgs.app;
+
+  const launchPath = stringArg(nextArgs, 'path') ?? stringArg(nextArgs, 'executable');
+  delete nextArgs.path;
+  delete nextArgs.executable;
+  if (!launchPath) return nextArgs;
+
+  if (platform === 'linux') {
+    if (typeof nextArgs.launch_path !== 'string') nextArgs.launch_path = launchPath;
+    return nextArgs;
+  }
+  if (typeof nextArgs.name !== 'string' && typeof nextArgs.bundle_id !== 'string') {
+    throw new Error('launch_app on macOS identifies the app by bundle_id or name; path and executable are not supported.');
+  }
   return nextArgs;
 }
 
@@ -3296,8 +3318,10 @@ async function ensureCuaDriverDaemon(binary: string): Promise<void> {
   daemonStartPromise = new Promise<void>((resolve, reject) => {
     // Embedded mode: the Rust driver runs as a direct child of the app,
     // inherits the app's TCC grants, and never disclaims, relaunches through
-    // a CuaDriver.app bundle, or prompts on its own.
+    // a CuaDriver.app bundle, or prompts on its own. Apps it launches inherit
+    // its environment, so Interpreter's own internal variables are left out.
     const child = spawn(binary, ['serve', '--embedded', '--socket', macCuaDriverSocketPath], {
+      env: cuaDriverProcessEnvironment(process.env),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     daemonProcess = child;
@@ -4035,6 +4059,10 @@ export function waitForCuaDriverDaemonForTest(
   pollTimeoutMs: number,
 ): Promise<void> {
   return waitForCuaDriverDaemon(binary, overallTimeoutMs, pollTimeoutMs);
+}
+
+export function ensureCuaDriverDaemonForTest(binary: string): Promise<void> {
+  return ensureCuaDriverDaemon(binary);
 }
 
 export function clearComputerUseTargetCacheForTest(): void {
