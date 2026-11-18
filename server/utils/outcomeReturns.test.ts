@@ -66,6 +66,21 @@ describe('outcome returns', () => {
     } finally { await f.cleanup(); }
   }, 30_000);
 
+  test('a turn started by the delivery of an outcome is never watched', async () => {
+    const f = await fixture();
+    try {
+      const store = await f.make(0);
+      expect(await store.watch(thread, 'turn_delivery', sender, `outcome-${outcomeReturnId(thread, 'turn_0')}`)).toBe(true);
+      expect(store.list()).toEqual([]);
+      await store.turnEnded(thread, 'turn_delivery', 'completed', 'Acknowledged.');
+      await store.deliverDue();
+      expect(await f.received()).toEqual([]);
+      // Ordinary sender-attributed work joining that same turn is still returned.
+      expect(await store.watch(thread, 'turn_delivery_2', sender, 'handoff_after_delivery')).toBe(true);
+      expect(store.list()).toHaveLength(1);
+    } finally { await f.cleanup(); }
+  }, 30_000);
+
   test('a failing command is retried with backoff and gives up after the attempt limit', async () => {
     const f = await fixture();
     try {

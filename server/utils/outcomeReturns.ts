@@ -49,6 +49,19 @@ export function outcomeReturnId(threadId: string, turnId: string): string {
   return createHash('sha256').update(`${threadId}:${turnId}`).digest('hex');
 }
 
+/** Prefix of the client message ID under which a return command delivers an
+ * outcome to the sender's thread (`outcome-<id>`). */
+export const OUTCOME_DELIVERY_ID_PREFIX = 'outcome-';
+
+/**
+ * True when a submission is itself the delivery of an outcome. Such a turn is
+ * never watched: returning the outcome of an outcome would make two idle
+ * threads answer each other without end.
+ */
+export function isOutcomeDelivery(clientUserMessageId: string): boolean {
+  return clientUserMessageId.startsWith(OUTCOME_DELIVERY_ID_PREFIX);
+}
+
 /** A JSON array of non-empty argv strings (no shell), or null when unusable. */
 export function parseOutcomeReturnCommand(raw: string | undefined): string[] | null {
   if (!raw?.trim()) return null;
@@ -165,6 +178,7 @@ export class OutcomeReturns {
     clientUserMessageId: string): Promise<boolean> {
     const checked = parseSubmissionSender(sender);
     if (!checked || !SUBMISSION_ID.test(clientUserMessageId)) throw new Error('Invalid outcome return');
+    if (isOutcomeDelivery(clientUserMessageId)) return true;
     const id = outcomeReturnId(threadId, turnId);
     return this.exclusive(async () => {
       if (this.entries.some(entry => entry.id === id)) return true;
