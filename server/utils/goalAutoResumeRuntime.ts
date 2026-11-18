@@ -1,4 +1,4 @@
-import { GoalAutoResume } from '../../src/lib/codex/goal-auto-resume';
+import { GoalAutoResume, type GoalAutoResumeState } from '../../src/lib/codex/goal-auto-resume';
 import { getCodexService, subscribeCodexNotifications } from '../../src/lib/codex/service';
 
 let autoResume: GoalAutoResume | undefined;
@@ -25,6 +25,11 @@ export function startGoalAutoResume(): void {
   });
   autoResume = instance;
   unsubscribe = subscribeCodexNotifications(notification => instance.handleNotification(notification));
+}
+
+/** The running automatic resume's view of a thread, or null when it is not running. */
+export function goalAutoResumeState(threadId: string): GoalAutoResumeState | null {
+  return autoResume?.state(threadId) ?? null;
 }
 
 export function stopGoalAutoResume(): void {

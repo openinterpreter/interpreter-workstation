@@ -57,7 +57,7 @@ For a host-wide pre-restart check, GET `/api/agent/custody/global` on loopback w
 
 To locate the owner of **one already-pending** approval without changing it, GET `/api/agent/custody/approvals/:approvalId?threadId=:threadId` using that bearer token and loopback. An exact pending ID and matching captured owner thread are required; other threads yield 404, regardless of window. If the owner was captured as CLI with no thread binding, use `?cliUnbound=1` with that exact ID instead. A non-CLI unbound request cannot use that exception. The result contains only approval ID, pending status, registered tool name, and captured owner kind/thread/window session/workspace; never tool arguments, questions, provider data, or a disposition capability. Missing/resolved IDs return 404; invalid scope returns 400; unavailable inspection fails 503. The operator must still find the legitimate owner UI/session and obtain its normal approval—these metadata routes cannot approve or deny it.
 
-The input begins with `[Wake event source/id]`. On restart, the dispatcher checks native history for this marker. If a submission remains ambiguous without a native receipt, it stays offered for operator inspection rather than risking a duplicate user turn; elapsed time alone does not prove rejection. It does not promise exactly-once tool side effects or message delivery. The provider-specific reply tool remains the way to answer; scheduling and input custody are not an outbound queue. The only automatic outbound path is the outcome return for a sender-attributed programmatic task, described below.
+The input begins with `[Wake event source/id]`. On restart, the dispatcher checks native history for this marker. If a submission remains ambiguous without a native receipt, it stays offered for operator inspection rather than risking a duplicate user turn; elapsed time alone does not prove rejection. It does not promise exactly-once tool side effects or message delivery. The provider-specific reply tool remains the way to answer; scheduling and input custody are not an outbound queue. The only automatic outbound paths are the outcome return for a sender-attributed programmatic task and the Goal notice to that thread's most recent sender, described below.
 
 New wake submissions also carry a stable native `clientUserMessageId` derived from their thread/source/event identity. Either that ID on a persisted native user message or the exact text marker is an admission receipt; an accepted RPC, a completed turn, or a queue count alone is not. A legacy offered input without either receipt must **not** be retried automatically. For a truly terminal, queue-empty ambiguous offer, the local operator can explicitly choose **not to replay** it: POST `/api/agent/threads/:threadId/wake-events/:sourceId/:eventId/hold` with the same loopback bearer authorization and `{ "turnId": "exact-offered-turn-id", "confirmedNoReplay": true }`. The server rechecks the exact offered event, terminal native turn, idle thread, empty native queue and absence of either receipt before preserving it as `held` (not admitted) and letting later inputs proceed. The held source remains in error for separate review; this operation never acknowledges the upstream provider, restarts the application, or resubmits the held text. If any check fails, stop and reconcile the native receipt rather than calling hold repeatedly. Do not use this endpoint to waive ordinary provider input or skip work without a documented operator decision.
 
@@ -83,14 +83,48 @@ When a sender-attributed submission starts its native turn, the server records i
 Delivery uses a host command configured in the Workstation service environment: `WORKSTATION_OUTCOME_RETURN_COMMAND` holds a JSON array of strings (argv, executed without a shell). For each due pending entry, the command receives one JSON object on standard input:
 
 ```json
-{"version":1,"id":"<sha256 of threadId:turnId>","to":{"computer":"peer-host","thread":"origin-thread-id"},"from":{"threadId":"...","turnId":"..."},"clientUserMessageId":"...","outcome":"completed","summary":"..."}
+{"version":1,"kind":"turn","id":"<sha256 of threadId:turnId>","to":{"computer":"peer-host","thread":"origin-thread-id"},"from":{"threadId":"...","turnId":"..."},"clientUserMessageId":"...","outcome":"completed","summary":"..."}
 ```
 
-A command that delivers the outcome as a message to the sender's thread must submit it with a client message ID of the form `outcome-<id>`. A submission with that prefix is the delivery of an outcome and is never itself watched; without this, two idle threads would return each other's outcome returns without end.
+The same command also receives **Goal notices** (described below) with `"kind":"goal"`. Every payload has `version: 1`, `kind`, `id`, `to`, `from.threadId` and a plain-text `summary`; `outcome`, `from.turnId` and `clientUserMessageId` exist only for `kind: "turn"`. Payloads written by earlier versions had no `kind`; treat a missing `kind` as `"turn"`. A command must branch on `kind`, and for any kind it does not recognise it should deliver `summary` as a plain message to `to`, exactly as it delivers an outcome. It must not fail on an unknown kind or extra fields, since a failure is retried until the attempt limit.
+
+A command that delivers an outcome or a Goal notice as a message to the sender's thread must submit it with a client message ID of the form `outcome-<id>`, for both kinds. A submission with that prefix is a delivery: it is never itself watched and never makes its sender the receiving thread's sender. Without this, two idle threads would return each other's outcome returns without end.
 
 Exit 0 marks the entry `delivered` (its summary text is then dropped). Any other exit, a spawn failure, or the two-minute timeout counts an attempt and schedules the next one after 1, 2, 4, 8 and then every 15 minutes; after 40 attempts the entry stays visible as `failed`. Delivery is at least once: a restart while a command runs retries it, so the receiving side should deduplicate on `id`. Only add a command you trust.
 
-If the variable is unset or not a non-empty JSON string array, nothing is spawned and entries simply remain `pending`; this is logged once at startup. `GET /api/agent/outcome-returns` lists entries with `id`, `threadId`, `turnId`, `sender`, `status`, `outcome`, `attempts`, `nextAttemptAt` and `updatedAt`, never the summary text. The newest 500 entries are kept; delivered or failed entries are dropped first, and a new watch is refused (and logged) rather than dropping an undelivered one.
+If the variable is unset or not a non-empty JSON string array, nothing is spawned and entries simply remain `pending`; this is logged once at startup. `GET /api/agent/outcome-returns` lists entries with `id`, `threadId`, `turnId`, `sender`, `status`, `outcome`, `attempts`, `nextAttemptAt` and `updatedAt`, never the summary text; Goal notice entries instead have `kind: "goal"` and `goal` in place of `turnId` and `outcome`. The newest 500 entries are kept; delivered or failed entries are dropped first, and a new watch or notice is refused (and logged) rather than dropping an undelivered one.
+
+### Goal notices
+
+A turn outcome does not tell the sender when the worker thread's [Goal](goals.md) later stops: the runtime can block it on a failed turn, a usage or budget limit can stop it, or the worker or an operator can pause or block it, long after the last attributed turn was returned. Workstation therefore also tells the thread's **most recent sender** when its Goal settles in a new status:
+
+- `paused`, `blocked`, `usageLimited` or `budgetLimited`: reported when the status differs from the last notice for that Goal.
+- `complete`: reported once. A completed Goal is final, so a later Goal on the thread becoming active is not reported as "active again".
+- `active`: reported only when the last notice for the thread was one of the stopped statuses above, so the sender's picture is corrected.
+
+The most recent sender is the sender of the newest sender-attributed turn recorded in `outcome-returns.json` for that thread; no second store is kept. Deliveries (`outcome-` client IDs) are never recorded, so a thread that has only received outcome or Goal notices has no sender. With no sender, nothing is sent or stored. A cleared Goal is not reported.
+
+A change must remain settled for 25 seconds; a Goal that flips between statuses within that time produces at most one notice for the state it settles in. A block caused by a temporary model-capacity refusal that the automatic resume (see [Goals](goals.md)) has scheduled is not reported while the resume is pending; if the resume does not reverse it, or gives up after its two-hour window, the block is reported then, with reason `model_capacity_exhausted` when it gave up.
+
+The payload carries no objective and no message text:
+
+```json
+{"version":1,"kind":"goal","id":"<sha256 of goal:threadId:createdAt:status:updatedAt>","to":{"computer":"peer-host","thread":"origin-thread-id"},"from":{"threadId":"..."},"goal":{"status":"blocked","previousStatus":"active","reason":"turn_error","createdAt":1763251200,"updatedAt":1763254800},"summary":"Goal on thread ... is blocked (status blocked, previously active; reason turn_error)."}
+```
+
+`createdAt` and `updatedAt` are the native Goal's own times: `createdAt` identifies the Goal on the thread and `updatedAt` the change, so `id` is stable for one change and receivers deduplicate on it as for outcomes. `previousStatus` is the status observed just before the change and is omitted when unknown (for example after a restart). `reason` is one of:
+
+| Reason | Meaning |
+| --- | --- |
+| `turn_error` | The runtime blocked the Goal because the turn that ran it failed. |
+| `model_capacity_exhausted` | As above for a model-capacity refusal, after the automatic resume gave up. |
+| `usage_limit` | An account or provider usage limit stopped the Goal. |
+| `budget_limit` | The Goal's explicit budget was reached. |
+| `changed_during_turn` | Changed during a turn that did not fail: usually the agent's own Goal update, but also a runtime stop after repeated empty responses. The two are not distinguishable from the notification. |
+| `changed_outside_turn` | Changed through the Goal API with no turn: a person, an app control, a peer, or the automatic resume. |
+| `unknown` | Found at startup; the change happened while the server was not observing it. |
+
+Notices use the same store, retry schedule, attempt limit and at-least-once delivery as outcomes. At startup, the 50 threads with the most recently attributed turns are each read once (one native Goal read per thread, bounded to 5 seconds) and a notice is queued for any Goal whose current status is due by the rules above, for example one that stopped while the server was down. Nothing is read when no thread has a recorded sender. If a thread's last notice was dropped by the 500-entry limit, a later startup can report its current state again; receivers deduplicate on `id`.
 
 ## Headless operation
 

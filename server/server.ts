@@ -57,6 +57,7 @@ import { readStableSupervisorGoal } from './utils/supervisorGoalRead';
 import { startWakeSources } from './utils/wakeSourcesRuntime';
 import { startOutcomeReturns } from './utils/outcomeReturnsRuntime';
 import { startGoalAutoResume } from './utils/goalAutoResumeRuntime';
+import { startGoalNotices } from './utils/goalNoticesRuntime';
 import authRouter from "./routes/auth";
 import { ENTERPRISE_READINESS } from './enterprise/controlPlane';
 import workspaceRouter from "./routes/workspace";
@@ -87,6 +88,8 @@ if (process.env.NODE_ENV !== 'test') startWakeSources();
 if (process.env.NODE_ENV !== 'test') startOutcomeReturns();
 // Resume Goals that a temporary model-capacity refusal blocked.
 if (process.env.NODE_ENV !== 'test') startGoalAutoResume();
+// Tell a thread's most recent sender when its Goal stops, completes or resumes.
+if (process.env.NODE_ENV !== 'test') startGoalNotices();
 // normalizePath intentionally not used here - it converts Unicode chars to ASCII,
 // breaking paths with smart quotes etc. Use path.normalize (pathNormalize) instead.
 import { enterWorkspaceOverride } from "./utils/workspace";
