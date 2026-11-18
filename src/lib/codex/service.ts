@@ -9,6 +9,7 @@ import { ManagedGoalDocumentError, validateGoalDocumentInput, verifyGoalDocument
 import { GoalMutationUnconfirmedError, GoalRevisionConflictError, GoalRevisionUnavailableError, goalCasExpectedParams,
   verifyThreadGoalRevision, type ThreadGoalRevision } from './goal-revision';
 import { JSONRPCErrorException } from "json-rpc-2.0";
+import { isSubagentDirectInputRefusal, SubagentDirectInputError } from './subagent-input';
 import type { v2 } from "../../../server/handlers/codex-generated-types/index";
 import type { JsonValue } from "../../../server/handlers/codex-generated-types/serde_json/JsonValue";
 import {
@@ -762,7 +763,7 @@ export class CodexService {
         return { turnId: turn.id, status: turn.status };
       } catch (error) {
         if (this.activeTurns.get(threadId) === null) this.activeTurns.delete(threadId);
-        throw error;
+        throw input.existingThread ? await this.subagentInputRefusal(error, threadId) : error;
       }
     }
     const response = await this.client.steerTurn(input.params);
@@ -817,11 +818,13 @@ export class CodexService {
     const observed = unloaded ?? await this.observeUnloadedThread(options.threadId);
     if (!observed) return this.resumeExistingInputThread(options);
     // A carrier is an improvement, never a condition for the turn: when one
-    // cannot be given, the thread resumes exactly as it did before.
+    // cannot be given, the thread resumes exactly as it did before. The
+    // runtime's sub-agent refusal is final; a second resume would be refused again.
     if (callerBoundShellPolicy && options.config?.shell_environment_policy) {
       try {
         return await this.resumeExistingInputThread({ ...options, unloadedShellPolicy: true });
-      } catch {
+      } catch (error) {
+        if (isSubagentDirectInputRefusal(error)) throw error;
         return this.resumeExistingInputThread(options);
       }
     }
@@ -838,8 +841,9 @@ export class CodexService {
       resumedId = await this.resumeExistingInputThread({ ...options,
         config: { ...configForExistingThread(options.config), shell_environment_policy: carrier.shellPolicy },
         unloadedShellPolicy: true });
-    } catch {
+    } catch (error) {
       carrier.rollback();
+      if (isSubagentDirectInputRefusal(error)) throw error;
       return this.resumeExistingInputThread(options);
     }
     carrier.commit();
@@ -853,6 +857,24 @@ export class CodexService {
     } catch {
       return null;
     }
+  }
+
+  /** The runtime's own sub-agent input refusal, with the parent thread when it
+   * can be read; every other failure is returned unchanged. The thread is read
+   * only after such a refusal, so ordinary input makes no extra request. */
+  private async subagentInputRefusal(error: unknown, threadId: string,
+    knownParentThreadId: string | null = null): Promise<unknown> {
+    if (error instanceof SubagentDirectInputError || !isSubagentDirectInputRefusal(error)) return error;
+    let parentThreadId = knownParentThreadId;
+    if (!parentThreadId) {
+      try {
+        const { thread } = await this.client.threadRead({ threadId, includeTurns: false });
+        if (thread.id === threadId && typeof thread.parentThreadId === 'string' && thread.parentThreadId) {
+          parentThreadId = thread.parentThreadId;
+        }
+      } catch { /* The refusal stands without a parent ID. */ }
+    }
+    return new SubagentDirectInputError(threadId, parentThreadId);
   }
 
   private assertNoActiveTurn(threadId: string): void {
@@ -1698,15 +1720,21 @@ export class CodexService {
     if (thread.id !== threadId || thread.cwd !== cwd ||
         !['idle', 'active', 'notLoaded'].includes(thread.status.type))
       throw new Error('Saved native thread identity or state unavailable');
-    if (thread.status.type === 'notLoaded') {
-      await this.resumeExistingThreadForInput({ threadId, cwd, config: { mcp_servers: {} } },
-        false, { cwd: thread.cwd });
+    const knownParent = typeof thread.parentThreadId === 'string' && thread.parentThreadId
+      ? thread.parentThreadId : null;
+    try {
+      if (thread.status.type === 'notLoaded') {
+        await this.resumeExistingThreadForInput({ threadId, cwd, config: { mcp_servers: {} } },
+          false, { cwd: thread.cwd });
+      }
+      // OIX turn/start calls start_or_steer_turn. Never speculate about active
+      // ownership here or turn a stale app observation into a second queue.
+      const turn = await this.client.startTurn({ threadId, message, cwd, clientUserMessageId });
+      this.activeTurns.set(threadId, turn.id);
+      return turn.id;
+    } catch (error) {
+      throw await this.subagentInputRefusal(error, threadId, knownParent);
     }
-    // OIX turn/start calls start_or_steer_turn. Never speculate about active
-    // ownership here or turn a stale app observation into a second queue.
-    const turn = await this.client.startTurn({ threadId, message, cwd, clientUserMessageId });
-    this.activeTurns.set(threadId, turn.id);
-    return turn.id;
   }
 
   async setThreadName(threadId: string, name: string): Promise<void> {

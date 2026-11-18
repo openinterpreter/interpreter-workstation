@@ -5,6 +5,7 @@ import { getCodexService, NativeCustodyPhaseError,
   NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS,
   NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS } from '../../src/lib/codex/service';
 import { nativeSubmissionJournal } from '../utils/nativeSubmissionJournal';
+import { SubagentDirectInputError } from '../../src/lib/codex/subagent-input';
 import { agentTabManager } from '../agentTabManager';
 import agentRouter from './agent';
 
@@ -51,6 +52,61 @@ describe('native custody diagnostic authentication', () => {
       nativeSubmissionJournal.advance = advance;
       service.submitSavedThreadInput = start;
       console.info = info;
+    }
+  });
+  test('the runtime sub-agent refusal is reported as an SSE error with its parent and recorded', async () => {
+    const service = getCodexService();
+    const parent = '00000000-0000-4000-8000-000000000004';
+    const binding = agentTabManager.getBindingForThread;
+    const begin = nativeSubmissionJournal.begin;
+    const advance = nativeSubmissionJournal.advance;
+    const start = service.submitSavedThreadInput;
+    const recorded: unknown[] = [];
+    agentTabManager.getBindingForThread = () => ({ agentId: 'agent_1', callerToken: 'agtok_fixture',
+      workspacePath: '/workspace/projects/interpreter', threadId: id }) as any;
+    nativeSubmissionJournal.begin = async () => ({ requestId: 'request_late', threadId: id,
+      clientUserMessageId: 'late_1', phase: 'received', turnId: null, at: '2026-11-18T00:00:00Z' });
+    nativeSubmissionJournal.advance = async (_entry, phase, turnId, refusal) => {
+      recorded.push(refusal ? { phase, turnId, refusal } : phase);
+    };
+    service.submitSavedThreadInput = async () => { throw new SubagentDirectInputError(id, parent); };
+    const info = console.info;
+    const admissions: unknown[] = [];
+    console.info = (value) => {
+      if (String(value).includes('programmatic_task_admission')) admissions.push(JSON.parse(String(value)));
+    };
+    try {
+      const response = await request(app).post('/api/agent/tasks/stream').send({ mode: 'headless',
+        threadId: id, clientUserMessageId: 'late_1', message: 'new input',
+        workspace: '/workspace/projects/interpreter' });
+      // The stream opens before native input; there is no up-front refusal status.
+      expect(response.status).toBe(200);
+      expect(response.text).toContain('event: error');
+      expect(response.text).toContain('"code":"subagent_direct_input_unsupported"');
+      expect(response.text).toContain(`"threadId":"${id}"`);
+      expect(response.text).toContain(`"parentThreadId":"${parent}"`);
+      expect(response.text).toContain(`only takes work through its parent thread ${parent}`);
+      expect(response.text).not.toContain('turn_not_acknowledged');
+      expect(recorded).toEqual([{ phase: 'terminal_refused', turnId: null,
+        refusal: { reason: 'subagent_direct_input_unsupported', parentThreadId: parent } }]);
+      expect(admissions.at(-1)).toEqual({ event: 'programmatic_task_admission', requestId: 'request_late',
+        phase: 'task_start', status: 'refused', code: 'subagent_direct_input_unsupported' });
+
+      // An unrelated failure keeps its message and is not recorded as a refusal.
+      recorded.length = 0;
+      service.submitSavedThreadInput = async () => { throw new Error('native resume rejected'); };
+      const ordinary = await request(app).post('/api/agent/tasks/stream').send({ mode: 'headless',
+        threadId: id, clientUserMessageId: 'late_2', message: 'new input',
+        workspace: '/workspace/projects/interpreter' });
+      expect(ordinary.text).toContain('native resume rejected');
+      expect(ordinary.text).not.toContain('subagent_direct_input_unsupported');
+      expect(recorded).toEqual([]);
+    } finally {
+      console.info = info;
+      agentTabManager.getBindingForThread = binding;
+      nativeSubmissionJournal.begin = begin;
+      nativeSubmissionJournal.advance = advance;
+      service.submitSavedThreadInput = start;
     }
   });
   test('slow native preflight reserves the stable ID before a duplicate request', async () => {

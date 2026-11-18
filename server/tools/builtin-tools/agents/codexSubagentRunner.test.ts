@@ -9,6 +9,7 @@ import { getProfile as getCodexProfile } from '../../../../src/lib/codex/profile
 import type { AgentModelConfig } from '../../../../shared/types/model';
 import type { v2 } from '../../../handlers/codex-generated-types';
 import type { CodexSubagentSession } from './codexSubagentRunner';
+import { SubagentDirectInputError } from '../../../../src/lib/codex/subagent-input';
 import {
   closeCodexSubagentSession,
   createCodexSubagentSession,
@@ -159,6 +160,27 @@ describe('runCodexSubagent', () => {
     expect(result.completed).toBe(false);
     expect(disposals).toBe(1);
     expect(agentTabManager.getBindingForCallerToken('agtok_no_native_thread')).toBeUndefined();
+  });
+
+  test('a sub-agent input refusal is returned with its code and parent thread', async () => {
+    const modelConfig: AgentModelConfig = { provider: 'openai-oauth', modelId: 'gpt-6-sol' };
+    const createSession = async (): Promise<CodexSubagentSession> => ({
+      service: { async ensureProvider() {}, async getAccount() { return { account: { type: 'chatgpt' } }; },
+        async runTurn() { throw new SubagentDirectInputError('thr_child', 'thr_parent'); } } as any,
+      profile: getCodexProfile('default'), agentId: 'refused-agent',
+      callerToken: 'agtok_refused', modelConfig, dispose() {},
+    });
+    const result = await runCodexSubagent({ message: 'Direct input', modelConfig,
+      workspace: '/tmp/refused', threadId: 'thr_child', createSession });
+    expect(result.completed).toBe(false);
+    expect(result.refusal).toEqual({ code: 'subagent_direct_input_unsupported',
+      threadId: 'thr_child', parentThreadId: 'thr_parent' });
+    const ordinary = await runCodexSubagent({ message: 'Direct input', modelConfig,
+      workspace: '/tmp/refused', threadId: 'thr_child', createSession: async () => ({
+        ...(await createSession()),
+        service: { async ensureProvider() {}, async getAccount() { throw new Error('pre-admission failure'); } } as any,
+      }) });
+    expect(ordinary.refusal).toBeUndefined();
   });
 
   test('a failed post-turn observer cannot revoke an observed native thread caller', async () => {

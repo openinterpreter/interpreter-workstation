@@ -21,6 +21,7 @@ import {
   THREAD_LIST_DEFAULTS,
   type TurnEndedEvent,
 } from "@/lib/codex/service";
+import { isSubagentDirectInputRefusal, SubagentDirectInputError } from "@/lib/codex/subagent-input";
 import type { v2 } from "@/schemas";
 import type { JsonValue } from "@/schemas/serde_json/JsonValue";
 
@@ -1972,6 +1973,129 @@ describe("CodexService", () => {
     }
     assert.deepEqual(carrierEvents, ['rollback']);
     assert.equal(fake.calls.startTurn, 0);
+  });
+
+  test('a spawned thread the runtime accepts takes direct input as before', async () => {
+    const id = '00000000-0000-4000-8000-000000000127';
+    const parent = '00000000-0000-4000-8000-000000000128';
+    const fake = createFakeClient({
+      async threadRead() { return { thread: { id, cwd: '/workspace', status: { type: 'idle' },
+        parentThreadId: parent,
+        source: { subAgent: { thread_spawn: { parent_thread_id: parent, depth: 1, agent_path: null,
+          agent_nickname: null, agent_role: null } } },
+        turns: [] } as unknown as v2.Thread }; },
+    });
+    const service = new CodexService(fake.client);
+    assert.equal(typeof await service.startExistingThreadTurn(id, 'wake input', '/workspace',
+      { mcp_servers: {} }), 'string');
+    assert.equal(typeof await service.submitSavedThreadInput(id, 'input', '/workspace', 'stable_sub'), 'string');
+    assert.equal(fake.calls.startTurn, 2);
+  });
+
+  test('the runtime resume refusal maps to the refusal code with its parent and no second resume', async () => {
+    const id = '00000000-0000-4000-8000-000000000129';
+    const parent = '00000000-0000-4000-8000-000000000130';
+    const resumeRefusal = 'cannot resume an unloaded multi-agent v2 sub-agent through its parent; ' +
+      'resume the parent first, or use thread/read to inspect it';
+    const fake = createFakeClient({
+      async threadRead() { return { thread: { id, cwd: '/workspace', status: { type: 'notLoaded' },
+        parentThreadId: parent, turns: [] } as unknown as v2.Thread }; },
+      async resumeThread() { throw new JSONRPCErrorException(resumeRefusal, JSONRPCErrorCode.InvalidRequest); },
+    });
+    fake.client.threadList = async () => ({ data: [{ id } as v2.Thread], nextCursor: null });
+    const carrierEvents: string[] = [];
+    const restore = setUnloadedThreadCarrierProvider(async () => ({
+      shellPolicy: { set: { INTERPRETER_CALLER_TOKEN: 'agtok_fresh_caller' } },
+      commit: () => carrierEvents.push('commit'), rollback: () => carrierEvents.push('rollback'),
+    }));
+    const service = new CodexService(fake.client);
+    const refused = (error: unknown) => {
+      assert.ok(error instanceof SubagentDirectInputError);
+      assert.equal(error.code, 'subagent_direct_input_unsupported');
+      assert.equal(error.threadId, id);
+      assert.equal(error.parentThreadId, parent);
+      assert.equal(error.message, `Thread ${id} is a sub-agent that only takes work through its parent ` +
+        `thread ${parent}; send the message to the parent thread instead.`);
+      return true;
+    };
+    try {
+      await assert.rejects(service.startExistingThreadTurn(id, 'wake input', '/workspace', { mcp_servers: {} }),
+        refused);
+      assert.deepEqual(carrierEvents, ['rollback']);
+      assert.equal(fake.calls.resumeThread, 1);
+      // The ordinary path's three reads, plus one for the parent after the refusal.
+      assert.equal(fake.calls.threadReadParams.length, 4);
+      await assert.rejects(service.submitSavedThreadInput(id, 'input', '/workspace', 'stable_sub'), refused);
+      assert.deepEqual(carrierEvents, ['rollback', 'rollback']);
+      assert.equal(fake.calls.resumeThread, 2);
+      // Saved input already read the thread, so its parent is reused; the
+      // other two reads are the carrier resume's custody check.
+      assert.equal(fake.calls.threadReadParams.length, 7);
+    } finally {
+      restore();
+    }
+    assert.equal(fake.calls.startTurn, 0);
+  });
+
+  test('the runtime turn-start refusal maps to the refusal code with its parent, or null when unreadable', async () => {
+    const id = '00000000-0000-4000-8000-000000000132';
+    const parent = '00000000-0000-4000-8000-000000000133';
+    let readable = true;
+    const loaded = createFakeClient({
+      async threadRead() {
+        if (!readable) throw new Error('thread read unavailable');
+        return { thread: { id, cwd: '/workspace', status: { type: 'idle' },
+          parentThreadId: parent, turns: [] } as unknown as v2.Thread };
+      },
+      async startTurn() {
+        throw new JSONRPCErrorException('direct app-server input is not allowed for multi-agent v2 sub-agents',
+          JSONRPCErrorCode.InvalidRequest);
+      },
+    });
+    const service = new CodexService(loaded.client);
+    for (const submit of [
+      () => service.startExistingThreadTurn(id, 'wake input', '/workspace', { mcp_servers: {} }),
+      () => service.submitSavedThreadInput(id, 'input', '/workspace', 'stable_loaded'),
+    ]) {
+      await assert.rejects(submit(), (error: unknown) =>
+        error instanceof SubagentDirectInputError && error.code === 'subagent_direct_input_unsupported' &&
+        error.threadId === id && error.parentThreadId === parent);
+    }
+    assert.equal(loaded.calls.resumeThread, 1);
+    readable = false;
+    await assert.rejects(service.startExistingThreadTurn(id, 'wake input', '/workspace', { mcp_servers: {} }),
+      (error: unknown) => error instanceof SubagentDirectInputError && error.parentThreadId === null);
+    assert.equal(isSubagentDirectInputRefusal(new Error('multi-agent v2 something else')), false);
+    assert.equal(isSubagentDirectInputRefusal(
+      new Error('cannot resume an unloaded multi-agent v2 sub-agent through its parent')), false);
+  });
+
+  test('an ordinary unloaded thread keeps its carrier and retry resume, and its failure is not relabelled', async () => {
+    const id = '00000000-0000-4000-8000-000000000131';
+    const fake = createFakeClient({
+      async threadRead() { return { thread: { id, cwd: '/workspace', status: { type: 'notLoaded' },
+        parentThreadId: null, source: 'appServer', turns: [] } as unknown as v2.Thread }; },
+      async resumeThread() { throw new Error('native resume rejected'); },
+    });
+    fake.client.threadList = async () => ({ data: [{ id } as v2.Thread], nextCursor: null });
+    const carrierEvents: string[] = [];
+    const restore = setUnloadedThreadCarrierProvider(async () => ({
+      shellPolicy: { set: { INTERPRETER_CALLER_TOKEN: 'agtok_fresh_caller' } },
+      commit: () => carrierEvents.push('commit'), rollback: () => carrierEvents.push('rollback'),
+    }));
+    const service = new CodexService(fake.client);
+    try {
+      await assert.rejects(service.startExistingThreadTurn(id, 'wake input', '/workspace', { mcp_servers: {} }),
+        (error: unknown) => !(error instanceof SubagentDirectInputError) &&
+          error instanceof Error && error.message === 'native resume rejected');
+    } finally {
+      restore();
+    }
+    assert.deepEqual(carrierEvents, ['rollback']);
+    assert.equal(fake.calls.resumeThread, 2);
+    // Only the load-state read and the carrier resume's custody check; nothing
+    // is read for the refusal mapping unless the runtime refuses.
+    assert.equal(fake.calls.threadReadParams.length, 3);
   });
 
   test('unloaded existing-thread turn resumes with the caller-bound policy, loaded keeps it stripped', async () => {
