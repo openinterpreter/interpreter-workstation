@@ -5,6 +5,8 @@ import path from 'node:path';
 import {
   OUTCOME_SUMMARY_LIMIT,
   OutcomeReturns,
+  goalNoticeId,
+  goalNoticeSummary,
   outcomeReturnId,
   outcomeRetryDelayMs,
   parseOutcomeReturnCommand,
@@ -55,7 +57,7 @@ describe('outcome returns', () => {
       await store.turnEnded(thread, 'turn_1', 'completed', 'All done.');
       await store.deliverDue();
       const id = outcomeReturnId(thread, 'turn_1');
-      expect(await f.received()).toEqual([{ version: 1, id, to: sender,
+      expect(await f.received()).toEqual([{ version: 1, kind: 'turn', id, to: sender,
         from: { threadId: thread, turnId: 'turn_1' }, clientUserMessageId: 'handoff_1',
         outcome: 'completed', summary: 'All done.' }]);
       const [entry] = store.list();
@@ -182,6 +184,58 @@ describe('outcome returns', () => {
       expect(payload.summary).toBe('x'.repeat(OUTCOME_SUMMARY_LIMIT));
     } finally { await f.cleanup(); }
   }, 30_000);
+
+  test('a Goal notice is delivered through the same command with its own kind and stable ID', async () => {
+    const f = await fixture();
+    try {
+      const store = await f.make(0);
+      await store.watch(thread, 'turn_g', sender, 'handoff_g');
+      expect(store.latestSender(thread)).toEqual(sender);
+      const goal = { status: 'blocked' as const, previousStatus: 'active' as const, reason: 'turn_error' as const,
+        createdAt: 1_700_000_000, updatedAt: 1_700_000_500 };
+      expect(await store.noticeGoal(thread, sender, goal)).toBe(true);
+      expect(await store.noticeGoal(thread, sender, goal)).toBe(true);
+      const id = goalNoticeId(thread, goal);
+      expect(id).toBe(goalNoticeId(thread, { ...goal, reason: 'unknown' } as typeof goal));
+      expect(id).not.toBe(goalNoticeId(thread, { ...goal, updatedAt: goal.updatedAt + 1 }));
+      expect(id).not.toBe(outcomeReturnId(thread, 'turn_g'));
+      expect(store.lastGoalNotice(thread)).toEqual(goal);
+      await store.turnEnded(thread, 'turn_g', 'completed', 'Worker answer.');
+      await store.deliverDue();
+      const received = await f.received();
+      expect(received).toContainEqual({ version: 1, kind: 'goal', id, to: sender, from: { threadId: thread },
+        goal, summary: goalNoticeSummary(thread, goal) });
+      expect(goalNoticeSummary(thread, goal))
+        .toBe(`Goal on thread ${thread} is blocked (status blocked, previously active; reason turn_error).`);
+      expect(store.list().find(entry => entry.id === id)).toMatchObject({ kind: 'goal', status: 'delivered', goal });
+      // The delivery of the notice to the sender's thread is never watched there.
+      expect(await store.watch(thread, 'turn_delivery', { computer: 'other-host' }, `outcome-${id}`)).toBe(true);
+      expect(store.latestSender(thread)).toEqual(sender);
+      // Goal entries survive a restart and still validate.
+      await store.stop();
+      const restarted = await f.make(null);
+      expect(restarted.lastGoalNotice(thread)).toEqual(goal);
+      expect(restarted.recentSenderThreads(50)).toEqual([thread]);
+    } finally { await f.cleanup(); }
+  }, 30_000);
+
+  test('only attributed turns count as senders; most recent thread first', async () => {
+    const f = await fixture();
+    try {
+      const store = await f.make(null);
+      const other = '00000000-0000-4000-8000-000000000002';
+      expect(store.latestSender(thread)).toBeNull();
+      await store.watch(thread, 'turn_only_delivery', sender, 'outcome-abc');
+      expect(store.latestSender(thread)).toBeNull();
+      expect(store.recentSenderThreads(50)).toEqual([]);
+      await store.watch(thread, 'turn_a', { computer: 'first-host' }, 'handoff_a');
+      await store.watch(other, 'turn_b', sender, 'handoff_b');
+      await store.watch(thread, 'turn_c', { computer: 'second-host' }, 'handoff_c');
+      expect(store.latestSender(thread)).toEqual({ computer: 'second-host' });
+      expect(store.recentSenderThreads(50)).toEqual([thread, other]);
+      expect(store.recentSenderThreads(1)).toEqual([thread]);
+    } finally { await f.cleanup(); }
+  });
 
   test('startup reconciles a watched turn that already ended', async () => {
     const f = await fixture();

@@ -71,9 +71,25 @@ resume, so a Goal that someone resumed, paused, edited, cleared or replaced in
 the meantime is never overridden. A pending resume is cancelled by any Goal
 change, by any new turn on the thread, and when the sidecar stops. Each
 scheduled, cancelled, completed or abandoned attempt is written to the sidecar
-log with a `[goal-auto-resume]` prefix. The schedule is held in memory only: a
+log with a `[goal-auto-resume]` prefix. The schedule is kept in memory only: a
 Goal that is still blocked when the sidecar restarts stays blocked until it is
 resumed.
+
+### Notices to the agent that assigned the work
+
+When another agent host handed work to the thread (a sender-attributed task,
+see [Thread wake sources](wake-sources.md#work-handed-over-by-another-agent-host)),
+Workstation tells that thread's most recent sender when the Goal settles as
+`paused`, `blocked`, `usageLimited`, `budgetLimited` or `complete`, and once
+more when a stopped Goal becomes `active` again. A change must stay settled for
+25 seconds, so a flapping Goal produces at most one notice per settled state. A
+model-capacity block that the automatic resume above has scheduled is reported
+only if the resume does not reverse it, with reason `model_capacity_exhausted`
+when it gave up. Notices contain status words, the Goal's own times and a fixed
+reason, never the objective, and are delivered through the configured outcome
+return command. At startup, Goals of recently attributed threads are read once
+so a change that happened while the sidecar was down is still reported. See
+[Goal notices](wake-sources.md#goal-notices) for the payload and reasons.
 
 ## Persistence and reconnection
 

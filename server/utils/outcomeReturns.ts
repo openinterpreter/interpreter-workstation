@@ -8,6 +8,8 @@ import { parseSubmissionSender, SUBMISSION_ID, type SubmissionSender } from './n
 export type OutcomeReturnStatus = 'watching' | 'pending' | 'delivered' | 'failed';
 export type TurnOutcome = 'completed' | 'failed' | 'interrupted';
 export type OutcomeReturn = {
+  /** Always absent on turn outcomes, which keeps the stored format unchanged. */
+  kind?: undefined;
   id: string;
   threadId: string;
   turnId: string;
@@ -21,17 +23,58 @@ export type OutcomeReturn = {
   createdAt: string;
   updatedAt: string;
 };
+export type GoalNoticeStatus = 'active' | 'paused' | 'blocked' | 'usageLimited' | 'budgetLimited' | 'complete';
+/** Fixed vocabulary for why a Goal changed; never free text. */
+export type GoalNoticeReason = 'turn_error' | 'model_capacity_exhausted' | 'usage_limit' | 'budget_limit' |
+  'changed_during_turn' | 'changed_outside_turn' | 'unknown';
+/** A Goal status change reported to the thread's most recent sender. Status
+ * words, timestamps and a reason only: never the objective or message text. */
+export type GoalNotice = {
+  status: GoalNoticeStatus;
+  previousStatus?: GoalNoticeStatus;
+  reason: GoalNoticeReason;
+  /** The native Goal's creation and update times; they identify the Goal and this change. */
+  createdAt: number;
+  updatedAt: number;
+};
+/** A stored Goal notice, delivered by the same command as turn outcomes. */
+export type GoalNoticeReturn = {
+  kind: 'goal';
+  id: string;
+  threadId: string;
+  sender: SubmissionSender;
+  goal: GoalNotice;
+  status: Exclude<OutcomeReturnStatus, 'watching'>;
+  attempts: number;
+  nextAttemptAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+type StoredEntry = OutcomeReturn | GoalNoticeReturn;
 /** What the visibility route exposes: never the summary text. */
 export type OutcomeReturnView = Pick<OutcomeReturn, 'id' | 'threadId' | 'turnId' | 'sender' | 'status' |
-  'outcome' | 'attempts' | 'nextAttemptAt' | 'updatedAt'>;
+  'outcome' | 'attempts' | 'nextAttemptAt' | 'updatedAt'> |
+  Pick<GoalNoticeReturn, 'kind' | 'id' | 'threadId' | 'sender' | 'goal' | 'status' | 'attempts' |
+    'nextAttemptAt' | 'updatedAt'>;
 /** The single JSON object written to the configured command's standard input. */
 export type OutcomeReturnPayload = {
   version: 1;
+  kind: 'turn';
   id: string;
   to: SubmissionSender;
   from: { threadId: string; turnId: string };
   clientUserMessageId: string;
   outcome: TurnOutcome;
+  summary: string;
+} | {
+  version: 1;
+  kind: 'goal';
+  id: string;
+  to: SubmissionSender;
+  from: { threadId: string };
+  goal: GoalNotice;
+  /** A fixed-template sentence built from the fields above, for receivers
+   * that deliver an unknown kind as a plain message. */
   summary: string;
 };
 
@@ -44,19 +87,52 @@ const RECONCILE_TIMEOUT_MS = 10_000;
 const RECENTLY_ENDED_LIMIT = 64;
 const STATUSES: OutcomeReturnStatus[] = ['watching', 'pending', 'delivered', 'failed'];
 const OUTCOMES: TurnOutcome[] = ['completed', 'failed', 'interrupted'];
+export const GOAL_NOTICE_STATUSES: readonly GoalNoticeStatus[] =
+  ['active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'];
+const GOAL_NOTICE_REASONS: readonly GoalNoticeReason[] = ['turn_error', 'model_capacity_exhausted', 'usage_limit',
+  'budget_limit', 'changed_during_turn', 'changed_outside_turn', 'unknown'];
 
 export function outcomeReturnId(threadId: string, turnId: string): string {
   return createHash('sha256').update(`${threadId}:${turnId}`).digest('hex');
 }
 
+/** Stable delivery ID of one Goal change: the thread, the Goal (its creation
+ * time), the new status and the Goal's update time of that change. */
+export function goalNoticeId(threadId: string, goal: Pick<GoalNotice, 'status' | 'createdAt' | 'updatedAt'>): string {
+  return createHash('sha256').update(`goal:${threadId}:${goal.createdAt}:${goal.status}:${goal.updatedAt}`)
+    .digest('hex');
+}
+
+const GOAL_STATUS_WORDS: Record<GoalNoticeStatus, string> = { active: 'active again', paused: 'paused',
+  blocked: 'blocked', usageLimited: 'stopped by a usage limit', budgetLimited: 'stopped by its token budget',
+  complete: 'complete' };
+
+/** The plain sentence a receiver can deliver for a Goal notice. Built only
+ * from status words and IDs. */
+export function goalNoticeSummary(threadId: string, goal: GoalNotice): string {
+  const previous = goal.previousStatus ? `, previously ${goal.previousStatus}` : '';
+  return `Goal on thread ${threadId} is ${GOAL_STATUS_WORDS[goal.status]} (status ${goal.status}${previous}; ` +
+    `reason ${goal.reason}).`;
+}
+
+function validGoalNotice(value: unknown): value is GoalNotice {
+  const goal = value as GoalNotice;
+  return !!goal && typeof goal === 'object' && GOAL_NOTICE_STATUSES.includes(goal.status) &&
+    (goal.previousStatus === undefined || GOAL_NOTICE_STATUSES.includes(goal.previousStatus)) &&
+    GOAL_NOTICE_REASONS.includes(goal.reason) && Number.isFinite(goal.createdAt) &&
+    Number.isFinite(goal.updatedAt) &&
+    Object.keys(goal).every(key => ['status', 'previousStatus', 'reason', 'createdAt', 'updatedAt'].includes(key));
+}
+
 /** Prefix of the client message ID under which a return command delivers an
- * outcome to the sender's thread (`outcome-<id>`). */
+ * outcome or a Goal notice to the sender's thread (`outcome-<id>`). */
 export const OUTCOME_DELIVERY_ID_PREFIX = 'outcome-';
 
 /**
- * True when a submission is itself the delivery of an outcome. Such a turn is
- * never watched: returning the outcome of an outcome would make two idle
- * threads answer each other without end.
+ * True when a submission is itself the delivery of an outcome or Goal notice.
+ * Such a turn is never watched and never makes its sender the thread's
+ * sender: returning the outcome of an outcome would make two idle threads
+ * answer each other without end.
  */
 export function isOutcomeDelivery(clientUserMessageId: string): boolean {
   return clientUserMessageId.startsWith(OUTCOME_DELIVERY_ID_PREFIX);
@@ -96,9 +172,18 @@ export type OutcomeReturnsOptions = {
   commandTimeoutMs?: number;
 };
 
-function validEntry(value: unknown): value is OutcomeReturn {
-  const entry = value as OutcomeReturn;
-  return !!entry && typeof entry === 'object' && /^[0-9a-f]{64}$/.test(entry.id) &&
+function validEntry(value: unknown): value is StoredEntry {
+  if (value && typeof value === 'object' && (value as GoalNoticeReturn).kind === 'goal') {
+    const entry = value as GoalNoticeReturn;
+    return typeof entry.threadId === 'string' && validGoalNotice(entry.goal) &&
+      entry.id === goalNoticeId(entry.threadId, entry.goal) && !!parseSubmissionSender(entry.sender) &&
+      STATUSES.includes(entry.status) && entry.status !== ('watching' as OutcomeReturnStatus) &&
+      Number.isInteger(entry.attempts) && entry.attempts >= 0 &&
+      (entry.nextAttemptAt === undefined || typeof entry.nextAttemptAt === 'string') &&
+      typeof entry.createdAt === 'string' && typeof entry.updatedAt === 'string';
+  }
+  const entry = value as OutcomeReturn & { kind?: unknown };
+  return !!entry && typeof entry === 'object' && entry.kind === undefined && /^[0-9a-f]{64}$/.test(entry.id) &&
     typeof entry.threadId === 'string' && typeof entry.turnId === 'string' &&
     entry.id === outcomeReturnId(entry.threadId, entry.turnId) &&
     !!parseSubmissionSender(entry.sender) && typeof entry.clientUserMessageId === 'string' &&
@@ -112,13 +197,14 @@ function validEntry(value: unknown): value is OutcomeReturn {
 
 /**
  * Durable record of sender-attributed turns whose outcome is returned to the
- * sending host by a configured command. One private file, atomically replaced
+ * sending host by a configured command, and of Goal notices sent to a thread's
+ * most recent sender through the same command. One private file, atomically replaced
  * (temp file, fsync, rename, directory fsync) under a serialised write chain.
  * Delivery is at-least-once: a restart during a running command retries it,
  * so receivers must deduplicate on `id`.
  */
 export class OutcomeReturns {
-  private entries: OutcomeReturn[] = [];
+  private entries: StoredEntry[] = [];
   private chain = Promise.resolve();
   private timer?: ReturnType<typeof setInterval>;
   private delivering?: Promise<void>;
@@ -182,17 +268,7 @@ export class OutcomeReturns {
     const id = outcomeReturnId(threadId, turnId);
     return this.exclusive(async () => {
       if (this.entries.some(entry => entry.id === id)) return true;
-      while (this.entries.length >= OUTCOME_RETURN_LIMIT) {
-        const index = this.entries.findIndex(entry => entry.status === 'delivered' || entry.status === 'failed');
-        if (index < 0) {
-          if (!this.refusalLogged) {
-            console.error('[Outcome returns] Store is full of undelivered outcomes; new outcomes are not recorded.');
-            this.refusalLogged = true;
-          }
-          return false;
-        }
-        this.entries.splice(index, 1);
-      }
+      if (!this.makeRoom()) return false;
       const at = new Date(this.now()).toISOString();
       const entry: OutcomeReturn = { id, threadId, turnId, sender: checked, clientUserMessageId,
         status: 'watching', attempts: 0, createdAt: at, updatedAt: at };
@@ -229,9 +305,78 @@ export class OutcomeReturns {
     });
   }
 
+  /** The sender of the most recently recorded attributed turn on a thread.
+   * Deliveries of outcomes and Goal notices are never recorded, so they never
+   * count as a sender. */
+  latestSender(threadId: string): SubmissionSender | null {
+    for (let index = this.entries.length - 1; index >= 0; index--) {
+      const entry = this.entries[index]!;
+      if (entry.kind === undefined && entry.threadId === threadId) return { ...entry.sender };
+    }
+    return null;
+  }
+
+  /** Threads with a recorded sender, most recently attributed first. */
+  recentSenderThreads(limit: number): string[] {
+    const threads: string[] = [];
+    for (let index = this.entries.length - 1; index >= 0 && threads.length < limit; index--) {
+      const entry = this.entries[index]!;
+      if (entry.kind === undefined && !threads.includes(entry.threadId)) threads.push(entry.threadId);
+    }
+    return threads;
+  }
+
+  /** The last Goal notice recorded for a thread, delivered or not. */
+  lastGoalNotice(threadId: string): GoalNotice | null {
+    for (let index = this.entries.length - 1; index >= 0; index--) {
+      const entry = this.entries[index]!;
+      if (entry.kind === 'goal' && entry.threadId === threadId) return { ...entry.goal };
+    }
+    return null;
+  }
+
+  /** Record a Goal notice as pending delivery. Idempotent on its ID; false
+   * when the store is full of undelivered entries. */
+  async noticeGoal(threadId: string, sender: SubmissionSender, goal: GoalNotice): Promise<boolean> {
+    const checked = parseSubmissionSender(sender);
+    if (!checked || !validGoalNotice(goal)) throw new Error('Invalid Goal notice');
+    const id = goalNoticeId(threadId, goal);
+    return this.exclusive(async () => {
+      if (this.entries.some(entry => entry.id === id)) return true;
+      if (!this.makeRoom()) return false;
+      const at = new Date(this.now()).toISOString();
+      this.entries.push({ kind: 'goal', id, threadId, sender: checked, goal: { ...goal }, status: 'pending',
+        attempts: 0, nextAttemptAt: at, createdAt: at, updatedAt: at });
+      await this.save();
+      return true;
+    });
+  }
+
   list(): OutcomeReturnView[] {
-    return this.entries.map(({ id, threadId, turnId, sender, status, outcome, attempts, nextAttemptAt, updatedAt }) =>
-      ({ id, threadId, turnId, sender: { ...sender }, status, outcome, attempts, nextAttemptAt, updatedAt }));
+    return this.entries.map(entry => {
+      const { id, threadId, sender, status, attempts, nextAttemptAt, updatedAt } = entry;
+      return entry.kind === 'goal'
+        ? { kind: 'goal' as const, id, threadId, sender: { ...sender }, goal: { ...entry.goal },
+          status: entry.status, attempts, nextAttemptAt, updatedAt }
+        : { id, threadId, turnId: entry.turnId, sender: { ...sender }, status, outcome: entry.outcome, attempts,
+          nextAttemptAt, updatedAt };
+    });
+  }
+
+  /** Drop the oldest delivered or failed entry while the store is full. */
+  private makeRoom(): boolean {
+    while (this.entries.length >= OUTCOME_RETURN_LIMIT) {
+      const index = this.entries.findIndex(entry => entry.status === 'delivered' || entry.status === 'failed');
+      if (index < 0) {
+        if (!this.refusalLogged) {
+          console.error('[Outcome returns] Store is full of undelivered outcomes; new outcomes are not recorded.');
+          this.refusalLogged = true;
+        }
+        return false;
+      }
+      this.entries.splice(index, 1);
+    }
+    return true;
   }
 
   /** One delivery pass over due pending entries (the timer tick). */
@@ -249,10 +394,13 @@ export class OutcomeReturns {
       if (this.stopping) return;
       const entry = this.entries.find(item => item.id === id);
       if (!entry || entry.status !== 'pending') continue;
-      const payload: OutcomeReturnPayload = { version: 1, id: entry.id, to: { ...entry.sender },
-        from: { threadId: entry.threadId, turnId: entry.turnId },
-        clientUserMessageId: entry.clientUserMessageId, outcome: entry.outcome ?? 'failed',
-        summary: entry.summary ?? '' };
+      const payload: OutcomeReturnPayload = entry.kind === 'goal'
+        ? { version: 1, kind: 'goal', id: entry.id, to: { ...entry.sender }, from: { threadId: entry.threadId },
+          goal: { ...entry.goal }, summary: goalNoticeSummary(entry.threadId, entry.goal) }
+        : { version: 1, kind: 'turn', id: entry.id, to: { ...entry.sender },
+          from: { threadId: entry.threadId, turnId: entry.turnId },
+          clientUserMessageId: entry.clientUserMessageId, outcome: entry.outcome ?? 'failed',
+          summary: entry.summary ?? '' };
       const delivered = await this.run(argv, payload);
       if (this.stopping && !delivered) return;
       await this.exclusive(async () => {
@@ -262,7 +410,7 @@ export class OutcomeReturns {
         current.updatedAt = new Date(now).toISOString();
         if (delivered) {
           current.status = 'delivered';
-          delete current.summary;
+          if (current.kind === undefined) delete current.summary;
           delete current.nextAttemptAt;
         } else {
           current.attempts += 1;
@@ -304,7 +452,7 @@ export class OutcomeReturns {
   private async reconcileWatching(): Promise<void> {
     const readTurn = this.options.readTurn;
     if (!readTurn) return;
-    const watching = this.entries.filter(entry => entry.status === 'watching');
+    const watching = this.entries.filter((entry): entry is OutcomeReturn => entry.status === 'watching');
     await Promise.all(watching.map(async entry => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {

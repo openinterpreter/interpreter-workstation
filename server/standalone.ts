@@ -61,6 +61,7 @@ import {
 import { stopWakeSources } from "./utils/wakeSourcesRuntime";
 import { stopOutcomeReturns } from "./utils/outcomeReturnsRuntime";
 import { stopGoalAutoResume } from "./utils/goalAutoResumeRuntime";
+import { stopGoalNotices } from "./utils/goalNoticesRuntime";
 
 const DEFAULT_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 5177;
 const DEFAULT_WORKSPACE = process.env.WORKSPACE || process.cwd();
@@ -84,6 +85,7 @@ async function shutdownServer(
   // admission and fsynced receipt settle. Incoming World events remain with
   // their approved source while this sidecar is unavailable.
   await stopWakeSources();
+  stopGoalNotices();
   await stopOutcomeReturns();
   stopGoalAutoResume();
 
