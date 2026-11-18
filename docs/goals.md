@@ -54,6 +54,27 @@ temporary blocker from completion, and audit what remains.
 successful completion. Workstation displays the native status rather than
 inventing a second idle timer or supervisor state.
 
+### Automatic resume after a model-capacity refusal
+
+OIX blocks an active Goal when a turn fails with any error other than a usage
+limit, including a temporary "Selected model is at capacity" refusal. For that
+one class of failure (model at capacity or overloaded, or the provider
+temporarily unavailable), the Workstation sidecar resumes the Goal on its own:
+after about 30 seconds, then 2, 5 and 10 minutes, then every 15 minutes, for at
+most two hours from the first such block. A turn that completes or runs for at
+least five minutes starts the schedule over. Usage and quota limits, rate
+limits, authorization, context-length, policy and interrupted turns are never
+resumed automatically.
+
+The resume uses the same exact four-field revision transition as a manual
+resume, so a Goal that someone resumed, paused, edited, cleared or replaced in
+the meantime is never overridden. A pending resume is cancelled by any Goal
+change, by any new turn on the thread, and when the sidecar stops. Each
+scheduled, cancelled, completed or abandoned attempt is written to the sidecar
+log with a `[goal-auto-resume]` prefix. The schedule is held in memory only: a
+Goal that is still blocked when the sidecar restarts stays blocked until it is
+resumed.
+
 ## Persistence and reconnection
 
 Persist the OIX home directory and the workspace used by the thread. The OIX
