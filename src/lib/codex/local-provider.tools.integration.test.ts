@@ -844,6 +844,86 @@ describeIfCodex("local provider integration - native file tools", () => {
     }
   }, 90_000);
 
+  test.skipIf(process.platform === "win32")(
+    "agent_shell_resolves_interpreter_to_the_running_runtime_and_home",
+    async () => {
+      setConfigOverride(createTestConfig());
+
+      const workspace = mkdtempSync(join(tmpdir(), "codex-runtime-cmd-workspace-"));
+      const codexHome = mkdtempSync(join(tmpdir(), "codex-home-runtime-cmd-"));
+      const harness = new CodexTestHarness(codexHome);
+      const callId = "call_runtime_command";
+      const command = [
+        "printf 'resolved=%s\\n' \"$(command -v interpreter)\"",
+        "printf 'home=%s\\n' \"$INTERPRETER_HOME\"",
+        "printf 'version=%s\\n' \"$(interpreter --version)\"",
+      ].join("; ");
+      const shellCall = nativeShellToolCall(command, workspace);
+
+      const scenario: ScriptedScenario = {
+        name: "agent-shell-runtime-command",
+        modelsResponse: MODELS_RESPONSE,
+        responseBehavior: {
+          type: "sequence",
+          responses: [
+            {
+              type: "sse",
+              body: chatToolCallStream(callId, shellCall.name, shellCall.args),
+            },
+            {
+              type: "sse",
+              body: chatAssistantMessageStream("Checked the runtime."),
+            },
+          ],
+        },
+      };
+
+      try {
+        await harness.start("ollama", scenario);
+
+        const threadId = await harness.client.startThreadWithConfig(
+          "test-model",
+          harness.modelProvider,
+          null,
+          workspace,
+          {
+            shell_environment_policy: buildInterpreterCliShellEnvironmentPolicy(
+              "agtok_runtime_command",
+              { ...process.env, INTERPRETER_HOME: codexHome },
+              process.platform,
+              workspace,
+            ) as unknown as JsonValue,
+          },
+        );
+        const turn = await harness.client.startTurn({
+          threadId,
+          message: "Which interpreter does the shell run?",
+          model: "test-model",
+          cwd: workspace,
+        });
+
+        const completed = await harness.recorder.waitForTurnCompleted(turn.id, 60_000);
+        expect(completed).toBeTruthy();
+        if ("turn" in completed.params) {
+          expect(completed.params.turn.status).toBe("completed");
+        }
+
+        const chatRequests = getChatCompletionRequests(harness);
+        expect(chatRequests).toHaveLength(2);
+        const toolOutput = JSON.stringify(findToolMessage(chatRequests[1]?.body, callId));
+        expect(toolOutput).toContain(
+          `resolved=${join(codexHome, "runtime", "interpreter-bin", "interpreter")}`,
+        );
+        expect(toolOutput).toContain(`home=${codexHome}`);
+        expect(toolOutput).toMatch(/version=[^\\"]*interpreter\s+\d+\.\d+\.\d+/i);
+      } finally {
+        await harness.stop();
+        rmSync(workspace, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
+
   test("should_read_a_file_via_native_shell", async () => {
     setConfigOverride(createTestConfig());
 

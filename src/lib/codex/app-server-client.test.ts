@@ -1268,11 +1268,11 @@ describe("CodexAppServerClient", () => {
     assert.equal(env.Path, "C:\\Windows\\System32");
   });
 
-  test("does not mutate PATH for non-Windows app-server process", () => {
+  test("puts the runtime bin directory first for non-Windows app-server process", () => {
     const env = buildCodexSpawnEnv({
       baseEnv: { PATH: "/usr/bin:/bin", NODE_V8_COVERAGE: "/tmp/cov" },
       codeHome: "/Users/alice/Library/Application Support/interpreter/codex-home",
-      codexBinary: "/Applications/Interpreter.app/Contents/Resources/codex",
+      codexBinary: "/Applications/Interpreter.app/Contents/Resources/oix/bin/interpreter",
       platform: "darwin",
       pathExists: () => true,
     });
@@ -1294,8 +1294,51 @@ describe("CodexAppServerClient", () => {
       env.HOME,
       "/Users/alice/Library/Application Support/interpreter/codex-home/home",
     );
-    assert.equal(env.PATH, "/usr/bin:/bin");
+    assert.equal(
+      env.PATH,
+      "/Applications/Interpreter.app/Contents/Resources/oix/bin:/usr/bin:/bin",
+    );
     assert.equal(env.NODE_V8_COVERAGE, undefined);
+  });
+
+  test("moves an existing runtime bin entry ahead of other installs without duplicating it", () => {
+    const binDir = "/home/alice/.openinterpreter/packages/standalone/releases/0.0.61-x86_64-unknown-linux-musl/bin";
+    const env = buildCodexSpawnEnv({
+      baseEnv: { PATH: `/home/alice/.local/bin:/usr/bin:${binDir}::/bin:/usr/bin` },
+      codeHome: "/home/alice/.openinterpreter",
+      codexBinary: `${binDir}/interpreter`,
+      platform: "linux",
+      pathExists: (candidatePath) => candidatePath === binDir,
+    });
+
+    assert.equal(
+      env.PATH,
+      `${binDir}:/home/alice/.local/bin:/usr/bin:/bin:/usr/bin`,
+    );
+  });
+
+  test("leaves non-Windows PATH unchanged when the runtime bin directory is absent", () => {
+    const env = buildCodexSpawnEnv({
+      baseEnv: { PATH: "/home/alice/.local/bin:/usr/bin:/bin" },
+      codeHome: "/home/alice/.openinterpreter",
+      codexBinary: "/opt/missing/bin/interpreter",
+      platform: "linux",
+      pathExists: () => false,
+    });
+
+    assert.equal(env.PATH, "/home/alice/.local/bin:/usr/bin:/bin");
+  });
+
+  test("does not invent a non-Windows PATH when none was inherited", () => {
+    const env = buildCodexSpawnEnv({
+      baseEnv: {},
+      codeHome: "/home/alice/.openinterpreter",
+      codexBinary: "/opt/oix/bin/interpreter",
+      platform: "linux",
+      pathExists: () => true,
+    });
+
+    assert.equal(env.PATH, undefined);
   });
 
   test("lists MCP auth status through interpreter CLI JSON output", async () => {
