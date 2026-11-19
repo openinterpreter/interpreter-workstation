@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { topNotices } from '@/ipc';
+import { isIpcUnavailableError } from '../../../shared/ipcAvailability';
 
 const NOTICE_ID = 'simple-whats-new';
 
@@ -21,7 +22,10 @@ export function SimpleWhatsNew({ firstRunSession, onVisibilityChange }: {
     }
     void topNotices.list().then((result: { notices: Array<{ id: string; version: string }> }) => {
       if (mounted) setVersion(result.notices.find((notice) => notice.id === NOTICE_ID)?.version ?? null);
-    }).catch(() => { if (mounted) setError('Could not load the update note.'); });
+    }).catch((loadError: unknown) => {
+      // A host without update notes has nothing to announce; that is not a failure.
+      if (mounted && !isIpcUnavailableError(loadError)) setError('Could not load the update note.');
+    });
     return () => { mounted = false; };
   }, [firstRunSession]);
 

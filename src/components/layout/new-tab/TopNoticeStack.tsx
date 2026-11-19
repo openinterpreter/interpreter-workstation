@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { browserControl, interviewInvite as interviewInviteIpc, topNotices as topNoticesIpc } from '@/ipc';
 import type { BaseTiptapComposerRef } from '../../../../agent/components/composer/BaseTiptapComposer';
 import type { TopNotice } from '../../../../shared/types/topNotices';
+import { isIpcUnavailableError } from '../../../../shared/ipcAvailability';
 import { isMarketingDemoMode } from '../../../demo/marketingDemo';
 import { useLayoutActions } from '../../../hooks/useLayout';
 
@@ -63,7 +64,7 @@ export function TopNoticeStack({
             : status.notices).filter((notice: TopNotice) => notice.id !== 'simple-whats-new'));
         }
       } catch (error) {
-        if (!cancelled) {
+        if (!cancelled && !isIpcUnavailableError(error)) {
           console.error('[TopNoticeStack] Failed to load top notices:', error);
         }
       }
@@ -111,7 +112,7 @@ export function TopNoticeStack({
           setInterviewInviteStatus(status);
         }
       } catch (error) {
-        if (!cancelled) {
+        if (!cancelled && !isIpcUnavailableError(error)) {
           console.error('[TopNoticeStack] Failed to load interview invite:', error);
         }
       }

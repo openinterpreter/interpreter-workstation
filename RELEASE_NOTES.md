@@ -6,6 +6,7 @@
 - A Goal resumes by itself after a temporary model-capacity error, and the agent that assigned the work is told when a Goal stops or resumes.
 - A Goal whose objective was changed can be read again by a supervising agent.
 - Applications opened through computer use no longer inherit the app's internal environment settings.
+- When the interface is opened somewhere that does not provide update notes or skills, Simple mode no longer shows "Could not load the update note" and the composer no longer reports a skills error; it simply shows no note and no skills.
 
 ## Distribution
 
