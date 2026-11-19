@@ -12,6 +12,16 @@ vi.mock('@/ipc', async (importOriginal) => ({
   skills: skillsIpc,
 }));
 
+// The composer subscribes to skill changes through the bridge's event stream,
+// which the test environment does not provide. An inert stream keeps that
+// subscription from raising errors unrelated to what these tests check.
+vi.stubGlobal('EventSource', class {
+  onopen: (() => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  onerror: (() => void) | null = null;
+  close() {}
+});
+
 vi.mock('../../../src/hooks/useLayout', () => {
   const layout = { state: { tabs: {} } };
   const actions = { openFile: () => {}, openFolder: () => {}, openBrowser: () => {} };
