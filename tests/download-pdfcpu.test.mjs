@@ -5,7 +5,9 @@ import { describe, test } from 'node:test';
 import {
   PDFCPU_DIR_NAME,
   PINNED_VERSION,
+  findExtractedBinary,
   getArchiveConfig,
+  getWindowsZipExtractCommand,
   getCurlDownloadArgs,
   getDownloadUrl,
   getPlatformKey,
@@ -101,6 +103,23 @@ describe('download-pdfcpu helpers', () => {
       currentPlatformOnly: false,
       requestedPlatform: 'linux-x64',
     });
+  });
+
+  test('extracts a Windows ZIP with the system tar, by absolute path', () => {
+    assert.deepEqual(
+      getWindowsZipExtractCommand('C:\\tmp\\pdfcpu.zip', 'C:\\out\\win32-x64', 'C:\\Windows'),
+      { file: 'C:\\Windows\\System32\\tar.exe', args: ['-xf', 'C:\\tmp\\pdfcpu.zip', '-C', 'C:\\out\\win32-x64'] },
+    );
+  });
+
+  test('finds the binary inside the archive directory or at the root, and reports when it is absent', () => {
+    const config = getArchiveConfig('win32-x64');
+    const nested = path.join('out', config.extractedDir, config.binary);
+    const root = path.join('out', config.binary);
+    assert.equal(findExtractedBinary('out', config, (candidate) => candidate === nested), nested);
+    assert.equal(findExtractedBinary('out', config, (candidate) => candidate === root), root);
+    assert.equal(findExtractedBinary('out', config, () => true), nested);
+    assert.equal(findExtractedBinary('out', config, () => false), undefined);
   });
 
   test('uses resources/pdfcpu as output root and node platform arch keys', () => {
