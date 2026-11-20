@@ -25,6 +25,9 @@ export type WakeSource = {
   sequence: number;
   /** Persisted admission gate. A running command drains naturally; no child is killed. */
   paused?: boolean;
+  /** Command only: the last run emitted events (or reported more), so the
+   * source runs again as soon as its last input is admitted. */
+  moreAvailable?: boolean;
 };
 export type WakeSourceDrain = {
   drained: true;
@@ -83,11 +86,52 @@ type State = { sources: WakeSource[]; events: WakeEvent[] };
 const EMPTY: State = { sources: [], events: [] };
 const ID = /^[a-zA-Z0-9_-]{1,160}$/;
 const MAX_MESSAGE = 32_000;
-const MAX_STDOUT = 64_000;
+const MAX_COMMAND_EVENTS = 16;
+// Room for MAX_COMMAND_EVENTS lines at the per-event message bound even when
+// the encoder escapes every UTF-16 unit as \uXXXX (6 bytes), plus 1 KiB per
+// line for the ID and keys. 16 * (32,000 * 6 + 1,024) = 3,088,384 bytes.
+const MAX_STDOUT = MAX_COMMAND_EVENTS * (MAX_MESSAGE * 6 + 1024);
 const MIN_INTERVAL = 60_000;
 // Leave room for a hyphen and the full decimal safe-integer sequence.
 const MAX_SCHEDULE_ID = 143;
 const COMMAND_REARM_MS = 30_000;
+// A short follow-up pass after an offer, so a burst is not paced by the 2 s interval.
+const FOLLOW_UP_MS = 250;
+/** Advertised in the wake-sources listing: command stdout may hold several lines. */
+export const WAKE_COMMAND_OUTPUT = 'ndjson' as const;
+type WakeBatchItem = { id: string; message: string };
+type CommandOutput = { waiting: true } | { waiting: false; events: WakeBatchItem[]; more: boolean };
+/** Newline-delimited JSON: one `{"status":"waiting"}` line, or 1-16 event
+ * lines optionally followed by one `{"status":"more"}` line. Every line is
+ * validated before anything is ingested; any violation rejects the run. */
+function parseCommandOutput(stdout: string): CommandOutput {
+  // The wording must not contain a word the error classifier below treats
+  // as a quota or sign-in failure.
+  const invalid = () => new Error('Command output must be one JSON wake event per line');
+  const lines = stdout.split('\n');
+  if (lines[lines.length - 1] === '') lines.pop();
+  // Reject an oversized run before parsing any of it.
+  if (!lines.length || lines.length > MAX_COMMAND_EVENTS + 1) throw invalid();
+  let values: unknown[];
+  try { values = lines.map(line => JSON.parse(line) as unknown); } catch { throw invalid(); }
+  if (values.some(value => !value || typeof value !== 'object' || Array.isArray(value))) throw invalid();
+  const records = values as Record<string, unknown>[];
+  const isStatus = (record: Record<string, unknown>, status: string) =>
+    record.status === status && Object.keys(record).length === 1;
+  if (records.length === 1 && isStatus(records[0], 'waiting')) return { waiting: true };
+  const more = isStatus(records[records.length - 1], 'more');
+  const items = more ? records.slice(0, -1) : records;
+  if (!items.length || items.length > MAX_COMMAND_EVENTS) throw invalid();
+  const ids = new Set<string>();
+  const events = items.map(item => {
+    // Exactly `id` and `message`: an unknown key is a format error, not ignored.
+    if (Object.keys(item).length !== 2 || typeof item.id !== 'string' || !ID.test(item.id) || ids.has(item.id) ||
+        typeof item.message !== 'string' || !item.message.trim() || item.message.length > MAX_MESSAGE) throw invalid();
+    ids.add(item.id);
+    return { id: item.id, message: item.message };
+  });
+  return { waiting: false, events, more };
+}
 const marker = (source: string, id: string) => `[Wake event ${source}/${id}]`;
 export const wakeInput = (event: WakeEvent) => `${marker(event.sourceId, event.eventId)}\n${event.message}`;
 // Native user-message IDs give a second, machine-readable receipt when a
@@ -103,6 +147,8 @@ function safeError(error: unknown): string {
     : error.reason === 'output'
       ? 'Wake command exceeded bounded output before a provider receipt'
       : 'Wake command exited nonzero; check local service diagnostics';
+  // A full local backlog is not a subscription allowance either.
+  if (error instanceof WakeBacklogFull) return error.message;
   if (/usage|quota|credit|billing|limit/.test(message)) return 'Usage limit reached; operator action required';
   if (/oauth|token|credential|authentication|unauthoriz|login/.test(message)) return 'Authentication unavailable; operator action required';
   if (/overload|capacity|unavailable|timeout|disconnect/.test(message)) return 'Runtime temporarily unavailable';
@@ -111,6 +157,15 @@ function safeError(error: unknown): string {
 }
 class WakeCommandExit extends Error {
   constructor(readonly reason: 'timeout' | 'output' | 'exit') { super('Wake command failed'); }
+}
+class WakeBacklogFull extends Error {
+  constructor() { super('Too many inputs await admission on this thread; operator action required'); }
+}
+/** The runtime's definite refusal of a steer: the inspected turn has ended.
+ * It reaches this module as an Error or as a plain JSON-RPC error object. */
+function isNoActiveTurnSteer(error: unknown): boolean {
+  const message = error && typeof error === 'object' && 'message' in error ? error.message : undefined;
+  return message === 'no active turn to steer';
 }
 export function wakeTokenValid(actual: string | undefined, supplied: string | undefined): boolean {
   if (!actual || !supplied) return false;
@@ -171,15 +226,28 @@ export class WakeSources {
   private stopping = false;
   private tickFinished?: Promise<void>;
   private finishTick?: () => void;
+  private queuedTick?: Promise<void>;
+  private followUp?: ReturnType<typeof setTimeout>;
+  private followUpWanted = false;
+  private started = false;
+  /** How many follow-up passes have been asked for; observable in tests. */
+  followUpsRequested = 0;
+  /** Inputs whose last steer was definitely refused; in memory only. */
+  private steerRefusals = new Set<string>();
   private readonly file: string;
   private readonly lock: string;
   private readonly owner = randomUUID();
   private readonly nativeInspections = new Map<string, ReturnType<WakeNative['inspect']>>();
 
   constructor(private readonly native: WakeNative, root = getInterpreterAppDataDir(),
-    private readonly inspectTimeoutMs = 30_000) {
+    private readonly inspectTimeoutMs = 30_000,
+    /** Pass timing. An interval of 0 leaves every pass to explicit `tick()` calls. */
+    private readonly timing: { intervalMs: number; followUpMs: number } = { intervalMs: 2000, followUpMs: FOLLOW_UP_MS }) {
     if (!Number.isInteger(inspectTimeoutMs) || inspectTimeoutMs < 1 || inspectTimeoutMs > 120_000) {
       throw new Error('Invalid native inspection timeout');
+    }
+    if (![timing.intervalMs, timing.followUpMs].every(ms => Number.isInteger(ms) && ms >= 0 && ms <= 60_000)) {
+      throw new Error('Invalid wake pass timing');
     }
     this.file = path.join(root, 'wake-sources.json');
     this.lock = `${this.file}.owner`;
@@ -213,9 +281,9 @@ export class WakeSources {
         source.status = 'waiting';
         if (!source.paused) source.nextAt = new Date(Date.now() + COMMAND_REARM_MS).toISOString();
       }
-      // Older command sources stopped permanently on a transient World or
-      // scanner error. Keep the diagnostic visible, but recover on a bounded
-      // timer after a restart without creating a second consumer.
+      // Older command sources stopped permanently on a transient source
+      // error. Keep the diagnostic visible, but recover on a bounded timer
+      // after a restart without creating a second consumer.
       if (source.kind === 'command' && source.status === 'error' && !source.nextAt) {
         source.nextAt = new Date(Date.now() + 300_000).toISOString();
       }
@@ -238,8 +306,11 @@ export class WakeSources {
       }
     }
     await this.save();
-    this.timer = setInterval(() => { void this.tick().catch(console.error); }, 2000);
-    this.timer.unref?.();
+    this.started = true;
+    if (this.timing.intervalMs) {
+      this.timer = setInterval(() => this.backgroundTick(), this.timing.intervalMs);
+      this.timer.unref?.();
+    }
     } catch (error) { await this.stop(); throw error; }
   }
 
@@ -290,6 +361,8 @@ export class WakeSources {
   async stop(): Promise<void> {
     this.stopping = true;
     if (this.timer) clearInterval(this.timer);
+    if (this.followUp) clearTimeout(this.followUp);
+    this.followUp = undefined;
     for (const child of this.commands.values()) child.kill('SIGKILL');
     await Promise.allSettled([...this.commandTasks]);
     // Do not release the single-owner lock while an admission RPC or durable
@@ -308,6 +381,11 @@ export class WakeSources {
       sources: this.state.sources.filter(s => s.threadId === threadId),
       events: this.state.events.filter(e => e.threadId === threadId),
     });
+  }
+
+  /** The wake-sources listing, with the accepted command output format. */
+  view(threadId: string) {
+    return { ...this.list(threadId), commandOutput: WAKE_COMMAND_OUTPUT };
   }
 
   /** A content-free, deterministic CAS token for one source and its unadmitted
@@ -393,9 +471,30 @@ export class WakeSources {
       } else if (source.kind === 'schedule' && source.everyMs) {
         source.nextAt = new Date(now + source.everyMs).toISOString(); source.status = 'waiting';
       } else if (source.kind === 'command') {
-        source.nextAt = new Date(now + COMMAND_REARM_MS).toISOString(); source.status = 'waiting';
+        // Once the last input of a run that produced events is admitted, run
+        // again at once: the command may have more ready input. While inputs
+        // remain, the pending fence keeps the source from running anyway.
+        const remaining = this.state.events.some(e => e.threadId === source.threadId &&
+          e.sourceId === source.id && (e.status === 'pending' || e.status === 'offered'));
+        const immediate = source.moreAvailable === true && !remaining;
+        source.nextAt = new Date(now + (immediate ? 0 : COMMAND_REARM_MS)).toISOString(); source.status = 'waiting';
+        if (immediate) this.requestTick();
       }
     }
+  }
+
+  /** Schedule one short follow-up pass; a running pass defers it to its end. */
+  private requestTick(): void {
+    this.followUpsRequested += 1;
+    if (this.stopping || !this.started || !this.timing.intervalMs || this.followUp) return;
+    this.followUp = setTimeout(() => { this.followUp = undefined; this.backgroundTick(); }, this.timing.followUpMs);
+    this.followUp.unref?.();
+  }
+
+  private backgroundTick(): void {
+    if (this.stopping) return;
+    if (this.ticking) { this.followUpWanted = true; return; }
+    void this.tick().catch(console.error);
   }
 
   /** Stop new command launches and native offers without retracting any event.
@@ -483,7 +582,7 @@ export class WakeSources {
     try { return await fn(); } finally { release(); }
   }
 
-  async put(source: Omit<WakeSource, 'status' | 'sequence' | 'nextAt' | 'error' | 'paused'>): Promise<WakeSource> {
+  async put(source: Omit<WakeSource, 'status' | 'sequence' | 'nextAt' | 'error' | 'paused' | 'moreAvailable'>): Promise<WakeSource> {
     if (this.stopping) throw new Error('Wake admission is draining for restart');
     if (!ID.test(source.threadId) || !ID.test(source.id)) throw new Error('Invalid thread or source ID');
     if (source.kind !== 'schedule' && source.kind !== 'command') throw new Error('Unknown wake source kind');
@@ -603,25 +702,65 @@ export class WakeSources {
   }
 
   async ingest(threadId: string, sourceId: string, eventId: string, message: string): Promise<WakeEvent> {
+    return (await this.ingestBatch(threadId, sourceId, [{ id: eventId, message }]))[0];
+  }
+
+  /** Take custody of several inputs of one source, in order, with one atomic
+   * save. An ID that already has a receipt is returned unchanged, so a
+   * re-emitted batch is harmless. Nothing is ingested if any item is invalid. */
+  async ingestBatch(threadId: string, sourceId: string, batch: WakeBatchItem[]): Promise<WakeEvent[]> {
+    this.checkBatch(threadId, sourceId, batch);
+    return this.exclusive(async () => {
+      const { events, fresh } = this.addEvents(threadId, sourceId, batch);
+      if (fresh.length) await this.saveOrDrop(fresh);
+      return structuredClone(events);
+    });
+  }
+
+  /** Save newly added events; if the write fails, take them back out, so a
+   * retried delivery is never answered from memory that is not on disk. */
+  private async saveOrDrop(fresh: WakeEvent[]): Promise<void> {
+    try { await this.save(); }
+    catch (error) {
+      const drop = new Set(fresh);
+      this.state.events = this.state.events.filter(event => !drop.has(event));
+      throw error;
+    }
+  }
+
+  private checkBatch(threadId: string, sourceId: string, batch: WakeBatchItem[]): void {
     if (this.stopping) throw new Error('Wake admission is draining for restart');
-    if (![threadId, sourceId, eventId].every(x => ID.test(x)) || !message.trim() || message.length > MAX_MESSAGE) {
+    if (![threadId, sourceId].every(x => typeof x === 'string' && ID.test(x)) || !Array.isArray(batch) ||
+        !batch.length || new Set(batch.map(item => item?.id)).size !== batch.length ||
+        batch.some(item => typeof item?.id !== 'string' || !ID.test(item.id) || typeof item.message !== 'string' ||
+          !item.message.trim() || item.message.length > MAX_MESSAGE)) {
       throw new Error('Invalid wake event');
     }
-    return this.exclusive(async () => {
-      const existing = this.state.events.find(e => e.threadId === threadId && e.sourceId === sourceId && e.eventId === eventId);
-      if (existing) return structuredClone(existing);
-      // Keep stable IDs as compact admission receipts indefinitely. Bound only
-      // inputs still awaiting admission, so a long-running thread cannot hit
-      // a permanent lifetime event ceiling.
-      if (this.state.events.filter(e => e.threadId === threadId &&
-        (e.status === 'pending' || e.status === 'offered')).length >= 10_000) {
-        throw new Error('Thread pending wake event limit reached; operator action required');
-      }
-      const event: WakeEvent = { threadId, sourceId, eventId, message, status: 'pending', createdAt: new Date().toISOString() };
+  }
+
+  /** Caller holds the exclusive section and saves. Throws before any change. */
+  private addEvents(threadId: string, sourceId: string, batch: WakeBatchItem[]): { events: WakeEvent[]; fresh: WakeEvent[] } {
+    const existing = batch.map(item => this.state.events.find(e => e.threadId === threadId &&
+      e.sourceId === sourceId && e.eventId === item.id));
+    const added = existing.filter(event => !event).length;
+    // Keep stable IDs as compact admission receipts indefinitely. Bound only
+    // inputs still awaiting admission, so a long-running thread cannot hit
+    // a permanent lifetime event ceiling.
+    if (added && this.state.events.filter(e => e.threadId === threadId &&
+      (e.status === 'pending' || e.status === 'offered')).length + added > 10_000) {
+      throw new WakeBacklogFull();
+    }
+    const createdAt = new Date().toISOString();
+    const fresh: WakeEvent[] = [];
+    const events = batch.map((item, index) => {
+      const prior = existing[index];
+      if (prior) return prior;
+      const event: WakeEvent = { threadId, sourceId, eventId: item.id, message: item.message, status: 'pending', createdAt };
       this.state.events.push(event);
-      await this.save();
-      return structuredClone(event);
+      fresh.push(event);
+      return event;
     });
+    return { events, fresh };
   }
 
   /** Operator-only resolution of an ambiguous, terminal offer: retain its body and
@@ -718,8 +857,14 @@ export class WakeSources {
     }); } finally { this.inFlight.delete(key); }
   }
 
-  async tick(now = Date.now()): Promise<void> {
-    if (this.ticking || this.stopping) return;
+  async tick(at?: number): Promise<void> {
+    // A caller arriving during a pass gets one shared pass after it, rather
+    // than a silent no-op; the interval and follow-up timers do not queue.
+    if (this.ticking && !this.stopping) {
+      return this.queuedTick ??= this.tickFinished!.then(() => { this.queuedTick = undefined; return this.tick(at); });
+    }
+    if (this.stopping) return;
+    const now = at ?? Date.now();
     this.ticking = true;
     this.tickFinished = new Promise<void>(resolve => { this.finishTick = resolve; });
     try {
@@ -774,34 +919,49 @@ export class WakeSources {
     }
     // An ambiguous RPC result is never automatically resubmitted while its
     // original turn is still running. The marker in native history is the receipt.
-    const seenThreads = new Set<string>();
-    for (const event of this.state.events.filter(e => e.status === 'pending' || e.status === 'offered')) {
+    const queues = new Map<string, WakeEvent[]>();
+    for (const event of this.state.events) {
+      if (event.status !== 'pending' && event.status !== 'offered') continue;
+      const queue = queues.get(event.threadId);
+      if (queue) queue.push(event); else queues.set(event.threadId, [event]);
+    }
+    for (const queue of queues.values()) {
       if (this.stopping) break;
       // Preserve durable per-thread input order. An ambiguous offered event or
       // a backoff must fence later inputs on that thread, not let them overtake
       // the missing native receipt. Other threads can continue independently.
-      if (seenThreads.has(event.threadId)) continue;
-      seenThreads.add(event.threadId);
-      if (this.inFlight.has(`${event.threadId}:${event.eventId}`)) continue;
-      this.inFlight.add(`${event.threadId}:${event.eventId}`);
-      try { await this.deliver(event, now); }
-      finally { this.inFlight.delete(`${event.threadId}:${event.eventId}`); }
+      // Only an observed native receipt lets the pass continue to the next
+      // input of the same thread, so at most one offer per thread is open.
+      for (const event of queue) {
+        if (this.stopping) break;
+        if (!this.state.events.includes(event)) continue; // removed by cancel
+        if (this.state.sources.find(s => s.id === event.sourceId && s.threadId === event.threadId)?.paused) break;
+        const key = `${event.threadId}:${event.eventId}`;
+        if (this.inFlight.has(key)) break;
+        this.inFlight.add(key);
+        let admitted = false;
+        try { admitted = await this.deliver(event, now); }
+        finally { this.inFlight.delete(key); }
+        if (!admitted) break;
+      }
     }
     } finally {
       this.ticking = false;
       this.finishTick?.();
       this.finishTick = undefined;
       this.tickFinished = undefined;
+      if (this.followUpWanted) { this.followUpWanted = false; this.requestTick(); }
     }
   }
 
-  private async deliver(event: WakeEvent, now: number): Promise<void> {
-    if (event.nextAttemptAt && Date.parse(event.nextAttemptAt) > now) return;
+  /** Resolves true only when this event's native receipt was observed. */
+  private async deliver(event: WakeEvent, now: number): Promise<boolean> {
+    if (event.nextAttemptAt && Date.parse(event.nextAttemptAt) > now) return false;
     let admissionPhase: NonNullable<WakeEvent['failure']>['phase'] = 'inspect';
     try {
       const source = this.state.sources.find(s => s.id === event.sourceId && s.threadId === event.threadId);
-      if (source?.paused) return;
-      if (source?.status === 'cancelled' && event.status === 'pending') return;
+      if (source?.paused) return false;
+      if (source?.status === 'cancelled' && event.status === 'pending') return false;
       // A nonterminating native history read must not pin the only durable
       // scheduler tick forever. This is read-only; on expiry keep the pending
       // event (and source fence) and persist a bounded retry. Never infer an
@@ -813,13 +973,13 @@ export class WakeSources {
           this.admitObserved(event, now);
           await this.save();
         });
-        return;
+        return true;
       }
       // An offered RPC is ambiguous even after a process crash: elapsed time
       // alone cannot prove the native service rejected it. Never submit it a
       // second time without an explicit native receipt or operator action.
-      if (event.status === 'offered') return;
-      if (source?.status === 'cancelled' && event.status === 'pending') return;
+      if (event.status === 'offered') return false;
+      if (source?.status === 'cancelled' && event.status === 'pending') return false;
       // Mark intent before the RPC: a crash between RPC and response must be
       // reconciled against native history, rather than immediately retried.
       await this.exclusive(async () => { event.status = 'offered'; event.offeredAt = new Date(now).toISOString(); await this.save(); });
@@ -828,8 +988,38 @@ export class WakeSources {
         ? await this.native.steer(event.threadId, state.activeTurnId, wakeInput(event), wakeClientId(event))
         : await this.native.start(event.threadId, wakeInput(event), wakeClientId(event));
       admissionPhase = 'persist';
+      this.steerRefusals.delete(`${event.threadId}:${event.sourceId}:${event.eventId}`);
       await this.exclusive(async () => { event.turnId = turnId; await this.save(); });
+      // Look for the receipt shortly, so the next input of a burst follows promptly.
+      this.requestTick();
+      return false;
     } catch (error) {
+      // The native steer endpoint explicitly rejected this input before
+      // admission: the inspected turn ended between inspect and steer. Unlike
+      // a timeout/disconnect, this is not an ambiguous accepted RPC and not a
+      // source fault; the next pass inspects the SAME thread, now idle, and
+      // starts it. No backoff, so the input is not held behind a finished turn.
+      const refusalKey = `${event.threadId}:${event.sourceId}:${event.eventId}`;
+      if (event.status === 'offered' && admissionPhase === 'steer' && isNoActiveTurnSteer(error)) {
+        // Once is the ordinary race. A second refusal in a row means history
+        // still reports a turn the runtime no longer has: keep the input
+        // pending, but retry on the normal interval and show why.
+        const repeated = this.steerRefusals.has(refusalKey);
+        if (repeated) this.steerRefusals.delete(refusalKey); else this.steerRefusals.add(refusalKey);
+        await this.exclusive(async () => {
+          event.status = 'pending'; delete event.offeredAt;
+          if (repeated) {
+            event.error = 'Active turn refused the input; retrying';
+            event.nextAttemptAt = new Date(now + 60_000).toISOString();
+            const source = this.state.sources.find(s => s.id === event.sourceId && s.threadId === event.threadId);
+            if (source && source.status !== 'cancelled') { source.status = 'error'; source.error = event.error; }
+          }
+          await this.save();
+        });
+        if (!repeated) this.requestTick();
+        return false;
+      }
+      this.steerRefusals.delete(refusalKey);
       const explanation = safeError(error instanceof WakeAdmissionFailure ? error.original : error);
       const failure = nativeFailure(error, admissionPhase);
       event.failure = failure;
@@ -838,13 +1028,8 @@ export class WakeSources {
       console.error('[Wake admission diagnostic]', JSON.stringify({
         sourceId: event.sourceId, eventId: event.eventId, clientId: wakeClientId(event), ...failure,
       }));
-      // The native steer endpoint explicitly rejected this input before
-      // admission: the inspected turn ended between inspect and steer. Unlike
-      // a timeout/disconnect, this is not an ambiguous accepted RPC; retry by
-      // inspecting the SAME thread, which can now be idle.
-      if (event.status === 'offered' && ((error instanceof WakeAdmissionFailure &&
-          (error.phase === 'preflight' || error.phase === 'resume')) ||
-          (error instanceof Error && error.message === 'no active turn to steer'))) {
+      if (event.status === 'offered' && error instanceof WakeAdmissionFailure &&
+          (error.phase === 'preflight' || error.phase === 'resume')) {
         // A pre-start failure cannot have submitted this user message; start
         // and steer failures remain ambiguous and must never replay blindly.
         event.status = 'pending';
@@ -860,6 +1045,7 @@ export class WakeSources {
       await this.exclusive(async () => { await this.save(); });
       // Do not hammer auth, allowance, or transport errors. Explicit intervention
       // or restart can reconcile the retained event.
+      return false;
     }
   }
 
@@ -903,9 +1089,9 @@ export class WakeSources {
         this.commands.set(key, child);
         const chunks: Buffer[] = [];
         let size = 0;
-        // The enrolled World adapter may run two sequential 90-second bounded
-        // reads (pending and peek). Its parent must outlive both child limits,
-        // otherwise an ordinary timeout is mistaken for an allowance error.
+        // A command source may run several bounded reads in sequence. This
+        // limit must outlive them, otherwise an ordinary timeout is mistaken
+        // for an allowance error.
         let reason: 'timeout' | 'output' | undefined;
         const timeout = setTimeout(() => { reason = 'timeout'; child.kill('SIGKILL'); }, 200_000);
         child.stdout.on('data', (chunk: Buffer) => {
@@ -919,24 +1105,43 @@ export class WakeSources {
             reject(new WakeCommandExit(reason ?? 'exit')); });
       });
       if (source.status === 'cancelled') return;
-      const output = JSON.parse(stdout) as { id?: string; message?: string; status?: string };
-      if (output.status === 'waiting') {
+      const output = parseCommandOutput(stdout);
+      if (output.waiting) {
         await this.exclusive(async () => {
           if (source.status !== 'cancelled') {
             source.status = 'waiting';
             delete source.error;
+            source.moreAvailable = false;
             source.nextAt = new Date(Date.now() + COMMAND_REARM_MS).toISOString();
           }
           await this.save();
         });
         return;
       }
-      if (!output.id || !output.message) throw new Error('Command must output JSON with stable id and message');
-      await this.ingest(source.threadId, source.id, output.id, output.message);
-      await this.exclusive(async () => {
-        if (source.status !== 'cancelled') { source.status = 'waiting'; delete source.error; source.nextAt = undefined; }
-        await this.save();
+      this.checkBatch(source.threadId, source.id, output.events);
+      // Events and the source transition commit in one section and one save,
+      // so an admission can never observe the batch before its source re-arm.
+      const added = await this.exclusive(async () => {
+        if (source.status === 'cancelled') return 0;
+        const { fresh } = this.addEvents(source.threadId, source.id, output.events);
+        source.status = 'waiting';
+        delete source.error;
+        // Only a run that produced new input earns an immediate re-run. A
+        // command that repeats inputs which already have receipts waits the
+        // minimum interval, whatever it reports.
+        source.moreAvailable = fresh.length > 0;
+        // Admission of the last new input re-arms the source. A batch with
+        // nothing new (every ID already has a receipt) waits the minimum
+        // interval instead of re-running at once.
+        source.nextAt = this.state.events.some(e => e.threadId === source.threadId && e.sourceId === source.id &&
+          (e.status === 'pending' || e.status === 'offered'))
+          ? undefined : new Date(Date.now() + COMMAND_REARM_MS).toISOString();
+        // On a failed write the batch leaves memory again; the catch below
+        // records the source error and the command re-emits it later.
+        await this.saveOrDrop(fresh);
+        return fresh.length;
       });
+      if (added) this.requestTick();
     } catch (error) {
       await this.exclusive(async () => {
         if (source.status === 'cancelled') return;

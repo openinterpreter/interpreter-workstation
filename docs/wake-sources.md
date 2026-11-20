@@ -15,13 +15,25 @@ For an easy-to-find configuration view in a headless thread, call the same tool 
 
 ## Trusted command
 
-Configure an absolute executable and JSON array of arguments. This executes on the Workstation host under its own operating-system permissions, without a shell. **Only add a command you trust**; never take an executable or arguments from untrusted inbound text. A command has a two-minute timeout and 64 KiB stdout limit; stderr is not placed in the transcript. Exit 0 must write one UTF-8 JSON object to stdout:
+Configure an absolute executable and JSON array of arguments. This executes on the Workstation host under its own operating-system permissions, without a shell. **Only add a command you trust**; never take an executable or arguments from untrusted inbound text. A command has a 200-second timeout and a 3,088,384-byte stdout limit (room for 16 maximum-length messages even when every character is `\uXXXX`-escaped); stderr is not placed in the transcript. Exit 0 must write UTF-8 newline-delimited JSON to stdout, one object per line (a final newline is optional). Either a single line means there is no input:
 
 ```json
-{"id":"source-stable-event-id","message":"An ordinary user input"}
+{"status":"waiting"}
 ```
 
-`id` must be stable for redelivery of the same upstream event (letters, digits, `_`, `-`). `{ "status": "waiting" }` means no event; the source polls again after at least 30 seconds. A successful event is not rearmed until its marker is confirmed in native thread history, and then has a 30-second minimum interval. Nonzero exit, malformed output, native admission failure, and authentication/usage failures become visible source errors without rapid respawn or model/account fallback. Re-save a corrected source to retry. A host restart recovers an interrupted command; external commands must produce stable IDs so a repeated poll does not cause a second user turn.
+or one to 16 event lines, in the order they should reach the thread, optionally followed by one final `{"status":"more"}` line when the source has more ready input than it emitted:
+
+```json
+{"id":"source-stable-event-id-1","message":"An ordinary user input"}
+{"id":"source-stable-event-id-2","message":"A second input"}
+{"status":"more"}
+```
+
+A single event line is the one-event case of this format. Each `id` must be stable for redelivery of the same upstream event (letters, digits, `_`, `-`, at most 160) and appear once per run; each `message` must contain a non-whitespace character and be at most 32,000 characters. An event line carries exactly `id` and `message`, and a status line exactly `status`. Every line is validated before anything is ingested: a malformed line, any other key, an invalid or repeated ID, a blank or over-long message, more than 16 events, `waiting` together with events, `more` anywhere but last after at least one event, an unknown `status`, or output over the stdout limit rejects the **whole** run as a source error and ingests nothing. Events of one run are taken into custody together, in order, with one durable write; an ID that already has a receipt is skipped, so re-emitting a batch is harmless.
+
+The source does not run again while any of its own inputs awaits admission; this is its back-pressure. After `waiting` it polls again after at least 30 seconds. After a run that produced new input (with or without `more`), it runs again **immediately** once the last of those inputs is confirmed in native thread history, so a burst drains without a 30-second gap; the next run reports `waiting` when it is empty. If every ID of a run already had a receipt, it waits the 30-second minimum instead, whatever the run reported. The dispatcher delivers one input per thread at a time: after each native receipt it continues with that thread's next input in the same pass, and after an offer it checks again within about a quarter second rather than waiting for its two-second interval. A steer refused because the turn ended in the meantime returns the input to pending without backoff and without a source error, and the next pass starts the now-idle thread. If the same input is refused that way again, it stays pending and is retried on the ordinary one-minute interval, with a visible source error. Nonzero exit, invalid output, other native admission failures, and authentication/usage failures become visible source errors without rapid respawn or model/account fallback. Re-save a corrected source to retry. A host restart recovers an interrupted command and keeps pending or offered inputs in order; a source whose last run produced events still runs again as soon as its remaining inputs are admitted. External commands must produce stable IDs so a repeated poll does not cause a second user turn.
+
+`GET /api/agent/threads/:threadId/wake-sources` returns `sources`, `events` and `commandOutput: "ndjson"`. A command can check that field to discover that multi-line output is accepted before emitting more than one event.
 
 ## Authenticated event input
 
