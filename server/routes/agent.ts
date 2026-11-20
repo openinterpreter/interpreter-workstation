@@ -460,7 +460,7 @@ router.post('/threads/:threadId/wake-events/:sourceId/:eventId/hold-historical',
 });
 
 router.get('/threads/:threadId/wake-sources', async (req: Request, res: Response) => {
-  try { await readyWakeSources(); res.json(wakeSources.list(req.params.threadId)); }
+  try { await readyWakeSources(); res.json(wakeSources.view(req.params.threadId)); }
   catch { res.status(503).json({ error: 'Wake sources unavailable.' }); }
 });
 
