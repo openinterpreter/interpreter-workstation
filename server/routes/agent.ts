@@ -1507,8 +1507,11 @@ router.put('/threads/:threadId/goal', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Exact native Goal revision required.' });
     }
     try {
-      const result = await getCodexService().setThreadGoalWithRevision(req.params.threadId,
-        expected, { status });
+      const service = getCodexService();
+      // A resume also makes sure a live thread owns the active Goal.
+      const result = status === 'active'
+        ? await service.resumeThreadGoalWithRevision(req.params.threadId, expected)
+        : await service.setThreadGoalWithRevision(req.params.threadId, expected, { status });
       return res.json(result);
     } catch (error) {
       return res.status(error instanceof GoalRevisionConflictError ? 409 : 503)

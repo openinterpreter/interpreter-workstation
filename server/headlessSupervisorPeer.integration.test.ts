@@ -71,7 +71,8 @@ describe('actual headless server peer mount', () => {
     });
     const first = await post();
     expect(first.status).toBe(200);
-    expect(await first.json()).toMatchObject({ revision: { status: 'active', lifecycleRevision: 8 } });
+    expect(await first.json()).toMatchObject({ revision: { status: 'active', lifecycleRevision: 8 },
+      continuation: 'already_loaded' });
     expect((await post()).status).toBe(409);
     expect(await (await fetch(`${base}/fixture/native-call-count`)).json()).toEqual({ nativeCalls: 2 });
     const old = children.pop()!;

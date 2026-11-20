@@ -17,6 +17,7 @@ import { createRequire } from 'node:module';
 import * as configStore from '../configStore';
 import { BOOLEAN_UI_SETTING_IDS } from '../../shared/booleanSettings';
 import { distributionProductConfig } from '../../shared/productConfig';
+import { IPC_UNAVAILABLE_CODE } from '../../shared/ipcAvailability';
 
 const INTERVIEW_INVITE_VERSION = '0.2.99-automation-services';
 const INTERVIEW_INVITE_MIN_APP_LAUNCH_COUNT = 1;
@@ -1408,12 +1409,12 @@ router.post('/:namespace/:method', async (req: Request, res: Response) => {
 
   const namespaceHandlers = handlers[namespace];
   if (!namespaceHandlers) {
-    return res.status(404).json({ error: `Unknown namespace: ${namespace}` });
+    return res.status(404).json({ error: `Unknown namespace: ${namespace}`, code: IPC_UNAVAILABLE_CODE });
   }
 
   const handler = namespaceHandlers[method];
   if (!handler) {
-    return res.status(404).json({ error: `Unknown method: ${namespace}.${method}` });
+    return res.status(404).json({ error: `Unknown method: ${namespace}.${method}`, code: IPC_UNAVAILABLE_CODE });
   }
 
   try {

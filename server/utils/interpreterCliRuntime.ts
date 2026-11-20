@@ -8,6 +8,7 @@ import {
   SETTINGS_TABS,
 } from '../../shared/settingsCatalog';
 import { resolveInterpreterHome } from '../../shared/interpreterHome';
+import { getOixRuntimeCommandDir } from './oixRuntime';
 
 export const INTERPRETER_CALLER_TOKEN_ENV = 'INTERPRETER_CALLER_TOKEN';
 export const INTERPRETER_CLI_COMMAND = 'interpreter-app';
@@ -69,6 +70,21 @@ function prependPathEntry(existingPath: string | undefined, entry: string, platf
     .filter(Boolean)
     .filter((part) => part !== normalizedEntry);
   return [normalizedEntry, ...nextParts].join(delimiter);
+}
+
+/**
+ * The runtime home the app gives its runtime (see `resolveDefaultCodexHome`)
+ * and the command directory linked to that runtime's binaries, or null when
+ * the app has not linked a runtime yet.
+ */
+function resolveLinkedRuntimeCommand(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+  pathExists: (candidatePath: string) => boolean = existsSync,
+): { runtimeHome: string; commandDir: string } | null {
+  const runtimeHome = resolveInterpreterHome(platform, env, env.HOME ?? os.homedir());
+  const commandDir = getOixRuntimeCommandDir(runtimeHome, platform);
+  return pathExists(commandDir) ? { runtimeHome, commandDir } : null;
 }
 
 const PDFCPU_DIR_NAME = 'pdfcpu';
@@ -3256,6 +3272,8 @@ export function buildInterpreterCliShellEnvironmentPolicy(
   _workspacePath?: string,
   serverConnection?: string,
   bundledPdfcpuDir: string | null = resolveBundledPdfcpuDir(platform),
+  linkedRuntime: { runtimeHome: string; commandDir: string } | null =
+    resolveLinkedRuntimeCommand(platform, env),
 ): InterpreterCliShellEnvironmentPolicy {
   const envServerConnection = env[INTERPRETER_CLI_SERVER_CONNECTION_ENV]?.trim();
   const resolvedServerConnection = serverConnection?.trim()
@@ -3277,9 +3295,19 @@ export function buildInterpreterCliShellEnvironmentPolicy(
   // path, because this is the environment shell tool executions actually see.
   // This does not let js_repl directly spawn binaries; js_repl still blocks
   // node:child_process by design.
-  const pathWithBundledCli = bundledPdfcpuDir
-    ? prependPathEntry(env[pathKey], bundledPdfcpuDir, platform)
+  //
+  // The same applies to the runtime itself: `interpreter` in an agent shell
+  // must be the runtime the app is running, not an older installation later
+  // on the user's PATH, and it must use the same runtime home. The policy
+  // keeps only core variables, so the home is set explicitly here. CODEX_HOME
+  // is deliberately not set: the runtime ignores it, and setting it would
+  // point other tools that honor it at this runtime home.
+  const pathWithRuntime = linkedRuntime
+    ? prependPathEntry(env[pathKey], linkedRuntime.commandDir, platform)
     : env[pathKey];
+  const pathWithBundledCli = bundledPdfcpuDir
+    ? prependPathEntry(pathWithRuntime, bundledPdfcpuDir, platform)
+    : pathWithRuntime;
   const nextPath = prependPathEntry(pathWithBundledCli, launcherDir, platform);
 
   const set: Record<string, string> = {
@@ -3289,6 +3317,11 @@ export function buildInterpreterCliShellEnvironmentPolicy(
   };
   if (resolvedServerConnection) {
     set[INTERPRETER_CLI_SERVER_CONNECTION_ENV] = resolvedServerConnection;
+  }
+  if (linkedRuntime) {
+    set.INTERPRETER_HOME = linkedRuntime.runtimeHome;
+    set.OPEN_INTERPRETER_HOME = linkedRuntime.runtimeHome;
+    set.INTERPRETER_DISABLE_SYSTEM_IMPORT = '1';
   }
   // Media providers configured for the local app must also be available to
   // the agent's intentionally rebuilt shell environment. Codex clears the

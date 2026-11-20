@@ -246,3 +246,17 @@ of at most 64 characters chosen by the verifier's operator. The two settings
 are required together. A present but invalid value of either, or one without
 the other, disables the supervisor peer route entirely rather than falling
 back to the cloud identity. An empty value is treated as unset.
+
+`POST …/goal/resume` resumes a paused, blocked, or usage-limited Goal with the
+native compare-and-swap on the caller's exact `expected` revision, and returns
+`{ available: true, revision, continuation }`. The runtime continues an active
+Goal only in a loaded thread, so after a confirmed swap Workstation loads a
+thread that is not loaded. `continuation` reports the outcome: `loaded` (the
+thread was loaded now and the runtime starts the Goal's next turn when it is
+idle), `already_loaded` (the thread was loaded and idle), `already_running` (a
+turn was already running; no second turn is started), or `not_started` (the
+thread could not be confirmed loaded). `not_started` is still a successful
+resume: the Goal is active, but nothing runs it until the thread is loaded, for
+example by its next message. A stale revision returns `409` and never loads the
+thread. The local Goal resume API and the automatic resume after a temporary
+model-capacity refusal load the thread the same way.

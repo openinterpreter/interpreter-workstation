@@ -151,7 +151,11 @@ export class GoalNotices {
       while (!this.stopped && next < threads.length) {
         const threadId = threads[next++]!;
         let goal: ObservedGoal | null;
-        try { goal = await this.deps.readGoal(threadId); } catch { continue; }
+        try { goal = await this.deps.readGoal(threadId); } catch {
+          // The read's own error text may carry runtime detail; only the id is logged.
+          this.deps.log(`[goal-notices] reconcile skipped threadId=${threadId} reason=goal-read-unavailable`);
+          continue;
+        }
         // A live notification since startup is newer than this read.
         if (!goal || this.stopped || this.threads.has(threadId)) continue;
         try { await this.serialize(() => this.decide(threadId, goal, { reason: 'unknown' })); }

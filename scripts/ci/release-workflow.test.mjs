@@ -12,6 +12,15 @@ const electronBuilderConfig = await readFile('electron-builder.yml', 'utf8');
 const publishedVerifier = await readFile('scripts/ci/verify-published-release.mjs', 'utf8');
 const licensePolicy = JSON.parse(await readFile('licenses/release-policy.json', 'utf8'));
 
+test('release notes are written for the version being released', async () => {
+  const { publicVersion } = JSON.parse(await readFile('package.json', 'utf8'));
+  const notes = await readFile('RELEASE_NOTES.md', 'utf8');
+  // The first line names the version the notes describe, so a version bump
+  // cannot publish the previous release's "What's new" unchanged.
+  assert.equal(notes.split('\n')[0], `<!-- release-notes-for: ${publicVersion} -->`);
+  assert.match(notes, /^## What's new\n\n- \S/m);
+});
+
 test('each packaging verifier requires every reviewed license notice', async () => {
   for (const scriptPath of [
     'scripts/package-smoke.mjs',

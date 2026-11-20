@@ -17,9 +17,11 @@ export function startGoalAutoResume(): void {
     },
     clearTimer: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
     readRevision: async threadId => (await getCodexService().getThreadGoalWithRevision(threadId)).revision,
-    // The same exact-revision transition the operator resume path uses.
+    // The same exact-revision transition the operator resume path uses. An
+    // idle blocked thread may have been unloaded during the backoff, so the
+    // resume also loads it; a thread that cannot be loaded is logged there.
     resume: async (threadId, expected) => {
-      await getCodexService().setThreadGoalWithRevision(threadId, expected, { status: 'active' });
+      await getCodexService().resumeThreadGoalWithRevision(threadId, expected);
     },
     log: line => console.info(line),
   });

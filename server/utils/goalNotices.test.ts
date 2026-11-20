@@ -26,6 +26,8 @@ function harness(options: { sender?: SubmissionSender | null; settleMs?: number 
   const autoResume = new Map<string, GoalAutoResumeState>();
   const goals = new Map<string, ObservedGoal>();
   const reads: string[] = [];
+  const unreadable = new Set<string>();
+  const logs: string[] = [];
   const senders = new Map<string, SubmissionSender>();
   if (options.sender !== null) senders.set(thread, options.sender ?? sender);
   const notices = new GoalNotices({
@@ -41,15 +43,19 @@ function harness(options: { sender?: SubmissionSender | null; settleMs?: number 
     record: async (threadId, to, notice) => { recorded.push({ threadId, sender: to, notice }); },
     autoResumeState: threadId => autoResume.get(threadId) ?? null,
     recentSenderThreads: async limit => [...senders.keys()].slice(0, limit),
-    readGoal: async threadId => { reads.push(threadId); return goals.get(threadId) ?? null; },
-    log: () => undefined,
+    readGoal: async threadId => {
+      reads.push(threadId);
+      if (unreadable.has(threadId)) throw Error(`thread not loaded: ${OBJECTIVE}`);
+      return goals.get(threadId) ?? null;
+    },
+    log: line => { logs.push(line); },
     settleMs: options.settleMs,
   });
   const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setTimeout(resolve, 0)); };
   const send = (method: string, params: Record<string, unknown>) =>
     notices.handleNotification({ method, params } as unknown as AppServerNotification);
   return {
-    notices, recorded, autoResume, goals, reads, senders, timers,
+    notices, recorded, autoResume, goals, reads, unreadable, logs, senders, timers,
     advance: async (ms: number) => {
       now += ms;
       for (const timer of [...timers]) {
@@ -252,6 +258,21 @@ describe('goal notices', () => {
     // A second startup finds every state already reported.
     await h.notices.reconcile();
     expect(h.recorded).toHaveLength(3);
+  });
+
+  test('reconciliation logs each thread whose Goal it cannot read, without the read error', async () => {
+    const h = harness();
+    const second = '00000000-0000-4000-8000-000000000002';
+    h.senders.set(second, sender);
+    h.unreadable.add(thread);
+    h.goals.set(second, { status: 'blocked', createdAt: CREATED, updatedAt: CREATED + 2 });
+    await h.notices.reconcile();
+    expect(h.logs.filter(line => line.includes('reconcile skipped'))).toEqual([
+      `[goal-notices] reconcile skipped threadId=${thread} reason=goal-read-unavailable`,
+    ]);
+    expect(h.logs.join('\n')).not.toContain(OBJECTIVE);
+    // The other threads are still reconciled.
+    expect(h.recorded.map(item => item.threadId)).toEqual([second]);
   });
 
   test('reconciliation is bounded and defers to live notifications', async () => {

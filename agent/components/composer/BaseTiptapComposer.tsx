@@ -26,6 +26,7 @@ import { humanizeSkillName } from '../../../shared/utils/skillDisplay';
 import { parseSkillMentionToken } from '../../../shared/utils/skillMentions';
 import type { SkillOption } from '../../../shared/types/skill';
 import { isAbsolutePath, pathBasename, pathDirname } from '@/ipc';
+import { isIpcUnavailableError } from '../../../shared/ipcAvailability';
 import { useToast } from '@/contexts/ToastContext';
 import { Tooltip, TooltipTrigger, TooltipContent } from '../../../src/components/ui/tooltip';
 import { LayoutContext } from '../../../src/contexts/LayoutContext';
@@ -1153,6 +1154,8 @@ export const BaseTiptapComposer = forwardRef<BaseTiptapComposerRef, BaseTiptapCo
           setSkillItemRegistry(allItems);
         }
       } catch (err) {
+        // A host without skills leaves the slash-command list empty.
+        if (isIpcUnavailableError(err)) return;
         console.error('[BaseTiptapComposer] Failed to load skills:', err);
       }
     };

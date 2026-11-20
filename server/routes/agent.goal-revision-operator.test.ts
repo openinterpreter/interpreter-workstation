@@ -45,8 +45,11 @@ describe('authenticated loopback Goal CAS bridge', () => {
     const service = getCodexService();
     const original = service.setThreadGoalWithRevision;
     const oldLegacy = service.setThreadGoal;
+    const oldContinuation = service.ensureGoalContinuation;
     let calls = 0;
+    const continued: string[] = [];
     service.setThreadGoal = async () => { throw Error('legacy must not run'); };
+    service.ensureGoalContinuation = async id => { continued.push(id); return 'loaded'; };
     service.setThreadGoalWithRevision = async (id, revision, change) => {
       calls++;
       expect({ id, revision, change }).toEqual({ id: threadId, revision: expected,
@@ -60,16 +63,29 @@ describe('authenticated loopback Goal CAS bridge', () => {
       expect(response.headers['cache-control']).toBe('no-store');
       expect(response.body.goal.createdAt).toBe(goal.createdAt);
       expect(response.body.revision.lifecycleRevision).toBe(4);
+      expect(response.body.continuation).toBe('loaded');
       expect(calls).toBe(1);
+      expect(continued).toEqual([threadId]);
+      // Stopping an active Goal never loads its thread.
+      service.setThreadGoalWithRevision = async () => ({ goal: { ...goal, status: 'paused' },
+        revision: { ...expected, status: 'paused', lifecycleRevision: 5 } }) as any;
+      const paused = await request(app).put(url).send({
+        expected: { ...expected, status: 'active', lifecycleRevision: 4 }, status: 'paused' });
+      expect(paused.status).toBe(200);
+      expect(paused.body.continuation).toBeUndefined();
+      expect(continued).toEqual([threadId]);
     } finally {
       service.setThreadGoalWithRevision = original;
       service.setThreadGoal = oldLegacy;
+      service.ensureGoalContinuation = oldContinuation;
     }
   });
 
   test('CAS resume carries native zero revisions from a migrated Goal', async () => {
     const service = getCodexService();
     const original = service.setThreadGoalWithRevision;
+    const oldContinuation = service.ensureGoalContinuation;
+    service.ensureGoalContinuation = async () => 'already_loaded';
     const migrated = { ...expected, missionRevision: 0, lifecycleRevision: 0 };
     service.setThreadGoalWithRevision = async (id, revision, change) => {
       expect({ id, revision, change }).toEqual({ id: threadId, revision: migrated,
@@ -81,14 +97,19 @@ describe('authenticated loopback Goal CAS bridge', () => {
       const response = await request(app).put(url).send({ expected: migrated, status: 'active' });
       expect(response.status).toBe(200);
       expect(response.body.revision.lifecycleRevision).toBe(1);
-    } finally { service.setThreadGoalWithRevision = original; }
+    } finally {
+      service.setThreadGoalWithRevision = original;
+      service.ensureGoalContinuation = oldContinuation;
+    }
   });
 
   test('malformed, wrong-origin, conflict and unknown effect fail closed without fallback', async () => {
     const service = getCodexService();
     const original = service.setThreadGoalWithRevision;
     const oldLegacy = service.setThreadGoal;
+    const oldContinuation = service.ensureGoalContinuation;
     let calls = 0;
+    service.ensureGoalContinuation = async () => { throw Error('a failed CAS must not load a thread'); };
     service.setThreadGoal = async () => { throw Error('legacy must not run'); };
     service.setThreadGoalWithRevision = async () => { calls++; throw new GoalRevisionConflictError(); };
     try {
@@ -112,6 +133,7 @@ describe('authenticated loopback Goal CAS bridge', () => {
     } finally {
       service.setThreadGoalWithRevision = original;
       service.setThreadGoal = oldLegacy;
+      service.ensureGoalContinuation = oldContinuation;
     }
   });
 });

@@ -1413,6 +1413,123 @@ describe('interpreterCliRuntime', () => {
     }
   });
 
+  test('puts the linked runtime first and carries its home into agent shells', async () => {
+    const tempHome = await useTempInterpreterDataDir('interpreter-cli-runtime-cmd-');
+
+    try {
+      const shellHome = path.join(tempHome, 'home');
+      const runtimeHome = '/Users/alice/.openinterpreter';
+      const commandDir = `${runtimeHome}/runtime/interpreter-bin`;
+      const policy = buildInterpreterCliShellEnvironmentPolicy(
+        'agtok_runtime',
+        { PATH: `/Users/alice/.local/bin:/usr/bin:${commandDir}:/bin`, INTERPRETER_HOME: tempHome },
+        'darwin',
+        undefined,
+        undefined,
+        '/Applications/Interpreter.app/Contents/Resources/pdfcpu',
+        { runtimeHome, commandDir },
+      );
+
+      expect(policy.set.PATH).toBe([
+        getInterpreterCliShellSafeLauncherDir('darwin', shellHome),
+        '/Applications/Interpreter.app/Contents/Resources/pdfcpu',
+        commandDir,
+        '/Users/alice/.local/bin',
+        '/usr/bin',
+        '/bin',
+      ].join(':'));
+      expect(policy.set.INTERPRETER_HOME).toBe(runtimeHome);
+      expect(policy.set.OPEN_INTERPRETER_HOME).toBe(runtimeHome);
+      expect(policy.set.INTERPRETER_DISABLE_SYSTEM_IMPORT).toBe('1');
+      // Other tools that honor CODEX_HOME must not be redirected into the runtime home.
+      expect(policy.set.CODEX_HOME).toBeUndefined();
+    } finally {
+      await rm(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  test('uses the Windows path separator and Path key for the linked runtime', async () => {
+    const tempHome = await useTempInterpreterDataDir('interpreter-cli-runtime-cmd-win-');
+
+    try {
+      const runtimeHome = 'C:\\Users\\alice\\.openinterpreter';
+      const commandDir = `${runtimeHome}\\runtime\\interpreter-bin`;
+      const policy = buildInterpreterCliShellEnvironmentPolicy(
+        'agtok_runtime_win',
+        {
+          Path: 'C:\\Users\\alice\\AppData\\Local\\Programs\\Open Interpreter\\bin;C:\\Windows\\System32',
+          USERPROFILE: 'C:\\Users\\alice',
+        },
+        'win32',
+        undefined,
+        undefined,
+        null,
+        { runtimeHome, commandDir },
+      );
+
+      expect(policy.set.PATH).toBeUndefined();
+      expect(policy.set.Path).toBe([
+        getInterpreterCliShellSafeLauncherDir('win32'),
+        commandDir,
+        'C:\\Users\\alice\\AppData\\Local\\Programs\\Open Interpreter\\bin',
+        'C:\\Windows\\System32',
+      ].join(';'));
+      expect(policy.set.INTERPRETER_HOME).toBe(runtimeHome);
+      expect(policy.set.OPEN_INTERPRETER_HOME).toBe(runtimeHome);
+    } finally {
+      await rm(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  test('adds no runtime entry or home when no runtime has been linked', async () => {
+    const tempHome = await useTempInterpreterDataDir('interpreter-cli-runtime-cmd-none-');
+
+    try {
+      const shellHome = path.join(tempHome, 'home');
+      // Default resolution: no link exists yet under this runtime home.
+      const policy = buildInterpreterCliShellEnvironmentPolicy(
+        'agtok_runtime_none',
+        { PATH: '/usr/bin:/bin', INTERPRETER_HOME: tempHome },
+        'linux',
+        undefined,
+        undefined,
+        null,
+      );
+
+      expect(policy.set.PATH).toBe(`${getInterpreterCliShellSafeLauncherDir('linux', shellHome)}:/usr/bin:/bin`);
+      expect(policy.set.INTERPRETER_HOME).toBeUndefined();
+      expect(policy.set.OPEN_INTERPRETER_HOME).toBeUndefined();
+      expect(policy.set.INTERPRETER_DISABLE_SYSTEM_IMPORT).toBeUndefined();
+    } finally {
+      await rm(tempHome, { recursive: true, force: true });
+    }
+  });
+
+  test('finds the runtime command directory linked inside the runtime home', async () => {
+    const tempHome = await useTempInterpreterDataDir('interpreter-cli-runtime-cmd-linked-');
+
+    try {
+      const shellHome = path.join(tempHome, 'home');
+      const commandDir = path.join(tempHome, 'runtime', 'interpreter-bin');
+      mkdirSync(commandDir, { recursive: true });
+      const policy = buildInterpreterCliShellEnvironmentPolicy(
+        'agtok_runtime_linked',
+        { PATH: '/usr/bin:/bin', INTERPRETER_HOME: tempHome },
+        'linux',
+        undefined,
+        undefined,
+        null,
+      );
+
+      expect(policy.set.PATH).toBe(
+        `${getInterpreterCliShellSafeLauncherDir('linux', shellHome)}:${commandDir}:/usr/bin:/bin`,
+      );
+      expect(policy.set.INTERPRETER_HOME).toBe(tempHome);
+    } finally {
+      await rm(tempHome, { recursive: true, force: true });
+    }
+  });
+
   test('preserves Windows core environment values in shell policy', async () => {
     const tempHome = await useTempInterpreterDataDir('interpreter-cli-win-env-');
 

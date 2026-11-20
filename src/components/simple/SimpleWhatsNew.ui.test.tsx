@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 const topNotices = vi.hoisted(() => ({ list: vi.fn(), dismiss: vi.fn() }));
 vi.mock('@/ipc', () => ({ topNotices }));
 import { SimpleWhatsNew } from './SimpleWhatsNew';
+import { IpcUnavailableError } from '../../../shared/ipcAvailability';
 
 describe('Simple versioned update note', () => {
   beforeEach(() => {
@@ -35,6 +36,26 @@ describe('Simple versioned update note', () => {
     topNotices.list.mockResolvedValue({ notices: [] });
     render(<SimpleWhatsNew firstRunSession={false} onVisibilityChange={visible} />);
     await waitFor(() => expect(topNotices.list).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('region', { name: "What's New" })).not.toBeInTheDocument();
+  });
+
+  test('renders nothing when this host does not provide update notes', async () => {
+    topNotices.list.mockRejectedValue(new IpcUnavailableError('topNotices.list'));
+    const visible = vi.fn();
+    const { container } = render(<SimpleWhatsNew firstRunSession={false} onVisibilityChange={visible} />);
+    await waitFor(() => expect(topNotices.list).toHaveBeenCalledTimes(1));
+    // Let the rejected list settle before asserting that nothing was rendered.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByText('Could not load the update note.')).not.toBeInTheDocument();
+    expect(visible).not.toHaveBeenCalledWith(true);
+  });
+
+  test('still reports a real failure to load the update note', async () => {
+    topNotices.list.mockRejectedValue(new Error('config read failed'));
+    render(<SimpleWhatsNew firstRunSession={false} onVisibilityChange={vi.fn()} />);
+    expect(await screen.findByRole('status')).toHaveTextContent('Could not load the update note.');
     expect(screen.queryByRole('region', { name: "What's New" })).not.toBeInTheDocument();
   });
 

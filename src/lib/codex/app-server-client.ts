@@ -59,6 +59,7 @@ import {
   resolveBundledResourceCandidates,
 } from "../../../server/utils/bundledRuntimePaths";
 import {
+  linkOixRuntimeCommandDir,
   resolveOrInstallOixRuntime,
   type OixRuntimeResolution,
 } from "../../../server/utils/oixRuntime";
@@ -1061,6 +1062,25 @@ function buildWindowsCodexSpawnEnv(
   return env;
 }
 
+// Put the running runtime's own bin directory first so that `interpreter`
+// started by the runtime (or by a shell that inherits this environment) is the
+// same runtime rather than another installation on the user's PATH. Matches
+// the Windows branch above. The remaining PATH order is preserved.
+function prependPosixRuntimeBinDir(
+  env: NodeJS.ProcessEnv,
+  codexBinary: string,
+  pathExists: (candidatePath: string) => boolean,
+): NodeJS.ProcessEnv {
+  const binDir = path.posix.dirname(codexBinary);
+  if (env.PATH === undefined || !pathExists(binDir)) {
+    return env;
+  }
+  const rest = env.PATH
+    .split(path.posix.delimiter)
+    .filter((entry) => entry.length > 0 && entry !== binDir);
+  env.PATH = [binDir, ...rest].join(path.posix.delimiter);
+  return env;
+}
 
 export function buildCodexSpawnEnv({
   baseEnv,
@@ -1088,7 +1108,7 @@ export function buildCodexSpawnEnv({
   delete nextEnv.NODE_V8_COVERAGE;
 
   if (platform !== "win32") {
-    return nextEnv;
+    return prependPosixRuntimeBinDir(nextEnv, codexBinary, pathExists);
   }
 
   return buildWindowsCodexSpawnEnv(
@@ -1556,6 +1576,16 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     const appServerBinary = await this.resolveInterpreterCliBinary();
     const disabledSystemSkillsConfig = formatDisabledSystemSkillsConfig(codeHome);
     console.log(`[interpreter-server] resolved app-server binary path: ${appServerBinary}`);
+    // Agent shells resolve `interpreter` through this stable directory (see
+    // buildInterpreterCliShellEnvironmentPolicy). Refresh it before the
+    // runtime starts so it always names the runtime that is running.
+    try {
+      linkOixRuntimeCommandDir(codeHome, appServerBinary);
+    } catch (error) {
+      console.warn(
+        `[interpreter-server] could not link runtime command directory: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
 
     // Start Workstation's pinned OIX `interpreter app-server` runtime with an empty MCP table so no
     // ~/.codex MCP config leaks into the runtime and no unscoped Interpreter
