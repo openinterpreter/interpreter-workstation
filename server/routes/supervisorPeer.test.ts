@@ -509,4 +509,58 @@ describe('enrolled supervisor peer route seam', () => {
     expect(JSON.stringify(body)).not.toContain('private command text');
     expect(calls.submission).toBe(1);
   });
+  it('answers a queued thread input from its own record by the caller ID, and falls back for other IDs', async () => {
+    const reads: string[] = [];
+    let nativeReads = 0;
+    const app = express();
+    app.use('/peer', createSupervisorPeerRouter({
+      targetComputer: 'target-1', verify: async () => grant,
+      readGoal: async () => { throw new Error('unused'); },
+      resumeGoal: async () => { throw new Error('unused'); },
+      readTerminal: async () => { throw new Error('unused'); },
+      readThreadInput: async (_thread, clientId) => {
+        reads.push(clientId);
+        return clientId === 'queued-1' ? { status: 'admitted', turnId: 'turn-7' }
+          : clientId === 'refused-1' ? { status: 'refused', code: 'subagent_direct_input_unsupported',
+            parentThreadId: '00000000-0000-4000-8000-000000000009' } : null;
+      },
+      readJournal: async () => null,
+      readSubmission: async (_thread, clientUserMessageId) => { nativeReads++;
+        return { threadId, clientUserMessageId, linkage: 'not_observed', nativeMatch: null,
+          queuedSubmissionIds: [], custodyVerified: true,
+          commandSessionScope: 'saved-native-turn-only-not-live-process-custody' as const };
+      },
+    }));
+    server = createServer(app);
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/peer/threads/${threadId}`;
+    const queued = await fetch(`${base}/submissions/queued-1`);
+    expect(queued.status).toBe(200);
+    expect(await queued.json()).toEqual({ available: true, threadId, clientUserMessageId: 'queued-1',
+      input: { status: 'admitted', turnId: 'turn-7' }, observation: 'thread-input-queue-record' });
+    expect(await (await fetch(`${base}/submissions/refused-1`)).json()).toMatchObject({ input: {
+      status: 'refused', code: 'subagent_direct_input_unsupported',
+      parentThreadId: '00000000-0000-4000-8000-000000000009' } });
+    expect(nativeReads).toBe(0);
+    const other = await fetch(`${base}/submissions/steer-1`);
+    expect(other.status).toBe(200);
+    expect(await other.json()).toMatchObject({ available: true, journal: null,
+      native: { linkage: 'not_observed' } });
+    expect(nativeReads).toBe(1);
+    expect(reads).toEqual(['queued-1', 'refused-1', 'steer-1']);
+    // Authorization is unchanged: without the task:read grant nothing is read.
+    await new Promise<void>(resolve => server!.close(() => resolve()));
+    server = undefined;
+    const denied = express();
+    denied.use('/peer', createSupervisorPeerRouter({ targetComputer: 'target-1',
+      verify: async () => ({ ...grant, capabilities: ['goal:read'] }),
+      readGoal: async () => { throw new Error('unused'); }, resumeGoal: async () => { throw new Error('unused'); },
+      readTerminal: async () => { throw new Error('unused'); },
+      readThreadInput: async (_thread, clientId) => { reads.push(clientId); return { status: 'admitted' }; } }));
+    server = createServer(denied);
+    await new Promise<void>(resolve => server!.listen(0, '127.0.0.1', resolve));
+    const deniedBase = `http://127.0.0.1:${(server.address() as { port: number }).port}/peer/threads/${threadId}`;
+    expect((await fetch(`${deniedBase}/submissions/queued-1`)).status).toBe(403);
+    expect(reads).toHaveLength(3);
+  });
 });

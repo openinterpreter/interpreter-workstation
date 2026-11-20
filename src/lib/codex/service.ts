@@ -221,6 +221,35 @@ export class SavedThreadIdentityError extends Error {
   constructor() { super('Exact durable saved-thread identity unavailable.'); }
 }
 
+/** The runtime answered that it has no such thread. */
+export class ThreadNotFoundError extends Error {
+  constructor(readonly threadId: string) { super('Thread not found'); this.name = 'ThreadNotFoundError'; }
+}
+
+/** A thread without its turn history: enough to check it exists and where it works. */
+export type ThreadShell = {
+  id: string;
+  cwd: string;
+  status: v2.ThreadStatus['type'];
+  parentThreadId: string | null;
+  ephemeral: boolean;
+  archived?: boolean;
+};
+
+const THREAD_SHELL_DEADLINE_MS = 10_000;
+const TURN_SCAN_PAGE_SIZE = 20;
+const TURN_SCAN_MAX_PAGES = 1_000;
+
+/** A JSON-RPC error answered by the runtime itself (it has a numeric code)
+ * saying the thread does not exist or cannot be addressed. */
+function isThreadNotFoundError(error: unknown): boolean {
+  const code = error instanceof JSONRPCErrorException ? error.code
+    : isRecord(error) ? error.code : undefined;
+  if (typeof code !== 'number') return false;
+  const message = extractJsonRpcErrorMessage(error) ?? '';
+  return /thread not found|no rollout found|invalid thread id/i.test(message);
+}
+
 export type StreamEvent =
   | { kind: "thread"; threadId: string }
   | { kind: "turn"; threadId: string; turnId: string; status: v2.TurnStatus }
@@ -873,18 +902,15 @@ export class CodexService {
   /** The runtime's own sub-agent input refusal, with the parent thread when it
    * can be read; every other failure is returned unchanged. The thread is read
    * only after such a refusal, so ordinary input makes no extra request. */
-  private async subagentInputRefusal(error: unknown, threadId: string,
-    knownParentThreadId: string | null = null): Promise<unknown> {
+  private async subagentInputRefusal(error: unknown, threadId: string): Promise<unknown> {
     if (error instanceof SubagentDirectInputError || !isSubagentDirectInputRefusal(error)) return error;
-    let parentThreadId = knownParentThreadId;
-    if (!parentThreadId) {
-      try {
-        const { thread } = await this.client.threadRead({ threadId, includeTurns: false });
-        if (thread.id === threadId && typeof thread.parentThreadId === 'string' && thread.parentThreadId) {
-          parentThreadId = thread.parentThreadId;
-        }
-      } catch { /* The refusal stands without a parent ID. */ }
-    }
+    let parentThreadId: string | null = null;
+    try {
+      const { thread } = await this.client.threadRead({ threadId, includeTurns: false });
+      if (thread.id === threadId && typeof thread.parentThreadId === 'string' && thread.parentThreadId) {
+        parentThreadId = thread.parentThreadId;
+      }
+    } catch { /* The refusal stands without a parent ID. */ }
     return new SubagentDirectInputError(threadId, parentThreadId);
   }
 
@@ -1477,6 +1503,57 @@ export class CodexService {
     return result.thread;
   }
 
+  /** The thread's identity, workspace and status without any turn history.
+   * Rejects with ThreadNotFoundError only when the runtime answers that it has
+   * no such thread; a timeout or transport failure rejects with another error. */
+  async readThreadShell(threadId: string, deadlineMs = THREAD_SHELL_DEADLINE_MS): Promise<ThreadShell> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let thread: v2.Thread;
+    try {
+      ({ thread } = await Promise.race([
+        this.client.threadRead({ threadId, includeTurns: false }),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Native thread read timed out')), deadlineMs);
+        }),
+      ]));
+    } catch (error) {
+      throw isThreadNotFoundError(error) ? new ThreadNotFoundError(threadId) : error;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    if (!thread || thread.id !== threadId) throw new Error('Native thread identity mismatch');
+    const archived = (thread as v2.Thread & { archived?: unknown }).archived;
+    return {
+      id: thread.id,
+      cwd: thread.cwd,
+      status: thread.status?.type,
+      parentThreadId: typeof thread.parentThreadId === 'string' && thread.parentThreadId ? thread.parentThreadId : null,
+      ephemeral: thread.ephemeral === true,
+      ...(typeof archived === 'boolean' ? { archived } : {}),
+    };
+  }
+
+  /** Visit a thread's turns newest first, one page at a time, with their full
+   * items. `visit` returns true to stop; no further page is read after that.
+   * Never reads the whole history in one request. */
+  async scanTurnsNewestFirst(threadId: string, visit: (turn: v2.Turn) => boolean,
+    pageSize = TURN_SCAN_PAGE_SIZE): Promise<void> {
+    let cursor: string | null = null;
+    for (let page = 0; page < TURN_SCAN_MAX_PAGES; page++) {
+      const result: v2.ThreadTurnsListResponse = await this.client.threadTurnsList({ threadId, limit: pageSize,
+        sortDirection: 'desc', itemsView: 'full', ...(cursor ? { cursor } : {}) });
+      if (!result || !Array.isArray(result.data) || result.data.length > pageSize ||
+          result.data.some(turn => turn.itemsView !== 'full')) {
+        throw new Error('Invalid native turn page');
+      }
+      for (const turn of result.data) if (visit(turn)) return;
+      if (!result.nextCursor) return;
+      if (result.nextCursor === cursor || !result.data.length) throw new Error('Native turn pagination did not advance');
+      cursor = result.nextCursor;
+    }
+    throw new Error('Native turn history exceeds the scan bound');
+  }
+
   /** Exact durable saved-thread binding for a caller that already has access
    * to the ordinary local agent HTTP surface. Never hydrate turn history or
    * use the observed active/idle status to decide whether input is admissible. */
@@ -1717,35 +1794,6 @@ export class CodexService {
       threadId, message, cwd, clientUserMessageId,
     }, existingThread: { config, onPhase: onAdmissionPhase } });
     return turn.turnId;
-  }
-
-  /** Ordinary saved-thread input: native turn/start owns start-versus-steer.
-   * App state is not an admission lock; the caller must reserve a durable
-   * client ID and verify its original scoped binding before invoking this.
-   */
-  async submitSavedThreadInput(threadId: string, message: string, cwd: string,
-    clientUserMessageId: string): Promise<string> {
-    // Do not hydrate a long saved conversation merely to check its native
-    // identity and loaded state before submitting the next input.
-    const { thread } = await this.client.threadRead({ threadId, includeTurns: false });
-    if (thread.id !== threadId || thread.cwd !== cwd ||
-        !['idle', 'active', 'notLoaded'].includes(thread.status.type))
-      throw new Error('Saved native thread identity or state unavailable');
-    const knownParent = typeof thread.parentThreadId === 'string' && thread.parentThreadId
-      ? thread.parentThreadId : null;
-    try {
-      if (thread.status.type === 'notLoaded') {
-        await this.resumeExistingThreadForInput({ threadId, cwd, config: { mcp_servers: {} } },
-          false, { cwd: thread.cwd });
-      }
-      // OIX turn/start calls start_or_steer_turn. Never speculate about active
-      // ownership here or turn a stale app observation into a second queue.
-      const turn = await this.client.startTurn({ threadId, message, cwd, clientUserMessageId });
-      this.activeTurns.set(threadId, turn.id);
-      return turn.id;
-    } catch (error) {
-      throw await this.subagentInputRefusal(error, threadId, knownParent);
-    }
   }
 
   async setThreadName(threadId: string, name: string): Promise<void> {

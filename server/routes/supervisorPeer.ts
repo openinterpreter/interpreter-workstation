@@ -16,6 +16,9 @@ import { ManagedGoalDocumentError, type ThreadGoalDocument } from '../../src/lib
 import { projectSupervisorTurn } from '../utils/supervisorTurnObservation';
 
 type Capability = SupervisorPeerTarget['capability'];
+/** Content-free custody of one queued thread input (see wakeSources.threadInputCustody). */
+export type ThreadInputCustody = { status: string; turnId?: string; accepted?: true; code?: string;
+  parentThreadId?: string | null };
 type GoalState = { goal: v2.ThreadGoal | null; revision: ThreadGoalRevision | null;
   document: { content: string; sha256: string; byteLength: number; missionRevision: number } | null };
 
@@ -40,6 +43,9 @@ export function createSupervisorPeerRouter(options: Readonly<{
     ReturnType<ReturnType<typeof getCodexService>['listNativeTerminalOwners']>;
   readSubmission?: (threadId: string, clientUserMessageId: string) =>
     ReturnType<ReturnType<typeof getCodexService>['readNativeSubmissionCustody']>;
+  /** The queued input with this client ID, if it was taken through the
+   * thread's input queue. Its custody answers the submission read. */
+  readThreadInput?: (threadId: string, clientUserMessageId: string) => Promise<ThreadInputCustody | null>;
   readJournal?: typeof nativeSubmissionJournal.lookup;
   readArtifact?: typeof threadArtifactReceipts.get;
   readThread?: (threadId: string) => Promise<v2.Thread>;
@@ -254,6 +260,16 @@ export function createSupervisorPeerRouter(options: Readonly<{
       const clientId = req.params.clientUserMessageId;
       if (!/^[A-Za-z0-9_-]{1,160}$/.test(clientId)) {
         return void res.status(400).json(denied('invalid_client_id'));
+      }
+      // Input taken through the thread's queue reaches the runtime under a
+      // derived client ID, so its own record is the receipt for the caller's ID.
+      const input = await options.readThreadInput?.(req.params.threadId, clientId);
+      if (input) {
+        return void res.json({ available: true, threadId: req.params.threadId, clientUserMessageId: clientId,
+          input: { status: input.status, ...(input.turnId && { turnId: input.turnId }),
+            ...(input.accepted && { accepted: true }),
+            ...(input.code && { code: input.code, parentThreadId: input.parentThreadId ?? null }) },
+          observation: 'thread-input-queue-record' });
       }
       const journal = await (options.readJournal ?? nativeSubmissionJournal.lookup.bind(nativeSubmissionJournal))(
         req.params.threadId, clientId);

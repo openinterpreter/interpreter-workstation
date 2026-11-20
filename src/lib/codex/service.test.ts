@@ -1895,62 +1895,6 @@ describe("CodexService", () => {
     assert.equal(fake.calls.startTurn, 1);
   });
 
-  test('saved input delegates idle and active admission to native turn/start with the same client ID', async () => {
-    const id = '00000000-0000-4000-8000-000000000123';
-    let status: 'idle' | 'active' = 'idle';
-    const ids: Array<string | undefined> = [];
-    const fake = createFakeClient({
-      async threadRead() { return { thread: { id, cwd: '/workspace', status: { type: status },
-        turns: [] } as v2.Thread }; },
-      async startTurn(params) {
-        ids.push(params.clientUserMessageId);
-        return createTurn(status === 'active' ? 'turn_active' : 'turn_idle');
-      },
-    });
-    const service = new CodexService(fake.client);
-    assert.equal(await service.submitSavedThreadInput(id, 'first', '/workspace', 'stable_1'), 'turn_idle');
-    status = 'active';
-    assert.equal(await service.submitSavedThreadInput(id, 'second', '/workspace', 'stable_2'), 'turn_active');
-    assert.deepEqual(ids, ['stable_1', 'stable_2']);
-    assert.equal(fake.calls.resumeThread, 0);
-    assert.deepEqual(fake.calls.threadReadParams, [
-      { threadId: id, includeTurns: false }, { threadId: id, includeTurns: false },
-    ]);
-    assert.equal(fake.calls.startTurn, 2);
-    assert.equal(fake.calls.steerTurn.length, 0);
-  });
-
-  test('saved unloaded thread resumes with a supplied fresh shell carrier, and unknown scope fails closed', async () => {
-    const id = '00000000-0000-4000-8000-000000000123';
-    let cwd = '/workspace';
-    let status = 'notLoaded';
-    const fake = createFakeClient({ async threadRead() { return { thread: {
-      id, cwd, status: { type: status }, turns: [],
-    } as v2.Thread }; } });
-    fake.client.threadList = async () => ({ data: [{ id } as v2.Thread], nextCursor: null });
-    const policy = { set: { INTERPRETER_CALLER_TOKEN: 'agtok_fresh_caller' } };
-    const carrierEvents: string[] = [];
-    const restore = setUnloadedThreadCarrierProvider(async (request) => {
-      carrierEvents.push(`prepare:${request.threadId}:${request.cwd}`);
-      return { shellPolicy: policy, commit: () => carrierEvents.push('commit'),
-        rollback: () => carrierEvents.push('rollback') };
-    });
-    const service = new CodexService(fake.client);
-    try {
-      assert.equal(await service.submitSavedThreadInput(id, 'message', '/workspace', 'stable_3'), 'turn_1');
-    } finally {
-      restore();
-    }
-    assert.equal(fake.calls.resumeThread, 1);
-    assert.deepEqual(fake.calls.resumeThreadConfig[0], { mcp_servers: {}, shell_environment_policy: policy });
-    assert.deepEqual(carrierEvents, [`prepare:${id}:/workspace`, 'commit']);
-    cwd = '/other';
-    await assert.rejects(service.submitSavedThreadInput(id, 'message', '/workspace', 'stable_4'), /identity or state unavailable/);
-    cwd = '/workspace'; status = 'systemError';
-    await assert.rejects(service.submitSavedThreadInput(id, 'message', '/workspace', 'stable_5'), /identity or state unavailable/);
-    assert.equal(fake.calls.startTurn, 1);
-  });
-
   test('unloaded existing-thread input rolls back its fresh carrier when the resume fails', async () => {
     const id = '00000000-0000-4000-8000-000000000124';
     const fake = createFakeClient({
@@ -1988,8 +1932,7 @@ describe("CodexService", () => {
     const service = new CodexService(fake.client);
     assert.equal(typeof await service.startExistingThreadTurn(id, 'wake input', '/workspace',
       { mcp_servers: {} }), 'string');
-    assert.equal(typeof await service.submitSavedThreadInput(id, 'input', '/workspace', 'stable_sub'), 'string');
-    assert.equal(fake.calls.startTurn, 2);
+    assert.equal(fake.calls.startTurn, 1);
   });
 
   test('the runtime resume refusal maps to the refusal code with its parent and no second resume', async () => {
@@ -2025,12 +1968,6 @@ describe("CodexService", () => {
       assert.equal(fake.calls.resumeThread, 1);
       // The ordinary path's three reads, plus one for the parent after the refusal.
       assert.equal(fake.calls.threadReadParams.length, 4);
-      await assert.rejects(service.submitSavedThreadInput(id, 'input', '/workspace', 'stable_sub'), refused);
-      assert.deepEqual(carrierEvents, ['rollback', 'rollback']);
-      assert.equal(fake.calls.resumeThread, 2);
-      // Saved input already read the thread, so its parent is reused; the
-      // other two reads are the carrier resume's custody check.
-      assert.equal(fake.calls.threadReadParams.length, 7);
     } finally {
       restore();
     }
@@ -2053,14 +1990,10 @@ describe("CodexService", () => {
       },
     });
     const service = new CodexService(loaded.client);
-    for (const submit of [
-      () => service.startExistingThreadTurn(id, 'wake input', '/workspace', { mcp_servers: {} }),
-      () => service.submitSavedThreadInput(id, 'input', '/workspace', 'stable_loaded'),
-    ]) {
-      await assert.rejects(submit(), (error: unknown) =>
+    await assert.rejects(service.startExistingThreadTurn(id, 'wake input', '/workspace', { mcp_servers: {} }),
+      (error: unknown) =>
         error instanceof SubagentDirectInputError && error.code === 'subagent_direct_input_unsupported' &&
         error.threadId === id && error.parentThreadId === parent);
-    }
     assert.equal(loaded.calls.resumeThread, 1);
     readable = false;
     await assert.rejects(service.startExistingThreadTurn(id, 'wake input', '/workspace', { mcp_servers: {} }),

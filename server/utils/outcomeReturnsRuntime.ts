@@ -1,17 +1,26 @@
 import { getCodexService, lastAgentMessageText, onTurnEnded, turnEndedOutcome } from '../../src/lib/codex/service';
+import type { v2 } from '../handlers/codex-generated-types/index';
 import type { SubmissionSender } from './nativeSubmissionJournal';
-import { OutcomeReturns } from './outcomeReturns';
+import { OutcomeReturns, type TurnOutcome } from './outcomeReturns';
+
+/** The outcome of one turn if it ended, paging back newest first only as far
+ * as that turn; never the whole history in one read. */
+export async function readEndedTurn(threadId: string, turnId: string, service = getCodexService()):
+  Promise<{ outcome: TurnOutcome; summary: string } | null> {
+  let found: v2.Turn | undefined;
+  await service.scanTurnsNewestFirst(threadId, turn => {
+    if (turn.id !== turnId) return false;
+    found = turn;
+    return true;
+  });
+  const turn = found as v2.Turn | undefined;
+  const outcome = turn ? turnEndedOutcome(turn.status) : null;
+  return turn && outcome ? { outcome, summary: lastAgentMessageText(turn.items) } : null;
+}
 
 export const outcomeReturns = new OutcomeReturns({
   command: process.env.WORKSTATION_OUTCOME_RETURN_COMMAND,
-  // Reuses the ordinary native thread read that wake sources also use.
-  async readTurn(threadId, turnId) {
-    const thread = await getCodexService().readThread(threadId);
-    if (thread.id !== threadId) return null;
-    const turn = thread.turns.find(item => item.id === turnId);
-    const outcome = turn ? turnEndedOutcome(turn.status) : null;
-    return turn && outcome ? { outcome, summary: lastAgentMessageText(turn.items) } : null;
-  },
+  readTurn: (threadId, turnId) => readEndedTurn(threadId, turnId),
 });
 
 let initialization: Promise<void> | undefined;
@@ -47,10 +56,13 @@ export async function stopOutcomeReturns(): Promise<void> {
   }
 }
 
-/** Never throws: admission has already happened when this is called. */
-export function watchOutcomeReturn(threadId: string, turnId: string, sender: SubmissionSender,
-  clientUserMessageId: string): void {
-  if (!unsubscribe) return;
-  void readyOutcomeReturns().then(() => outcomeReturns.watch(threadId, turnId, sender, clientUserMessageId))
-    .catch(error => console.error('[Outcome returns] Could not record a sender-attributed turn.', error));
+/** Record the admitting turn of a sender-attributed input. True once the watch
+ * is durable (or the input is itself an outcome delivery, which is never
+ * watched); false when outcome returns are not running here or the store is
+ * full. Rejects when the store cannot be written. */
+export async function recordOutcomeReturn(threadId: string, turnId: string, sender: SubmissionSender,
+  clientUserMessageId: string): Promise<boolean> {
+  if (!unsubscribe) return false;
+  await readyOutcomeReturns();
+  return outcomeReturns.watch(threadId, turnId, sender, clientUserMessageId);
 }

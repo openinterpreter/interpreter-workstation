@@ -19,6 +19,8 @@ import { createSupervisorPeerVerifier } from './utils/supervisorPeerVerifier';
 import { supervisorSignerSetting } from './utils/supervisorPeerSigner';
 import { getCodexService } from '../src/lib/codex/service';
 import { readStableSupervisorGoal } from './utils/supervisorGoalRead';
+import { readyWakeSources, wakeSources } from './utils/wakeSourcesRuntime';
+import { THREAD_INPUT_SOURCE, threadInputCustody } from './utils/wakeSources';
 import mcpRouter from "./routes/mcp";
 import interpreterCliRouter from "./routes/interpreterCli";
 import { initializeSandbox, cleanupSandbox } from "./utils/sandboxManager";
@@ -206,6 +208,11 @@ if (process.env.INTERPRETER_SUPERVISOR_VERIFY_URL &&
     updateGoalDocument: async (id, expected, document) =>
       getCodexService().setThreadGoalDocumentWithRevision({ threadId: id, document }, expected),
     readTerminal: (request) => getCodexService().readNativeTerminalStatus(request),
+    readThreadInput: async (id, clientUserMessageId) => {
+      await readyWakeSources();
+      const event = wakeSources.find(id, THREAD_INPUT_SOURCE, clientUserMessageId);
+      return event ? threadInputCustody(event) : null;
+    },
   }));
 }
 app.use("/api/interpreter-cli", interpreterCliRouter);
