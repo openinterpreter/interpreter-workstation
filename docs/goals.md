@@ -177,21 +177,22 @@ and the last conversation message remain separate historical observations.
 
 ## Programmatic task receipts
 
-For an authenticated saved-thread task, assign one stable
-`clientUserMessageId` before sending it. A broken progress stream is not proof
-that the native turn failed to start. Workstation binds progress arriving before
-the `turn/start` response only after that response identifies the exact turn;
-notifications from an older turn are not completion receipts for the new task.
-If the progress observer fails, the native turn can continue independently.
+A task for an existing thread requires one stable `clientUserMessageId`. It is
+retained in that thread's wake queue before it is acknowledged and delivered in
+order with the thread's other inputs; see
+[Programmatic input to an existing thread](wake-sources.md#programmatic-input-to-an-existing-thread).
+A broken or ended progress stream, or a `503`, is not proof that the input was
+lost: repeat the request with the **same** client ID and the same message,
+which never submits a second input. The same ID with a different message or
+sender is refused with `409`.
 
 Use the authenticated, exact-thread and exact-client-ID custody read at
 `GET /api/agent/threads/:threadId/submissions/:clientUserMessageId/custody`
-to distinguish a recorded request, an observed native user item, a native
-queue item, and an unverified or timed-out inspection. A request receipt alone
-does not prove a model response, a command result, or external delivery. A
-timeout does not cancel an outstanding native call and must not cause a blind
-retry with a different client ID. Saved command records also do not establish
-whether an operating-system process remains live.
+to see whether the input is `pending`, `offered`, `admitted` (with its turn),
+`held` or `refused`. Admission does not prove a model response, a command
+result, or external delivery. Never retry with a different client ID. Saved
+command records also do not establish whether an operating-system process
+remains live.
 
 The exact-thread native custody read exposes command item ID, opaque native
 process ID, saved status, exit code, and bounded output digest/size from its
@@ -260,3 +261,12 @@ resume: the Goal is active, but nothing runs it until the thread is loaded, for
 example by its next message. A stale revision returns `409` and never loads the
 thread. The local Goal resume API and the automatic resume after a temporary
 model-capacity refusal load the thread the same way.
+
+`GET …/submissions/:clientUserMessageId` needs the `task:read` grant. For input
+that went through the thread's input queue (a task sent to an existing thread),
+it answers from that queue's record, keyed by the caller's own client ID:
+`{ available: true, threadId, clientUserMessageId, input: { status, turnId?,
+code?, parentThreadId? }, observation: "thread-input-queue-record" }`, with the
+same statuses as the local custody read above and never the message. For any
+other client ID (for example an interactive steer) it reports the submission
+journal and saved native history as before.

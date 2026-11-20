@@ -56,7 +56,7 @@ describe('outcome returns', () => {
       expect(store.list()[0]).toMatchObject({ status: 'watching', attempts: 0 });
       await store.turnEnded(thread, 'turn_1', 'completed', 'All done.');
       await store.deliverDue();
-      const id = outcomeReturnId(thread, 'turn_1');
+      const id = outcomeReturnId(thread, 'turn_1', 'handoff_1');
       expect(await f.received()).toEqual([{ version: 1, kind: 'turn', id, to: sender,
         from: { threadId: thread, turnId: 'turn_1' }, clientUserMessageId: 'handoff_1',
         outcome: 'completed', summary: 'All done.' }]);
@@ -72,7 +72,7 @@ describe('outcome returns', () => {
     const f = await fixture();
     try {
       const store = await f.make(0);
-      expect(await store.watch(thread, 'turn_delivery', sender, `outcome-${outcomeReturnId(thread, 'turn_0')}`)).toBe(true);
+      expect(await store.watch(thread, 'turn_delivery', sender, `outcome-${outcomeReturnId(thread, 'turn_0', 'handoff_0')}`)).toBe(true);
       expect(store.list()).toEqual([]);
       await store.turnEnded(thread, 'turn_delivery', 'completed', 'Acknowledged.');
       await store.deliverDue();
@@ -198,7 +198,7 @@ describe('outcome returns', () => {
       const id = goalNoticeId(thread, goal);
       expect(id).toBe(goalNoticeId(thread, { ...goal, reason: 'unknown' } as typeof goal));
       expect(id).not.toBe(goalNoticeId(thread, { ...goal, updatedAt: goal.updatedAt + 1 }));
-      expect(id).not.toBe(outcomeReturnId(thread, 'turn_g'));
+      expect(id).not.toBe(outcomeReturnId(thread, 'turn_g', 'handoff_g'));
       expect(store.lastGoalNotice(thread)).toEqual(goal);
       await store.turnEnded(thread, 'turn_g', 'completed', 'Worker answer.');
       await store.deliverDue();
@@ -234,6 +234,118 @@ describe('outcome returns', () => {
       expect(store.latestSender(thread)).toEqual({ computer: 'second-host' });
       expect(store.recentSenderThreads(50)).toEqual([thread, other]);
       expect(store.recentSenderThreads(1)).toEqual([thread]);
+    } finally { await f.cleanup(); }
+  });
+
+  test('two senders whose inputs steered one turn each get their own return', async () => {
+    const f = await fixture();
+    try {
+      const store = await f.make(0);
+      const other = { computer: 'second-host' };
+      expect(await store.watch(thread, 'turn_shared', sender, 'handoff_first')).toBe(true);
+      expect(await store.watch(thread, 'turn_shared', other, 'handoff_second')).toBe(true);
+      // A repeat of either input is idempotent.
+      expect(await store.watch(thread, 'turn_shared', other, 'handoff_second')).toBe(true);
+      expect(store.list()).toHaveLength(2);
+      await store.turnEnded(thread, 'turn_shared', 'completed', 'Both handled.');
+      await store.deliverDue();
+      const received = await f.received() as Array<Record<string, unknown>>;
+      expect(received.map(payload => [payload.id, payload.to, payload.clientUserMessageId])).toEqual([
+        [outcomeReturnId(thread, 'turn_shared', 'handoff_first'), sender, 'handoff_first'],
+        [outcomeReturnId(thread, 'turn_shared', 'handoff_second'), other, 'handoff_second'],
+      ]);
+      expect(received.every(payload => payload.summary === 'Both handled.')).toBe(true);
+      // A sender joining after the turn ended still gets the outcome; a delivery never does.
+      expect(await store.watch(thread, 'turn_shared', { computer: 'third-host' }, 'handoff_third')).toBe(true);
+      expect(await store.watch(thread, 'turn_shared', other, 'outcome-abc')).toBe(true);
+      expect(store.list().map(entry => entry.status)).toEqual(['delivered', 'delivered', 'pending']);
+      await store.stop();
+      // Both kinds of entry reload and validate after a restart.
+      const restarted = await f.make(null);
+      expect(restarted.list()).toHaveLength(3);
+    } finally { await f.cleanup(); }
+  }, 30_000);
+
+  test('a watch recorded after startup for a turn that already ended resolves at once', async () => {
+    const f = await fixture();
+    try {
+      const reads: string[] = [];
+      const store = await f.make(null, { readTurn: async (_thread, turnId) => {
+        reads.push(turnId);
+        return turnId === 'turn_over' ? { outcome: 'interrupted', summary: 'Ended while unobserved.' } : null;
+      } });
+      expect(reads).toEqual([]);
+      await store.watch(thread, 'turn_over', sender, 'handoff_late');
+      await store.watch(thread, 'turn_running', sender, 'handoff_live');
+      expect(reads).toEqual(['turn_over', 'turn_running']);
+      expect(store.list().map(entry => [entry.turnId, entry.status, entry.outcome])).toEqual([
+        ['turn_over', 'pending', 'interrupted'], ['turn_running', 'watching', undefined]]);
+      // A repeated watch reads nothing again.
+      await store.watch(thread, 'turn_running', sender, 'handoff_live');
+      expect(reads).toHaveLength(2);
+    } finally { await f.cleanup(); }
+  });
+
+  test('a watched turn whose end was missed is read again on the re-check interval, without a restart', async () => {
+    const f = await fixture();
+    try {
+      const reads: string[] = [];
+      let ended = false;
+      let failing = true;
+      const store = await f.make(null, { recheckMs: 20, readTurn: async (_thread, turnId) => {
+        reads.push(turnId);
+        if (failing) { failing = false; throw new Error('read failed'); }
+        return ended ? { outcome: 'completed', summary: 'Ended while unobserved.' } : null;
+      } });
+      // The read when the watch is recorded fails, and no notification ever arrives.
+      await store.watch(thread, 'turn_missed', sender, 'handoff_missed');
+      expect(store.list()[0]).toMatchObject({ status: 'watching' });
+      ended = true;
+      for (let i = 0; i < 200 && store.list()[0]?.status === 'watching'; i++) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      expect(store.list()[0]).toMatchObject({ status: 'pending', outcome: 'completed' });
+      // A turn no longer watched is not read again.
+      const count = reads.length;
+      await new Promise(resolve => setTimeout(resolve, 80));
+      expect(reads.length).toBe(count);
+    } finally { await f.cleanup(); }
+  });
+
+  test('a watch whose write failed is not reported recorded by a retry; once written it survives a restart', async () => {
+    const f = await fixture();
+    try {
+      const store = await f.make(null);
+      const save = (store as any).save.bind(store);
+      let failing = true;
+      (store as any).save = async () => { if (failing) throw new Error('disk full'); return save(); };
+      await expect(store.watch(thread, 'turn_s', sender, 'handoff_s')).rejects.toThrow('disk full');
+      expect(store.list()).toEqual([]);
+      // The retry writes it again instead of finding it known.
+      await expect(store.watch(thread, 'turn_s', sender, 'handoff_s')).rejects.toThrow('disk full');
+      await store.stop();
+      // Nothing reached disk, so nothing may have been reported recorded.
+      expect((await f.make(null)).list()).toEqual([]);
+      const again = await f.make(null);
+      expect(await again.watch(thread, 'turn_s', sender, 'handoff_s')).toBe(true);
+      await again.stop();
+      const restarted = await f.make(null);
+      expect(restarted.list().map(entry => [entry.turnId, entry.status])).toEqual([['turn_s', 'watching']]);
+    } finally { await f.cleanup(); }
+  });
+
+  test('a turn whose read never settles is read once, however many re-checks pass', async () => {
+    const f = await fixture();
+    try {
+      let reads = 0;
+      const store = await f.make(null, { recheckMs: 20, readTimeoutMs: 20,
+        readTurn: () => { reads++; return new Promise<null>(() => {}); } });
+      const started = Date.now();
+      expect(await store.watch(thread, 'turn_hung', sender, 'handoff_hung')).toBe(true);
+      expect(Date.now() - started).toBeLessThan(5_000);
+      await new Promise(resolve => setTimeout(resolve, 150));
+      expect(reads).toBe(1);
+      expect(store.list()[0]).toMatchObject({ status: 'watching' });
     } finally { await f.cleanup(); }
   });
 

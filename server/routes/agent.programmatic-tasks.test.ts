@@ -24,7 +24,7 @@ describe('Simple mode service tier', () => {
 });
 
 describe('programmatic task HTTP transport', () => {
-  test('accepts an exact optional native client ID and rejects malformed values before admission', () => {
+  test('accepts a native client ID in the wake event ID alphabet and rejects malformed values before admission', () => {
     expect(parseProgrammaticTaskBody({ message: 'task', clientUserMessageId: 'origin_01' }).clientUserMessageId)
       .toBe('origin_01');
     expect(getProgrammaticClientIdError(undefined)).toBe(false);
@@ -62,7 +62,8 @@ describe('programmatic task HTTP transport', () => {
       .toBe('sender requires threadId.');
     expect(getProgrammaticSenderError({ message: 'task', threadId: '  ', clientUserMessageId: 'c1', sender }))
       .toBe('sender requires threadId.');
-    // A client ID is optional with a sender, exactly as it is without one.
+    // The sender check covers only the sender; the task routes require a
+    // client ID for any input to an existing thread.
     expect(getProgrammaticSenderError({ message: 'task', threadId: base.threadId, sender })).toBeNull();
   });
   test('a request without sender is unchanged', () => {

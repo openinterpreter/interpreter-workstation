@@ -84,6 +84,8 @@ export const OUTCOME_MAX_ATTEMPTS = 40;
 const COMMAND_TIMEOUT_MS = 120_000;
 const TICK_MS = 5_000;
 const RECONCILE_TIMEOUT_MS = 10_000;
+/** Re-check of watched turns whose end was not observed. */
+const RECHECK_MS = 60_000;
 const RECENTLY_ENDED_LIMIT = 64;
 const STATUSES: OutcomeReturnStatus[] = ['watching', 'pending', 'delivered', 'failed'];
 const OUTCOMES: TurnOutcome[] = ['completed', 'failed', 'interrupted'];
@@ -92,9 +94,12 @@ export const GOAL_NOTICE_STATUSES: readonly GoalNoticeStatus[] =
 const GOAL_NOTICE_REASONS: readonly GoalNoticeReason[] = ['turn_error', 'model_capacity_exhausted', 'usage_limit',
   'budget_limit', 'changed_during_turn', 'changed_outside_turn', 'unknown'];
 
-export function outcomeReturnId(threadId: string, turnId: string): string {
-  return createHash('sha256').update(`${threadId}:${turnId}`).digest('hex');
+/** Stable delivery ID of one turn's outcome for one sender's input: every
+ * input that started or steered the turn gets its own return. */
+export function outcomeReturnId(threadId: string, turnId: string, clientUserMessageId: string): string {
+  return createHash('sha256').update(`${threadId}:${turnId}:${clientUserMessageId}`).digest('hex');
 }
+const turnKey = (threadId: string, turnId: string) => JSON.stringify([threadId, turnId]);
 
 /** Stable delivery ID of one Goal change: the thread, the Goal (its creation
  * time), the new status and the Goal's update time of that change. */
@@ -166,10 +171,16 @@ export type OutcomeReturnsOptions = {
   /** Raw `WORKSTATION_OUTCOME_RETURN_COMMAND` value. */
   command: string | undefined;
   now?: () => number;
-  /** One cheap read of whether a watched turn already ended (startup only). */
+  /** One bounded read of whether a watched turn already ended: at startup for
+   * every watched turn, when a watch is recorded for a turn not seen ending,
+   * and then periodically for every turn still watched. */
   readTurn?: (threadId: string, turnId: string) =>
     Promise<{ outcome: TurnOutcome; summary: string } | null>;
   commandTimeoutMs?: number;
+  /** Interval of the periodic re-check of watched turns; 0 disables it. */
+  recheckMs?: number;
+  /** How long a caller waits for one end check (default 10 seconds). */
+  readTimeoutMs?: number;
 };
 
 function validEntry(value: unknown): value is StoredEntry {
@@ -185,9 +196,10 @@ function validEntry(value: unknown): value is StoredEntry {
   const entry = value as OutcomeReturn & { kind?: unknown };
   return !!entry && typeof entry === 'object' && entry.kind === undefined && /^[0-9a-f]{64}$/.test(entry.id) &&
     typeof entry.threadId === 'string' && typeof entry.turnId === 'string' &&
-    entry.id === outcomeReturnId(entry.threadId, entry.turnId) &&
     !!parseSubmissionSender(entry.sender) && typeof entry.clientUserMessageId === 'string' &&
-    SUBMISSION_ID.test(entry.clientUserMessageId) && STATUSES.includes(entry.status) &&
+    SUBMISSION_ID.test(entry.clientUserMessageId) &&
+    entry.id === outcomeReturnId(entry.threadId, entry.turnId, entry.clientUserMessageId) &&
+    STATUSES.includes(entry.status) &&
     (entry.outcome === undefined || OUTCOMES.includes(entry.outcome)) &&
     (entry.summary === undefined || typeof entry.summary === 'string') &&
     Number.isInteger(entry.attempts) && entry.attempts >= 0 &&
@@ -207,6 +219,9 @@ export class OutcomeReturns {
   private entries: StoredEntry[] = [];
   private chain = Promise.resolve();
   private timer?: ReturnType<typeof setInterval>;
+  private recheckTimer?: ReturnType<typeof setInterval>;
+  /** The one outstanding end check per watched turn. */
+  private readonly checks = new Map<string, Promise<void>>();
   private delivering?: Promise<void>;
   private child?: ChildProcess;
   private stopping = false;
@@ -247,60 +262,81 @@ export class OutcomeReturns {
     await this.reconcileWatching();
     this.timer = setInterval(() => { void this.deliverDue().catch(console.error); }, TICK_MS);
     this.timer.unref?.();
+    // A turn whose end was missed (a failed or timed-out read, a lost
+    // notification) is read again on a bounded interval while it is watched.
+    const recheckMs = this.options.recheckMs ?? RECHECK_MS;
+    if (recheckMs > 0) {
+      this.recheckTimer = setInterval(() => { void this.reconcileWatching(); }, recheckMs);
+      this.recheckTimer.unref?.();
+    }
   }
 
-  /** Stop the timer and any running command; a stopped attempt stays pending. */
+  /** Stop the timers and any running command; a stopped attempt stays pending. */
   async stop(): Promise<void> {
     this.stopping = true;
     if (this.timer) clearInterval(this.timer);
+    if (this.recheckTimer) clearInterval(this.recheckTimer);
     this.timer = undefined;
+    this.recheckTimer = undefined;
     this.child?.kill('SIGKILL');
     await this.delivering;
+    // A hung read is not waited for beyond its bound; its late result is ignored.
+    await Promise.allSettled([...this.checks.values()].map(check => this.bounded(check)));
     await this.chain;
   }
 
-  /** Record a sender-attributed turn. Idempotent; false when the store is full. */
+  /** Record that one sender's input started or steered a turn. Each input of a
+   * turn is watched separately and gets its own return. Idempotent per input;
+   * false when the store is full. A turn not seen ending is read once, so a
+   * watch recorded after its turn ended still resolves. */
   async watch(threadId: string, turnId: string, sender: SubmissionSender,
     clientUserMessageId: string): Promise<boolean> {
     const checked = parseSubmissionSender(sender);
     if (!checked || !SUBMISSION_ID.test(clientUserMessageId)) throw new Error('Invalid outcome return');
     if (isOutcomeDelivery(clientUserMessageId)) return true;
-    const id = outcomeReturnId(threadId, turnId);
-    return this.exclusive(async () => {
-      if (this.entries.some(entry => entry.id === id)) return true;
-      if (!this.makeRoom()) return false;
+    const id = outcomeReturnId(threadId, turnId, clientUserMessageId);
+    const result = await this.exclusive(async () => {
+      if (this.entries.some(entry => entry.id === id)) return 'known' as const;
+      if (!this.makeRoom()) return 'full' as const;
       const at = new Date(this.now()).toISOString();
       const entry: OutcomeReturn = { id, threadId, turnId, sender: checked, clientUserMessageId,
         status: 'watching', attempts: 0, createdAt: at, updatedAt: at };
-      const ended = this.recentlyEnded.get(id);
+      // Kept, not taken: another input of the same turn may be watched next.
+      const ended = this.recentlyEnded.get(turnKey(threadId, turnId));
       if (ended) {
-        this.recentlyEnded.delete(id);
         Object.assign(entry, { status: 'pending', outcome: ended.outcome,
           summary: truncateOutcomeSummary(ended.summary), nextAttemptAt: at });
       }
       this.entries.push(entry);
-      await this.save();
-      return true;
+      // A watch that is not on disk is not kept: a retry records it again
+      // rather than finding it known and reporting it recorded.
+      try { await this.save(); }
+      catch (error) { this.entries.splice(this.entries.indexOf(entry), 1); throw error; }
+      return ended ? 'known' as const : 'watching' as const;
     });
+    if (result === 'full') return false;
+    if (result === 'watching') await this.checkEnded(threadId, turnId);
+    return true;
   }
 
-  /** Mark a watched turn as ended; unknown turns are only remembered briefly
-   * in memory in case their watch is recorded just after the turn ends. */
+  /** Mark every watch of a turn as ended; an unknown turn is only remembered
+   * briefly in memory in case a watch is recorded just after it ends. */
   async turnEnded(threadId: string, turnId: string, outcome: TurnOutcome, summary: string): Promise<void> {
-    const id = outcomeReturnId(threadId, turnId);
     await this.exclusive(async () => {
-      const entry = this.entries.find(item => item.id === id);
-      if (!entry) {
-        this.recentlyEnded.set(id, { outcome, summary: truncateOutcomeSummary(summary) });
-        if (this.recentlyEnded.size > RECENTLY_ENDED_LIMIT) {
-          this.recentlyEnded.delete(this.recentlyEnded.keys().next().value!);
-        }
-        return;
+      const key = turnKey(threadId, turnId);
+      this.recentlyEnded.delete(key);
+      this.recentlyEnded.set(key, { outcome, summary: truncateOutcomeSummary(summary) });
+      if (this.recentlyEnded.size > RECENTLY_ENDED_LIMIT) {
+        this.recentlyEnded.delete(this.recentlyEnded.keys().next().value!);
       }
-      if (entry.status !== 'watching') return;
+      const watching = this.entries.filter((item): item is OutcomeReturn => item.kind === undefined &&
+        item.threadId === threadId && item.turnId === turnId && item.status === 'watching');
+      if (!watching.length) return;
       const at = new Date(this.now()).toISOString();
-      Object.assign(entry, { status: 'pending', outcome, summary: truncateOutcomeSummary(summary),
-        nextAttemptAt: at, updatedAt: at });
+      for (const entry of watching) {
+        Object.assign(entry, { status: 'pending', outcome, summary: truncateOutcomeSummary(summary),
+          nextAttemptAt: at, updatedAt: at });
+      }
       await this.save();
     });
   }
@@ -449,22 +485,52 @@ export class OutcomeReturns {
     });
   }
 
+  /** Check every turn still watched once (at startup and on the re-check interval). */
   private async reconcileWatching(): Promise<void> {
+    const turns = new Map<string, { threadId: string; turnId: string }>();
+    for (const entry of this.entries) {
+      if (entry.kind === undefined && entry.status === 'watching') {
+        turns.set(turnKey(entry.threadId, entry.turnId), { threadId: entry.threadId, turnId: entry.turnId });
+      }
+    }
+    await Promise.all([...turns.values()].map(({ threadId, turnId }) => this.checkEnded(threadId, turnId)));
+  }
+
+  /** One read of whether a turn ended; never throws, and the caller waits for
+   * it only up to the read bound. A turn has at most one read outstanding,
+   * until that read itself settles: a caller during one shares it, and a hung
+   * runtime is not sent another read for the turn on every re-check. */
+  private checkEnded(threadId: string, turnId: string): Promise<void> {
+    const key = turnKey(threadId, turnId);
+    let check = this.checks.get(key);
+    if (!check) {
+      const read = this.readEnded(threadId, turnId)
+        .finally(() => { if (this.checks.get(key) === read) this.checks.delete(key); });
+      this.checks.set(key, read);
+      check = read;
+    }
+    return this.bounded(check);
+  }
+
+  private async readEnded(threadId: string, turnId: string): Promise<void> {
     const readTurn = this.options.readTurn;
-    if (!readTurn) return;
-    const watching = this.entries.filter((entry): entry is OutcomeReturn => entry.status === 'watching');
-    await Promise.all(watching.map(async entry => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        const ended = await Promise.race([
-          readTurn(entry.threadId, entry.turnId),
-          new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), RECONCILE_TIMEOUT_MS); }),
-        ]);
-        if (ended) await this.turnEnded(entry.threadId, entry.turnId, ended.outcome, ended.summary);
-      } catch {
-        // The turn may still end; its live notification remains authoritative.
-      } finally { if (timer) clearTimeout(timer); }
-    }));
+    if (!readTurn || this.stopping) return;
+    try {
+      const ended = await readTurn(threadId, turnId);
+      if (ended && !this.stopping) await this.turnEnded(threadId, turnId, ended.outcome, ended.summary);
+    } catch {
+      // Read again on the re-check interval; a live notification still counts.
+    }
+  }
+
+  /** Wait for a check at most the read bound. */
+  private async bounded(check: Promise<void>): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([check, new Promise<void>(resolve => {
+        timer = setTimeout(resolve, this.options.readTimeoutMs ?? RECONCILE_TIMEOUT_MS);
+      })]);
+    } finally { if (timer) clearTimeout(timer); }
   }
 
   private async save(): Promise<void> {
