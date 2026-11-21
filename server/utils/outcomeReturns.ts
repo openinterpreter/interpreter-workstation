@@ -25,10 +25,14 @@ export type OutcomeReturn = {
 };
 export type GoalNoticeStatus = 'active' | 'paused' | 'blocked' | 'usageLimited' | 'budgetLimited' | 'complete';
 /** Fixed vocabulary for why a Goal changed; never free text. */
-export type GoalNoticeReason = 'turn_error' | 'model_capacity_exhausted' | 'usage_limit' | 'budget_limit' |
-  'changed_during_turn' | 'changed_outside_turn' | 'unknown';
-/** A Goal status change reported to the thread's most recent sender. Status
- * words, timestamps and a reason only: never the objective or message text. */
+export type GoalNoticeReason = 'turn_error' | 'model_capacity_exhausted' | 'capacity_retry_pending' |
+  'usage_limit' | 'budget_limit' | 'changed_during_turn' | 'changed_outside_turn' | 'unknown';
+/** Reason of the one transient notice for a block the automatic capacity
+ * resume is about to retry; the block's outcome is reported after it. */
+export const CAPACITY_RETRY_PENDING = 'capacity_retry_pending';
+/** A Goal status change reported to the agent that assigned the Goal. Status
+ * words, timestamps, native identity and a reason only: never the objective
+ * or message text. */
 export type GoalNotice = {
   status: GoalNoticeStatus;
   previousStatus?: GoalNoticeStatus;
@@ -36,26 +40,40 @@ export type GoalNotice = {
   /** The native Goal's creation and update times; they identify the Goal and this change. */
   createdAt: number;
   updatedAt: number;
+  /** The native Goal's identity and revisions, when the runtime reported them. */
+  goalId?: string;
+  missionRevision?: number;
+  lifecycleRevision?: number;
 };
-/** A stored Goal notice, delivered by the same command as turn outcomes. */
-export type GoalNoticeReturn = {
+/** Why a Goal has no agent to tell: no sender of its thread named a thread,
+ * or several did and none is known to have assigned it. */
+export type GoalUnroutedReason = 'no_assigner' | 'ambiguous_assigner';
+/** The immutable recipient of one Goal's notices. A Goal is identified by its
+ * thread and its native creation time. */
+export type GoalAssigner = { threadId: string; goalCreatedAt: number } & (
+  { sender: SubmissionSender; source: 'turn' | 'sole_sender' } | { unrouted: GoalUnroutedReason });
+type GoalNoticeReturnBase = {
   kind: 'goal';
   id: string;
   threadId: string;
-  sender: SubmissionSender;
   goal: GoalNotice;
-  status: Exclude<OutcomeReturnStatus, 'watching'>;
   attempts: number;
   nextAttemptAt?: string;
   createdAt: string;
   updatedAt: string;
 };
+/** A stored Goal notice, delivered by the same command as turn outcomes. An
+ * unrouted notice is kept for visibility and never delivered. */
+export type GoalNoticeReturn = GoalNoticeReturnBase & (
+  { sender: SubmissionSender; unrouted?: undefined; status: Exclude<OutcomeReturnStatus, 'watching'> } |
+  { sender?: undefined; unrouted: GoalUnroutedReason; status: 'unrouted' });
 type StoredEntry = OutcomeReturn | GoalNoticeReturn;
 /** What the visibility route exposes: never the summary text. */
 export type OutcomeReturnView = Pick<OutcomeReturn, 'id' | 'threadId' | 'turnId' | 'sender' | 'status' |
   'outcome' | 'attempts' | 'nextAttemptAt' | 'updatedAt'> |
-  Pick<GoalNoticeReturn, 'kind' | 'id' | 'threadId' | 'sender' | 'goal' | 'status' | 'attempts' |
-    'nextAttemptAt' | 'updatedAt'>;
+  (Pick<GoalNoticeReturnBase, 'kind' | 'id' | 'threadId' | 'goal' | 'attempts' | 'nextAttemptAt' | 'updatedAt'> &
+    ({ sender: SubmissionSender; status: Exclude<OutcomeReturnStatus, 'watching'> } |
+      { unrouted: GoalUnroutedReason; status: 'unrouted' }));
 /** The single JSON object written to the configured command's standard input. */
 export type OutcomeReturnPayload = {
   version: 1;
@@ -81,6 +99,8 @@ export type OutcomeReturnPayload = {
 export const OUTCOME_SUMMARY_LIMIT = 3000;
 export const OUTCOME_RETURN_LIMIT = 500;
 export const OUTCOME_MAX_ATTEMPTS = 40;
+/** Goal assigner records kept; the oldest is dropped first. */
+export const GOAL_ASSIGNER_LIMIT = 500;
 const COMMAND_TIMEOUT_MS = 120_000;
 const TICK_MS = 5_000;
 const RECONCILE_TIMEOUT_MS = 10_000;
@@ -91,8 +111,13 @@ const STATUSES: OutcomeReturnStatus[] = ['watching', 'pending', 'delivered', 'fa
 const OUTCOMES: TurnOutcome[] = ['completed', 'failed', 'interrupted'];
 export const GOAL_NOTICE_STATUSES: readonly GoalNoticeStatus[] =
   ['active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'];
-const GOAL_NOTICE_REASONS: readonly GoalNoticeReason[] = ['turn_error', 'model_capacity_exhausted', 'usage_limit',
-  'budget_limit', 'changed_during_turn', 'changed_outside_turn', 'unknown'];
+const GOAL_NOTICE_REASONS: readonly GoalNoticeReason[] = ['turn_error', 'model_capacity_exhausted',
+  CAPACITY_RETRY_PENDING, 'usage_limit', 'budget_limit', 'changed_during_turn', 'changed_outside_turn', 'unknown'];
+const GOAL_UNROUTED_REASONS: readonly GoalUnroutedReason[] = ['no_assigner', 'ambiguous_assigner'];
+const GOAL_ASSIGNER_SOURCES: readonly string[] = ['turn', 'sole_sender'];
+const GOAL_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
+const GOAL_NOTICE_KEYS = ['status', 'previousStatus', 'reason', 'createdAt', 'updatedAt', 'goalId',
+  'missionRevision', 'lifecycleRevision'];
 
 /** Stable delivery ID of one turn's outcome for one sender's input: every
  * input that started or steered the turn gets its own return. */
@@ -102,9 +127,13 @@ export function outcomeReturnId(threadId: string, turnId: string, clientUserMess
 const turnKey = (threadId: string, turnId: string) => JSON.stringify([threadId, turnId]);
 
 /** Stable delivery ID of one Goal change: the thread, the Goal (its creation
- * time), the new status and the Goal's update time of that change. */
-export function goalNoticeId(threadId: string, goal: Pick<GoalNotice, 'status' | 'createdAt' | 'updatedAt'>): string {
-  return createHash('sha256').update(`goal:${threadId}:${goal.createdAt}:${goal.status}:${goal.updatedAt}`)
+ * time), the new status and the Goal's update time of that change. The
+ * transient notice of a pending automatic resume has its own ID, so the
+ * block's later outcome is a separate notice even with the same times. */
+export function goalNoticeId(threadId: string,
+  goal: Pick<GoalNotice, 'status' | 'createdAt' | 'updatedAt'> & { reason?: GoalNoticeReason }): string {
+  const transient = goal.reason === CAPACITY_RETRY_PENDING ? `:${CAPACITY_RETRY_PENDING}` : '';
+  return createHash('sha256').update(`goal:${threadId}:${goal.createdAt}:${goal.status}:${goal.updatedAt}${transient}`)
     .digest('hex');
 }
 
@@ -113,12 +142,17 @@ const GOAL_STATUS_WORDS: Record<GoalNoticeStatus, string> = { active: 'active ag
   complete: 'complete' };
 
 /** The plain sentence a receiver can deliver for a Goal notice. Built only
- * from status words and IDs. */
+ * from status words, IDs and revisions. */
 export function goalNoticeSummary(threadId: string, goal: GoalNotice): string {
   const previous = goal.previousStatus ? `, previously ${goal.previousStatus}` : '';
+  const identity = [goal.goalId !== undefined && `goal ${goal.goalId}`,
+    goal.missionRevision !== undefined && `mission revision ${goal.missionRevision}`,
+    goal.lifecycleRevision !== undefined && `lifecycle revision ${goal.lifecycleRevision}`].filter(Boolean).join(', ');
   return `Goal on thread ${threadId} is ${GOAL_STATUS_WORDS[goal.status]} (status ${goal.status}${previous}; ` +
-    `reason ${goal.reason}).`;
+    `reason ${goal.reason}${identity ? `; ${identity}` : ''}).`;
 }
+
+const validRevision = (value: unknown) => value === undefined || (Number.isSafeInteger(value) && (value as number) >= 0);
 
 function validGoalNotice(value: unknown): value is GoalNotice {
   const goal = value as GoalNotice;
@@ -126,7 +160,21 @@ function validGoalNotice(value: unknown): value is GoalNotice {
     (goal.previousStatus === undefined || GOAL_NOTICE_STATUSES.includes(goal.previousStatus)) &&
     GOAL_NOTICE_REASONS.includes(goal.reason) && Number.isFinite(goal.createdAt) &&
     Number.isFinite(goal.updatedAt) &&
-    Object.keys(goal).every(key => ['status', 'previousStatus', 'reason', 'createdAt', 'updatedAt'].includes(key));
+    (goal.goalId === undefined || (typeof goal.goalId === 'string' && GOAL_ID.test(goal.goalId))) &&
+    validRevision(goal.missionRevision) && validRevision(goal.lifecycleRevision) &&
+    Object.keys(goal).every(key => GOAL_NOTICE_KEYS.includes(key));
+}
+
+function validGoalAssigner(value: unknown): value is GoalAssigner {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if (typeof record.threadId !== 'string' || !Number.isFinite(record.goalCreatedAt)) return false;
+  const keys = Object.keys(record).sort().join();
+  if (keys === 'goalCreatedAt,threadId,unrouted') {
+    return GOAL_UNROUTED_REASONS.includes(record.unrouted as GoalUnroutedReason);
+  }
+  return keys === 'goalCreatedAt,sender,source,threadId' && !!parseSubmissionSender(record.sender)?.thread &&
+    GOAL_ASSIGNER_SOURCES.includes(record.source as string);
 }
 
 /** Prefix of the client message ID under which a return command delivers an
@@ -166,7 +214,7 @@ export function truncateOutcomeSummary(text: string): string {
 }
 
 export type OutcomeReturnsOptions = {
-  /** Directory holding `outcome-returns.json`; defaults to the app data dir. */
+  /** Directory holding `outcome-returns-2.json`; defaults to the app data dir. */
   root?: string;
   /** Raw `WORKSTATION_OUTCOME_RETURN_COMMAND` value. */
   command: string | undefined;
@@ -186,9 +234,13 @@ export type OutcomeReturnsOptions = {
 function validEntry(value: unknown): value is StoredEntry {
   if (value && typeof value === 'object' && (value as GoalNoticeReturn).kind === 'goal') {
     const entry = value as GoalNoticeReturn;
+    const route = entry.status === 'unrouted'
+      ? entry.sender === undefined && GOAL_UNROUTED_REASONS.includes(entry.unrouted) && entry.attempts === 0 &&
+        entry.nextAttemptAt === undefined
+      : entry.unrouted === undefined && !!parseSubmissionSender(entry.sender) && STATUSES.includes(entry.status) &&
+        entry.status !== ('watching' as OutcomeReturnStatus);
     return typeof entry.threadId === 'string' && validGoalNotice(entry.goal) &&
-      entry.id === goalNoticeId(entry.threadId, entry.goal) && !!parseSubmissionSender(entry.sender) &&
-      STATUSES.includes(entry.status) && entry.status !== ('watching' as OutcomeReturnStatus) &&
+      entry.id === goalNoticeId(entry.threadId, entry.goal) && route &&
       Number.isInteger(entry.attempts) && entry.attempts >= 0 &&
       (entry.nextAttemptAt === undefined || typeof entry.nextAttemptAt === 'string') &&
       typeof entry.createdAt === 'string' && typeof entry.updatedAt === 'string';
@@ -209,14 +261,16 @@ function validEntry(value: unknown): value is StoredEntry {
 
 /**
  * Durable record of sender-attributed turns whose outcome is returned to the
- * sending host by a configured command, and of Goal notices sent to a thread's
- * most recent sender through the same command. One private file, atomically replaced
+ * sending host by a configured command, and of Goal notices sent to the agent
+ * bound as each Goal's assigner through the same command, with those
+ * bindings. One private file, atomically replaced
  * (temp file, fsync, rename, directory fsync) under a serialised write chain.
  * Delivery is at-least-once: a restart during a running command retries it,
  * so receivers must deduplicate on `id`.
  */
 export class OutcomeReturns {
   private entries: StoredEntry[] = [];
+  private assigners: GoalAssigner[] = [];
   private chain = Promise.resolve();
   private timer?: ReturnType<typeof setInterval>;
   private recheckTimer?: ReturnType<typeof setInterval>;
@@ -229,12 +283,16 @@ export class OutcomeReturns {
   /** Turns that ended before their watch was recorded (in-memory, bounded). */
   private readonly recentlyEnded = new Map<string, { outcome: TurnOutcome; summary: string }>();
   private readonly file: string;
+  /** The state file of releases before Goal assigners were bound. */
+  private readonly earlierFile: string;
   private readonly argv: string[] | null;
   private readonly now: () => number;
   private readonly commandTimeoutMs: number;
 
   constructor(private readonly options: OutcomeReturnsOptions) {
-    this.file = path.join(options.root ?? getInterpreterAppDataDir(), 'outcome-returns.json');
+    const root = options.root ?? getInterpreterAppDataDir();
+    this.file = path.join(root, 'outcome-returns-2.json');
+    this.earlierFile = path.join(root, 'outcome-returns.json');
     this.argv = parseOutcomeReturnCommand(options.command);
     this.now = options.now ?? Date.now;
     this.commandTimeoutMs = options.commandTimeoutMs ?? COMMAND_TIMEOUT_MS;
@@ -243,14 +301,32 @@ export class OutcomeReturns {
   /** Load durable state, reconcile watched turns once, and start delivery. */
   async initialize(): Promise<void> {
     await mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 });
-    try {
-      const raw = JSON.parse(await readFile(this.file, 'utf8')) as { version?: unknown; entries?: unknown };
-      if (raw.version !== 1 || !Array.isArray(raw.entries) || !raw.entries.every(validEntry)) {
+    const read = async (file: string) => {
+      try { return JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>; }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        return null;
+      }
+    };
+    const state = await read(this.file);
+    if (state) {
+      if (state.version !== 2 || !Array.isArray(state.entries) || !state.entries.every(validEntry) ||
+          !Array.isArray(state.goalAssigners) || state.goalAssigners.length > GOAL_ASSIGNER_LIMIT ||
+          !state.goalAssigners.every(validGoalAssigner)) {
         throw new Error('Invalid outcome return state');
       }
-      this.entries = raw.entries;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      this.entries = state.entries;
+      this.assigners = state.goalAssigners;
+    } else {
+      // First start on this format: carry over the earlier file's entries. That
+      // file is left as it is, so the release that wrote it can still read it.
+      const earlier = await read(this.earlierFile);
+      if (earlier) {
+        if (earlier.version !== 1 || !Array.isArray(earlier.entries) || !earlier.entries.every(validEntry)) {
+          throw new Error('Invalid outcome return state');
+        }
+        this.entries = earlier.entries;
+      }
     }
     if (!this.argv) {
       if (this.options.command?.trim()) {
@@ -341,15 +417,44 @@ export class OutcomeReturns {
     });
   }
 
-  /** The sender of the most recently recorded attributed turn on a thread.
-   * Deliveries of outcomes and Goal notices are never recorded, so they never
-   * count as a sender. */
-  latestSender(threadId: string): SubmissionSender | null {
-    for (let index = this.entries.length - 1; index >= 0; index--) {
-      const entry = this.entries[index]!;
-      if (entry.kind === undefined && entry.threadId === threadId) return { ...entry.sender };
-    }
-    return null;
+  /**
+   * The Goal's assigner, bound the first time it is asked for and never
+   * changed afterwards. From the recorded attributed inputs of the thread
+   * (deliveries of outcomes and Goal notices are never recorded):
+   * the one sender with a thread among the inputs of `turnId` (the turn in
+   * which the Goal was observed), else the one sender with a thread among all
+   * of the thread's inputs. A thread with no recorded input gets no record (a
+   * local Goal); otherwise the Goal is recorded unrouted rather than guessed.
+   */
+  async bindGoalAssigner(threadId: string, goalCreatedAt: number, turnId: string | null): Promise<GoalAssigner | null> {
+    return this.exclusive(async () => {
+      const known = this.assigners.find(item => item.threadId === threadId && item.goalCreatedAt === goalCreatedAt);
+      if (known) return structuredClone(known);
+      const inputs = this.entries.filter((entry): entry is OutcomeReturn => entry.kind === undefined &&
+        entry.threadId === threadId);
+      if (!inputs.length) return null;
+      const threaded = (list: OutcomeReturn[]) => {
+        const senders = new Map<string, SubmissionSender>();
+        for (const { sender } of list) {
+          if (sender.thread) senders.set(JSON.stringify([sender.computer, sender.thread]), sender);
+        }
+        return [...senders.values()];
+      };
+      const ofTurn = turnId ? threaded(inputs.filter(entry => entry.turnId === turnId)) : [];
+      const all = threaded(inputs);
+      const record: GoalAssigner = ofTurn.length === 1
+        ? { threadId, goalCreatedAt, sender: { ...ofTurn[0]! }, source: 'turn' }
+        : all.length === 1 ? { threadId, goalCreatedAt, sender: { ...all[0]! }, source: 'sole_sender' }
+          : { threadId, goalCreatedAt, unrouted: all.length ? 'ambiguous_assigner' : 'no_assigner' };
+      this.assigners.push(record);
+      const dropped = this.assigners.length > GOAL_ASSIGNER_LIMIT ? this.assigners.shift() : undefined;
+      try { await this.save(); } catch (error) {
+        this.assigners.splice(this.assigners.indexOf(record), 1);
+        if (dropped) this.assigners.unshift(dropped);
+        throw error;
+      }
+      return structuredClone(record);
+    });
   }
 
   /** Threads with a recorded sender, most recently attributed first. */
@@ -371,38 +476,49 @@ export class OutcomeReturns {
     return null;
   }
 
-  /** Record a Goal notice as pending delivery. Idempotent on its ID; false
-   * when the store is full of undelivered entries. */
-  async noticeGoal(threadId: string, sender: SubmissionSender, goal: GoalNotice): Promise<boolean> {
-    const checked = parseSubmissionSender(sender);
-    if (!checked || !validGoalNotice(goal)) throw new Error('Invalid Goal notice');
+  /** Record a Goal notice: pending delivery to its assigner, or unrouted
+   * (kept for visibility, never delivered). Idempotent on its ID; false when
+   * the store is full of undelivered entries. */
+  async noticeGoal(threadId: string, route: { sender: SubmissionSender } | { unrouted: GoalUnroutedReason },
+    goal: GoalNotice): Promise<boolean> {
+    const checked = 'sender' in route ? parseSubmissionSender(route.sender) : null;
+    if (('sender' in route ? !checked : !GOAL_UNROUTED_REASONS.includes(route.unrouted)) || !validGoalNotice(goal)) {
+      throw new Error('Invalid Goal notice');
+    }
     const id = goalNoticeId(threadId, goal);
     return this.exclusive(async () => {
       if (this.entries.some(entry => entry.id === id)) return true;
       if (!this.makeRoom()) return false;
       const at = new Date(this.now()).toISOString();
-      this.entries.push({ kind: 'goal', id, threadId, sender: checked, goal: { ...goal }, status: 'pending',
-        attempts: 0, nextAttemptAt: at, createdAt: at, updatedAt: at });
+      this.entries.push(checked
+        ? { kind: 'goal', id, threadId, sender: checked, goal: { ...goal }, status: 'pending', attempts: 0,
+          nextAttemptAt: at, createdAt: at, updatedAt: at }
+        : { kind: 'goal', id, threadId, unrouted: (route as { unrouted: GoalUnroutedReason }).unrouted,
+          goal: { ...goal }, status: 'unrouted', attempts: 0, createdAt: at, updatedAt: at });
       await this.save();
       return true;
     });
   }
 
   list(): OutcomeReturnView[] {
-    return this.entries.map(entry => {
-      const { id, threadId, sender, status, attempts, nextAttemptAt, updatedAt } = entry;
-      return entry.kind === 'goal'
-        ? { kind: 'goal' as const, id, threadId, sender: { ...sender }, goal: { ...entry.goal },
-          status: entry.status, attempts, nextAttemptAt, updatedAt }
-        : { id, threadId, turnId: entry.turnId, sender: { ...sender }, status, outcome: entry.outcome, attempts,
-          nextAttemptAt, updatedAt };
+    return this.entries.map((entry): OutcomeReturnView => {
+      const { id, threadId, attempts, nextAttemptAt, updatedAt } = entry;
+      if (entry.kind === undefined) {
+        return { id, threadId, turnId: entry.turnId, sender: { ...entry.sender }, status: entry.status,
+          outcome: entry.outcome, attempts, nextAttemptAt, updatedAt };
+      }
+      const base = { kind: 'goal' as const, id, threadId, goal: { ...entry.goal }, attempts, nextAttemptAt, updatedAt };
+      return entry.status === 'unrouted'
+        ? { ...base, unrouted: entry.unrouted, status: entry.status }
+        : { ...base, sender: { ...entry.sender }, status: entry.status };
     });
   }
 
-  /** Drop the oldest delivered or failed entry while the store is full. */
+  /** Drop the oldest delivered, failed or unrouted entry while the store is full. */
   private makeRoom(): boolean {
     while (this.entries.length >= OUTCOME_RETURN_LIMIT) {
-      const index = this.entries.findIndex(entry => entry.status === 'delivered' || entry.status === 'failed');
+      const index = this.entries.findIndex(entry => entry.status === 'delivered' || entry.status === 'failed' ||
+        entry.status === 'unrouted');
       if (index < 0) {
         if (!this.refusalLogged) {
           console.error('[Outcome returns] Store is full of undelivered outcomes; new outcomes are not recorded.');
@@ -537,7 +653,8 @@ export class OutcomeReturns {
     await mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 });
     const temp = `${this.file}.${randomUUID()}.tmp`;
     const handle = await open(temp, 'wx', 0o600);
-    try { await handle.writeFile(JSON.stringify({ version: 1, entries: this.entries })); await handle.sync(); }
+    try { await handle.writeFile(JSON.stringify({ version: 2, entries: this.entries,
+      goalAssigners: this.assigners })); await handle.sync(); }
     finally { await handle.close(); }
     await rename(temp, this.file);
     const directory = await open(path.dirname(this.file), 'r');

@@ -10,7 +10,7 @@ let notices: GoalNotices | undefined;
 let reconcileTimer: ReturnType<typeof setTimeout> | undefined;
 let unsubscribe: (() => void) | undefined;
 
-/** Tell a thread's most recent sender when its Goal stops, completes or
+/** Tell the agent that assigned a thread's Goal when it stops, completes or
  * resumes. Started after outcome returns and the automatic Goal resume. */
 export function startGoalNotices(): void {
   if (notices) return;
@@ -22,11 +22,19 @@ export function startGoalNotices(): void {
       return timer;
     },
     clearTimer: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
-    latestSender: async threadId => { await readyOutcomeReturns(); return outcomeReturns.latestSender(threadId); },
-    lastNotice: async threadId => { await readyOutcomeReturns(); return outcomeReturns.lastGoalNotice(threadId); },
-    record: async (threadId, sender, notice) => {
+    bindAssigner: async (threadId, goalCreatedAt, turnId) => {
       await readyOutcomeReturns();
-      await outcomeReturns.noticeGoal(threadId, sender, notice);
+      return outcomeReturns.bindGoalAssigner(threadId, goalCreatedAt, turnId);
+    },
+    lastNotice: async threadId => { await readyOutcomeReturns(); return outcomeReturns.lastGoalNotice(threadId); },
+    record: async (threadId, assigner, notice) => {
+      await readyOutcomeReturns();
+      await outcomeReturns.noticeGoal(threadId, assigner, notice);
+    },
+    // Bounded, and never reconnects the runtime; an old runtime has no revision.
+    readRevision: async threadId => {
+      const { goal, revision } = await getCodexService().getThreadGoalWithRevision(threadId);
+      return goal && revision ? { createdAt: goal.createdAt, revision } : null;
     },
     autoResumeState: goalAutoResumeState,
     recentSenderThreads: async limit => { await readyOutcomeReturns(); return outcomeReturns.recentSenderThreads(limit); },

@@ -79,16 +79,26 @@ resumed.
 
 When another agent host handed work to the thread (a sender-attributed task,
 see [Thread wake sources](wake-sources.md#work-handed-over-by-another-agent-host)),
-Workstation tells that thread's most recent sender when the Goal settles as
+Workstation tells the agent that assigned the Goal when it settles as
 `paused`, `blocked`, `usageLimited`, `budgetLimited` or `complete`, and once
-more when a stopped Goal becomes `active` again. A change must stay settled for
-25 seconds, so a flapping Goal produces at most one notice per settled state. A
-model-capacity block that the automatic resume above has scheduled is reported
-only if the resume does not reverse it, with reason `model_capacity_exhausted`
-when it gave up. Notices contain status words, the Goal's own times and a fixed
-reason, never the objective, and are delivered through the configured outcome
-return command. At startup, Goals of recently attributed threads are read once
-so a change that happened while the sidecar was down is still reported. See
+more when a stopped Goal becomes `active` again. The assigner is bound once per
+Goal, when the Goal is first observed: the one sender with a thread among the
+inputs of the turn in which the Goal appeared, otherwise the thread's only
+sender with a thread. Later senders to the thread never replace it. When no
+sender named a thread, or several did, the Goal is unrouted: its notices are
+recorded and listed but not delivered. A Goal on a thread that never received
+attributed work is not reported.
+
+A change must stay settled for 25 seconds, so a flapping Goal produces at most
+one notice per settled state. A model-capacity block that the automatic resume
+above has scheduled is reported once with reason `capacity_retry_pending`; its
+outcome follows as an `active` notice when the resume works, or as a second
+`blocked` notice with reason `model_capacity_exhausted` when it gives up.
+Notices contain status words, the Goal's own times, its native Goal id and
+revisions when the runtime reports them, and a fixed reason, never the
+objective, and are delivered through the configured outcome return command.
+At startup, Goals of recently attributed threads are read once so a change
+that happened while the sidecar was down is still reported. See
 [Goal notices](wake-sources.md#goal-notices) for the payload and reasons.
 
 ## Persistence and reconnection

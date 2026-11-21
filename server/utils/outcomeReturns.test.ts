@@ -3,6 +3,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  GOAL_ASSIGNER_LIMIT,
+  OUTCOME_RETURN_LIMIT,
   OUTCOME_SUMMARY_LIMIT,
   OutcomeReturns,
   goalNoticeId,
@@ -104,7 +106,7 @@ describe('outcome returns', () => {
         .toEqual([60_000, 120_000, 240_000, 480_000, 900_000, 900_000, 900_000]);
       await store.stop();
       // The last allowed attempt marks the entry failed and keeps it visible.
-      const file = path.join(f.root, 'outcome-returns.json');
+      const file = path.join(f.root, 'outcome-returns-2.json');
       const state = JSON.parse(await readFile(file, 'utf8'));
       state.entries[0].attempts = 39;
       await writeFile(file, JSON.stringify(state));
@@ -190,11 +192,10 @@ describe('outcome returns', () => {
     try {
       const store = await f.make(0);
       await store.watch(thread, 'turn_g', sender, 'handoff_g');
-      expect(store.latestSender(thread)).toEqual(sender);
       const goal = { status: 'blocked' as const, previousStatus: 'active' as const, reason: 'turn_error' as const,
         createdAt: 1_700_000_000, updatedAt: 1_700_000_500 };
-      expect(await store.noticeGoal(thread, sender, goal)).toBe(true);
-      expect(await store.noticeGoal(thread, sender, goal)).toBe(true);
+      expect(await store.noticeGoal(thread, { sender }, goal)).toBe(true);
+      expect(await store.noticeGoal(thread, { sender }, goal)).toBe(true);
       const id = goalNoticeId(thread, goal);
       expect(id).toBe(goalNoticeId(thread, { ...goal, reason: 'unknown' } as typeof goal));
       expect(id).not.toBe(goalNoticeId(thread, { ...goal, updatedAt: goal.updatedAt + 1 }));
@@ -209,8 +210,10 @@ describe('outcome returns', () => {
         .toBe(`Goal on thread ${thread} is blocked (status blocked, previously active; reason turn_error).`);
       expect(store.list().find(entry => entry.id === id)).toMatchObject({ kind: 'goal', status: 'delivered', goal });
       // The delivery of the notice to the sender's thread is never watched there.
-      expect(await store.watch(thread, 'turn_delivery', { computer: 'other-host' }, `outcome-${id}`)).toBe(true);
-      expect(store.latestSender(thread)).toEqual(sender);
+      expect(await store.watch(thread, 'turn_delivery', { computer: 'other-host', thread: 'other_thread' },
+        `outcome-${id}`)).toBe(true);
+      expect(await store.bindGoalAssigner(thread, goal.createdAt, null)).toEqual({ threadId: thread,
+        goalCreatedAt: goal.createdAt, sender, source: 'sole_sender' });
       // Goal entries survive a restart and still validate.
       await store.stop();
       const restarted = await f.make(null);
@@ -224,18 +227,152 @@ describe('outcome returns', () => {
     try {
       const store = await f.make(null);
       const other = '00000000-0000-4000-8000-000000000002';
-      expect(store.latestSender(thread)).toBeNull();
       await store.watch(thread, 'turn_only_delivery', sender, 'outcome-abc');
-      expect(store.latestSender(thread)).toBeNull();
       expect(store.recentSenderThreads(50)).toEqual([]);
+      // A delivery is not an input: the Goal is local and gets no record.
+      expect(await store.bindGoalAssigner(thread, 1, 'turn_only_delivery')).toBeNull();
       await store.watch(thread, 'turn_a', { computer: 'first-host' }, 'handoff_a');
       await store.watch(other, 'turn_b', sender, 'handoff_b');
       await store.watch(thread, 'turn_c', { computer: 'second-host' }, 'handoff_c');
-      expect(store.latestSender(thread)).toEqual({ computer: 'second-host' });
       expect(store.recentSenderThreads(50)).toEqual([thread, other]);
       expect(store.recentSenderThreads(1)).toEqual([thread]);
     } finally { await f.cleanup(); }
   });
+
+  test('a Goal assigner is bound by its turn, then by a sole sender with a thread, else recorded unrouted', async () => {
+    const f = await fixture();
+    try {
+      const store = await f.make(null);
+      const first = { computer: 'first-host', thread: 'first_thread' };
+      const second = { computer: 'second-host', thread: 'second_thread' };
+      await store.watch(thread, 'turn_1', first, 'handoff_1');
+      await store.watch(thread, 'turn_1', { computer: 'plain-host' }, 'handoff_plain');
+      await store.watch(thread, 'turn_2', second, 'handoff_2');
+      // The turn's one sender with a thread, although the thread has two.
+      expect(await store.bindGoalAssigner(thread, 10, 'turn_1')).toEqual({ threadId: thread, goalCreatedAt: 10,
+        sender: first, source: 'turn' });
+      // Several senders with a thread and no deciding turn.
+      expect(await store.bindGoalAssigner(thread, 20, 'turn_unknown')).toEqual({ threadId: thread, goalCreatedAt: 20,
+        unrouted: 'ambiguous_assigner' });
+      // Bound once: later calls and senders never change it.
+      expect(await store.bindGoalAssigner(thread, 10, 'turn_2')).toMatchObject({ sender: first, source: 'turn' });
+      const other = '00000000-0000-4000-8000-000000000002';
+      await store.watch(other, 'turn_3', { computer: 'plain-host' }, 'handoff_3');
+      expect(await store.bindGoalAssigner(other, 30, null)).toEqual({ threadId: other, goalCreatedAt: 30,
+        unrouted: 'no_assigner' });
+      await store.watch(other, 'turn_4', second, 'handoff_4');
+      expect(await store.bindGoalAssigner(other, 30, 'turn_4')).toEqual({ threadId: other, goalCreatedAt: 30,
+        unrouted: 'no_assigner' });
+      // A new Goal on that thread has its own binding.
+      expect(await store.bindGoalAssigner(other, 31, null)).toEqual({ threadId: other, goalCreatedAt: 31,
+        sender: second, source: 'sole_sender' });
+      await store.stop();
+      // The bindings survive a restart and stay immutable.
+      const restarted = await f.make(null);
+      await restarted.watch(thread, 'turn_5', { computer: 'third-host', thread: 'third_thread' }, 'handoff_5');
+      expect(await restarted.bindGoalAssigner(thread, 10, 'turn_5')).toEqual({ threadId: thread, goalCreatedAt: 10,
+        sender: first, source: 'turn' });
+      expect(await restarted.bindGoalAssigner(other, 30, null)).toMatchObject({ unrouted: 'no_assigner' });
+      const state = JSON.parse(await readFile(path.join(f.root, 'outcome-returns-2.json'), 'utf8'));
+      expect(state.goalAssigners).toHaveLength(4);
+    } finally { await f.cleanup(); }
+  });
+
+  test('assigner records are bounded, oldest dropped first, and validated on load', async () => {
+    const f = await fixture();
+    try {
+      const store = await f.make(null);
+      await store.watch(thread, 'turn_1', sender, 'handoff_1');
+      for (let index = 0; index <= GOAL_ASSIGNER_LIMIT; index++) await store.bindGoalAssigner(thread, index, null);
+      await store.stop();
+      const file = path.join(f.root, 'outcome-returns-2.json');
+      const state = JSON.parse(await readFile(file, 'utf8'));
+      expect(state.goalAssigners).toHaveLength(GOAL_ASSIGNER_LIMIT);
+      expect(state.goalAssigners[0].goalCreatedAt).toBe(1);
+      state.goalAssigners[0] = { threadId: thread, goalCreatedAt: 1, sender: { computer: 'peer-host' },
+        source: 'sole_sender' };
+      await writeFile(file, JSON.stringify(state));
+      // A bound sender without a thread is not a valid record.
+      await expect(f.make(null)).rejects.toThrow('Invalid outcome return state');
+    } finally { await f.cleanup(); }
+  }, 60_000);
+
+  test('a state file without assigner records and with existing Goal notices loads', async () => {
+    const f = await fixture();
+    try {
+      const goal = { status: 'blocked' as const, reason: 'turn_error' as const, createdAt: 1_700_000_000,
+        updatedAt: 1_700_000_100 };
+      const at = '2026-11-16T00:00:00.000Z';
+      await writeFile(path.join(f.root, 'outcome-returns.json'), JSON.stringify({ version: 1, entries: [
+        { id: outcomeReturnId(thread, 'turn_old', 'handoff_old'), threadId: thread, turnId: 'turn_old', sender,
+          clientUserMessageId: 'handoff_old', status: 'delivered', outcome: 'completed', attempts: 0,
+          createdAt: at, updatedAt: at },
+        { kind: 'goal', id: goalNoticeId(thread, goal), threadId: thread, sender, goal, status: 'delivered',
+          attempts: 0, createdAt: at, updatedAt: at },
+      ] }));
+      const store = await f.make(null);
+      expect(store.lastGoalNotice(thread)).toEqual(goal);
+      // The Goal that existed before is bound to the thread's sole sender with a thread.
+      expect(await store.bindGoalAssigner(thread, goal.createdAt, null)).toEqual({ threadId: thread,
+        goalCreatedAt: goal.createdAt, sender, source: 'sole_sender' });
+      // The earlier file is carried over, not rewritten: the release that wrote it can still read it.
+      const earlier = JSON.parse(await readFile(path.join(f.root, 'outcome-returns.json'), 'utf8'));
+      expect(earlier).toEqual({ version: 1, entries: expect.any(Array) });
+      expect(earlier.entries).toHaveLength(2);
+      const current = JSON.parse(await readFile(path.join(f.root, 'outcome-returns-2.json'), 'utf8'));
+      expect(current.version).toBe(2);
+      expect(current.entries).toHaveLength(2);
+      expect(current.goalAssigners).toHaveLength(1);
+    } finally { await f.cleanup(); }
+  });
+
+  test('an unrouted Goal notice is stored typed, never delivered, and dropped first when the store is full', async () => {
+    const f = await fixture();
+    try {
+      const store = await f.make(3);
+      const goal = { status: 'paused' as const, reason: 'changed_outside_turn' as const, createdAt: 1, updatedAt: 2 };
+      expect(await store.noticeGoal(thread, { unrouted: 'ambiguous_assigner' }, goal)).toBe(true);
+      expect(await store.noticeGoal(thread, { unrouted: 'ambiguous_assigner' }, goal)).toBe(true);
+      await store.deliverDue();
+      expect(await f.received()).toEqual([]);
+      expect(store.list()).toEqual([{ kind: 'goal', id: goalNoticeId(thread, goal), threadId: thread, goal,
+        unrouted: 'ambiguous_assigner', status: 'unrouted', attempts: 0, nextAttemptAt: undefined,
+        updatedAt: expect.any(String) }]);
+      expect(store.lastGoalNotice(thread)).toEqual(goal);
+      await store.stop();
+      const restarted = await f.make(null);
+      expect(restarted.list()).toHaveLength(1);
+      for (let index = 1; index < OUTCOME_RETURN_LIMIT; index++) {
+        await restarted.watch(thread, `turn_${index}`, sender, `handoff_${index}`);
+      }
+      // The unrouted entry makes room; undelivered watches do not.
+      expect(await restarted.watch(thread, 'turn_last', sender, 'handoff_last')).toBe(true);
+      expect(restarted.list().some(entry => 'kind' in entry)).toBe(false);
+    } finally { await f.cleanup(); }
+  }, 60_000);
+
+  test('the transient notice of a pending resume and the block\'s final notice are both delivered', async () => {
+    const f = await fixture();
+    try {
+      const store = await f.make(0);
+      const transient = { status: 'blocked' as const, previousStatus: 'active' as const,
+        reason: 'capacity_retry_pending' as const, createdAt: 1_700_000_000, updatedAt: 1_700_000_100,
+        goalId: '11111111-2222-4333-8444-555555555555', missionRevision: 0, lifecycleRevision: 3 };
+      const final = { ...transient, reason: 'model_capacity_exhausted' as const };
+      expect(await store.noticeGoal(thread, { sender }, transient)).toBe(true);
+      expect(await store.noticeGoal(thread, { sender }, final)).toBe(true);
+      await store.deliverDue();
+      const received = await f.received() as Array<{ id: string; goal: unknown; summary: string }>;
+      expect(received.map(payload => payload.goal)).toEqual([transient, final]);
+      expect(received[0]!.id).not.toBe(received[1]!.id);
+      expect(received[0]!.summary).toBe(`Goal on thread ${thread} is blocked (status blocked, previously active; ` +
+        'reason capacity_retry_pending; goal 11111111-2222-4333-8444-555555555555, mission revision 0, ' +
+        'lifecycle revision 3).');
+      await store.stop();
+      // Both reload and validate.
+      expect((await f.make(null)).list()).toHaveLength(2);
+    } finally { await f.cleanup(); }
+  }, 30_000);
 
   test('two senders whose inputs steered one turn each get their own return', async () => {
     const f = await fixture();
