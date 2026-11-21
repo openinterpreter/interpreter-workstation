@@ -1,10 +1,8 @@
-<!-- release-notes-for: 0.2.247 -->
+<!-- release-notes-for: 0.2.248 -->
 ## What's new
 
-- When another agent hands a Goal to a conversation, that agent is now told when the Goal stops, completes or resumes, even if other senders message the conversation afterwards. Previously the most recent sender was told instead, and a sender without its own conversation could make the notice undeliverable.
-- A Goal whose assigning agent cannot be determined is listed as unrouted instead of being reported to someone else.
-- A Goal blocked by temporary model capacity is reported once straight away as waiting for the automatic retry, and again when it resumes or the retry gives up.
-- Goal notices include the Goal's id and revisions when the runtime provides them.
+- Fixes an upgrade problem in 0.2.247: on a computer that had already returned turn outcomes to another agent, outcome returns and Goal notices could stay switched off after the update. Records written by earlier versions are now carried over unchanged, and nothing already delivered is sent again.
+- The carried-over records are saved as soon as the app starts, rather than on the first later change.
 
 ## Distribution
 
