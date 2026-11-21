@@ -174,7 +174,7 @@ A turn outcome does not tell the sender when the worker thread's [Goal](goals.md
 - `complete`: reported once. A completed Goal is final, so a later Goal on the thread becoming active is not reported as "active again".
 - `active`: reported only when the last notice for the thread was one of the stopped statuses above, so the sender's picture is corrected.
 
-On its first start, a release with this format carries over the entries of the earlier `outcome-returns.json` and leaves that file unchanged, so the release that wrote it can still read it.
+On its first start, a release with this format carries over the entries of the earlier `outcome-returns.json`, writes `outcome-returns-2.json` with them before anything else changes, and leaves the earlier file unchanged, so the release that wrote it can still read it.
 
 A Goal is identified by its thread and its native `createdAt`. Its assigner is bound once, the first time the Goal is observed (a `thread/goal/updated` notification, or the startup read below), from the sender-attributed inputs recorded in `outcome-returns-2.json` for that thread, in this order:
 

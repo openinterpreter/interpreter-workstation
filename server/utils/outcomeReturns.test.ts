@@ -7,6 +7,7 @@ import {
   OUTCOME_RETURN_LIMIT,
   OUTCOME_SUMMARY_LIMIT,
   OutcomeReturns,
+  earlierOutcomeReturnId,
   goalNoticeId,
   goalNoticeSummary,
   outcomeReturnId,
@@ -304,13 +305,21 @@ describe('outcome returns', () => {
         updatedAt: 1_700_000_100 };
       const at = '2026-11-16T00:00:00.000Z';
       await writeFile(path.join(f.root, 'outcome-returns.json'), JSON.stringify({ version: 1, entries: [
-        { id: outcomeReturnId(thread, 'turn_old', 'handoff_old'), threadId: thread, turnId: 'turn_old', sender,
+        // Written by the earlier release, whose ID did not include the input.
+        { id: earlierOutcomeReturnId(thread, 'turn_old'), threadId: thread, turnId: 'turn_old', sender,
           clientUserMessageId: 'handoff_old', status: 'delivered', outcome: 'completed', attempts: 0,
           createdAt: at, updatedAt: at },
         { kind: 'goal', id: goalNoticeId(thread, goal), threadId: thread, sender, goal, status: 'delivered',
           attempts: 0, createdAt: at, updatedAt: at },
       ] }));
+      const earlierBytes = await readFile(path.join(f.root, 'outcome-returns.json'), 'utf8');
       const store = await f.make(null);
+      // The first start writes the state file with the carried entries, before any change.
+      const started = JSON.parse(await readFile(path.join(f.root, 'outcome-returns-2.json'), 'utf8'));
+      expect(started.version).toBe(2);
+      expect(started.entries).toEqual(JSON.parse(earlierBytes).entries);
+      expect(started.goalAssigners).toEqual([]);
+      expect(await readFile(path.join(f.root, 'outcome-returns.json'), 'utf8')).toBe(earlierBytes);
       expect(store.lastGoalNotice(thread)).toEqual(goal);
       // The Goal that existed before is bound to the thread's sole sender with a thread.
       expect(await store.bindGoalAssigner(thread, goal.createdAt, null)).toEqual({ threadId: thread,
@@ -323,6 +332,57 @@ describe('outcome returns', () => {
       expect(current.version).toBe(2);
       expect(current.entries).toHaveLength(2);
       expect(current.goalAssigners).toHaveLength(1);
+      // The carried input is known under its earlier ID, and the state loads again on the next start.
+      expect(await store.watch(thread, 'turn_old', sender, 'handoff_old')).toBe(true);
+      await store.stop();
+      const again = await f.make(null);
+      expect(again.lastGoalNotice(thread)).toEqual(goal);
+      await again.stop();
+      const reloaded = JSON.parse(await readFile(path.join(f.root, 'outcome-returns-2.json'), 'utf8'));
+      expect(reloaded.entries).toEqual(JSON.parse(earlierBytes).entries);
+    } finally { await f.cleanup(); }
+  });
+
+  test('a full store of the earlier release carries over whole and is never delivered again', async () => {
+    const f = await fixture();
+    try {
+      const at = '2026-11-16T00:00:00.000Z';
+      const turns = Array.from({ length: 35 }, (_, index) => {
+        const failed = index === 34;
+        return { id: earlierOutcomeReturnId(thread, `turn_${index}`), threadId: thread, turnId: `turn_${index}`,
+          // One input came from a host without a thread, and its return failed.
+          sender: failed ? { computer: 'other-host' } : sender, clientUserMessageId: `handoff_${index}`,
+          status: failed ? 'failed' : 'delivered', outcome: 'completed', summary: 'Done.',
+          attempts: failed ? 40 : 1, createdAt: at, updatedAt: at };
+      });
+      const reasons = ['changed_during_turn', 'changed_outside_turn', 'unknown'] as const;
+      const goals = Array.from({ length: 11 }, (_, index) => {
+        const goal = { status: index % 2 ? 'active' as const : 'blocked' as const, reason: reasons[index % 3]!,
+          createdAt: 1_700_000_000, updatedAt: 1_700_000_100 + index,
+          ...(index > 0 && { previousStatus: index % 2 ? 'blocked' as const : 'active' as const }) };
+        const failed = index < 2;
+        return { kind: 'goal', id: goalNoticeId(thread, goal), threadId: thread,
+          sender: failed ? { computer: 'other-host' } : sender, goal, status: failed ? 'failed' : 'delivered',
+          attempts: failed ? 40 : 1, createdAt: at, updatedAt: at };
+      });
+      const earlierBytes = JSON.stringify({ version: 1, entries: [...turns, ...goals] });
+      await writeFile(path.join(f.root, 'outcome-returns.json'), earlierBytes);
+      const store = await f.make(0);
+      const file = path.join(f.root, 'outcome-returns-2.json');
+      expect(JSON.parse(await readFile(file, 'utf8'))).toEqual({ version: 2, entries: [...turns, ...goals],
+        goalAssigners: [] });
+      // Settled entries stay settled: nothing is sent for them.
+      f.advance(24 * 60 * 60_000);
+      await store.deliverDue();
+      expect(await f.received()).toEqual([]);
+      // The Goal is bound to the one sender that named a thread.
+      expect(await store.bindGoalAssigner(thread, 1_700_000_000, null)).toEqual({ threadId: thread,
+        goalCreatedAt: 1_700_000_000, sender, source: 'sole_sender' });
+      await store.stop();
+      const again = await f.make(0);
+      expect(again.list()).toHaveLength(46);
+      expect(JSON.parse(await readFile(file, 'utf8')).entries).toEqual([...turns, ...goals]);
+      expect(await readFile(path.join(f.root, 'outcome-returns.json'), 'utf8')).toBe(earlierBytes);
     } finally { await f.cleanup(); }
   });
 
