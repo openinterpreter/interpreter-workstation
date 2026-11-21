@@ -124,6 +124,12 @@ const GOAL_NOTICE_KEYS = ['status', 'previousStatus', 'reason', 'createdAt', 'up
 export function outcomeReturnId(threadId: string, turnId: string, clientUserMessageId: string): string {
   return createHash('sha256').update(`${threadId}:${turnId}:${clientUserMessageId}`).digest('hex');
 }
+/** The ID of a turn's return as written before each input had its own. An
+ * entry carried over from `outcome-returns.json` keeps it, so its delivery ID
+ * never changes. */
+export function earlierOutcomeReturnId(threadId: string, turnId: string): string {
+  return createHash('sha256').update(`${threadId}:${turnId}`).digest('hex');
+}
 const turnKey = (threadId: string, turnId: string) => JSON.stringify([threadId, turnId]);
 
 /** Stable delivery ID of one Goal change: the thread, the Goal (its creation
@@ -250,7 +256,8 @@ function validEntry(value: unknown): value is StoredEntry {
     typeof entry.threadId === 'string' && typeof entry.turnId === 'string' &&
     !!parseSubmissionSender(entry.sender) && typeof entry.clientUserMessageId === 'string' &&
     SUBMISSION_ID.test(entry.clientUserMessageId) &&
-    entry.id === outcomeReturnId(entry.threadId, entry.turnId, entry.clientUserMessageId) &&
+    (entry.id === outcomeReturnId(entry.threadId, entry.turnId, entry.clientUserMessageId) ||
+      entry.id === earlierOutcomeReturnId(entry.threadId, entry.turnId)) &&
     STATUSES.includes(entry.status) &&
     (entry.outcome === undefined || OUTCOMES.includes(entry.outcome)) &&
     (entry.summary === undefined || typeof entry.summary === 'string') &&
@@ -327,6 +334,9 @@ export class OutcomeReturns {
         }
         this.entries = earlier.entries;
       }
+      // Written now rather than on the first change, so the file shows what
+      // this start loaded.
+      await this.save();
     }
     if (!this.argv) {
       if (this.options.command?.trim()) {
@@ -372,7 +382,9 @@ export class OutcomeReturns {
     if (isOutcomeDelivery(clientUserMessageId)) return true;
     const id = outcomeReturnId(threadId, turnId, clientUserMessageId);
     const result = await this.exclusive(async () => {
-      if (this.entries.some(entry => entry.id === id)) return 'known' as const;
+      // A carried-over entry has the earlier ID; the input itself identifies it.
+      if (this.entries.some(entry => entry.id === id || (entry.kind === undefined && entry.threadId === threadId &&
+          entry.turnId === turnId && entry.clientUserMessageId === clientUserMessageId))) return 'known' as const;
       if (!this.makeRoom()) return 'full' as const;
       const at = new Date(this.now()).toISOString();
       const entry: OutcomeReturn = { id, threadId, turnId, sender: checked, clientUserMessageId,
