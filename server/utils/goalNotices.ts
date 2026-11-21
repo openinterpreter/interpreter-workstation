@@ -1,19 +1,26 @@
 import type { GoalAutoResumeState } from '../../src/lib/codex/goal-auto-resume';
+import type { ThreadGoalRevision } from '../../src/lib/codex/goal-revision';
 import type { AppServerNotification } from '../../src/lib/codex/protocol';
-import type { SubmissionSender } from './nativeSubmissionJournal';
-import { GOAL_NOTICE_STATUSES, type GoalNotice, type GoalNoticeReason, type GoalNoticeStatus } from './outcomeReturns';
+import { CAPACITY_RETRY_PENDING, GOAL_NOTICE_STATUSES, type GoalAssigner, type GoalNotice, type GoalNoticeReason,
+  type GoalNoticeStatus } from './outcomeReturns';
 
 /**
- * Tells the agent that last handed work to a thread when that thread's Goal
- * stops (paused, blocked, usage or budget limited), completes, or becomes
- * active again after such a notice.
+ * Tells the agent that assigned a thread's Goal when that Goal stops (paused,
+ * blocked, usage or budget limited), completes, or becomes active again after
+ * such a notice.
+ *
+ * Each Goal's assigner is bound once, the first time the Goal is observed, and
+ * later senders to the thread never replace it. A Goal whose assigner cannot
+ * be determined gets unrouted notices, recorded but never delivered.
  *
  * A change must stay settled for a short delay before it counts, so a Goal
  * that flips back and forth produces at most one notice per settled state. A
- * block that the automatic capacity resume is about to reverse is not
- * reported; it is reported once that resume gives up. Notices carry status
- * words, Goal times and a fixed reason only, and go through the durable
- * outcome-return store and its configured command.
+ * block that the automatic capacity resume is about to retry is reported once
+ * as pending that resume (`capacity_retry_pending`); its outcome follows as an
+ * active notice when the resume works, or as a second blocked notice when it
+ * gives up. Notices carry status words, Goal times, native identity and a
+ * fixed reason only, and go through the durable outcome-return store and its
+ * configured command.
  */
 
 export const GOAL_NOTICE_SETTLE_MS = 25_000;
@@ -31,12 +38,15 @@ export type GoalNoticesDeps = {
   now(): number;
   setTimer(callback: () => void, delayMs: number): unknown;
   clearTimer(handle: unknown): void;
-  /** Sender of the most recent attributed work on the thread, or null. */
-  latestSender(threadId: string): Promise<SubmissionSender | null>;
+  /** The Goal's assigner record, bound on first call and immutable after;
+   * null for a thread with no recorded attributed input. */
+  bindAssigner(threadId: string, goalCreatedAt: number, turnId: string | null): Promise<GoalAssigner | null>;
   /** The last notice recorded for the thread, or null. */
   lastNotice(threadId: string): Promise<GoalNotice | null>;
-  /** Durably queue a notice for delivery. */
-  record(threadId: string, sender: SubmissionSender, notice: GoalNotice): Promise<void>;
+  /** Durably queue a notice for delivery to the assigner, or record it unrouted. */
+  record(threadId: string, assigner: GoalAssigner, notice: GoalNotice): Promise<void>;
+  /** The thread's current native Goal identity and revisions; may throw. */
+  readRevision(threadId: string): Promise<{ createdAt: number; revision: ThreadGoalRevision } | null>;
   /** The automatic capacity resume's view of the thread. */
   autoResumeState(threadId: string): GoalAutoResumeState | null;
   /** Startup only: threads with a known sender, most recent first. */
@@ -47,12 +57,16 @@ export type GoalNoticesDeps = {
   settleMs?: number;
 };
 
-/** Whether `current` differs from what the sender was last told. Active is
+/** Whether `current` differs from what the assigner was last told. Active is
  * reported only to correct an earlier stopped notice; a completed Goal stays
- * reported as complete. */
-export function goalNoticeDue(current: Pick<ObservedGoal, 'status' | 'createdAt'>, last: GoalNotice | null): boolean {
+ * reported as complete. After a notice that an automatic resume is pending,
+ * the same block is reported again once with its final reason. */
+export function goalNoticeDue(current: Pick<ObservedGoal, 'status' | 'createdAt'> & { reason?: GoalNoticeReason },
+  last: GoalNotice | null): boolean {
   if (current.status === 'active') return !!last && STOPPED.has(last.status);
-  return !last || last.status !== current.status || last.createdAt !== current.createdAt;
+  if (!last || last.status !== current.status || last.createdAt !== current.createdAt) return true;
+  return last.reason === CAPACITY_RETRY_PENDING && current.reason !== undefined &&
+    current.reason !== CAPACITY_RETRY_PENDING;
 }
 
 /** The fixed-vocabulary cause of a change, from what the notifications show. */
@@ -82,7 +96,9 @@ type Pending = {
   /** Settle checks that found the automatic resume between attempts. */
   waitingChecks: number;
 };
-type ThreadState = { lastSeen?: GoalNoticeStatus; failedTurns: string[]; pending?: Pending; generation: number };
+type ThreadState = { lastSeen?: GoalNoticeStatus; failedTurns: string[]; pending?: Pending; generation: number;
+  /** Creation time of the Goal whose assigner record is known to exist. */
+  boundGoal?: number };
 
 export class GoalNotices {
   private readonly threads = new Map<string, ThreadState>();
@@ -124,6 +140,7 @@ export class GoalNotices {
     if (!goal) return;
     const turnId = typeof params?.turnId === 'string' ? params.turnId : null;
     const state = this.state(threadId);
+    if (state.boundGoal !== goal.createdAt) this.bind(threadId, state, goal.createdAt, turnId);
     const previous = state.lastSeen;
     state.lastSeen = goal.status;
     if (state.pending) {
@@ -158,7 +175,7 @@ export class GoalNotices {
         }
         // A live notification since startup is newer than this read.
         if (!goal || this.stopped || this.threads.has(threadId)) continue;
-        try { await this.serialize(() => this.decide(threadId, goal, { reason: 'unknown' })); }
+        try { await this.serialize(() => this.decide(threadId, goal, { reason: 'unknown' }, null)); }
         catch (error) { this.deps.log(`[goal-notices] failed threadId=${threadId} error=${String(error)}`); }
       }
     };
@@ -185,6 +202,15 @@ export class GoalNotices {
     return state;
   }
 
+  /** Bind the Goal's assigner when it is first observed, in the turn that
+   * shows it, before any later decision about that Goal. */
+  private bind(threadId: string, state: ThreadState, goalCreatedAt: number, turnId: string | null): void {
+    void this.serialize(async () => {
+      if (this.stopped || state.boundGoal === goalCreatedAt) return;
+      if (await this.deps.bindAssigner(threadId, goalCreatedAt, turnId)) state.boundGoal = goalCreatedAt;
+    }).catch(error => this.deps.log(`[goal-notices] failed threadId=${threadId} error=${String(error)}`));
+  }
+
   private arm(threadId: string, state: ThreadState, delayMs: number): void {
     if (state.pending?.timer !== undefined) this.deps.clearTimer(state.pending.timer);
     const generation = ++state.generation;
@@ -206,31 +232,55 @@ export class GoalNotices {
     pending.timer = undefined;
     const { goal, turnId } = pending;
     const autoResume = goal.status === 'blocked' ? this.deps.autoResumeState(threadId) : null;
-    if (autoResume?.state === 'scheduled') {
-      // The automatic resume will act first; look again after its attempt settles.
-      this.arm(threadId, state, Math.max(0, autoResume.retryAt - this.deps.now()) + this.settleMs);
-      return;
-    }
-    if (autoResume?.state === 'waiting' && pending.waitingChecks < 1) {
-      // Between scheduling and an attempt's result; give it one more delay.
-      pending.waitingChecks += 1;
-      this.arm(threadId, state, this.settleMs);
+    if (autoResume?.state === 'scheduled' || (autoResume?.state === 'waiting' && pending.waitingChecks < 1)) {
+      // The automatic resume acts first. Report the block once as pending
+      // that resume, then look again after its attempt settles.
+      const current = () => state.generation === generation && state.pending === pending;
+      await this.decide(threadId, goal, { reason: CAPACITY_RETRY_PENDING, from: pending.from }, turnId, current);
+      if (this.stopped || !current()) return;
+      if (autoResume.state === 'scheduled') {
+        this.arm(threadId, state, Math.max(0, autoResume.retryAt - this.deps.now()) + this.settleMs);
+      } else {
+        // Between scheduling and an attempt's result; give it one more delay.
+        pending.waitingChecks += 1;
+        this.arm(threadId, state, this.settleMs);
+      }
       return;
     }
     state.pending = undefined;
     const reason = goalChangeReason(goal.status, turnId, !!turnId && state.failedTurns.includes(turnId), autoResume);
-    await this.decide(threadId, goal, { reason, from: pending.from }, () => state.generation === generation);
+    await this.decide(threadId, goal, { reason, from: pending.from }, turnId, () => state.generation === generation);
   }
 
   private async decide(threadId: string, goal: ObservedGoal, cause: { reason: GoalNoticeReason;
-    from?: GoalNoticeStatus }, current: () => boolean = () => true): Promise<void> {
-    const sender = await this.deps.latestSender(threadId);
-    if (!sender || this.stopped || !current()) return;
-    if (!goalNoticeDue(goal, await this.deps.lastNotice(threadId)) || this.stopped || !current()) return;
+    from?: GoalNoticeStatus }, turnId: string | null, current: () => boolean = () => true): Promise<void> {
+    const assigner = await this.deps.bindAssigner(threadId, goal.createdAt, turnId);
+    if (!assigner || this.stopped || !current()) return;
+    const due = goalNoticeDue({ ...goal, reason: cause.reason }, await this.deps.lastNotice(threadId));
+    if (!due || this.stopped || !current()) return;
     const notice: GoalNotice = { status: goal.status, reason: cause.reason, createdAt: goal.createdAt,
-      updatedAt: goal.updatedAt, ...(cause.from && cause.from !== goal.status && { previousStatus: cause.from }) };
-    await this.deps.record(threadId, sender, notice);
-    this.deps.log(`[goal-notices] queued threadId=${threadId} status=${goal.status} reason=${cause.reason}`);
+      updatedAt: goal.updatedAt, ...(cause.from && cause.from !== goal.status && { previousStatus: cause.from }),
+      ...await this.identity(threadId, goal) };
+    if (this.stopped || !current()) return;
+    await this.deps.record(threadId, assigner, notice);
+    this.deps.log('unrouted' in assigner
+      ? `[goal-notices] unrouted threadId=${threadId} status=${goal.status} reason=${assigner.unrouted}`
+      : `[goal-notices] queued threadId=${threadId} status=${goal.status} reason=${cause.reason}`);
+  }
+
+  /** The native Goal identity and revisions, only when the read shows this
+   * same Goal (creation time) in this same status. */
+  private async identity(threadId: string, goal: ObservedGoal):
+    Promise<Pick<GoalNotice, 'goalId' | 'missionRevision' | 'lifecycleRevision'>> {
+    try {
+      const read = await this.deps.readRevision(threadId);
+      if (!read || read.createdAt !== goal.createdAt || read.revision.status !== goal.status) return {};
+      const { goalId, missionRevision, lifecycleRevision } = read.revision;
+      return { goalId, missionRevision, lifecycleRevision };
+    } catch {
+      // An old runtime or an unavailable read: the notice goes without them.
+      return {};
+    }
   }
 
   /** One decision at a time, so two changes never both see "no earlier notice". */
