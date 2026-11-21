@@ -1,11 +1,10 @@
-<!-- release-notes-for: 0.2.246 -->
+<!-- release-notes-for: 0.2.247 -->
 ## What's new
 
-- Several inputs arriving close together for one conversation (from an automation, a connected channel, or another program) are now passed to the agent in one go and in order, instead of one at a time with a wait between them.
-- A program that sends a message to an existing conversation is no longer refused while the agent is busy: the message is saved first, then steers the running turn or starts one, and is kept across a restart. A request repeated with the same message ID is recognised and not queued a second time.
-- An automation command may hand over up to 16 inputs per run, one JSON object per line.
-- Saving or changing an automation, and receiving an input, no longer wait on reading a long conversation's whole history.
-- When several senders add to the same turn, each is told the outcome.
+- When another agent hands a Goal to a conversation, that agent is now told when the Goal stops, completes or resumes, even if other senders message the conversation afterwards. Previously the most recent sender was told instead, and a sender without its own conversation could make the notice undeliverable.
+- A Goal whose assigning agent cannot be determined is listed as unrouted instead of being reported to someone else.
+- A Goal blocked by temporary model capacity is reported once straight away as waiting for the automatic retry, and again when it resumes or the retry gives up.
+- Goal notices include the Goal's id and revisions when the runtime provides them.
 
 ## Distribution
 
