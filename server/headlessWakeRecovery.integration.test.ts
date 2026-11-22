@@ -23,7 +23,9 @@ async function start(home: string) {
   children.push(child);
   const reader = child.stdout.getReader();
   let output = '';
-  const deadline = Date.now() + 15_000;
+  // The real CLI auth-status probe has a 30-second bound. Allow that probe to
+  // finish (or time out) before declaring the standalone listener unavailable.
+  const deadline = Date.now() + 45_000;
   while (Date.now() < deadline) {
     const result = await Promise.race([reader.read(), Bun.sleep(Math.max(1, deadline - Date.now()))
       .then(() => null)]);
@@ -79,7 +81,7 @@ describe('actual standalone own-thread daily recovery tool', () => {
     base = await start(home);
     expect(value((await tool(base, 'inspect-recovery')).result)).toEqual(recovered);
     expect((await fetch(`${base}/fixture/native-starts`).then(r => r.json()))).toEqual({ starts: 0 });
-  }, 60_000);
+  }, 120_000);
 
   test('held occurrence stays held, future-only CAS survives restart; unauthorized and stale refuse', async () => {
     const home = mkdtempSync(join(tmpdir(), 'headless-wake-')); homes.push(home);
@@ -103,7 +105,7 @@ describe('actual standalone own-thread daily recovery tool', () => {
     expect(restart).toEqual(first);
     expect(value((await tool(base, 'recover-future', fields)).result).category).toBe('stale_revision');
     expect((await fetch(`${base}/fixture/native-starts`).then(r => r.json()))).toEqual({ starts: 0 });
-  }, 60_000);
+  }, 120_000);
 
   test('offered unknown receipt refuses without replay; later positive marker admits once after restart', async () => {
     const home = mkdtempSync(join(tmpdir(), 'headless-wake-')); homes.push(home);
@@ -123,5 +125,5 @@ describe('actual standalone own-thread daily recovery tool', () => {
     expect((await fetch(`${base}/fixture/native-starts`).then(r => r.json()))).toEqual({ starts: 0 });
     const persisted = JSON.parse(readFileSync(join(home, 'wake-sources.json'), 'utf8'));
     expect(persisted.events[0].status).toBe('admitted');
-  }, 60_000);
+  }, 120_000);
 });
