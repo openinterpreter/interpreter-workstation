@@ -25,9 +25,11 @@ Sentry.init({
       return null;
     }
   },
-  // Disable OpenTelemetry auto-instrumentation to reduce dependency footprint
-  // and avoid electron-builder packaging issues on macOS
-  registerEsmLoaderHooks: false,
+  // Keep the server's existing no-auto-instrumentation policy under Sentry 11.
+  // Runtime channel injection can register module hooks; neither that nor
+  // OpenTelemetry setup belongs in the packaged Electron sidecar.
+  enableRuntimeChannelInjection: false,
+  enableOpenTelemetrySetup: false,
 });
 
 import express from "express";
