@@ -33,6 +33,10 @@ function upgrade(port: number, origin: string) {
         'GET /_next/webpack-hmr?page=1 HTTP/1.1',
         'Host: preview.example',
         `Origin: ${origin}`,
+        'Authorization: Bearer front-session',
+        'Cookie: front_session=secret',
+        'X-Forwarded-For: 203.0.113.9',
+        'X-Authenticated-User: someone@example.com',
         'Connection: Upgrade',
         'Upgrade: websocket',
         'Sec-WebSocket-Version: 13',
@@ -81,6 +85,14 @@ describe('Simple preview proxy WebSocket upgrades', () => {
     expect(upstreamHead).toContain(`Origin: http://127.0.0.1:${upstreamPort}`);
     expect(upstreamHead).not.toContain('preview.example');
     expect(upstreamHead).toContain('Upgrade: websocket');
+    expect(upstreamHead).toContain('Connection: Upgrade');
+    expect(upstreamHead).toContain('Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==');
+    // The front's credentials and identity headers never reach the project server.
+    expect(upstreamHead.toLowerCase()).not.toContain('authorization');
+    expect(upstreamHead.toLowerCase()).not.toContain('cookie');
+    expect(upstreamHead.toLowerCase()).not.toContain('x-forwarded-for');
+    expect(upstreamHead.toLowerCase()).not.toContain('x-authenticated-user');
+    expect(upstreamHead).not.toContain('front-session');
 
     const echoed = new Promise<string>((resolve) => socket.once('data', (chunk: Buffer) => resolve(chunk.toString('utf8'))));
     socket.write('ping');

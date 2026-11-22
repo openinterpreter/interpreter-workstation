@@ -13,6 +13,7 @@
 import http from 'node:http';
 import net from 'node:net';
 import type { Duplex } from 'node:stream';
+import { forwardedSimplePreviewHeaders, namespacedSimplePreviewSetCookies } from './simplePreviewHeaders';
 
 export const SIMPLE_PREVIEW_PROXY_PORT_ENV = 'INTERPRETER_SIMPLE_PREVIEW_PROXY_PORT';
 export const SIMPLE_PREVIEW_PUBLIC_ORIGIN_ENV = 'INTERPRETER_SIMPLE_PREVIEW_PUBLIC_ORIGIN';
@@ -92,38 +93,27 @@ export function resolveSimplePreviewRuntimeUrl(
   return `${publicOrigin}${path}${source.search}${source.hash}`;
 }
 
-function rewrittenHeaderValue(name: string, value: string, upstreamHost: string): string {
-  const lower = name.toLowerCase();
-  if (lower === 'host') return upstreamHost;
-  if (lower === 'origin') return `http://${upstreamHost}`;
-  return value;
-}
-
+// Only allowlisted headers and the project's own cookies go upstream; the
+// front's credentials and identity headers never reach a project server.
 function requestHeaders(rawHeaders: string[], upstreamHost: string): http.OutgoingHttpHeaders {
   const headers: http.OutgoingHttpHeaders = {};
-  for (let index = 0; index + 1 < rawHeaders.length; index += 2) {
-    const name = rawHeaders[index];
+  for (const [name, value] of forwardedSimplePreviewHeaders(rawHeaders, upstreamHost)) {
     const lower = name.toLowerCase();
-    if (HOP_BY_HOP_HEADERS.has(lower)) continue;
-    const value = rewrittenHeaderValue(name, rawHeaders[index + 1], upstreamHost);
+    if (lower === 'upgrade') continue; // Only an upgrade request carries it.
     const existing = headers[lower];
     headers[lower] = existing === undefined
       ? value
       : Array.isArray(existing) ? [...existing, value] : [String(existing), value];
   }
-  headers.host = upstreamHost;
   return headers;
 }
 
 function upgradeRequestHead(request: http.IncomingMessage, upstreamHost: string): string {
   const lines = [`${request.method ?? 'GET'} ${request.url ?? '/'} HTTP/1.1`];
-  let sawHost = false;
-  for (let index = 0; index + 1 < request.rawHeaders.length; index += 2) {
-    const name = request.rawHeaders[index];
-    if (name.toLowerCase() === 'host') sawHost = true;
-    lines.push(`${name}: ${rewrittenHeaderValue(name, request.rawHeaders[index + 1], upstreamHost)}`);
+  for (const [name, value] of forwardedSimplePreviewHeaders(request.rawHeaders, upstreamHost)) {
+    lines.push(`${name}: ${value}`);
   }
-  if (!sawHost) lines.push(`Host: ${upstreamHost}`);
+  lines.push('Connection: Upgrade');
   return `${lines.join('\r\n')}\r\n\r\n`;
 }
 
@@ -168,6 +158,10 @@ async function forwardRequest(
     headers: requestHeaders(request.rawHeaders, upstreamHost),
   }, (upstreamResponse) => {
     const headers = { ...upstreamResponse.headers };
+    // Project cookies are stored under their own namespace (see simplePreviewHeaders).
+    const setCookies = namespacedSimplePreviewSetCookies(headers['set-cookie']);
+    if (setCookies.length > 0) headers['set-cookie'] = setCookies;
+    else delete headers['set-cookie'];
     for (const name of HOP_BY_HOP_HEADERS) delete headers[name];
     response.writeHead(upstreamResponse.statusCode ?? 502, headers);
     upstreamResponse.pipe(response);

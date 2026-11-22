@@ -183,6 +183,19 @@ Neither the sidecar nor the preview proxy authenticates requests on loopback.
 The front must authenticate both origins, and both ports must stay private to
 the host.
 
+A project server never receives the front's credentials. The preview proxy
+forwards an allowlist of request headers (content negotiation, conditional and
+range requests, fetch metadata, client hints, Next.js and WebSocket headers)
+and drops everything else, including `Authorization`, forwarded-identity
+headers and any custom header, for requests and WebSocket upgrades alike.
+Cookies a project sets are stored in the browser under an
+`interpreter_preview_app_` prefix, without a `Domain` attribute, and only
+cookies with that prefix are returned to the project under their original
+names. A project therefore cannot read or replace another cookie on the
+preview origin. A cookie written by page script rather than by the project
+server is not sent to it, and a project that depends on a custom request
+header does not receive that header through the preview origin.
+
 GPT Live voice normally uses the default OpenAI profile's key or
 `OPENAI_API_KEY`. A host that signs in with a subscription can set
 `INTERPRETER_LIVE_OPENAI_API_KEY` instead; it is used only for GPT Live
