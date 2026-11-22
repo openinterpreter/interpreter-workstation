@@ -717,8 +717,12 @@ export class WakeSources {
         Number.isSafeInteger(source.everyMs) && source.everyMs! >= MIN_INTERVAL &&
         now + source.everyMs! <= 8_640_000_000_000_000;
       if (source.kind !== 'schedule' || (!civil && !interval) || source.paused ||
+          source.stopped !== undefined || source.moreAvailable !== undefined ||
+          !Number.isSafeInteger(source.sequence) || source.sequence < 0 ||
           source.status !== 'error' || source.nextAt !== undefined ||
-          events.some(e => e.status === 'pending' || e.status === 'offered') ||
+          // The persisted event schema also includes refused; unfamiliar
+          // statuses must not be interpreted as settled custody.
+          events.some(e => e.status !== 'held' && e.status !== 'admitted') ||
           !events.some(e => e.eventId === expectedHeldEventId && e.status === 'held' &&
             e.eventId === `${id}-${source.sequence}`)) {
         throw new WakeRecoveryError('refused_ambiguous');

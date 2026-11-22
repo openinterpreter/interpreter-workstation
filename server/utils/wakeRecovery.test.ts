@@ -34,6 +34,8 @@ describe('own-thread source recovery CAS', () => {
         everyMs: 86_400_000, dailyAt: undefined, timeZone: undefined };
       saved.sources.push({ ...source(3), id: 'other', status: 'waiting',
         nextAt: '2026-12-01T00:00:00.000Z' });
+      saved.events.unshift({ threadId, sourceId, eventId: 'daily-16', message: '',
+        status: 'admitted', createdAt });
       await writeFile(filename, JSON.stringify(saved));
       wake = await f.make();
       const before = wake.recoverySnapshot(threadId, sourceId);
@@ -56,7 +58,7 @@ describe('own-thread source recovery CAS', () => {
       const due = Date.parse(wake.recoverySnapshot(threadId, sourceId).source.nextAt!);
       await wake.tick(due + 1);
       expect(wake.recoverySnapshot(threadId, sourceId).events.map(e => [e.eventId, e.status]))
-        .toEqual([[f.eventId, 'held'], ['daily-18', 'offered']]);
+        .toEqual([['daily-16', 'admitted'], [f.eventId, 'held'], ['daily-18', 'offered']]);
     } finally { await wake?.stop(); await rm(f.root, { recursive: true, force: true }); }
   });
 
@@ -86,6 +88,30 @@ describe('own-thread source recovery CAS', () => {
         .rejects.toMatchObject({ category: 'refused_ambiguous' });
       expect(wake.recoverySnapshot(threadId, sourceId)).toEqual(malformed);
     } finally { await wake?.stop(); await rm(f.root, { recursive: true, force: true }); }
+  });
+
+  test('fixed interval refuses refused, unknown or stopped custody with no write', async () => {
+    for (const otherStatus of ['refused', 'unknown', 'stopped'] as const) {
+      const f = await fixture(17, 'held', { inspect: async () => ({ messages: [] }),
+        start: async () => { throw Error('unexpected start'); },
+        steer: async () => { throw Error('unexpected steer'); } });
+      let wake: WakeSources | undefined;
+      try {
+        const filename = path.join(f.root, 'wake-sources.json');
+        const saved = JSON.parse(await readFile(filename, 'utf8'));
+        saved.sources[0] = { ...source(17), at: '2026-10-01T00:00:00.000Z',
+          everyMs: 86_400_000, dailyAt: undefined, timeZone: undefined,
+          ...(otherStatus === 'stopped' ? { stopped: 'refusal' } : {}) };
+        if (otherStatus !== 'stopped') saved.events.push({ threadId, sourceId,
+          eventId: 'daily-prior', status: otherStatus, message: 'Unresolved input', createdAt });
+        await writeFile(filename, JSON.stringify(saved));
+        wake = await f.make();
+        const before = wake.recoverySnapshot(threadId, sourceId);
+        await expect(wake.recoverDailyFuture(threadId, sourceId, before.revision, f.eventId))
+          .rejects.toMatchObject({ category: 'refused_ambiguous' });
+        expect(wake.recoverySnapshot(threadId, sourceId)).toEqual(before);
+      } finally { await wake?.stop(); await rm(f.root, { recursive: true, force: true }); }
+    }
   });
 
   test('held daily sequence remains retained; only future sequence runs after restart', async () => {
