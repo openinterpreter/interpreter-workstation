@@ -16,6 +16,8 @@ export type SimplePreviewTargetDependencies = {
   selected: (sessionKey: string | null) => Promise<SimplePreviewSelection | null>;
   /** The project server's state. */
   status: (projectPath: string) => Promise<{ status: string; url?: string | null }>;
+  /** Whether the target passed in is still the recorded target. */
+  isCurrent: () => boolean;
 };
 
 /**
@@ -32,6 +34,12 @@ export function reportedSimplePreviewTarget(
   return { path: projectPath, scope: selection.scope, sessionKey: sessionKey ?? null };
 }
 
+/** Whether two targets name the same project, selection scope and window session. */
+export function sameSimplePreviewTarget(a: SimplePreviewTarget | null, b: SimplePreviewTarget | null): boolean {
+  if (!a || !b) return a === b;
+  return a.path === b.path && a.scope === b.scope && a.sessionKey === b.sessionKey;
+}
+
 export async function resolveSimplePreviewTargetPort(
   target: SimplePreviewTarget | null,
   dependencies: SimplePreviewTargetDependencies,
@@ -41,11 +49,16 @@ export async function resolveSimplePreviewTargetPort(
   // another project must never leave the previous one reachable, and a target
   // chosen by a window session must not survive that session's choice going
   // away by falling back to the global selection.
-  const selected = await dependencies.selected(target.sessionKey);
-  if (!selected || selected.path !== target.path || selected.scope !== target.scope) {
-    return { port: null, stale: true };
-  }
+  const matches = (selected: SimplePreviewSelection | null) =>
+    Boolean(selected) && selected!.path === target.path && selected!.scope === target.scope;
+  if (!matches(await dependencies.selected(target.sessionKey))) return { port: null, stale: true };
   const state = await dependencies.status(target.path);
+  // The selection can change while the state is being read. Check again after
+  // every wait, so a request already in flight never reaches a project that
+  // stopped being the selected one in the meantime.
+  if (!dependencies.isCurrent()) return { port: null, stale: false };
+  if (!matches(await dependencies.selected(target.sessionKey))) return { port: null, stale: true };
+  if (!dependencies.isCurrent()) return { port: null, stale: false };
   if (state.status !== 'running' || !state.url) return { port: null, stale: false };
   let port: number;
   try {

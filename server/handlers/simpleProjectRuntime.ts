@@ -17,6 +17,7 @@ import { getCurrentWindowSessionKey } from '../utils/windowSessions';
 import {
   reportedSimplePreviewTarget,
   resolveSimplePreviewTargetPort,
+  sameSimplePreviewTarget,
   type SimplePreviewTarget,
 } from '../utils/simplePreviewTarget';
 import { prefixToolName } from '../../shared/utils/mcpToolName';
@@ -132,13 +133,17 @@ let previewProject: SimplePreviewTarget | null = null;
 async function reportPreviewProject(projectPath: string, running: boolean): Promise<void> {
   // A report about a project that is not running, or that is not what the
   // reporting session has selected, clears the target, so the proxy never
-  // keeps serving a project the renderer has moved away from. The target is
-  // cleared before the selection is read so nothing stale survives the wait.
-  const sessionKey = getCurrentWindowSessionKey();
-  previewProject = null;
+  // keeps serving a project the renderer has moved away from. A different or
+  // stopped project clears the target before the selection is read, so nothing
+  // stale survives the wait; a repeated report of the same running project
+  // keeps it, and every proxy request re-validates the selection anyway.
+  const sessionKey = getCurrentWindowSessionKey() ?? null;
+  const current = previewProject;
+  if (!running || !current || current.path !== projectPath || current.sessionKey !== sessionKey) {
+    previewProject = null;
+  }
   if (!running) return;
-  const next = reportedSimplePreviewTarget(projectPath, running, sessionKey, await peekSelectedSimpleProject(sessionKey));
-  previewProject = next;
+  previewProject = reportedSimplePreviewTarget(projectPath, running, sessionKey, await peekSelectedSimpleProject(sessionKey));
 }
 
 const PROJECT_TOOL_NAMES = [
@@ -400,9 +405,11 @@ export async function getSimplePreviewPort(): Promise<number | null> {
   const { port, stale } = await resolveSimplePreviewTargetPort(target, {
     selected: peekSelectedSimpleProject,
     status: async (projectPath) => (await trustedProjectRunner.status(projectPath)).state,
+    isCurrent: () => sameSimplePreviewTarget(previewProject, target),
   });
-  if (stale && previewProject === target) previewProject = null;
-  return port;
+  if (stale && sameSimplePreviewTarget(previewProject, target)) previewProject = null;
+  // Nothing awaits between the checks inside the resolver and this return.
+  return port !== null && sameSimplePreviewTarget(previewProject, target) ? port : null;
 }
 
 export async function resetSimpleProjectRuntimeForTest(projectPath: string): Promise<void> {
