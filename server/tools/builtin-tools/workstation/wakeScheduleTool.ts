@@ -6,7 +6,7 @@ import { WakeRecoveryError } from '../../../utils/wakeSources';
 /** This tool only edits the caller's own ordinary thread. */
 export const wakeScheduleTool: BuiltinToolDefinition = {
   name: 'interpreter_wake_schedule',
-  description: 'List, inspect, recover future-only daily delivery, reconcile an offered native receipt without replay, add, change, or cancel a time-based input for this conversation.',
+  description: 'List, inspect, recover future-only daily or fixed-interval delivery, reconcile an offered native receipt without replay, add, change, or cancel a time-based input for this conversation.',
   inputSchema: {
     type: 'object',
     properties: {

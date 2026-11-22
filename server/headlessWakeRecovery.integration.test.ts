@@ -23,7 +23,9 @@ async function start(home: string) {
   children.push(child);
   const reader = child.stdout.getReader();
   let output = '';
-  const deadline = Date.now() + 15_000;
+  // The real CLI auth-status probe has a 30-second bound. Allow that probe to
+  // finish (or time out) before declaring the standalone listener unavailable.
+  const deadline = Date.now() + 45_000;
   while (Date.now() < deadline) {
     const result = await Promise.race([reader.read(), Bun.sleep(Math.max(1, deadline - Date.now()))
       .then(() => null)]);
@@ -36,12 +38,13 @@ async function start(home: string) {
   const error = await new Response(child.stderr).text();
   throw Error(`Fixture failed to start: ${output.slice(-500)} ${error.slice(-800)}`);
 }
-function create(home: string, sequence: number, status: 'held' | 'offered') {
+function create(home: string, sequence: number, status: 'held' | 'offered', interval = false) {
   const eventId = `daily-${sequence}`;
   writeFileSync(join(home, 'receipt.json'), '[]');
   writeFileSync(join(home, 'wake-sources.json'), JSON.stringify({
     sources: [{ id: 'daily', threadId, kind: 'schedule', message: 'Fixture input',
-      dailyAt: '07:00', timeZone: 'America/Los_Angeles', status: 'error', sequence }],
+      ...(interval ? { at: '2026-10-01T00:00:00.000Z', everyMs: 86_400_000 }
+        : { dailyAt: '07:00', timeZone: 'America/Los_Angeles' }), status: 'error', sequence }],
     events: [{ threadId, sourceId: 'daily', eventId, message: 'Fixture input',
       status, createdAt: '2026-11-01T00:00:00.000Z',
       ...(status === 'offered' ? { offeredAt: '2026-11-01T00:00:00.000Z' } : {}) }],
@@ -60,6 +63,26 @@ async function tool(base: string, action: string, fields: Record<string, string>
 const value = (result: { content: Array<{ text: string }> }) => JSON.parse(result.content[0]!.text);
 
 describe('actual standalone own-thread daily recovery tool', () => {
+  test('fixed interval uses own-thread revision; retained event survives restart without native start', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'headless-wake-')); homes.push(home);
+    const eventId = create(home, 17, 'held', true);
+    let base = await start(home);
+    const prior = value((await tool(base, 'inspect-recovery')).result);
+    expect(prior.events).toEqual([{ eventId, status: 'held' }]);
+    expect(value((await tool(base, 'inspect-recovery', {},
+      { ...headers, 'x-fixture-thread': wrongThread })).result).category).toBe('invalid_request');
+    const fields = { eventId, expectedRevision: prior.revision };
+    const recovered = value((await tool(base, 'recover-future', fields)).result);
+    expect(recovered.source.status).toBe('waiting');
+    expect(Date.parse(recovered.source.nextAt)).toBeGreaterThan(Date.now());
+    expect(recovered.events).toEqual(prior.events);
+    expect(value((await tool(base, 'recover-future', fields)).result).category).toBe('stale_revision');
+    const old = children.pop()!; old.kill(); await old.exited;
+    base = await start(home);
+    expect(value((await tool(base, 'inspect-recovery')).result)).toEqual(recovered);
+    expect((await fetch(`${base}/fixture/native-starts`).then(r => r.json()))).toEqual({ starts: 0 });
+  }, 120_000);
+
   test('held occurrence stays held, future-only CAS survives restart; unauthorized and stale refuse', async () => {
     const home = mkdtempSync(join(tmpdir(), 'headless-wake-')); homes.push(home);
     const eventId = create(home, 17, 'held');
@@ -82,7 +105,7 @@ describe('actual standalone own-thread daily recovery tool', () => {
     expect(restart).toEqual(first);
     expect(value((await tool(base, 'recover-future', fields)).result).category).toBe('stale_revision');
     expect((await fetch(`${base}/fixture/native-starts`).then(r => r.json()))).toEqual({ starts: 0 });
-  }, 60_000);
+  }, 120_000);
 
   test('offered unknown receipt refuses without replay; later positive marker admits once after restart', async () => {
     const home = mkdtempSync(join(tmpdir(), 'headless-wake-')); homes.push(home);
@@ -102,5 +125,5 @@ describe('actual standalone own-thread daily recovery tool', () => {
     expect((await fetch(`${base}/fixture/native-starts`).then(r => r.json()))).toEqual({ starts: 0 });
     const persisted = JSON.parse(readFileSync(join(home, 'wake-sources.json'), 'utf8'));
     expect(persisted.events[0].status).toBe('admitted');
-  }, 60_000);
+  }, 120_000);
 });
