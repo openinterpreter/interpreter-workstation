@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, readdirSync, chmodSync, symlinkSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { persistNativeCallerBinding, recoverNativeCallerBinding, revokeNativeCallerBinding, revokeOtherNativeCallerBindingsForThread } from './persistedCallerBinding';
+import { listNativeCallerScopesForThread, persistNativeCallerBinding, recoverNativeCallerBinding, revokeNativeCallerBinding, revokeOtherNativeCallerBindingsForThread } from './persistedCallerBinding';
 import { agentTabManager } from '../agentTabManager';
 
 const roots: string[] = [];
@@ -39,6 +39,26 @@ describe.skipIf(process.platform !== 'linux')('native caller scope continuity', 
     expect(() => revokeOtherNativeCallerBindingsForThread(binding.threadId, next, dir, true))
       .toThrow(/narrower tool scope/);
     expect(recoverNativeCallerBinding(token, dir)?.allowedToolNames).toEqual(binding.allowedToolNames);
+  });
+
+  it('revokes a restricted older caller only when the replacement carries the same scope', () => {
+    const dir = root();
+    const next = 'agtok_replacement123456789';
+    persistNativeCallerBinding({ ...binding, toolProfileId: 'profile-narrow' }, dir);
+    const sameScope = { allowedToolNames: [...binding.allowedToolNames].reverse(), toolProfileId: 'profile-narrow' };
+    expect(listNativeCallerScopesForThread(binding.threadId, dir)).toEqual([{ workspacePath: binding.workspacePath,
+      allowedToolNames: binding.allowedToolNames, toolProfileId: 'profile-narrow',
+      model: { provider: 'openai-oauth', modelId: 'gpt-6-sol' } }]);
+    for (const other of [{}, { toolProfileId: 'profile-narrow' }, { allowedToolNames: binding.allowedToolNames },
+      { ...sameScope, toolProfileId: 'profile-other' }]) {
+      expect(() => revokeOtherNativeCallerBindingsForThread(binding.threadId, next, dir, false, other))
+        .toThrow(/different tool scope/);
+      expect(recoverNativeCallerBinding(token, dir)?.toolProfileId).toBe('profile-narrow');
+    }
+    expect(revokeOtherNativeCallerBindingsForThread(binding.threadId, next, dir, true, sameScope)).toBe(1);
+    expect(recoverNativeCallerBinding(token, dir)?.threadId).toBe(binding.threadId);
+    expect(revokeOtherNativeCallerBindingsForThread(binding.threadId, next, dir, false, sameScope)).toBe(1);
+    expect(recoverNativeCallerBinding(token, dir)).toBeUndefined();
   });
 
   it('allows an empty, not-yet-created binding directory without making one', () => {

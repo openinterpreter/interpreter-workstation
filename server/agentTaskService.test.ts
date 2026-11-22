@@ -1,14 +1,18 @@
-import { afterEach, describe, test } from 'bun:test';
+import { afterEach, beforeEach, describe, test } from 'bun:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { clearConfigCache, setConfigOverride } from './configStore';
 import {
   coldBindAgentTaskThread,
   forkAgentTaskThread,
+  prepareUnloadedThreadCarrier,
   resumeAgentTaskThread,
   startAgentTask,
 } from './agentTaskService';
+import { listNativeCallerScopesForThread, persistNativeCallerBinding } from './utils/persistedCallerBinding';
 import { agentTabManager } from './agentTabManager';
 import { getCodexService, type CodexService } from '../src/lib/codex/service';
 import { resolveAgentInterpreterCliTransport } from './utils/codexRuntime';
@@ -131,11 +135,14 @@ describe('resumeAgentTaskThread shell environment', () => {
 });
 
 describe('coldBindAgentTaskThread caller carrier', () => {
-  test('still binds a fresh caller through the guarded cold shell policy', async () => {
-    const threadId = '00000000-0000-4000-8000-0000000000e2';
+  for (const prior of [{}, { toolProfileId: 'profile-narrow' }]) test(
+    `still binds a fresh caller through the guarded cold shell policy (${prior.toolProfileId ?? 'open'})`,
+    async () => {
+    const threadId = prior.toolProfileId
+      ? '00000000-0000-4000-8000-0000000000e3' : '00000000-0000-4000-8000-0000000000e2';
     const workspace = '/tmp/owned-workspace';
     agentTabManager.bindThread({ agentId: 'original-agent', callerToken: 'agtok_prior_caller',
-      threadId, workspacePath: workspace });
+      threadId, workspacePath: workspace, ...prior });
     const service = getCodexService();
     const original = {
       readThread: service.readThread, readNativeCustody: service.readNativeCustody,
@@ -162,6 +169,212 @@ describe('coldBindAgentTaskThread caller carrier', () => {
       .shell_environment_policy.set[INTERPRETER_CALLER_TOKEN_ENV];
     assert.notEqual(token, 'agtok_prior_caller');
     assert.equal(agentTabManager.getBindingForThread(threadId)?.callerToken, token);
+    // The operator cold bind carries the prior caller's scope, never a wider one.
+    assert.equal(agentTabManager.getBindingForThread(threadId)?.toolProfileId, prior.toolProfileId);
+  });
+});
+
+describe('unloaded thread carrier keeps the prior caller scope', () => {
+  // Persisted caller scopes exist on Linux hosts only.
+  const linuxTest = process.platform === 'linux' ? test : test.skip;
+  const workspace = '/tmp/carrier-workspace/project';
+  const olderWorkspace = '/tmp/carrier-workspace';
+  const modelConfig = { provider: 'api' as const, modelId: 'test-model',
+    apiFormat: 'openai' as const, baseURL: 'https://example.test/v1' };
+  const narrowTools = ['builtin-interpreter__interpreter_goal_revision_get'];
+  let dataDir = '';
+  let priorDataDir: string | undefined;
+  let sequence = 0;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(path.join(os.tmpdir(), 'carrier-scope-'));
+    priorDataDir = process.env.INTERPRETER_USER_DATA_DIR;
+    process.env.INTERPRETER_USER_DATA_DIR = dataDir;
+  });
+
+  afterEach(() => {
+    agentTabManager.clearAll();
+    if (priorDataDir === undefined) delete process.env.INTERPRETER_USER_DATA_DIR;
+    else process.env.INTERPRETER_USER_DATA_DIR = priorDataDir;
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const newThreadId = () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, '0')}`;
+
+  function persistPrior(threadId: string, scope: {
+    workspacePath?: string; allowedToolNames?: string[]; toolProfileId?: string;
+    modelConfig?: typeof modelConfig;
+  } = {}): string {
+    const callerToken = `agtok_prior_${++sequence}_abcdefgh`;
+    persistNativeCallerBinding({ agentId: `prior-${sequence}`, callerToken, threadId,
+      workspacePath: scope.workspacePath ?? workspace,
+      ...(scope.allowedToolNames ? { allowedToolNames: scope.allowedToolNames } : {}),
+      ...(scope.toolProfileId ? { toolProfileId: scope.toolProfileId } : {}),
+      ...(scope.modelConfig ? { modelConfig: scope.modelConfig } : {}) }, dataDir);
+    return callerToken;
+  }
+
+  const prepare = (threadId: string) =>
+    prepareUnloadedThreadCarrier({ service: {} as CodexService, threadId, cwd: workspace });
+
+  function policyToken(carrier: { shellPolicy: unknown }): string {
+    const policy = carrier.shellPolicy as { set: Record<string, string> };
+    assert.ok(policy.set[INTERPRETER_CLI_SERVER_CONNECTION_ENV]);
+    assert.ok(policy.set[INTERPRETER_CLI_PATH_ENV]);
+    return policy.set[INTERPRETER_CALLER_TOKEN_ENV];
+  }
+
+  test('a restricted live caller is replaced by a fresh caller with the same scope', async () => {
+    const threadId = newThreadId();
+    agentTabManager.bindThread({ agentId: 'prior-live', callerToken: 'agtok_prior_live_caller', threadId,
+      workspacePath: workspace, toolProfileId: 'profile-narrow', modelConfig });
+    const carrier = await prepare(threadId);
+    const token = policyToken(carrier);
+    assert.notEqual(token, 'agtok_prior_live_caller');
+    const binding = agentTabManager.getBindingForThread(threadId);
+    assert.equal(binding?.callerToken, token);
+    assert.equal(binding?.toolProfileId, 'profile-narrow');
+    assert.equal(binding?.allowedToolNames, undefined);
+    assert.deepEqual(binding?.modelConfig, modelConfig);
+    carrier.commit();
+    assert.equal(agentTabManager.getBindingForCallerToken('agtok_prior_live_caller'), undefined);
+    assert.equal(agentTabManager.getBindingForCallerToken(token)?.toolProfileId, 'profile-narrow');
+  });
+
+  test('rollback restores the restricted live caller', async () => {
+    const threadId = newThreadId();
+    agentTabManager.bindThread({ agentId: 'prior-live', callerToken: 'agtok_prior_live_caller', threadId,
+      workspacePath: workspace, allowedToolNames: narrowTools });
+    const carrier = await prepare(threadId);
+    const token = policyToken(carrier);
+    carrier.rollback();
+    assert.equal(agentTabManager.getBindingForThread(threadId)?.callerToken, 'agtok_prior_live_caller');
+    assert.deepEqual(agentTabManager.getBindingForThread(threadId)?.allowedToolNames, narrowTools);
+    assert.equal(agentTabManager.getBindingForCallerToken(token), undefined);
+  });
+
+  linuxTest('persisted callers with one scope give a fresh caller of that scope and leave one record', async () => {
+    const threadId = newThreadId();
+    for (let i = 0; i < 3; i++) persistPrior(threadId, { toolProfileId: 'profile-narrow', modelConfig });
+    const carrier = await prepare(threadId);
+    const token = policyToken(carrier);
+    const binding = agentTabManager.getBindingForThread(threadId);
+    assert.equal(binding?.callerToken, token);
+    assert.equal(binding?.toolProfileId, 'profile-narrow');
+    assert.equal(binding?.allowedToolNames, undefined);
+    assert.deepEqual(binding?.modelConfig, { provider: modelConfig.provider, modelId: modelConfig.modelId });
+    carrier.commit();
+    assert.deepEqual(listNativeCallerScopesForThread(threadId, dataDir), [{ workspacePath: workspace,
+      toolProfileId: 'profile-narrow', model: { provider: modelConfig.provider, modelId: modelConfig.modelId } }]);
+  });
+
+  linuxTest('older same-scope callers in a parent workspace do not block the fresh caller', async () => {
+    const threadId = newThreadId();
+    for (let i = 0; i < 15; i++) persistPrior(threadId, { toolProfileId: 'profile-narrow' });
+    for (let i = 0; i < 9; i++) persistPrior(threadId, { toolProfileId: 'profile-narrow', workspacePath: olderWorkspace });
+    const carrier = await prepare(threadId);
+    policyToken(carrier);
+    assert.equal(agentTabManager.getBindingForThread(threadId)?.toolProfileId, 'profile-narrow');
+    carrier.commit();
+    assert.deepEqual(listNativeCallerScopesForThread(threadId, dataDir), [{ workspacePath: workspace,
+      toolProfileId: 'profile-narrow' }]);
+  });
+
+  linuxTest('persisted callers of one scope but different models give no model', async () => {
+    const threadId = newThreadId();
+    persistPrior(threadId, { allowedToolNames: narrowTools, modelConfig });
+    persistPrior(threadId, { allowedToolNames: narrowTools, modelConfig: { ...modelConfig, modelId: 'other-model' } });
+    const carrier = await prepare(threadId);
+    const binding = agentTabManager.getBindingForThread(threadId);
+    assert.deepEqual(binding?.allowedToolNames, narrowTools);
+    assert.equal(binding?.modelConfig, undefined);
+    carrier.rollback();
+  });
+
+  linuxTest('persisted callers that disagree on scope are refused and nothing is revoked', async () => {
+    for (const scopes of [
+      [{ toolProfileId: 'profile-a' }, { toolProfileId: 'profile-b' }],
+      [{}, { toolProfileId: 'profile-a' }],
+      [{ allowedToolNames: narrowTools }, {}],
+    ]) {
+      const threadId = newThreadId();
+      for (const scope of scopes) persistPrior(threadId, scope);
+      await assert.rejects(prepare(threadId), /scope differs/);
+      assert.equal(agentTabManager.getBindingForThread(threadId), undefined);
+      assert.equal(listNativeCallerScopesForThread(threadId, dataDir).length, 2);
+    }
+  });
+
+  linuxTest('an older caller in another workspace with a different scope is refused', async () => {
+    const consistent = newThreadId();
+    persistPrior(consistent, { toolProfileId: 'profile-a' });
+    persistPrior(consistent, { toolProfileId: 'profile-b', workspacePath: olderWorkspace });
+    await assert.rejects(prepare(consistent), /different tool scope/);
+    // With no caller in this workspace the chosen scope is open, which a
+    // restricted older caller must not be widened to.
+    const onlyOlder = newThreadId();
+    persistPrior(onlyOlder, { toolProfileId: 'profile-a', workspacePath: olderWorkspace });
+    await assert.rejects(prepare(onlyOlder), /different tool scope/);
+    for (const threadId of [consistent, onlyOlder]) {
+      assert.equal(agentTabManager.getBindingForThread(threadId), undefined);
+    }
+    assert.equal(listNativeCallerScopesForThread(consistent, dataDir).length, 2);
+    assert.equal(listNativeCallerScopesForThread(onlyOlder, dataDir).length, 1);
+  });
+
+  test('a thread with no prior caller still gets an open fresh caller', async () => {
+    const threadId = newThreadId();
+    const carrier = await prepare(threadId);
+    const binding = agentTabManager.getBindingForThread(threadId);
+    assert.equal(binding?.callerToken, policyToken(carrier));
+    assert.equal(binding?.allowedToolNames, undefined);
+    assert.equal(binding?.toolProfileId, undefined);
+    assert.equal(binding?.modelConfig, undefined);
+    carrier.commit();
+  });
+
+  test('a delegated, window-scoped or other-workspace live caller is still refused', async () => {
+    const parentOwner = { approvalOwnerKind: 'normal-agent' as const, agentId: 'parent-agent',
+      windowSessionKey: null, workspacePath: workspace };
+    for (const extra of [{ parentOwner }, { windowSessionKey: 'window-a' }, { workspacePath: olderWorkspace }]) {
+      const threadId = newThreadId();
+      agentTabManager.bindThread({ agentId: `prior-${threadId}`, callerToken: `agtok_live_${sequence}_abcdefgh`,
+        threadId, workspacePath: workspace, ...extra });
+      const original = agentTabManager.getBindingForThread(threadId);
+      await assert.rejects(prepare(threadId), /owner or tool scope differs/);
+      assert.equal(agentTabManager.getBindingForThread(threadId), original);
+    }
+  });
+
+  linuxTest('a restricted prior caller never yields an open or different fresh caller', async () => {
+    const priors = [
+      { toolProfileId: 'profile-narrow' },
+      { allowedToolNames: narrowTools },
+      { allowedToolNames: [...narrowTools, 'builtin-interpreter__interpreter_browser_page_inspect'].reverse(),
+        toolProfileId: 'profile-narrow' },
+    ];
+    for (const prior of priors) {
+      for (const live of [true, false]) {
+        const threadId = newThreadId();
+        if (live) {
+          agentTabManager.bindThread({ agentId: `prior-${threadId}`, callerToken: `agtok_live_${sequence}_abcdefgh`,
+            threadId, workspacePath: workspace, ...prior });
+        } else {
+          persistPrior(threadId, prior);
+          persistPrior(threadId, prior);
+        }
+        const carrier = await prepare(threadId);
+        const binding = agentTabManager.getBindingForThread(threadId);
+        assert.equal(binding?.callerToken, policyToken(carrier));
+        assert.ok(binding?.toolProfileId || binding?.allowedToolNames?.length, 'fresh caller must not be open');
+        assert.equal(binding?.toolProfileId, prior.toolProfileId);
+        assert.deepEqual([...(binding?.allowedToolNames ?? [])].sort(), [...(prior.allowedToolNames ?? [])].sort());
+        carrier.commit();
+        const remaining = listNativeCallerScopesForThread(threadId, dataDir);
+        assert.equal(remaining.length, 1);
+        assert.equal(remaining[0]?.toolProfileId, prior.toolProfileId);
+      }
+    }
   });
 });
 
