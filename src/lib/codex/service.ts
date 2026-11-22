@@ -1,4 +1,5 @@
 import { match } from "ts-pattern";
+import { createHash } from 'node:crypto';
 import { nativeTerminalOwnerObserved } from '../../../server/utils/nativeTurnOwnership';
 import { nativeCommandSessionSnapshot, nativeTurnReceipt } from './native-turn-receipt';
 import { boundNativeTerminalStatus, validateNativeTerminalRequest, type NativeTerminalStatusRequest,
@@ -80,6 +81,7 @@ export class NativeGlobalInventoryError extends Error {
     readonly category: 'invalid_page' | 'invalid_identifiers' | 'invalid_cursor'
       | 'loaded_missing' | 'inventory_changed' | 'queue_changed',
     message: string,
+    readonly missingLoadedThreadDigests?: readonly string[],
   ) {
     super(message);
     this.name = 'NativeGlobalInventoryError';
@@ -1462,8 +1464,10 @@ export class CodexService {
     };
     const loadedBefore = await collect(true);
     const threadIds = await collect(false);
-    if (loadedBefore.some((id) => !threadIds.includes(id)))
-      throw new NativeGlobalInventoryError('loaded_missing', 'Loaded native thread missing from inventory');
+    const missingLoadedIds = loadedBefore.filter((id) => !threadIds.includes(id));
+    if (missingLoadedIds.length)
+      throw new NativeGlobalInventoryError('loaded_missing', 'Loaded native thread missing from inventory',
+        missingLoadedIds.map((id) => createHash('sha256').update(id).digest('hex')));
     // A host can hold hundreds of saved threads. Reading their queues one at
     // a time cannot finish inside the single inspection budget, so each pass
     // runs a bounded number of reads at once. Results keep inventory order,
