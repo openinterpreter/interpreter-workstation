@@ -3,7 +3,7 @@ import { constants, existsSync } from 'node:fs';
 import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { resolveBundledResourceCandidates } from '../utils/bundledRuntimePaths';
-import { assertSimpleProjectChildPath, getActiveSimpleProject, peekSelectedSimpleProjectPath } from '../simpleProjects';
+import { assertSimpleProjectChildPath, getActiveSimpleProject, peekSelectedSimpleProject } from '../simpleProjects';
 import {
   SIMPLE_INTERFACE_COMPONENT_CSS,
   SIMPLE_INTERFACE_RUNTIME_MODULE,
@@ -129,10 +129,16 @@ const projectRuntimeTokens = new Map<string, string>();
  */
 let previewProject: SimplePreviewTarget | null = null;
 
-function reportPreviewProject(projectPath: string, running: boolean): void {
-  // A report about a project that is not running clears the target, so the
-  // proxy never keeps serving a project the renderer has moved away from.
-  previewProject = reportedSimplePreviewTarget(projectPath, running, getCurrentWindowSessionKey());
+async function reportPreviewProject(projectPath: string, running: boolean): Promise<void> {
+  // A report about a project that is not running, or that is not what the
+  // reporting session has selected, clears the target, so the proxy never
+  // keeps serving a project the renderer has moved away from. The target is
+  // cleared before the selection is read so nothing stale survives the wait.
+  const sessionKey = getCurrentWindowSessionKey();
+  previewProject = null;
+  if (!running) return;
+  const next = reportedSimplePreviewTarget(projectPath, running, sessionKey, await peekSelectedSimpleProject(sessionKey));
+  previewProject = next;
 }
 
 const PROJECT_TOOL_NAMES = [
@@ -353,7 +359,7 @@ async function refreshProject(workstationOrigin: string): Promise<SimpleAppStatu
     [INTERPRETER_CLI_SERVER_CONNECTION_ENV]: workstationOrigin,
     [INTERPRETER_CALLER_TOKEN_ENV]: projectRuntimeToken(project.path),
   }, 120_000); // Cold Next compilation can outlast the generic project budget.
-  reportPreviewProject(project.path, result.success && result.state.status === 'running');
+  await reportPreviewProject(project.path, result.success && result.state.status === 'running');
   return {
     revision: project.metadata.id,
     sourceRevision: fingerprint,
@@ -376,7 +382,7 @@ export async function promoteSimpleProjectApp(workstationOrigin: string): Promis
 export async function readSimpleProjectAppStatus(): Promise<SimpleAppStatus> {
   const project = await getActiveSimpleProject();
   const result = await trustedProjectRunner.status(project.path);
-  reportPreviewProject(project.path, result.state.status === 'running');
+  await reportPreviewProject(project.path, result.state.status === 'running');
   const fingerprint = await readInstallMarker(project.path);
   return {
     revision: project.metadata.id,
@@ -392,7 +398,7 @@ export async function readSimpleProjectAppStatus(): Promise<SimpleAppStatus> {
 export async function getSimplePreviewPort(): Promise<number | null> {
   const target = previewProject;
   const { port, stale } = await resolveSimplePreviewTargetPort(target, {
-    selectedPath: peekSelectedSimpleProjectPath,
+    selected: peekSelectedSimpleProject,
     status: async (projectPath) => (await trustedProjectRunner.status(projectPath)).state,
   });
   if (stale && previewProject === target) previewProject = null;
