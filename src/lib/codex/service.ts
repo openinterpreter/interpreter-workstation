@@ -1686,26 +1686,38 @@ export class CodexService {
       throw new Error('Invalid exact submission inspection');
     }
     onPhase?.('thread_read', 'started');
-    const thread = await nativeCustodyPhase('thread_read', () => this.readThread(threadId), deadlineMs,
+    const matches: Array<{ turnId: string; userItemId: string; status: string;
+      commandSessions: ReturnType<typeof nativeTurnReceipt>['commandSessions'] }> = [];
+    const expiresAt = Date.now() + deadlineMs;
+    const scan = async () => {
+      // A full thread/read can hydrate hundreds of megabytes. An incomplete
+      // paginated scan is unknown, never a negative or unique admission proof.
+      const { thread } = await this.client.threadRead({ threadId, includeTurns: false });
+      if (thread.id !== threadId || !Array.isArray(thread.turns) || thread.turns.length !== 0) {
+        throw new Error('Invalid native thread shell');
+      }
+      let turnCount = 0;
+      await this.scanTurnsNewestFirst(threadId, turn => {
+        if (Date.now() >= expiresAt) throw new Error('Native submission scan deadline exceeded');
+        if (++turnCount > 2000) throw new Error('Native submission scan bound exceeded');
+        const receipt = nativeTurnReceipt(turn);
+        for (const user of receipt.userItems) {
+          if (user.clientUserMessageId === clientUserMessageId && matches.length < 2) matches.push({
+            turnId: receipt.turnId, userItemId: user.itemId, status: receipt.status,
+            commandSessions: receipt.commandSessions,
+          });
+        }
+        return false;
+      });
+    };
+    await nativeCustodyPhase('thread_read', scan, deadlineMs,
       (phase, status) => onPhase?.(phase, status === 'completed' ? 'late_completed' : 'late_failed'));
     onPhase?.('thread_read', 'completed');
-    if (thread.id !== threadId || thread.turns.length > 2000) throw new Error('Invalid native thread inspection bound');
     onPhase?.('queue_read', 'started');
     const queue = await nativeCustodyPhase('queue_read',
       () => this.readNativeQueuedSubmissions(threadId), deadlineMs,
       (phase, status) => onPhase?.(phase, status === 'completed' ? 'late_completed' : 'late_failed'));
     onPhase?.('queue_read', 'completed');
-    const matches: Array<{ turnId: string; userItemId: string; status: string;
-      commandSessions: ReturnType<typeof nativeTurnReceipt>['commandSessions'] }> = [];
-    for (const turn of thread.turns) {
-      const receipt = nativeTurnReceipt(turn);
-      for (const user of receipt.userItems) {
-        if (user.clientUserMessageId === clientUserMessageId) matches.push({
-          turnId: receipt.turnId, userItemId: user.itemId, status: receipt.status,
-          commandSessions: receipt.commandSessions,
-        });
-      }
-    }
     return { threadId, clientUserMessageId,
       linkage: matches.length === 1 ? 'native_user_item' : matches.length ? 'ambiguous' : 'not_observed',
       nativeMatch: matches.length === 1 ? matches[0] : null,
