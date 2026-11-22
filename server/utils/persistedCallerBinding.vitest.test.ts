@@ -61,6 +61,32 @@ describe.skipIf(process.platform !== 'linux')('native caller scope continuity', 
     expect(recoverNativeCallerBinding(token, dir)).toBeUndefined();
   });
 
+  it('with a replacement workspace, checks every workspace but revokes only that one', () => {
+    const dir = root();
+    const next = 'agtok_replacement123456789';
+    const elsewhere = 'agtok_elsewhere123456789';
+    const scope = { allowedToolNames: binding.allowedToolNames };
+    persistNativeCallerBinding(binding, dir);
+    persistNativeCallerBinding({ ...binding, callerToken: elsewhere, workspacePath: '/workspace/other' }, dir);
+    const files = path.join(dir, 'native-caller-bindings');
+    const elsewhereFile = readdirSync(files).map(name => path.join(files, name))
+      .find(file => readFileSync(file, 'utf8').includes('/workspace/other'))!;
+    const elsewhereBytes = readFileSync(elsewhereFile, 'utf8');
+    const replacement = { ...scope, workspacePath: binding.workspacePath };
+    expect(revokeOtherNativeCallerBindingsForThread(binding.threadId, next, dir, true, replacement)).toBe(1);
+    expect(revokeOtherNativeCallerBindingsForThread(binding.threadId, next, dir, false, replacement)).toBe(1);
+    expect(recoverNativeCallerBinding(token, dir)).toBeUndefined();
+    expect(readFileSync(elsewhereFile, 'utf8')).toBe(elsewhereBytes);
+    // Another workspace's caller with a different scope still refuses.
+    persistNativeCallerBinding({ ...binding, callerToken: 'agtok_differs123456789', workspacePath: '/workspace/third',
+      allowedToolNames: undefined, toolProfileId: 'profile-other' }, dir);
+    for (const dryRun of [true, false]) {
+      expect(() => revokeOtherNativeCallerBindingsForThread(binding.threadId, next, dir, dryRun, replacement))
+        .toThrow(/different tool scope/);
+    }
+    expect(listNativeCallerScopesForThread(binding.threadId, dir)).toHaveLength(2);
+  });
+
   it('allows an empty, not-yet-created binding directory without making one', () => {
     const dir = root();
     expect(revokeOtherNativeCallerBindingsForThread('thr-123', 'agtok_replacement123456789', dir, true)).toBe(0);

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, test } from 'bun:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -268,27 +269,83 @@ describe('unloaded thread carrier keeps the prior caller scope', () => {
       toolProfileId: 'profile-narrow', model: { provider: modelConfig.provider, modelId: modelConfig.modelId } }]);
   });
 
-  linuxTest('older same-scope callers in a parent workspace do not block the fresh caller', async () => {
+  const recordBytes = (token: string) => readFileSync(path.join(dataDir, 'native-caller-bindings',
+    `${createHash('sha256').update(token).digest('hex')}.json`), 'utf8');
+
+  linuxTest('older same-scope callers in a parent workspace do not block the fresh caller and are kept', async () => {
     const threadId = newThreadId();
     for (let i = 0; i < 15; i++) persistPrior(threadId, { toolProfileId: 'profile-narrow' });
     for (let i = 0; i < 9; i++) persistPrior(threadId, { toolProfileId: 'profile-narrow', workspacePath: olderWorkspace });
     const carrier = await prepare(threadId);
-    policyToken(carrier);
+    const token = policyToken(carrier);
     assert.equal(agentTabManager.getBindingForThread(threadId)?.toolProfileId, 'profile-narrow');
-    carrier.commit();
-    assert.deepEqual(listNativeCallerScopesForThread(threadId, dataDir), [{ workspacePath: workspace,
+    assert.equal(carrier.commit(), 15);
+    const remaining = listNativeCallerScopesForThread(threadId, dataDir);
+    assert.deepEqual(remaining.filter(record => record.workspacePath === workspace), [{ workspacePath: workspace,
       toolProfileId: 'profile-narrow' }]);
+    assert.equal(remaining.filter(record => record.workspacePath === olderWorkspace).length, 9);
+    assert.equal(remaining.length, 10);
+    assert.ok(recordBytes(token));
   });
 
-  linuxTest('persisted callers of one scope but different models give no model', async () => {
+  linuxTest('a same-scope caller in another workspace is left byte for byte after commit', async () => {
+    for (const scope of [{ toolProfileId: 'profile-narrow', modelConfig }, {}]) {
+      const threadId = newThreadId();
+      const current = [persistPrior(threadId, scope), persistPrior(threadId, scope)];
+      const other = persistPrior(threadId, { ...scope, workspacePath: olderWorkspace });
+      const otherBytes = recordBytes(other);
+      const carrier = await prepare(threadId);
+      const token = policyToken(carrier);
+      assert.equal(agentTabManager.getBindingForThread(threadId)?.toolProfileId, scope.toolProfileId);
+      assert.equal(carrier.commit(), 2);
+      // Only this workspace's older callers were replaced by the fresh one.
+      assert.equal(recordBytes(other), otherBytes);
+      for (const prior of current) assert.throws(() => recordBytes(prior), /ENOENT/);
+      assert.ok(recordBytes(token));
+      const remaining = listNativeCallerScopesForThread(threadId, dataDir);
+      assert.equal(remaining.length, 2);
+      assert.equal(remaining.filter(record => record.workspacePath === workspace).length, 1);
+      assert.equal(remaining.filter(record => record.workspacePath === olderWorkspace).length, 1);
+    }
+  });
+
+  linuxTest('the operator cold bind keeps a same-scope caller of another workspace', async () => {
     const threadId = newThreadId();
-    persistPrior(threadId, { allowedToolNames: narrowTools, modelConfig });
-    persistPrior(threadId, { allowedToolNames: narrowTools, modelConfig: { ...modelConfig, modelId: 'other-model' } });
-    const carrier = await prepare(threadId);
-    const binding = agentTabManager.getBindingForThread(threadId);
-    assert.deepEqual(binding?.allowedToolNames, narrowTools);
-    assert.equal(binding?.modelConfig, undefined);
-    carrier.rollback();
+    persistPrior(threadId, { toolProfileId: 'profile-narrow' });
+    const other = persistPrior(threadId, { toolProfileId: 'profile-narrow', workspacePath: olderWorkspace });
+    const otherBytes = recordBytes(other);
+    const service = getCodexService();
+    const original = {
+      readThread: service.readThread, readNativeCustody: service.readNativeCustody,
+      readGlobalNativeCustody: service.readGlobalNativeCustody, resumeThread: service.resumeThread,
+    };
+    service.readThread = (async () => ({ id: threadId, cwd: workspace })) as never;
+    service.readNativeCustody = (async () => ({ status: 'notLoaded', queuedSubmissionCount: 0 })) as never;
+    service.readGlobalNativeCustody = (async () => ({ queuedSubmissionCount: 0, loadedThreadIds: [],
+      threads: [{ threadId }] })) as never;
+    service.resumeThread = async (options) => options.threadId;
+    try {
+      const result = await coldBindAgentTaskThread({ threadId, workspace });
+      assert.equal(result.revokedPriorBindings, 1);
+    } finally {
+      Object.assign(service, original);
+    }
+    assert.equal(recordBytes(other), otherBytes);
+    assert.equal(agentTabManager.getBindingForThread(threadId)?.toolProfileId, 'profile-narrow');
+    assert.equal(listNativeCallerScopesForThread(threadId, dataDir).length, 2);
+  });
+
+  linuxTest('persisted callers of one scope but different models are refused and nothing is revoked', async () => {
+    for (const models of [
+      [modelConfig, { ...modelConfig, modelId: 'other-model' }],
+      [modelConfig, undefined],
+    ]) {
+      const threadId = newThreadId();
+      for (const model of models) persistPrior(threadId, { allowedToolNames: narrowTools, modelConfig: model });
+      await assert.rejects(prepare(threadId), /disagree on model/);
+      assert.equal(agentTabManager.getBindingForThread(threadId), undefined);
+      assert.equal(listNativeCallerScopesForThread(threadId, dataDir).length, 2);
+    }
   });
 
   linuxTest('persisted callers that disagree on scope are refused and nothing is revoked', async () => {

@@ -250,11 +250,12 @@ const PRIOR_SCOPE_ERROR = 'Existing caller owner or tool scope differs';
  * a restricted caller into an open one. A live binding is authoritative; it
  * must be an undelegated, unwindowed caller of the same workspace. Otherwise
  * every persisted caller of the thread in this workspace must share one tool
- * scope; with none, the scope is open. Every other persisted caller of the
- * thread, in any workspace, must have that same scope. */
+ * scope and one stored model; with none, the scope is open. Every other
+ * persisted caller of the thread, in any workspace, must have that same tool
+ * scope. Callers of another workspace are checked but never revoked here. */
 function resolvePriorCallerScope(
   threadId: string, workspace: string, callerToken: string,
-): { scope: PriorCallerScope; oldBinding?: AgentThreadBinding } {
+): { scope: PriorCallerScope & { workspacePath: string }; oldBinding?: AgentThreadBinding } {
   const oldBinding = agentTabManager.getBindingForThread(threadId);
   let scope: PriorCallerScope;
   if (oldBinding) {
@@ -273,9 +274,14 @@ function resolvePriorCallerScope(
     if (first && current.some(record => !sameNativeCallerScope(record, first))) {
       throw new Error(PRIOR_SCOPE_ERROR);
     }
+    // A caller with no model resolves one from its tool profile, or from the
+    // default profile when it has none, so omitting a disputed model could
+    // give it a model or provider that no saved caller had. Refuse instead.
     const modelKey = (record: PersistedNativeCallerScope) => JSON.stringify(record.model ?? null);
-    const model = first?.model && current.every(record => modelKey(record) === modelKey(first))
-      ? first.model : undefined;
+    if (first && current.some(record => modelKey(record) !== modelKey(first))) {
+      throw new Error('Existing callers disagree on model');
+    }
+    const model = first?.model;
     scope = {
       ...(first?.allowedToolNames?.length ? { allowedToolNames: [...first.allowedToolNames] } : {}),
       ...(first?.toolProfileId ? { toolProfileId: first.toolProfileId } : {}),
@@ -283,9 +289,12 @@ function resolvePriorCallerScope(
       ...(model ? { modelConfig: model as AgentModelConfig } : {}),
     };
   }
-  // Older callers in any workspace must not differ from the chosen scope.
-  revokeOtherNativeCallerBindingsForThread(threadId, callerToken, undefined, true, scope);
-  return { scope, oldBinding };
+  // Older callers in any workspace must not differ from the chosen scope; the
+  // commit passes this same scope and workspace, so it revokes exactly what
+  // this dry run approved.
+  const replacement = { ...scope, workspacePath: workspace };
+  revokeOtherNativeCallerBindingsForThread(threadId, callerToken, undefined, true, replacement);
+  return { scope: replacement, oldBinding };
 }
 
 function prepareColdCallerCarrier(

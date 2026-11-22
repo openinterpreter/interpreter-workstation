@@ -199,13 +199,20 @@ export function listNativeCallerScopesForThread(
   }));
 }
 
+/** The scope a replacement caller carries and, optionally, its workspace. */
+export type ReplacementNativeCallerScope = NativeCallerScope & { workspacePath?: string };
+
 /** Revoke only older persisted callers of the exact thread after a verified
  * cold bind. Without `sameScopeAs`, any restricted older caller refuses. With
  * it, an older caller refuses only when its scope differs from `sameScopeAs`,
- * the scope the replacement caller carries. */
+ * the scope the replacement caller carries. When `sameScopeAs.workspacePath`
+ * is given, an older caller of another workspace must still have that same
+ * scope but is never revoked; only callers of that workspace are revoked.
+ * Every record is checked before anything is removed, so a dry run approves
+ * exactly what the same call without `dryRun` removes. */
 export function revokeOtherNativeCallerBindingsForThread(
   threadId: string, keepToken: string, root = getInterpreterAppDataDir(), dryRun = false,
-  sameScopeAs?: NativeCallerScope,
+  sameScopeAs?: ReplacementNativeCallerScope,
 ): number {
   if (process.platform !== 'linux') return 0;
   if (!ID.test(threadId) || !TOKEN.test(keepToken)) throw new Error('Invalid cold caller scope');
@@ -217,6 +224,7 @@ export function revokeOtherNativeCallerBindingsForThread(
       if (!sameNativeCallerScope(record, sameScopeAs)) {
         throw new Error('A prior native caller has a different tool scope');
       }
+      if (sameScopeAs.workspacePath !== undefined && record.workspacePath !== sameScopeAs.workspacePath) continue;
     } else if (record.allowedToolNames?.length || record.toolProfileId) {
       throw new Error('A prior native caller has a narrower tool scope');
     }

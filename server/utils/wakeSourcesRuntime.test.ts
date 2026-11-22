@@ -538,6 +538,44 @@ describe('Goal resume by exact revision on a saved thread that is not loaded', (
     },
   );
 
+  (process.platform === 'linux' ? test : test.skip)(
+    'a prior caller in another workspace with a different scope, or saved callers that disagree on model, refuse the carrier and log the cause',
+    async () => {
+      restores.push(installUnloadedThreadCarrier());
+      const warnings = captureWarnings();
+      const dataDir = await mkdtemp(path.join(os.tmpdir(), 'wake-carrier-workspace-'));
+      const priorDataDir = process.env.INTERPRETER_USER_DATA_DIR;
+      process.env.INTERPRETER_USER_DATA_DIR = dataDir;
+      restores.push(() => {
+        if (priorDataDir === undefined) delete process.env.INTERPRETER_USER_DATA_DIR;
+        else process.env.INTERPRETER_USER_DATA_DIR = priorDataDir;
+      });
+      const model = { provider: 'openai-oauth' as const, modelId: 'model-a' };
+      try {
+        for (const priors of [
+          [{ toolProfileId: 'profile-a' }, { toolProfileId: 'profile-b', workspacePath: '/workspace' }],
+          [{ toolProfileId: 'profile-a', modelConfig: model },
+            { toolProfileId: 'profile-a', modelConfig: { ...model, modelId: 'model-b' } }],
+        ]) {
+          const threadId = crypto.randomUUID();
+          for (const prior of priors) {
+            persistNativeCallerBinding({ agentId: `prior-${crypto.randomUUID()}`, callerToken: `agtok_${crypto.randomUUID()}`,
+              threadId, workspacePath: '/workspace/worker', ...prior }, dataDir);
+          }
+          const native = nativeService(threadId, 'notLoaded');
+
+          expect((await native.service.resumeThreadGoalWithRevision(threadId, GOAL_BLOCKED)).continuation)
+            .toBe('loaded');
+          expect(native.resumeConfigs).toEqual([{ mcp_servers: {} }]);
+          expect(agentTabManager.getBindingForThread(threadId)).toBeUndefined();
+          expect(listNativeCallerScopesForThread(threadId, dataDir)).toHaveLength(2);
+          expect(warnings).toContain(`[Unloaded thread carrier] ${JSON.stringify({ threadId,
+            carrier: 'not_given', cause: 'carrier_refused' })}`);
+        }
+      } finally { await rm(dataDir, { recursive: true, force: true }); }
+    },
+  );
+
   test('a loaded thread is not resumed and gains no caller', async () => {
     restores.push(installUnloadedThreadCarrier());
     const threadId = crypto.randomUUID();

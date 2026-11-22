@@ -237,10 +237,12 @@ loaded keeps its live environment until it is next loaded.
 A fresh caller carries exactly the tool scope (tool profile and allowed tools)
 of the thread's prior caller, so a restart never widens a restricted caller and
 never leaves it without the app CLI. The prior scope is the live binding when
-there is one; otherwise it is the scope shared by every saved caller of the
-thread in the same workspace, and every other saved caller of the thread must
-have that same scope. A delegated, window-scoped or other-workspace live
-caller, or saved callers that disagree on scope, still refuse the fresh caller.
+there is one; otherwise it is the tool scope and stored model shared by every
+saved caller of the thread in the same workspace. A saved caller of the thread
+in another workspace must have that same tool scope and is never revoked: only
+older callers in the fresh caller's own workspace are replaced. A delegated,
+window-scoped or other-workspace live caller, or saved callers that disagree
+on tool scope or model, still refuse the fresh caller.
 
 If an older saved thread has **no** usable CLI carrier, an authenticated
 loopback operator may cold-bind the existing thread with
