@@ -13,7 +13,11 @@
 import http from 'node:http';
 import net from 'node:net';
 import type { Duplex } from 'node:stream';
-import { forwardedSimplePreviewHeaders, namespacedSimplePreviewSetCookies } from './simplePreviewHeaders';
+import {
+  forwardedSimplePreviewHeaders,
+  namespacedSimplePreviewSetCookies,
+  simplePreviewCookiePrefix,
+} from './simplePreviewHeaders';
 
 export const SIMPLE_PREVIEW_PROXY_PORT_ENV = 'INTERPRETER_SIMPLE_PREVIEW_PROXY_PORT';
 export const SIMPLE_PREVIEW_PUBLIC_ORIGIN_ENV = 'INTERPRETER_SIMPLE_PREVIEW_PUBLIC_ORIGIN';
@@ -22,8 +26,15 @@ const LOOPBACK_HOST = '127.0.0.1';
 const UNAVAILABLE_MESSAGE = 'The interface project is not running.\n';
 const HOP_BY_HOP_HEADERS = new Set(['connection', 'keep-alive', 'proxy-connection']);
 
-/** Resolves the running project server's loopback port, or null when none is running. */
-export type SimplePreviewUpstream = () => Promise<number | null> | number | null;
+/**
+ * The running project server: its loopback port and a cookie scope that is
+ * stable for that project and differs between projects.
+ */
+export type SimplePreviewUpstreamTarget = { port: number; cookieScope: string };
+
+/** Resolves the running project server, or null when none is running. */
+export type SimplePreviewUpstream = () =>
+  Promise<SimplePreviewUpstreamTarget | null> | SimplePreviewUpstreamTarget | null;
 
 export type SimplePreviewProxyHandle = {
   host: string;
@@ -95,9 +106,9 @@ export function resolveSimplePreviewRuntimeUrl(
 
 // Only allowlisted headers and the project's own cookies go upstream; the
 // front's credentials and identity headers never reach a project server.
-function requestHeaders(rawHeaders: string[], upstreamHost: string): http.OutgoingHttpHeaders {
+function requestHeaders(rawHeaders: string[], upstreamHost: string, cookieScope: string): http.OutgoingHttpHeaders {
   const headers: http.OutgoingHttpHeaders = {};
-  for (const [name, value] of forwardedSimplePreviewHeaders(rawHeaders, upstreamHost)) {
+  for (const [name, value] of forwardedSimplePreviewHeaders(rawHeaders, upstreamHost, cookieScope)) {
     const lower = name.toLowerCase();
     if (lower === 'upgrade') continue; // Only an upgrade request carries it.
     const existing = headers[lower];
@@ -108,19 +119,23 @@ function requestHeaders(rawHeaders: string[], upstreamHost: string): http.Outgoi
   return headers;
 }
 
-function upgradeRequestHead(request: http.IncomingMessage, upstreamHost: string): string {
+function upgradeRequestHead(request: http.IncomingMessage, upstreamHost: string, cookieScope: string): string {
   const lines = [`${request.method ?? 'GET'} ${request.url ?? '/'} HTTP/1.1`];
-  for (const [name, value] of forwardedSimplePreviewHeaders(request.rawHeaders, upstreamHost)) {
+  for (const [name, value] of forwardedSimplePreviewHeaders(request.rawHeaders, upstreamHost, cookieScope)) {
     lines.push(`${name}: ${value}`);
   }
   lines.push('Connection: Upgrade');
   return `${lines.join('\r\n')}\r\n\r\n`;
 }
 
-async function resolveUpstream(upstream: SimplePreviewUpstream): Promise<number | null> {
+// A target without a usable port or cookie scope is treated as no target, so
+// a project is never served without its own cookie namespace.
+async function resolveUpstream(upstream: SimplePreviewUpstream): Promise<SimplePreviewUpstreamTarget | null> {
   try {
-    const port = await upstream();
-    return typeof port === 'number' && Number.isInteger(port) && port > 0 ? port : null;
+    const target = await upstream();
+    if (!target || !Number.isInteger(target.port) || target.port <= 0) return null;
+    simplePreviewCookiePrefix(target.cookieScope);
+    return { port: target.port, cookieScope: target.cookieScope };
   } catch {
     return null;
   }
@@ -143,23 +158,24 @@ async function forwardRequest(
   response: http.ServerResponse,
   upstream: SimplePreviewUpstream,
 ): Promise<void> {
-  const port = await resolveUpstream(upstream);
-  if (port === null) {
+  const target = await resolveUpstream(upstream);
+  if (target === null) {
     request.resume();
     respondUnavailable(response);
     return;
   }
+  const { port, cookieScope } = target;
   const upstreamHost = `${LOOPBACK_HOST}:${port}`;
   const proxied = http.request({
     host: LOOPBACK_HOST,
     port,
     method: request.method,
     path: request.url,
-    headers: requestHeaders(request.rawHeaders, upstreamHost),
+    headers: requestHeaders(request.rawHeaders, upstreamHost, cookieScope),
   }, (upstreamResponse) => {
     const headers = { ...upstreamResponse.headers };
-    // Project cookies are stored under their own namespace (see simplePreviewHeaders).
-    const setCookies = namespacedSimplePreviewSetCookies(headers['set-cookie']);
+    // Project cookies are stored under that project's own namespace (see simplePreviewHeaders).
+    const setCookies = namespacedSimplePreviewSetCookies(headers['set-cookie'], cookieScope);
     if (setCookies.length > 0) headers['set-cookie'] = setCookies;
     else delete headers['set-cookie'];
     for (const name of HOP_BY_HOP_HEADERS) delete headers[name];
@@ -180,8 +196,8 @@ async function forwardUpgrade(
   upstream: SimplePreviewUpstream,
 ): Promise<void> {
   socket.on('error', () => socket.destroy());
-  const port = await resolveUpstream(upstream);
-  if (port === null) {
+  const resolved = await resolveUpstream(upstream);
+  if (resolved === null) {
     const body = Buffer.from(UNAVAILABLE_MESSAGE);
     socket.end(
       'HTTP/1.1 503 Service Unavailable\r\n'
@@ -192,10 +208,11 @@ async function forwardUpgrade(
     );
     return;
   }
+  const { port, cookieScope } = resolved;
   const upstreamHost = `${LOOPBACK_HOST}:${port}`;
   const target = net.connect(port, LOOPBACK_HOST);
   target.on('connect', () => {
-    target.write(upgradeRequestHead(request, upstreamHost));
+    target.write(upgradeRequestHead(request, upstreamHost, cookieScope));
     if (head.length > 0) target.write(head);
     socket.pipe(target);
     target.pipe(socket);

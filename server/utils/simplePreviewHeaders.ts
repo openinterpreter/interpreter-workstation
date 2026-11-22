@@ -54,46 +54,62 @@ function forwardable(lowerName: string): boolean {
  * the prefix removed. No other cookie on the origin can reach a project, and a
  * project can neither read nor replace one. A cookie written by page script
  * rather than by the project server has no prefix and is not sent to it.
+ *
+ * The namespace is per project. All projects share the one preview origin,
+ * so the prefix carries a scope derived from the project: when another
+ * project is selected, the previous project's cookies stay in the browser but
+ * are never sent to the new one.
  */
 export const SIMPLE_PREVIEW_COOKIE_PREFIX = 'interpreter_preview_app_';
 
+const COOKIE_SCOPE = /^[a-z0-9]{8,64}$/;
+
+/** The cookie name prefix for one project scope (lowercase letters and digits). */
+export function simplePreviewCookiePrefix(scope: string): string {
+  if (!COOKIE_SCOPE.test(scope)) throw new Error('Invalid Simple preview cookie scope.');
+  return `${SIMPLE_PREVIEW_COOKIE_PREFIX}${scope}_`;
+}
+
 /**
- * A project's Set-Cookie header moved into the project namespace and confined
- * to the preview host. Returns null for a header that is not a usable cookie.
+ * A project's Set-Cookie header moved into that project's namespace and
+ * confined to the preview host. Returns null for a header that is not a usable cookie.
  */
-export function namespacedSimplePreviewSetCookie(setCookie: string): string | null {
+export function namespacedSimplePreviewSetCookie(setCookie: string, scope: string): string | null {
   const [pair, ...attributes] = setCookie.split(';');
   const separator = pair.indexOf('=');
   const name = separator > 0 ? pair.slice(0, separator).trim() : '';
   if (!name || /[\s,;="]/.test(name)) return null;
   // A Domain attribute could widen the cookie to sibling hosts; keep it host-only.
   const kept = attributes.filter((attribute) => !/^\s*domain\s*=/i.test(attribute));
-  return [`${SIMPLE_PREVIEW_COOKIE_PREFIX}${name}=${pair.slice(separator + 1)}`, ...kept].join(';');
+  return [`${simplePreviewCookiePrefix(scope)}${name}=${pair.slice(separator + 1)}`, ...kept].join(';');
 }
 
 /** A response's Set-Cookie headers rewritten for the browser; unusable ones are dropped. */
-export function namespacedSimplePreviewSetCookies(setCookie: string | string[] | undefined): string[] {
+export function namespacedSimplePreviewSetCookies(setCookie: string | string[] | undefined, scope: string): string[] {
   const values = setCookie === undefined ? [] : Array.isArray(setCookie) ? setCookie : [setCookie];
-  return values.flatMap((value) => namespacedSimplePreviewSetCookie(value) ?? []);
+  return values.flatMap((value) => namespacedSimplePreviewSetCookie(value, scope) ?? []);
 }
 
-/** The Cookie header reduced to the project's own cookies under their original names, or null when none remain. */
-export function projectSimplePreviewCookies(cookieHeader: string): string | null {
+/** The Cookie header reduced to this project's own cookies under their original names, or null when none remain. */
+export function projectSimplePreviewCookies(cookieHeader: string, scope: string): string | null {
+  const prefix = simplePreviewCookiePrefix(scope);
   const kept = cookieHeader
     .split(';')
     .map((pair) => pair.trim())
-    .filter((pair) => pair.startsWith(SIMPLE_PREVIEW_COOKIE_PREFIX) && pair.indexOf('=') > SIMPLE_PREVIEW_COOKIE_PREFIX.length)
-    .map((pair) => pair.slice(SIMPLE_PREVIEW_COOKIE_PREFIX.length));
+    .filter((pair) => pair.startsWith(prefix) && pair.indexOf('=') > prefix.length)
+    .map((pair) => pair.slice(prefix.length));
   return kept.length > 0 ? kept.join('; ') : null;
 }
 
 /**
  * The header list to send upstream, in order, with Host and Origin naming the
- * project server. `rawHeaders` is Node's alternating name/value list.
+ * project server. `rawHeaders` is Node's alternating name/value list; `scope`
+ * selects which project's cookies may be returned.
  */
 export function forwardedSimplePreviewHeaders(
   rawHeaders: readonly string[],
   upstreamHost: string,
+  scope: string,
 ): Array<[name: string, value: string]> {
   const forwarded: Array<[string, string]> = [['Host', upstreamHost]];
   for (let index = 0; index + 1 < rawHeaders.length; index += 2) {
@@ -101,7 +117,7 @@ export function forwardedSimplePreviewHeaders(
     const value = rawHeaders[index + 1];
     const lower = name.toLowerCase();
     if (lower === 'cookie') {
-      const own = projectSimplePreviewCookies(value);
+      const own = projectSimplePreviewCookies(value, scope);
       if (own !== null) forwarded.push(['Cookie', own]);
       continue;
     }

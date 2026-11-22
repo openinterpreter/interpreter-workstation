@@ -283,8 +283,8 @@ export async function runStandaloneCli(argv: string[] = process.argv.slice(2)) {
       resolve();
     });
   });
-  const { getSimplePreviewPort } = await import("./handlers/simpleProjectRuntime");
-  const simplePreviewProxy = await startSimplePreviewProxyFromEnvironment(getSimplePreviewPort);
+  const { getSimplePreviewTarget } = await import("./handlers/simpleProjectRuntime");
+  const simplePreviewProxy = await startSimplePreviewProxyFromEnvironment(getSimplePreviewTarget);
   if (simplePreviewProxy && !cliOptions.quietStartup) {
     console.log(`  Simple preview proxy: http://127.0.0.1:${simplePreviewProxy.port}`);
   }

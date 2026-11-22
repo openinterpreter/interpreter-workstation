@@ -189,10 +189,12 @@ range requests, fetch metadata, client hints, Next.js and WebSocket headers)
 and drops everything else, including `Authorization`, forwarded-identity
 headers and any custom header, for requests and WebSocket upgrades alike.
 Cookies a project sets are stored in the browser under an
-`interpreter_preview_app_` prefix, without a `Domain` attribute, and only
-cookies with that prefix are returned to the project under their original
-names. A project therefore cannot read or replace another cookie on the
-preview origin. A cookie written by page script rather than by the project
+`interpreter_preview_app_<project scope>_` prefix, without a `Domain`
+attribute, and only cookies with that project's prefix are returned to it
+under their original names. All projects share the one preview origin, so the
+scope is derived from the project: a project cannot read or replace another
+cookie on the preview origin, including another project's, and selecting a
+different project never sends it the previous project's cookies. A cookie written by page script rather than by the project
 server is not sent to it, and a project that depends on a custom request
 header does not receive that header through the preview origin.
 

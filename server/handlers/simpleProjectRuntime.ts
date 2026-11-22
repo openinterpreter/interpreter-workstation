@@ -399,8 +399,16 @@ export async function readSimpleProjectAppStatus(): Promise<SimpleAppStatus> {
   };
 }
 
-/** Loopback port of the running Simple project server, or null when it is not running. */
-export async function getSimplePreviewPort(): Promise<number | null> {
+/** A cookie scope that is stable for one project and differs between projects. */
+export function simplePreviewCookieScope(projectPath: string): string {
+  return createHash('sha256').update(projectPath).digest('hex').slice(0, 24);
+}
+
+/**
+ * The running Simple project server for the preview proxy, or null when it is
+ * not running: its loopback port and the cookie scope of that project.
+ */
+export async function getSimplePreviewTarget(): Promise<{ port: number; cookieScope: string } | null> {
   const target = previewProject;
   const { port, stale } = await resolveSimplePreviewTargetPort(target, {
     selected: peekSelectedSimpleProject,
@@ -409,7 +417,8 @@ export async function getSimplePreviewPort(): Promise<number | null> {
   });
   if (stale && sameSimplePreviewTarget(previewProject, target)) previewProject = null;
   // Nothing awaits between the checks inside the resolver and this return.
-  return port !== null && sameSimplePreviewTarget(previewProject, target) ? port : null;
+  if (port === null || !target || !sameSimplePreviewTarget(previewProject, target)) return null;
+  return { port, cookieScope: simplePreviewCookieScope(target.path) };
 }
 
 export async function resetSimpleProjectRuntimeForTest(projectPath: string): Promise<void> {
