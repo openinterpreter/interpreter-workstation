@@ -24,6 +24,9 @@ afterEach(() => {
   for (const token of boundTokens.splice(0)) agentTabManager.disposeBinding(token);
 });
 
+const GOAL_BLOCKED = { goalId: '00000000-0000-4000-8000-0000000000a1', status: 'blocked' as const,
+  missionRevision: 2, lifecycleRevision: 3 };
+
 function nativeService(threadId: string, status: 'notLoaded' | 'idle', options: {
   loadedThreadIds?: string[];
 } = {}) {
@@ -47,6 +50,12 @@ function nativeService(threadId: string, status: 'notLoaded' | 'idle', options: 
       startedTurns++;
       return { id: 'native-turn', status: 'inProgress', items: [], error: null };
     },
+    // A confirmed Goal resume by exact revision.
+    threadGoalRevisionSet: async () => ({
+      goal: { threadId, objective: 'Mission', status: 'active', tokenBudget: null, tokensUsed: 0,
+        timeUsedSeconds: 0, createdAt: 1, updatedAt: 2 },
+      revision: { ...GOAL_BLOCKED, status: 'active', lifecycleRevision: GOAL_BLOCKED.lifecycleRevision + 1 },
+    }),
   } as unknown as CodexClient;
   return { service: new CodexService(client), resumeConfigs, startedTurns: () => startedTurns };
 }
@@ -381,6 +390,100 @@ describe('native wake on a saved thread that is not loaded', () => {
     const native = nativeService(threadId, 'idle');
     expect(await startWakeThreadTurn(threadId, 'wake', native.service)).toBe('native-turn');
     expect(native.resumeConfigs).toEqual([{ mcp_servers: {} }]);
+    expect(agentTabManager.getBindingForThread(threadId)).toBeUndefined();
+  });
+
+  test('replaces an open prior caller with the fresh caller it loads the thread with', async () => {
+    restores.push(installUnloadedThreadCarrier());
+    const threadId = crypto.randomUUID();
+    const priorToken = `agtok_${crypto.randomUUID()}`;
+    agentTabManager.bindThread({ agentId: `prior-${crypto.randomUUID()}`, callerToken: priorToken, threadId,
+      workspacePath: '/workspace/worker' });
+    boundTokens.push(priorToken);
+    const native = nativeService(threadId, 'notLoaded');
+
+    expect(await startWakeThreadTurn(threadId, 'wake', native.service)).toBe('native-turn');
+    const binding = agentTabManager.getBindingForThread(threadId);
+    if (binding) boundTokens.push(binding.callerToken);
+    const policy = native.resumeConfigs[0]?.shell_environment_policy as { set: Record<string, string> };
+    expect(policy.set[INTERPRETER_CALLER_TOKEN_ENV]).toBe(binding?.callerToken);
+    expect(policy.set[INTERPRETER_CALLER_TOKEN_ENV]).not.toBe(priorToken);
+    expect(agentTabManager.getBindingForCallerToken(priorToken)).toBeUndefined();
+  });
+});
+
+describe('Goal resume by exact revision on a saved thread that is not loaded', () => {
+  function captureWarnings() {
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(' ')); };
+    restores.push(() => { console.warn = original; });
+    return warnings;
+  }
+
+  test('loads the thread with a fresh app CLI caller when no caller is bound', async () => {
+    restores.push(installUnloadedThreadCarrier());
+    const threadId = crypto.randomUUID();
+    const native = nativeService(threadId, 'notLoaded');
+
+    const result = await native.service.resumeThreadGoalWithRevision(threadId, GOAL_BLOCKED);
+    expect(result.continuation).toBe('loaded');
+    const binding = agentTabManager.getBindingForThread(threadId);
+    expect(binding?.workspacePath).toBe('/workspace/worker');
+    if (binding) boundTokens.push(binding.callerToken);
+    expect(native.resumeConfigs).toHaveLength(1);
+    const policy = native.resumeConfigs[0]?.shell_environment_policy as { set: Record<string, string> };
+    expect(policy.set[INTERPRETER_CLI_SERVER_CONNECTION_ENV]).toBeTruthy();
+    expect(policy.set[INTERPRETER_CLI_PATH_ENV]).toBeTruthy();
+    expect(policy.set[INTERPRETER_CALLER_TOKEN_ENV]).toBe(binding?.callerToken);
+    // The runtime, not the app, starts the continuation turn.
+    expect(native.startedTurns()).toBe(0);
+  });
+
+  test('replaces an open in-memory caller with the fresh caller', async () => {
+    restores.push(installUnloadedThreadCarrier());
+    const threadId = crypto.randomUUID();
+    const priorToken = `agtok_${crypto.randomUUID()}`;
+    agentTabManager.bindThread({ agentId: `prior-${crypto.randomUUID()}`, callerToken: priorToken, threadId,
+      workspacePath: '/workspace/worker' });
+    boundTokens.push(priorToken);
+    const native = nativeService(threadId, 'notLoaded');
+
+    expect((await native.service.resumeThreadGoalWithRevision(threadId, GOAL_BLOCKED)).continuation)
+      .toBe('loaded');
+    const binding = agentTabManager.getBindingForThread(threadId);
+    if (binding) boundTokens.push(binding.callerToken);
+    const policy = native.resumeConfigs[0]?.shell_environment_policy as { set: Record<string, string> };
+    expect(policy.set[INTERPRETER_CALLER_TOKEN_ENV]).toBe(binding?.callerToken);
+    expect(binding?.callerToken).not.toBe(priorToken);
+    expect(agentTabManager.getBindingForCallerToken(priorToken)).toBeUndefined();
+  });
+
+  test('keeps a narrower prior caller, loads without a new caller and logs only the cause', async () => {
+    restores.push(installUnloadedThreadCarrier());
+    const warnings = captureWarnings();
+    const threadId = crypto.randomUUID();
+    const callerToken = `agtok_${crypto.randomUUID()}`;
+    agentTabManager.bindThread({ agentId: `existing-${crypto.randomUUID()}`, callerToken, threadId,
+      workspacePath: '/workspace/worker', allowedToolNames: ['builtin-interpreter.interpreter_browser_page_inspect'] });
+    boundTokens.push(callerToken);
+    const native = nativeService(threadId, 'notLoaded');
+
+    expect((await native.service.resumeThreadGoalWithRevision(threadId, GOAL_BLOCKED)).continuation)
+      .toBe('loaded');
+    expect(native.resumeConfigs).toEqual([{ mcp_servers: {} }]);
+    expect(agentTabManager.getBindingForThread(threadId)?.callerToken).toBe(callerToken);
+    expect(warnings).toContain(`[Unloaded thread carrier] ${JSON.stringify({ threadId,
+      carrier: 'not_given', cause: 'carrier_refused' })}`);
+  });
+
+  test('a loaded thread is not resumed and gains no caller', async () => {
+    restores.push(installUnloadedThreadCarrier());
+    const threadId = crypto.randomUUID();
+    const native = nativeService(threadId, 'idle');
+    expect((await native.service.resumeThreadGoalWithRevision(threadId, GOAL_BLOCKED)).continuation)
+      .toBe('already_loaded');
+    expect(native.resumeConfigs).toEqual([]);
     expect(agentTabManager.getBindingForThread(threadId)).toBeUndefined();
   });
 });
