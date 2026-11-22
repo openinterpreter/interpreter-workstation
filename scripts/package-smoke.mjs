@@ -342,7 +342,11 @@ async function runBundledNextOfflineSmoke() {
         });
       }
     }
-    rmSync(project, { recursive: true, force: true });
+    // Windows can keep Next's native SWC DLL briefly locked after the child
+    // exits. Retry only the temporary-directory cleanup; a persistent error
+    // still fails the smoke test rather than hiding an incomplete teardown.
+    // Node's retry delay grows linearly; ten 100-ms retries cap waiting near 5.5s.
+    rmSync(project, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }
 
