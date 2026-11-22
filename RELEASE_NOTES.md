@@ -1,8 +1,8 @@
-<!-- release-notes-for: 0.2.249 -->
+<!-- release-notes-for: 0.2.250 -->
 ## What's new
 
-- Fixes an upgrade problem in 0.2.248: on a computer with a long history of messages from other agents, the first start after the update could return the outcomes of turns that had ended long before. Inputs admitted by an earlier version are no longer handed over for an outcome return after an update.
-- An input admitted from this version on keeps waiting for its outcome return to be recorded for as long as that takes, across restarts.
+- Adds a guarded, future-only recovery path for fixed-interval wake sources after a restart. Already-held events remain unchanged, and ambiguous or refused event states are not replayed.
+- Updates server error-reporting compatibility with Sentry Node 11 while preserving the existing consent gate.
 
 ## Distribution
 
