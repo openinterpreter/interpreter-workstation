@@ -2116,6 +2116,31 @@ describe('thread input events', () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
+  test('at startup an admission from an earlier release is marked without a hand-over; one with an admission time is handed over at any age', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-thread-input-old-'));
+    const now = Date.now();
+    const admitted = (eventId: string, ageMs?: number): WakeEvent => ({ threadId: 'thread-1',
+      sourceId: THREAD_INPUT_SOURCE, eventId, message: '', status: 'admitted',
+      createdAt: new Date(now - (ageMs ?? 86_400_000) - 1_000).toISOString(), turnId: `turn-${eventId}`, sender,
+      ...(ageMs !== undefined && { admittedAt: new Date(now - ageMs).toISOString() }) });
+    const file = path.join(root, 'wake-sources.json');
+    await writeFile(file, JSON.stringify({ sources: [], events: [
+      admitted('long_ago_1', 3 * 86_400_000), admitted('earlier_release_1'), admitted('recent_1', 60_000)] }));
+    const calls: WakeAdmission[] = [];
+    const wake = new WakeSources({ ...threadInputNative().native,
+      onAdmitted: async admission => { calls.push(admission); return true; } }, root, 30_000, MANUAL);
+    try {
+      await wake.initialize();
+      // The earlier release's one is on disk as handled before any hand-over runs.
+      const saved = JSON.parse(await readFile(file, 'utf8')) as { events: WakeEvent[] };
+      expect(saved.events.find(e => e.eventId === 'earlier_release_1')?.outcomeWatched).toBe(true);
+      await settle(() => wake.list('thread-1').events.every(e => e.outcomeWatched));
+      // An accepted input waits for its watch for as long as it takes: three days is not too old.
+      expect(calls.map(c => c.eventId).sort()).toEqual(['long_ago_1', 'recent_1']);
+      expect(wake.list('thread-1').events.every(e => e.outcomeWatched)).toBe(true);
+    } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
   test('an admission observed after a restart takes its turn from the native receipt', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'wake-thread-input-turn-'));
     const calls: WakeAdmission[] = [];
@@ -3386,6 +3411,27 @@ describe('in-memory and in-flight bounds', () => {
       const count = calls.length;
       await new Promise(resolve => setTimeout(resolve, 60));
       expect(calls.length).toBe(count); // once recorded, never handed over again
+    }, 30_000, { intervalMs: 0, followUpMs: 0, retryMs: 20 });
+  });
+
+  test('an admission whose watch cannot be recorded keeps being handed over, however old it gets', async () => {
+    const calls: WakeAdmission[] = [];
+    const fake = threadInputNative({ busyTurn: 'turn-1', hook: async admission => { calls.push(admission); return false; } });
+    await withWake(fake.native, async (wake, root) => {
+      fake.attach(wake);
+      await wake.ingest('thread-1', THREAD_INPUT_SOURCE, 'aging_1', 'attributed input',
+        { computer: 'peer-host', thread: 'origin_thread-1' });
+      await drain(wake, 'thread-1');
+      await settle(() => calls.length >= 1);
+      expect(wake.list('thread-1').events[0]?.admittedAt).toBeTruthy();
+      expect(wake.list('thread-1').events[0]?.outcomeWatched).toBeUndefined();
+      // Days pass while the watch is still unrecorded: it is neither dropped nor marked.
+      (wake as any).state.events[0].admittedAt = new Date(Date.now() - 3 * 86_400_000).toISOString();
+      const count = calls.length;
+      await settle(() => calls.length >= count + 2);
+      expect(wake.list('thread-1').events[0]?.outcomeWatched).toBeUndefined();
+      const saved = JSON.parse(await readFile(path.join(root, 'wake-sources.json'), 'utf8')) as { events: WakeEvent[] };
+      expect(saved.events[0]?.outcomeWatched).toBeUndefined();
     }, 30_000, { intervalMs: 0, followUpMs: 0, retryMs: 20 });
   });
 });
