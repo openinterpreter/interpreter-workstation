@@ -235,7 +235,7 @@
     "@radix-ui/react-tooltip": "1.4.1",
     "@resvg/resvg-js": "2.6.2",
     "@sentry/electron": "7.19.0",
-    "@sentry/node": "10.75.0",
+    "@sentry/node": "11.14.0",
     "@supabase/supabase-js": "2.119.0",
     "jose": "6.2.17",
     "@tailwindcss/vite": "4.3.5",
