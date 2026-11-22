@@ -1,8 +1,8 @@
-<!-- release-notes-for: 0.2.250 -->
+<!-- release-notes-for: 0.2.251 -->
 ## What's new
 
-- Adds a guarded, future-only recovery path for fixed-interval wake sources after a restart. Already-held events remain unchanged, and ambiguous or refused event states are not replayed.
-- Updates server error-reporting compatibility with Sentry Node 11 while preserving the existing consent gate.
+- Restores the app CLI environment when an eligible saved agent thread is loaded after a restart, so later turns on that thread can access its existing tools.
+- Preserves saved caller tool and model scope during cold recovery; conflicting scopes are refused rather than widened, and callers from another workspace are not revoked.
 
 ## Distribution
 
