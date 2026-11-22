@@ -238,6 +238,23 @@ export async function getActiveSimpleProject(): Promise<SimpleProject> {
   return getOrCreateDefaultProject();
 }
 
+/**
+ * The project path currently selected for a window session (or globally when
+ * the session has none), without creating, syncing, or activating anything.
+ * Returns null when nothing is selected or the selection cannot be resolved.
+ */
+export async function peekSelectedSimpleProjectPath(sessionKey: string | null | undefined): Promise<string | null> {
+  try {
+    const sessionProjectPath = sessionKey ? getWindowSessionSimpleProject(sessionKey) : null;
+    if (sessionProjectPath && existsSync(sessionProjectPath)) return canonicalDirectory(sessionProjectPath);
+    const setting = await getSimpleProjectSetting();
+    if (!setting.activePath || !existsSync(setting.activePath)) return null;
+    return canonicalDirectory(setting.activePath);
+  } catch {
+    return null;
+  }
+}
+
 export async function listSimpleProjects(): Promise<{ active: SimpleProject; recent: SimpleProject[] }> {
   const active = await getActiveSimpleProject();
   const setting = await getSimpleProjectSetting();

@@ -3,7 +3,7 @@ import { constants, existsSync } from 'node:fs';
 import { cp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { resolveBundledResourceCandidates } from '../utils/bundledRuntimePaths';
-import { assertSimpleProjectChildPath, getActiveSimpleProject } from '../simpleProjects';
+import { assertSimpleProjectChildPath, getActiveSimpleProject, peekSelectedSimpleProjectPath } from '../simpleProjects';
 import {
   SIMPLE_INTERFACE_COMPONENT_CSS,
   SIMPLE_INTERFACE_RUNTIME_MODULE,
@@ -14,6 +14,11 @@ import { trustedProjectRunner } from './projectRunner';
 import { getSimpleAssetRevision } from './simpleAssetRevision';
 import { agentTabManager } from '../agentTabManager';
 import { getCurrentWindowSessionKey } from '../utils/windowSessions';
+import {
+  reportedSimplePreviewTarget,
+  resolveSimplePreviewTargetPort,
+  type SimplePreviewTarget,
+} from '../utils/simplePreviewTarget';
 import { prefixToolName } from '../../shared/utils/mcpToolName';
 import { INTERPRETER_CALLER_TOKEN_ENV, INTERPRETER_CLI_SERVER_CONNECTION_ENV } from '../utils/interpreterCliRuntime';
 import { WORKSTATION_NODE_PACKAGE, WORKSTATION_NODE_PACKAGE_MANIFEST } from './simpleWorkstationNodePackage';
@@ -117,8 +122,18 @@ const MOTION_PACKAGE = `${JSON.stringify({
 
 const pendingRefreshes = new Map<string, Promise<SimpleAppStatus>>();
 const projectRuntimeTokens = new Map<string, string>();
-/** The Simple project most recently reported to a renderer; the preview proxy targets it. */
-let previewProjectPath: string | null = null;
+/**
+ * The running Simple project most recently reported to a renderer, and the
+ * window session that selected it. The preview proxy targets it only while it
+ * is still that session's selected project.
+ */
+let previewProject: SimplePreviewTarget | null = null;
+
+function reportPreviewProject(projectPath: string, running: boolean): void {
+  // A report about a project that is not running clears the target, so the
+  // proxy never keeps serving a project the renderer has moved away from.
+  previewProject = reportedSimplePreviewTarget(projectPath, running, getCurrentWindowSessionKey());
+}
 
 const PROJECT_TOOL_NAMES = [
   'interpreter_whole_computer_state_get',
@@ -338,7 +353,7 @@ async function refreshProject(workstationOrigin: string): Promise<SimpleAppStatu
     [INTERPRETER_CLI_SERVER_CONNECTION_ENV]: workstationOrigin,
     [INTERPRETER_CALLER_TOKEN_ENV]: projectRuntimeToken(project.path),
   }, 120_000); // Cold Next compilation can outlast the generic project budget.
-  previewProjectPath = project.path;
+  reportPreviewProject(project.path, result.success && result.state.status === 'running');
   return {
     revision: project.metadata.id,
     sourceRevision: fingerprint,
@@ -361,7 +376,7 @@ export async function promoteSimpleProjectApp(workstationOrigin: string): Promis
 export async function readSimpleProjectAppStatus(): Promise<SimpleAppStatus> {
   const project = await getActiveSimpleProject();
   const result = await trustedProjectRunner.status(project.path);
-  if (result.state.status === 'running') previewProjectPath = project.path;
+  reportPreviewProject(project.path, result.state.status === 'running');
   const fingerprint = await readInstallMarker(project.path);
   return {
     revision: project.metadata.id,
@@ -375,15 +390,17 @@ export async function readSimpleProjectAppStatus(): Promise<SimpleAppStatus> {
 
 /** Loopback port of the running Simple project server, or null when it is not running. */
 export async function getSimplePreviewPort(): Promise<number | null> {
-  if (!previewProjectPath) return null;
-  const { state } = await trustedProjectRunner.status(previewProjectPath);
-  if (state.status !== 'running' || !state.url) return null;
-  const port = Number(new URL(state.url).port);
-  return Number.isInteger(port) && port > 0 ? port : null;
+  const target = previewProject;
+  const { port, stale } = await resolveSimplePreviewTargetPort(target, {
+    selectedPath: peekSelectedSimpleProjectPath,
+    status: async (projectPath) => (await trustedProjectRunner.status(projectPath)).state,
+  });
+  if (stale && previewProject === target) previewProject = null;
+  return port;
 }
 
 export async function resetSimpleProjectRuntimeForTest(projectPath: string): Promise<void> {
-  if (previewProjectPath === projectPath) previewProjectPath = null;
+  if (previewProject?.path === projectPath) previewProject = null;
   pendingRefreshes.delete(projectPath);
   await trustedProjectRunner.stop(projectPath);
   const token = projectRuntimeTokens.get(projectPath);
