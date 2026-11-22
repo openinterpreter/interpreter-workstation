@@ -5,7 +5,6 @@ import {
   getCodexService,
   subscribeCodexNotifications,
 } from '../../src/lib/codex/service';
-import { enrichThreadWithReasoning } from '../../src/lib/codex/enrich-thread-reasoning';
 import { mapNotificationToUiEvents } from '../../src/lib/codex/event-mapper';
 import {
   paginateThreadTurns,
@@ -26,8 +25,7 @@ import { resolvePublicThreadId } from '../utils/publicThreadConfig';
 const router = Router();
 async function loadPublicThreadState(threadId: string): Promise<CachedPublicThreadSnapshot> {
   const service = getCodexService();
-  let thread = await service.readThread(threadId);
-  thread = enrichThreadWithReasoning(thread);
+  const thread = await service.readThread(threadId);
   const goal = await service.getThreadGoal(threadId);
   return {
     snapshot: buildPublicThreadSnapshot({

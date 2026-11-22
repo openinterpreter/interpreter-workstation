@@ -274,7 +274,7 @@ describe('useChat telemetry', () => {
       expect(
         vi.mocked(fetch).mock.calls.some(([input]) =>
           String(input).includes(
-            `/api/agent/threads/${threadId}?limit=24&bestEffort=1`,
+            `/api/agent/threads/${threadId}?limit=2&bestEffort=1`,
           ),
         ),
       ).toBe(true);
@@ -304,5 +304,108 @@ describe('useChat telemetry', () => {
       'Historical answer',
       'stop this request',
     ]);
+  });
+});
+
+describe('useChat history refresh', () => {
+  beforeEach(() => {
+    ipcMocks.getApiUrl.mockImplementation(async (path: string) => `http://localhost${path}`);
+    ipcMocks.runtime.onRestarting.mockImplementation(() => () => {});
+    ipcMocks.runtime.onRestarted.mockImplementation(() => () => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  test('skips refresh ticks while a slow refresh is still in flight and aborts it on unmount', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const threadId = 'thread-slow';
+    const refreshSignals: AbortSignal[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('bestEffort=1')) {
+        refreshSignals.push(init!.signal!);
+        return new Promise<Response>(() => {});
+      }
+      if (url.includes(`/api/agent/threads/${threadId}?limit=24`)) {
+        return threadHistoryResponse(threadId);
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    }));
+
+    const { result, unmount } = renderHook(() =>
+      useChat('interpreter', {
+        agentId: 'agent-1',
+        callerToken: 'caller-token',
+        model: 'interpreter-smart',
+        initialThreadId: threadId,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.historyLoaded).toBe(true);
+      expect(refreshSignals).toHaveLength(1);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(refreshSignals).toHaveLength(1);
+    expect(refreshSignals[0]!.aborted).toBe(false);
+
+    unmount();
+    expect(refreshSignals[0]!.aborted).toBe(true);
+  });
+
+  test('records the in-progress turn of an active thread for steering', async () => {
+    const threadId = 'thread-active';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('bestEffort=1')) {
+        return new Response(JSON.stringify({
+          thread: {
+            id: threadId,
+            preview: 'Historical question',
+            createdAt: 1,
+            updatedAt: 3,
+            status: { type: 'active', activeFlags: [] },
+            turns: [{
+              id: 'turn-2',
+              status: 'inProgress',
+              items: [{
+                type: 'userMessage',
+                id: 'user-2',
+                content: [{ type: 'text', text: 'Started elsewhere', text_elements: [] }],
+              }],
+            }],
+          },
+          historyPage: { nextCursor: 'older', hasMore: true },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.includes(`/api/agent/threads/${threadId}?limit=24`)) {
+        return threadHistoryResponse(threadId);
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    }));
+
+    const { result } = renderHook(() =>
+      useChat('interpreter', {
+        agentId: 'agent-1',
+        callerToken: 'caller-token',
+        model: 'interpreter-smart',
+        initialThreadId: threadId,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.observedActiveTurnId).toBe('turn-2');
+      expect(result.current.isStreaming).toBe(true);
+      expect(messageTexts(result.current.messages)).toEqual([
+        'Historical question',
+        'Historical answer',
+        'Started elsewhere',
+      ]);
+    });
   });
 });

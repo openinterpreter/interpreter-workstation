@@ -20,6 +20,7 @@ import {
   rememberRuntimeRestartContinuation,
   runtimeRestartContinuationStorageKey,
   mergeChatHistory,
+  findInProgressTurnId,
   type ChatMessage,
   type ChatMessagePart,
   type ToolCallInfo,
@@ -140,6 +141,55 @@ describe("mergeChatHistory", () => {
     );
 
     assert.deepEqual(merged.map((entry) => entry.id), ["server-assistant"]);
+  });
+
+  test("a short newer page keeps repeated text in older history", () => {
+    const user = (id: string, content: string): ChatMessage => ({
+      id, role: "user", parts: [{ kind: "text", content }],
+    });
+    const reply = (id: string, turnId: string, content: string): ChatMessage => ({
+      ...message(id, content), serverMessageId: turnId,
+    });
+    const loaded = [
+      user("u1", "continue"), reply("a1", "turn_1", "Step one"),
+      user("u2", "check it"), reply("a2", "turn_2", "Checked"),
+      user("u3", "now deploy"), reply("a3", "turn_3", "Deployed"),
+    ];
+    // The latest two turns, with a new turn that repeats an older message.
+    const page = [
+      user("u3", "now deploy"), reply("a3", "turn_3", "Deployed"),
+      user("u4", "continue"), reply("a4", "turn_4", "Step two"),
+    ];
+
+    const merged = mergeChatHistory(loaded, page, "newer");
+
+    assert.deepEqual(merged.map((entry) => entry.id), ["u1", "a1", "u2", "a2", "u3", "a3", "u4", "a4"]);
+  });
+
+  test("a short newer page still replaces live rows of the turns it covers", () => {
+    const older: ChatMessage = { ...message("a1", "Done"), serverMessageId: "turn_1" };
+    const live: ChatMessage = { ...message("local-a2", "Done"), serverMessageId: "turn_2" };
+    const confirmed: ChatMessage = { ...message("a2", "Done"), serverMessageId: "turn_2" };
+
+    const merged = mergeChatHistory([older, live], [confirmed], "newer");
+
+    assert.deepEqual(merged.map((entry) => entry.id), ["a1", "a2"]);
+  });
+});
+
+describe("findInProgressTurnId", () => {
+  test("returns the newest in-progress turn", () => {
+    assert.equal(findInProgressTurnId({ turns: [
+      { id: "turn_1", status: "inProgress" },
+      { id: "turn_2", status: "completed" },
+      { id: "turn_3", status: "inProgress" },
+    ] }), "turn_3");
+  });
+
+  test("returns null without an in-progress turn with an id", () => {
+    assert.equal(findInProgressTurnId({ turns: [] }), null);
+    assert.equal(findInProgressTurnId({ turns: [{ id: "turn_1", status: "completed" }] }), null);
+    assert.equal(findInProgressTurnId({ turns: [{ id: 7, status: "inProgress" }] }), null);
   });
 });
 

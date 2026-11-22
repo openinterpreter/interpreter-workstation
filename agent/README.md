@@ -20,7 +20,7 @@ Tab labels automatically update to show the first user message from each convers
 
 **Background and detached work**: Switching tabs doesn't interrupt streaming. A renderer disconnect also leaves the OIX turn running; explicit Stop remains the only UI action that interrupts it.
 
-**Resumable history**: Existing threads open at the newest activity. Older turns load in pages as the user scrolls upward, with scroll anchoring so content does not jump. A lightweight catch-up poll reconciles completed and in-progress history after reconnect.
+**Resumable history**: Existing threads open at the newest activity. Older turns load in pages as the user scrolls upward, with scroll anchoring so content does not jump. A lightweight catch-up poll reads only the latest two turns, runs one request at a time, and reconciles completed and in-progress history after reconnect. It also records the thread's in-progress turn, so a follow-up can steer a turn that another client or a wake source started.
 
 **Thread Goals**: Workstation reads and edits native OIX Goals. After OIX creates a thread, `/goal <objective>` sets one without sending a model message; compact Goal and Plan cards share the accessory stack above the composer. OIX owns persistence and continuation semantics; see [Goals](../docs/goals.md).
 
@@ -28,7 +28,7 @@ Tab labels automatically update to show the first user message from each convers
 
 ## Backend
 
-The API implementation lives in `/server/routes/`. `/api/agent/chat/stream` starts or resumes OIX turns, `/api/agent/threads/:threadId` reads reverse-paginated history, and `/api/agent/threads/:threadId/goal` exposes native Goal state.
+The API implementation lives in `/server/routes/`. `/api/agent/chat/stream` starts or resumes OIX turns, `/api/agent/threads/:threadId` reads reverse-paginated history, and `/api/agent/threads/:threadId/goal` exposes native Goal state. With `limit=N` the history route reads the thread metadata plus one native turn page (`thread/turns/list`), so a page costs the same however long the conversation is; `before` and `historyPage.nextCursor` are the runtime's opaque cursors. Without `limit` it returns the whole thread.
 
 The server uses Server-Sent Events for live turn presentation. The Electron app provides the dynamic server port to the frontend, while browser surfaces use the same HTTP abstraction. SSE disconnection is presentation loss, not an instruction to stop the OIX turn.
 

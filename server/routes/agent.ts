@@ -82,7 +82,6 @@ import {
 } from '../../src/lib/codex/service';
 import { GoalRevisionConflictError, goalCasExpectedParams,
   type ThreadGoalRevision } from '../../src/lib/codex/goal-revision';
-import { enrichThreadWithReasoning } from '../../src/lib/codex/enrich-thread-reasoning';
 import {
   buildProfileFromPreset,
   getCustomPreset,
@@ -141,7 +140,7 @@ import {
 } from '../utils/headlessTaskWorkspace';
 import type { v2 } from '../handlers/codex-generated-types/index';
 import {
-  paginateThreadTurns,
+  isThreadHistoryCursor,
   parseThreadHistoryLimit,
 } from '../utils/threadHistoryPagination';
 
@@ -1462,24 +1461,26 @@ router.get('/threads/:threadId/identity', async (req: Request, res: Response) =>
 });
 
 router.get('/threads/:threadId', async (req: Request, res: Response) => {
+  const limit = parseThreadHistoryLimit(req.query.limit);
+  const before = req.query.before;
+  if (before !== undefined && !isThreadHistoryCursor(before)) {
+    res.status(400).json({ error: 'Invalid history cursor.' });
+    return;
+  }
   try {
-    let thread = await getCodexService().readThread(req.params.threadId);
-    thread = enrichThreadWithReasoning(thread);
-    const limit = parseThreadHistoryLimit(req.query.limit);
     if (limit === null) {
-      res.json({ thread });
+      res.json({ thread: await getCodexService().readThread(req.params.threadId) });
       return;
     }
 
-    const before = typeof req.query.before === 'string'
-      ? req.query.before
-      : undefined;
-    const page = paginateThreadTurns(thread.turns, { limit, before });
+    // A page costs one bounded native read regardless of how long the
+    // conversation is; `before` is the runtime's opaque cursor.
+    const page = await getCodexService().readThreadPage(req.params.threadId, { limit, cursor: before });
     res.json({
-      thread: { ...thread, turns: page.turns },
+      thread: page.thread,
       historyPage: {
         nextCursor: page.nextCursor,
-        hasMore: page.hasMore,
+        hasMore: page.nextCursor !== null,
       },
     });
   } catch (error) {
@@ -1767,7 +1768,8 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
       : null;
     if (targetThreadId) {
       try {
-        const existingThread = await service.readThread(targetThreadId);
+        // Only the latest turn decides whether the thread can be resumed.
+        const { thread: existingThread } = await service.readThreadPage(targetThreadId, { limit: 1 });
         if (requiresFreshThread(existingThread)) {
           console.warn('[Agent API] Blocking resume of known-bad Codex thread.', {
             threadId: existingThread.id,
