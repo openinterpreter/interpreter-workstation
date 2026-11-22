@@ -254,7 +254,8 @@ describe('native custody metadata', () => {
     const client = createFakeClient({}).client;
     client.threadLoadedList = async () => ({ data: ['00000000-0000-4000-8000-000000000123'], nextCursor: null });
     await assert.rejects(new CodexService(client).readGlobalNativeCustody(),
-      { name: 'NativeGlobalInventoryError', category: 'loaded_missing' });
+      { name: 'NativeGlobalInventoryError', category: 'loaded_missing',
+        missingLoadedThreadDigests: ['50ea506360bd4eb049e21ee01d052f182dbcc20a89e6661cf74142f83233902d'] });
   });
 
   test('classifies a changed loaded inventory without returning a partial snapshot', async () => {
