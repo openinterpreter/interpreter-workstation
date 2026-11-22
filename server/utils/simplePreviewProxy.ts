@@ -8,18 +8,143 @@
  * upgrade to the running project server. An authenticated HTTPS front can then
  * give the preview its own public origin (INTERPRETER_SIMPLE_PREVIEW_PUBLIC_ORIGIN).
  *
- * The proxy always binds 127.0.0.1 and adds no authentication of its own.
+ * The proxy always binds 127.0.0.1. With a public origin it requires access:
+ * the shell's runtime URL carries a short-lived signed ticket, which the proxy
+ * exchanges for its own partitioned cookie (the shell's cookie is not sent to
+ * another origin inside a frame). Without a public origin it adds no
+ * authentication, so loopback use is unchanged.
  */
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import http from 'node:http';
 import net from 'node:net';
 import type { Duplex } from 'node:stream';
+import { SIMPLE_PREVIEW_TICKET_PARAM } from '../../shared/simplePreview';
 
 export const SIMPLE_PREVIEW_PROXY_PORT_ENV = 'INTERPRETER_SIMPLE_PREVIEW_PROXY_PORT';
 export const SIMPLE_PREVIEW_PUBLIC_ORIGIN_ENV = 'INTERPRETER_SIMPLE_PREVIEW_PUBLIC_ORIGIN';
+export const SIMPLE_PREVIEW_COOKIE = 'interpreter_preview_session';
+export const SIMPLE_PREVIEW_TICKET_SECONDS = 120;
+export const SIMPLE_PREVIEW_COOKIE_SECONDS = 12 * 60 * 60;
 
 const LOOPBACK_HOST = '127.0.0.1';
 const UNAVAILABLE_MESSAGE = 'The interface project is not running.\n';
 const HOP_BY_HOP_HEADERS = new Set(['connection', 'keep-alive', 'proxy-connection']);
+
+/**
+ * Access control for a publicly reachable preview. `subject` names who the
+ * ticket was issued to (for example a paired device); a subject that is no
+ * longer active is refused even with an unexpired ticket or cookie.
+ */
+export type SimplePreviewAccess = {
+  signingKey: string;
+  isSubjectActive?: (subject: string) => boolean | Promise<boolean>;
+  now?: () => number;
+};
+
+type TokenKind = 't1' | 'p1';
+
+function tokenSignature(payload: string, signingKey: string): string {
+  return createHmac('sha256', signingKey).update(payload).digest('base64url');
+}
+
+function createToken(kind: TokenKind, subject: string, seconds: number, signingKey: string, now: number): string {
+  const expiresAt = Math.floor(now / 1000) + seconds;
+  const payload = `${kind}.${Buffer.from(subject, 'utf8').toString('base64url')}.${expiresAt}`;
+  return `${payload}.${tokenSignature(payload, signingKey)}`;
+}
+
+function safeEqual(actual: string, expected: string): boolean {
+  const actualHash = createHash('sha256').update(actual).digest();
+  const expectedHash = createHash('sha256').update(expected).digest();
+  return timingSafeEqual(actualHash, expectedHash);
+}
+
+async function verifyToken(
+  kind: TokenKind,
+  value: string | null,
+  access: SimplePreviewAccess,
+): Promise<string | null> {
+  if (!value) return null;
+  const match = /^(t1|p1)\.([A-Za-z0-9_-]{1,256})\.(\d{1,12})\.([A-Za-z0-9_-]{43})$/.exec(value);
+  if (!match || match[1] !== kind) return null;
+  const payload = `${match[1]}.${match[2]}.${match[3]}`;
+  if (!safeEqual(match[4], tokenSignature(payload, access.signingKey))) return null;
+  const now = access.now?.() ?? Date.now();
+  if (Number(match[3]) <= Math.floor(now / 1000)) return null;
+  const subject = Buffer.from(match[2], 'base64url').toString('utf8');
+  if (access.isSubjectActive && !(await access.isSubjectActive(subject))) return null;
+  return subject;
+}
+
+/** A short-lived ticket the preview origin exchanges for its own cookie. */
+export function createSimplePreviewTicket(subject: string, signingKey: string, now = Date.now()): string {
+  return createToken('t1', subject, SIMPLE_PREVIEW_TICKET_SECONDS, signingKey, now);
+}
+
+/** Adds a preview ticket to a public runtime URL. */
+export function withSimplePreviewTicket(runtimeUrl: string, ticket: string): string {
+  const url = new URL(runtimeUrl);
+  url.searchParams.set(SIMPLE_PREVIEW_TICKET_PARAM, ticket);
+  return url.toString();
+}
+
+function cookieValue(request: http.IncomingMessage, name: string): string | null {
+  const header = request.headers.cookie;
+  if (!header) return null;
+  for (const item of header.split(';')) {
+    const separator = item.indexOf('=');
+    if (separator < 0 || item.slice(0, separator).trim() !== name) continue;
+    try {
+      return decodeURIComponent(item.slice(separator + 1).trim());
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+type PreviewAuthorization =
+  | { allowed: false }
+  | { allowed: true; strippedUrl: string | null; cookie: string | null };
+
+/**
+ * Accepts a valid ticket (issuing a cookie) or a valid cookie. `strippedUrl`
+ * is set when the request carried a ticket parameter that must be removed.
+ */
+async function authorizePreviewRequest(
+  request: http.IncomingMessage,
+  access: SimplePreviewAccess,
+): Promise<PreviewAuthorization> {
+  const url = new URL(request.url ?? '/', 'http://preview.invalid');
+  const ticket = url.searchParams.get(SIMPLE_PREVIEW_TICKET_PARAM);
+  let strippedUrl: string | null = null;
+  if (ticket !== null) {
+    url.searchParams.delete(SIMPLE_PREVIEW_TICKET_PARAM);
+    strippedUrl = `${url.pathname}${url.search}`;
+    const subject = await verifyToken('t1', ticket, access);
+    if (subject) {
+      const now = access.now?.() ?? Date.now();
+      return {
+        allowed: true,
+        strippedUrl,
+        cookie: createToken('p1', subject, SIMPLE_PREVIEW_COOKIE_SECONDS, access.signingKey, now),
+      };
+    }
+  }
+  const subject = await verifyToken('p1', cookieValue(request, SIMPLE_PREVIEW_COOKIE), access);
+  return subject ? { allowed: true, strippedUrl, cookie: null } : { allowed: false };
+}
+
+function previewCookieHeader(value: string): string {
+  // The preview is framed by the shell on another origin; only a partitioned
+  // SameSite=None cookie is sent back to it from inside that frame.
+  return `${SIMPLE_PREVIEW_COOKIE}=${encodeURIComponent(value)}; Path=/; HttpOnly; Secure; SameSite=None; Partitioned; Max-Age=${SIMPLE_PREVIEW_COOKIE_SECONDS}`;
+}
+
+function respondUnauthorized(response: http.ServerResponse): void {
+  response.writeHead(401, { 'Cache-Control': 'no-store', 'Content-Length': '0' });
+  response.end();
+}
 
 /** Resolves the running project server's loopback port, or null when none is running. */
 export type SimplePreviewUpstream = () => Promise<number | null> | number | null;
@@ -152,7 +277,27 @@ async function forwardRequest(
   request: http.IncomingMessage,
   response: http.ServerResponse,
   upstream: SimplePreviewUpstream,
+  access: SimplePreviewAccess | null,
 ): Promise<void> {
+  if (access) {
+    const authorization = await authorizePreviewRequest(request, access);
+    if (!authorization.allowed) {
+      request.resume();
+      respondUnauthorized(response);
+      return;
+    }
+    if (authorization.strippedUrl !== null) {
+      request.resume();
+      response.writeHead(302, {
+        Location: authorization.strippedUrl,
+        'Cache-Control': 'no-store',
+        'Content-Length': '0',
+        ...(authorization.cookie ? { 'Set-Cookie': previewCookieHeader(authorization.cookie) } : {}),
+      });
+      response.end();
+      return;
+    }
+  }
   const port = await resolveUpstream(upstream);
   if (port === null) {
     request.resume();
@@ -184,8 +329,17 @@ async function forwardUpgrade(
   socket: Duplex,
   head: Buffer,
   upstream: SimplePreviewUpstream,
+  access: SimplePreviewAccess | null,
 ): Promise<void> {
   socket.on('error', () => socket.destroy());
+  if (access) {
+    const authorization = await authorizePreviewRequest(request, access);
+    if (!authorization.allowed) {
+      socket.end('HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
+      return;
+    }
+    if (authorization.strippedUrl !== null) request.url = authorization.strippedUrl;
+  }
   const port = await resolveUpstream(upstream);
   if (port === null) {
     const body = Buffer.from(UNAVAILABLE_MESSAGE);
@@ -214,12 +368,15 @@ async function forwardUpgrade(
 export async function startSimplePreviewProxy(options: {
   port: number;
   upstream: SimplePreviewUpstream;
+  /** Required for a publicly reachable preview; omitted for loopback-only use. */
+  access?: SimplePreviewAccess | null;
 }): Promise<SimplePreviewProxyHandle> {
+  const access = options.access ?? null;
   const server = http.createServer((request, response) => {
-    void forwardRequest(request, response, options.upstream);
+    void forwardRequest(request, response, options.upstream, access);
   });
   server.on('upgrade', (request, socket, head) => {
-    void forwardUpgrade(request, socket, head, options.upstream);
+    void forwardUpgrade(request, socket, head, options.upstream, access);
   });
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
@@ -239,10 +396,14 @@ export async function startSimplePreviewProxy(options: {
   };
 }
 
-/** Starts the preview proxy when the environment asks for it; otherwise returns null. */
+/**
+ * Starts the preview proxy when the environment asks for it; otherwise returns
+ * null. A public origin requires `access`, which is resolved only then.
+ */
 export async function startSimplePreviewProxyFromEnvironment(
   upstream: SimplePreviewUpstream,
   environment: NodeJS.ProcessEnv = process.env,
+  access?: () => Promise<SimplePreviewAccess> | SimplePreviewAccess,
 ): Promise<SimplePreviewProxyHandle | null> {
   const port = parseSimplePreviewProxyPort(environment[SIMPLE_PREVIEW_PROXY_PORT_ENV]);
   const publicOrigin = parseSimplePreviewPublicOrigin(environment[SIMPLE_PREVIEW_PUBLIC_ORIGIN_ENV]);
@@ -252,5 +413,12 @@ export async function startSimplePreviewProxyFromEnvironment(
     }
     return null;
   }
-  return startSimplePreviewProxy({ port, upstream });
+  if (publicOrigin && !access) {
+    throw new Error(`${SIMPLE_PREVIEW_PUBLIC_ORIGIN_ENV} requires preview access control.`);
+  }
+  return startSimplePreviewProxy({
+    port,
+    upstream,
+    access: publicOrigin && access ? await access() : null,
+  });
 }

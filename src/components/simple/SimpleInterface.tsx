@@ -12,6 +12,7 @@ import {
   simpleInterfaceClient,
   type SimpleAppStatus,
 } from "./simpleInterfaceClient";
+import { simplePreviewTarget } from "../../../shared/simplePreview";
 
 type Props = {
   /** Messages from generated interface code enter the one durable conversation. */
@@ -140,10 +141,17 @@ export function SimpleInterface({ onMessage }: Props) {
     inFlightRef.current = true;
     try {
       const next = await simpleInterfaceClient.refresh();
-      const nextRuntimeUrl =
+      const resolvedRuntimeUrl =
         next.ready && next.runtimeUrl
           ? await simpleInterfaceClient.appUrl(next.runtimeUrl)
           : null;
+      // A paired device's preview URL carries a ticket that is renewed on
+      // every status read. Keep the mounted frame while its target is unchanged.
+      const nextRuntimeUrl =
+        resolvedRuntimeUrl
+        && simplePreviewTarget(resolvedRuntimeUrl) === simplePreviewTarget(runtimeUrlRef.current)
+          ? runtimeUrlRef.current
+          : resolvedRuntimeUrl;
       if (revisionRef.current && next.revision && revisionRef.current !== next.revision) {
         await captureUiState();
       }

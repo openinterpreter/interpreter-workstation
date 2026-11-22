@@ -219,6 +219,10 @@ const HEADLESS_BROWSER_TOOL_NAMES = new Set([
   'interpreter_browser_page_type',
   'interpreter_browser_page_select',
   'interpreter_browser_page_scroll',
+  // Connect a device is served by the sidecar's device gateway.
+  'interpreter_device_connection_create',
+  'interpreter_device_connections_list',
+  'interpreter_device_connection_revoke',
 ]);
 
 /**

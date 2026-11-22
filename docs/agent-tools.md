@@ -127,6 +127,11 @@ alone does not imply a connected browser extension.
 The thread-scoped `interpreter_wake_schedule` command is also available in a
 headless sidecar; `list` reads only the authenticated caller's native thread,
 and edits retain the same thread and permission checks.
+`interpreter_device_connection_create`, `interpreter_device_connections_list`,
+and `interpreter_device_connection_revoke` pair, list, and disconnect another
+device (link plus QR code) through the sidecar's device gateway; they refuse
+when the gateway is not configured. See
+[Connect a device](remote-workstation.md#connect-a-device).
 
 Interpreter workstation tools are model-facing through the `interpreter-app` CLI only.
 

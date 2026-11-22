@@ -5,6 +5,7 @@ import type {
   WorkstationAuthentication,
   WorkstationConnectionDescriptor,
 } from '../shared/types/workstationConnection';
+import { trustedClientDeviceId } from './deviceConnections/gatewayTrust';
 
 const SESSION_COOKIE = 'interpreter_workstation_session';
 const DEFAULT_SESSION_SECONDS = 60 * 60 * 24 * 14;
@@ -151,7 +152,7 @@ const READ_ONLY_IPC_OPERATIONS = new Set([
   'settings.get', 'settings.getBackgroundOpacity', 'profiles.list', 'profiles.get',
   'userName.get', 'userEmail.get', 'onboardingPersona.get', 'onboardingState.get',
   'onboardingPermissions.get', 'locale.get', 'whatsNew.getDismissed',
-  'topNotices.list', 'interviewInvite.getStatus', 'telemetry.get',
+  'topNotices.list', 'interviewInvite.getStatus', 'telemetry.get', 'deviceConnections.list',
   'providers.list', 'providers.get', 'providers.getOAuthStatus',
   'providers.listOpenAIOAuthModels', 'providers.listOpenRouterModels',
   'providers.listDeepSeekModels', 'providers.listInterpreterProviders',
@@ -233,12 +234,17 @@ export function workstationAccessMiddleware(
     return;
   }
 
-  if (!isWorkstationSessionAuthenticated(request, policy)) {
+  // A paired device is authenticated by the device gateway in this process,
+  // which also checked the request Origin against its public origin. Only
+  // that gateway can produce the trust token. Access policy still applies.
+  const pairedDevice = trustedClientDeviceId(request) !== null;
+
+  if (!pairedDevice && !isWorkstationSessionAuthenticated(request, policy)) {
     response.status(401).json({ error: 'Authentication required.' });
     return;
   }
 
-  if (!isSafeMethod(request.method) && !isAllowedOrigin(request, policy)) {
+  if (!pairedDevice && !isSafeMethod(request.method) && !isAllowedOrigin(request, policy)) {
     response.status(403).json({ error: 'Request origin is not allowed.' });
     return;
   }

@@ -9,6 +9,11 @@ import {
   workstationAccessMiddleware,
   workstationCorsMiddleware,
 } from './workstationConnection';
+import {
+  CLIENT_DEVICE_HEADER,
+  DEVICE_GATEWAY_TOKEN_HEADER,
+  getDeviceGatewayToken,
+} from './deviceConnections/gatewayTrust';
 
 const ENV_KEYS = [
   'INTERPRETER_WORKSTATION_ACCESS',
@@ -113,6 +118,29 @@ describe('remote Workstation host policy', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ public: true });
     expect((await request(createTestApp()).get('/api/public-thread-pretender')).status).toBe(401);
+  });
+
+  test('admits a paired device only with the in-process gateway token and keeps access policy', async () => {
+    process.env.INTERPRETER_WORKSTATION_ACCESS = 'read-write';
+    process.env.INTERPRETER_WORKSTATION_AUTH = 'password';
+    process.env.INTERPRETER_WORKSTATION_PASSWORD = 'test-password';
+    const app = createTestApp();
+    const device = 'dev_abcdefghijklmnop';
+
+    expect((await request(app).get('/api/read')
+      .set(CLIENT_DEVICE_HEADER, device)
+      .set(DEVICE_GATEWAY_TOKEN_HEADER, 'guessed-token')).status).toBe(401);
+    expect((await request(app).get('/api/read')
+      .set(CLIENT_DEVICE_HEADER, device)
+      .set(DEVICE_GATEWAY_TOKEN_HEADER, getDeviceGatewayToken())).status).toBe(200);
+    expect((await request(app).post('/api/write')
+      .set(CLIENT_DEVICE_HEADER, device)
+      .set(DEVICE_GATEWAY_TOKEN_HEADER, getDeviceGatewayToken())).status).toBe(200);
+
+    process.env.INTERPRETER_WORKSTATION_ACCESS = 'read-only';
+    expect((await request(app).post('/api/write')
+      .set(CLIENT_DEVICE_HEADER, device)
+      .set(DEVICE_GATEWAY_TOKEN_HEADER, getDeviceGatewayToken())).status).toBe(403);
   });
 
   test('serves the browser shell before login while keeping APIs private', async () => {

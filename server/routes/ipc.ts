@@ -402,6 +402,22 @@ const handlers: Record<string, Record<string, HandlerFn>> = {
     },
   },
 
+  // ========== Connect a device ==========
+  deviceConnections: {
+    create: async ([input]: [{ label?: string; kind?: string }?]) => {
+      const { createDeviceConnection } = await import('../handlers/deviceConnections');
+      return createDeviceConnection(input ?? {});
+    },
+    list: async () => {
+      const { listDeviceConnections } = await import('../handlers/deviceConnections');
+      return listDeviceConnections();
+    },
+    revoke: async ([id]: [string]) => {
+      const { revokeDeviceConnection } = await import('../handlers/deviceConnections');
+      return revokeDeviceConnection(id);
+    },
+  },
+
   // ========== Interview Invite ==========
   interviewInvite: {
     getStatus: async () => {
