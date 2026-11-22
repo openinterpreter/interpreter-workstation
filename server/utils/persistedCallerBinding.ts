@@ -136,21 +136,37 @@ export function revokeNativeCallerBinding(token: string, root = getInterpreterAp
   catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
 }
 
-/** Revoke only older persisted callers of the exact thread after a verified cold bind. */
-export function revokeOtherNativeCallerBindingsForThread(
-  threadId: string, keepToken: string, root = getInterpreterAppDataDir(), dryRun = false,
-): number {
-  if (process.platform !== 'linux') return 0;
-  if (!ID.test(threadId) || !TOKEN.test(keepToken)) throw new Error('Invalid cold caller scope');
+/** The tool scope of a caller: its tool profile and its allowed tool list. */
+export type NativeCallerScope = { allowedToolNames?: string[]; toolProfileId?: string };
+
+/** A persisted caller's scope, workspace and model, without any token. */
+export type PersistedNativeCallerScope = NativeCallerScope & {
+  workspacePath: string;
+  model?: StoredBinding['model'];
+};
+
+function scopeKey(scope: NativeCallerScope): string {
+  // An absent list and an empty list are the same open scope.
+  return JSON.stringify([scope.toolProfileId || null, [...new Set(scope.allowedToolNames ?? [])].sort()]);
+}
+
+/** True when two callers have exactly the same tool scope. */
+export function sameNativeCallerScope(left: NativeCallerScope, right: NativeCallerScope): boolean {
+  return scopeKey(left) === scopeKey(right);
+}
+
+/** Every persisted record of the exact thread. The whole inventory is
+ * validated; an untrusted entry fails closed. */
+function readThreadRecords(threadId: string, root: string): Array<{ file: string; hash: string; record: StoredBinding }> {
   let dir: string;
   try { dir = secureDirectory(root, false); }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw error;
   }
   const names = readdirSync(dir).filter(name => !name.startsWith('.'));
   if (names.length > 512) throw new Error('Native caller binding inventory exceeds bound');
-  const remove: string[] = [];
+  const records: Array<{ file: string; hash: string; record: StoredBinding }> = [];
   for (const name of names) {
     if (!/^[0-9a-f]{64}\.json$/.test(name)) throw new Error('Invalid native caller binding entry');
     const hash = name.slice(0, 64);
@@ -163,13 +179,56 @@ export function revokeOtherNativeCallerBindingsForThread(
       }
       const record: unknown = JSON.parse(readFileSync(fd, 'utf8'));
       if (!validRecord(record, hash)) throw new Error('Invalid native caller binding record');
-      if (record.threadId === threadId && hash !== digest(keepToken)) {
-        if (record.allowedToolNames?.length || record.toolProfileId) {
-          throw new Error('A prior native caller has a narrower tool scope');
-        }
-        remove.push(file);
-      }
+      if (record.threadId === threadId) records.push({ file, hash, record });
     } finally { closeSync(fd); }
+  }
+  return records;
+}
+
+/** Scopes of every persisted caller of the exact thread (no tokens). */
+export function listNativeCallerScopesForThread(
+  threadId: string, root = getInterpreterAppDataDir(),
+): PersistedNativeCallerScope[] {
+  if (process.platform !== 'linux') return [];
+  if (!ID.test(threadId)) throw new Error('Invalid cold caller scope');
+  return readThreadRecords(threadId, root).map(({ record }) => ({
+    workspacePath: record.workspacePath,
+    ...(record.allowedToolNames ? { allowedToolNames: [...record.allowedToolNames] } : {}),
+    ...(record.toolProfileId ? { toolProfileId: record.toolProfileId } : {}),
+    ...(record.model ? { model: { ...record.model } } : {}),
+  }));
+}
+
+/** The scope a replacement caller carries and, optionally, its workspace. */
+export type ReplacementNativeCallerScope = NativeCallerScope & { workspacePath?: string };
+
+/** Revoke only older persisted callers of the exact thread after a verified
+ * cold bind. Without `sameScopeAs`, any restricted older caller refuses. With
+ * it, an older caller refuses only when its scope differs from `sameScopeAs`,
+ * the scope the replacement caller carries. When `sameScopeAs.workspacePath`
+ * is given, an older caller of another workspace must still have that same
+ * scope but is never revoked; only callers of that workspace are revoked.
+ * Every record is checked before anything is removed, so a dry run approves
+ * exactly what the same call without `dryRun` removes. */
+export function revokeOtherNativeCallerBindingsForThread(
+  threadId: string, keepToken: string, root = getInterpreterAppDataDir(), dryRun = false,
+  sameScopeAs?: ReplacementNativeCallerScope,
+): number {
+  if (process.platform !== 'linux') return 0;
+  if (!ID.test(threadId) || !TOKEN.test(keepToken)) throw new Error('Invalid cold caller scope');
+  const keep = digest(keepToken);
+  const remove: string[] = [];
+  for (const { file, hash, record } of readThreadRecords(threadId, root)) {
+    if (hash === keep) continue;
+    if (sameScopeAs) {
+      if (!sameNativeCallerScope(record, sameScopeAs)) {
+        throw new Error('A prior native caller has a different tool scope');
+      }
+      if (sameScopeAs.workspacePath !== undefined && record.workspacePath !== sameScopeAs.workspacePath) continue;
+    } else if (record.allowedToolNames?.length || record.toolProfileId) {
+      throw new Error('A prior native caller has a narrower tool scope');
+    }
+    remove.push(file);
   }
   if (!dryRun) for (const file of remove) unlinkSync(file);
   return remove.length;

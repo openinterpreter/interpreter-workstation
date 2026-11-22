@@ -2067,6 +2067,53 @@ describe("CodexService", () => {
     assert.equal(fake.calls.resumeThreadConfig[1]?.shell_environment_policy, undefined);
   });
 
+  test('resume without input applies the existing caller policy only while the thread is not loaded', async () => {
+    const id = '00000000-0000-4000-8000-000000000134';
+    let status = 'notLoaded';
+    let rejectPolicy = false;
+    const fake = createFakeClient({
+      async threadRead() { return { thread: { id, cwd: '/workspace', status: { type: status },
+        turns: [] } as v2.Thread }; },
+      async resumeThread(threadId, _provider, _model, _cwd, config) {
+        if (rejectPolicy && config?.shell_environment_policy) throw new Error('native resume rejected');
+        return threadId;
+      },
+    });
+    fake.client.threadList = async () => ({ data: [{ id } as v2.Thread], nextCursor: null });
+    let prepared = 0;
+    const restore = setUnloadedThreadCarrierProvider(async () => {
+      prepared++;
+      throw new Error('resume of an existing caller needs no new carrier');
+    });
+    const service = new CodexService(fake.client);
+    const policy = { set: { INTERPRETER_CALLER_TOKEN: 'agtok_existing_caller' } };
+    const resume = (callerBoundShellPolicy?: boolean) => service.resumeThread({ threadId: id, model: null,
+      cwd: '/workspace', config: { mcp_servers: {}, shell_environment_policy: policy },
+      ...(callerBoundShellPolicy ? { callerBoundShellPolicy } : {}) });
+    try {
+      assert.equal(await resume(true), id);
+      assert.deepEqual(fake.calls.resumeThreadConfig[0]?.shell_environment_policy, policy);
+      // Without the caller-bound marker the ordinary resume keeps stripping it.
+      assert.equal(await resume(), id);
+      assert.equal(fake.calls.resumeThreadConfig[1]?.shell_environment_policy, undefined);
+      // A loaded thread keeps its live shell environment.
+      status = 'idle';
+      assert.equal(await resume(true), id);
+      assert.equal(fake.calls.resumeThreadConfig[2]?.shell_environment_policy, undefined);
+      // A rejected policy-bearing resume falls back to the ordinary resume.
+      status = 'notLoaded';
+      rejectPolicy = true;
+      assert.equal(await resume(true), id);
+      assert.deepEqual(fake.calls.resumeThreadConfig[3]?.shell_environment_policy, policy);
+      assert.equal(fake.calls.resumeThreadConfig[4]?.shell_environment_policy, undefined);
+    } finally {
+      restore();
+    }
+    assert.equal(prepared, 0);
+    assert.equal(fake.calls.resumeThread, 5);
+    assert.equal(fake.calls.startTurn, 0);
+  });
+
   test('unloaded existing-thread input without a registered carrier keeps the ordinary resume', async () => {
     const id = '00000000-0000-4000-8000-000000000126';
     const fake = createFakeClient({

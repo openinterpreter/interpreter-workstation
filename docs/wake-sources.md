@@ -224,14 +224,35 @@ unconfirmed-offer proof rule, never on elapsed time. A source-only
 fix does not resolve a previously offered event or prove that a running host
 has been updated.
 
+Loading a saved thread fixes its shell environment for every later turn,
+including Goal continuations the runtime starts on its own, so every load of a
+thread that is not loaded carries the current `interpreter-app` launcher path
+and server connection. `POST /api/agent/threads/:threadId/resume` uses the
+thread's own existing caller and refuses when none is bound; wake input, other
+input and a Goal resume by exact revision give the thread a fresh caller under
+the same scope rules as a cold bind, and log `[Unloaded thread carrier]` with
+the cause whenever a thread is loaded without one. A thread that is already
+loaded keeps its live environment until it is next loaded.
+
+A fresh caller carries exactly the tool scope (tool profile and allowed tools)
+of the thread's prior caller, so a restart never widens a restricted caller and
+never leaves it without the app CLI. The prior scope is the live binding when
+there is one; otherwise it is the tool scope and stored model shared by every
+saved caller of the thread in the same workspace. A saved caller of the thread
+in another workspace must have that same tool scope and is never revoked: only
+older callers in the fresh caller's own workspace are replaced. A delegated,
+window-scoped or other-workspace live caller, or saved callers that disagree
+on tool scope or model, still refuse the fresh caller.
+
 If an older saved thread has **no** usable CLI carrier, an authenticated
 loopback operator may cold-bind the existing thread with
 `POST /api/agent/threads/:threadId/caller/cold-bind` and JSON
 `{"workspace":"/absolute/original/workspace"}` using the already-configured
 `WORKSTATION_WAKE_TOKEN`. This submits no user input. It rejects a loaded or
 active thread, any native/app queued input, pending approval or tab request,
-pending/offered wake event, workspace mismatch, or a previously restricted
-tool caller. The server rechecks native custody before resuming and leaves the
+pending/offered wake event, workspace mismatch, or prior callers whose scope
+cannot be carried under the rule above; a restricted prior caller is replaced
+by a fresh caller with the same scope. The server rechecks native custody before resuming and leaves the
 existing model/provider settings unchanged. Do not use it to mutate a loaded
 thread's shell environment or to dispose held events. A successful response
 is **not** proof of model output or that the CLI tool catalog is available in
