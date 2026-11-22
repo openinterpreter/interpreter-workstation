@@ -718,7 +718,7 @@ export class WakeSources {
     return { source: structuredClone(source), events: structuredClone(events), revision };
   }
 
-  /** Rearm only future civil occurrences. The historical held event is kept
+  /** Rearm only future civil or fixed-interval occurrences. The historical held event is kept
    * byte-for-byte, and an unresolved offer always refuses the operation. */
   async recoverDailyFuture(threadId: string, id: string, expectedRevision: string,
     expectedHeldEventId: string): Promise<ReturnType<WakeSources['recoverySnapshot']>> {
@@ -728,15 +728,27 @@ export class WakeSources {
       const snapshot = this.recoverySnapshot(threadId, id);
       if (snapshot.revision !== expectedRevision) throw new WakeRecoveryError('stale_revision');
       const { source, events } = snapshot;
-      if (source.kind !== 'schedule' || !source.dailyAt || !source.timeZone || source.paused ||
+      const now = Date.now();
+      const civil = !!source.dailyAt && !!source.timeZone && source.at === undefined &&
+        source.everyMs === undefined;
+      const interval = source.dailyAt === undefined && source.timeZone === undefined &&
+        typeof source.at === 'string' && Number.isFinite(Date.parse(source.at)) &&
+        Number.isSafeInteger(source.everyMs) && source.everyMs! >= MIN_INTERVAL &&
+        now + source.everyMs! <= 8_640_000_000_000_000;
+      if (source.kind !== 'schedule' || (!civil && !interval) || source.paused ||
+          source.stopped !== undefined || source.moreAvailable !== undefined ||
+          !Number.isSafeInteger(source.sequence) || source.sequence < 0 ||
           source.status !== 'error' || source.nextAt !== undefined ||
-          events.some(e => e.status === 'pending' || e.status === 'offered') ||
+          // The persisted event schema also includes refused; unfamiliar
+          // statuses must not be interpreted as settled custody.
+          events.some(e => e.status !== 'held' && e.status !== 'admitted') ||
           !events.some(e => e.eventId === expectedHeldEventId && e.status === 'held' &&
             e.eventId === `${id}-${source.sequence}`)) {
         throw new WakeRecoveryError('refused_ambiguous');
       }
       const current = this.state.sources.find(s => s.threadId === threadId && s.id === id)!;
-      current.nextAt = nextCivilDaily(Date.now(), current.timeZone!, current.dailyAt!);
+      current.nextAt = civil ? nextCivilDaily(now, current.timeZone!, current.dailyAt!)
+        : new Date(now + current.everyMs!).toISOString();
       current.status = 'waiting';
       delete current.error;
       await this.save();

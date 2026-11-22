@@ -1,8 +1,8 @@
-<!-- release-notes-for: 0.2.249 -->
+<!-- release-notes-for: 0.2.251 -->
 ## What's new
 
-- Fixes an upgrade problem in 0.2.248: on a computer with a long history of messages from other agents, the first start after the update could return the outcomes of turns that had ended long before. Inputs admitted by an earlier version are no longer handed over for an outcome return after an update.
-- An input admitted from this version on keeps waiting for its outcome return to be recorded for as long as that takes, across restarts.
+- Restores the app CLI environment when an eligible saved agent thread is loaded after a restart, so later turns on that thread can access its existing tools.
+- Preserves saved caller tool and model scope during cold recovery; conflicting scopes are refused rather than widened, and callers from another workspace are not revoked.
 
 ## Distribution
 

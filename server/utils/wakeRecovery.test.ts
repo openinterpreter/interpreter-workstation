@@ -23,6 +23,101 @@ async function fixture(sequence: number, status: 'held' | 'offered', native: Wak
 }
 
 describe('own-thread source recovery CAS', () => {
+  test('fixed interval retains held occurrence and unrelated source, then schedules only a future occurrence', async () => {
+    const f = await fixture(17, 'held', { inspect: async () => ({ messages: [] }),
+      start: async () => 'new-turn', steer: async () => { throw Error('unexpected steer'); } });
+    let wake: WakeSources | undefined;
+    try {
+      const filename = path.join(f.root, 'wake-sources.json');
+      const saved = JSON.parse(await readFile(filename, 'utf8'));
+      saved.sources[0] = { ...source(17), at: '2026-10-01T00:00:00.000Z',
+        everyMs: 86_400_000, dailyAt: undefined, timeZone: undefined };
+      saved.sources.push({ ...source(3), id: 'other', status: 'waiting',
+        nextAt: '2026-12-01T00:00:00.000Z' });
+      saved.events.unshift({ threadId, sourceId, eventId: 'daily-16', message: '',
+        status: 'admitted', createdAt });
+      await writeFile(filename, JSON.stringify(saved));
+      wake = await f.make();
+      const before = wake.recoverySnapshot(threadId, sourceId);
+      const other = wake.recoverySnapshot(threadId, 'other');
+      await expect(wake.recoverDailyFuture(threadId, sourceId, '0'.repeat(64), f.eventId))
+        .rejects.toMatchObject({ category: 'stale_revision' });
+      await expect(wake.recoverDailyFuture('wrong-thread', sourceId, before.revision, f.eventId))
+        .rejects.toMatchObject({ category: 'invalid_request' });
+      const after = await wake.recoverDailyFuture(threadId, sourceId, before.revision, f.eventId);
+      expect(after.source.status).toBe('waiting');
+      expect(Date.parse(after.source.nextAt!)).toBeGreaterThan(Date.now());
+      expect(after.events).toEqual(before.events);
+      expect(wake.recoverySnapshot(threadId, 'other')).toEqual(other);
+      await expect(wake.recoverDailyFuture(threadId, sourceId, before.revision, f.eventId))
+        .rejects.toMatchObject({ category: 'stale_revision' });
+      await wake.stop();
+      wake = await f.make();
+      expect(wake.recoverySnapshot(threadId, sourceId).events).toEqual(before.events);
+      expect(wake.recoverySnapshot(threadId, 'other')).toEqual(other);
+      const due = Date.parse(wake.recoverySnapshot(threadId, sourceId).source.nextAt!);
+      await wake.tick(due + 1);
+      expect(wake.recoverySnapshot(threadId, sourceId).events.map(e => [e.eventId, e.status]))
+        .toEqual([['daily-16', 'admitted'], [f.eventId, 'held'], ['daily-18', 'offered']]);
+    } finally { await wake?.stop(); await rm(f.root, { recursive: true, force: true }); }
+  });
+
+  test('fixed interval refuses unresolved offer and invalid schedule without changing custody', async () => {
+    const f = await fixture(17, 'offered', { inspect: async () => ({ messages: [] }),
+      start: async () => { throw Error('unexpected replay'); },
+      steer: async () => { throw Error('unexpected steer'); } });
+    let wake: WakeSources | undefined;
+    try {
+      const filename = path.join(f.root, 'wake-sources.json');
+      const saved = JSON.parse(await readFile(filename, 'utf8'));
+      saved.sources[0] = { ...source(17), at: '2026-10-01T00:00:00.000Z',
+        everyMs: 86_400_000, dailyAt: undefined, timeZone: undefined };
+      await writeFile(filename, JSON.stringify(saved));
+      wake = await f.make();
+      const before = wake.recoverySnapshot(threadId, sourceId);
+      await expect(wake.recoverDailyFuture(threadId, sourceId, before.revision, f.eventId))
+        .rejects.toMatchObject({ category: 'refused_ambiguous' });
+      expect(wake.recoverySnapshot(threadId, sourceId)).toEqual(before);
+      await wake.stop();
+      saved.events[0].status = 'held';
+      saved.sources[0].everyMs = 10;
+      await writeFile(filename, JSON.stringify(saved));
+      wake = await f.make();
+      const malformed = wake.recoverySnapshot(threadId, sourceId);
+      await expect(wake.recoverDailyFuture(threadId, sourceId, malformed.revision, f.eventId))
+        .rejects.toMatchObject({ category: 'refused_ambiguous' });
+      expect(wake.recoverySnapshot(threadId, sourceId)).toEqual(malformed);
+    } finally { await wake?.stop(); await rm(f.root, { recursive: true, force: true }); }
+  });
+
+  test('fixed interval refuses unresolved or malformed source custody with no write', async () => {
+    for (const otherStatus of ['refused', 'unknown', 'stopped', 'command-state', 'invalid-sequence'] as const) {
+      const f = await fixture(17, 'held', { inspect: async () => ({ messages: [] }),
+        start: async () => { throw Error('unexpected start'); },
+        steer: async () => { throw Error('unexpected steer'); } });
+      let wake: WakeSources | undefined;
+      try {
+        const filename = path.join(f.root, 'wake-sources.json');
+        const saved = JSON.parse(await readFile(filename, 'utf8'));
+        saved.sources[0] = { ...source(17), at: '2026-10-01T00:00:00.000Z',
+          everyMs: 86_400_000, dailyAt: undefined, timeZone: undefined,
+          ...(otherStatus === 'stopped' ? { stopped: 'refusal' } : {}),
+          ...(otherStatus === 'command-state' ? { moreAvailable: true } : {}),
+          ...(otherStatus === 'invalid-sequence' ? { sequence: -17 } : {}) };
+        if (otherStatus === 'invalid-sequence') saved.events[0].eventId = 'daily--17';
+        if (otherStatus === 'refused' || otherStatus === 'unknown') saved.events.push({ threadId, sourceId,
+          eventId: 'daily-prior', status: otherStatus, message: 'Unresolved input', createdAt });
+        await writeFile(filename, JSON.stringify(saved));
+        wake = await f.make();
+        const before = wake.recoverySnapshot(threadId, sourceId);
+        await expect(wake.recoverDailyFuture(threadId, sourceId, before.revision,
+          otherStatus === 'invalid-sequence' ? 'daily--17' : f.eventId))
+          .rejects.toMatchObject({ category: 'refused_ambiguous' });
+        expect(wake.recoverySnapshot(threadId, sourceId)).toEqual(before);
+      } finally { await wake?.stop(); await rm(f.root, { recursive: true, force: true }); }
+    }
+  });
+
   test('held daily sequence remains retained; only future sequence runs after restart', async () => {
     let starts = 0;
     const f = await fixture(17, 'held', { inspect: async () => ({ messages: [] }),
