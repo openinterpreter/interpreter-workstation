@@ -290,6 +290,10 @@ type ResumeThreadOptions = {
   config?: Record<string, JsonValue> | null;
   /** Only after bounded native custody proves this saved thread is not loaded. */
   coldShellPolicy?: boolean;
+  /** The config's shell policy names the thread's own existing caller. It is
+   * applied only when the exact thread is verified not loaded; a loaded thread
+   * keeps its live shell environment. */
+  callerBoundShellPolicy?: boolean;
 };
 
 /** Whether a live thread owns an active Goal after it was resumed.
@@ -862,12 +866,19 @@ export class CodexService {
     // A carrier is an improvement, never a condition for the turn: when one
     // cannot be given, the thread resumes exactly as it did before. The
     // runtime's sub-agent refusal is final; a second resume would be refused again.
+    // Such a thread then runs without the app CLI until it is next loaded, so
+    // each fallback is logged with its cause (never the error text).
+    const withoutCarrier = (cause: string) => {
+      console.warn('[Unloaded thread carrier]', JSON.stringify({ threadId: options.threadId,
+        carrier: 'not_given', cause }));
+      return this.resumeExistingInputThread(options);
+    };
     if (callerBoundShellPolicy && options.config?.shell_environment_policy) {
       try {
         return await this.resumeExistingInputThread({ ...options, unloadedShellPolicy: true });
       } catch (error) {
         if (isSubagentDirectInputRefusal(error)) throw error;
-        return this.resumeExistingInputThread(options);
+        return withoutCarrier('caller_policy_rejected');
       }
     }
     const provider = unloadedThreadCarrierProvider;
@@ -876,7 +887,7 @@ export class CodexService {
     try {
       carrier = await provider({ service: this, threadId: options.threadId, cwd: observed.cwd });
     } catch {
-      return this.resumeExistingInputThread(options);
+      return withoutCarrier('carrier_refused');
     }
     let resumedId: string;
     try {
@@ -886,7 +897,7 @@ export class CodexService {
     } catch (error) {
       carrier.rollback();
       if (isSubagentDirectInputRefusal(error)) throw error;
-      return this.resumeExistingInputThread(options);
+      return withoutCarrier('carrier_resume_rejected');
     }
     carrier.commit();
     return resumedId;
@@ -1055,12 +1066,22 @@ export class CodexService {
       };
     }
 
-    return this.resumeExistingInputThread({
+    const existing = {
       threadId: options.threadId,
       modelProvider: options.modelProvider,
       model: options.model,
       cwd: options.cwd,
       config: runConfig,
+    };
+    // Loading a saved thread fixes its shell environment for every later turn,
+    // including the runtime's own Goal continuations. Give it the existing
+    // caller's policy when it is not loaded; never mint a carrier here.
+    if (options.callerBoundShellPolicy && !options.coldShellPolicy &&
+        isJsonObject(runConfig.shell_environment_policy)) {
+      return this.resumeExistingThreadForInput(existing, true);
+    }
+    return this.resumeExistingInputThread({
+      ...existing,
       coldShellPolicy: options.coldShellPolicy,
     });
   }

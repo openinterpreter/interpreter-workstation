@@ -10,6 +10,7 @@ import {
   INTERPRETER_CLI_PATH_ENV,
   INTERPRETER_CLI_SERVER_CONNECTION_ENV,
 } from './interpreterCliRuntime';
+import { listNativeCallerScopesForThread, persistNativeCallerBinding } from './persistedCallerBinding';
 import { JSONRPCErrorException } from 'json-rpc-2.0';
 import { ThreadNotFoundError } from '../../src/lib/codex/service';
 import { inspectThread, readTurnsSince, startWakeThreadTurn } from './wakeSourcesRuntime';
@@ -23,6 +24,9 @@ afterEach(() => {
   for (const restore of restores.splice(0).reverse()) restore();
   for (const token of boundTokens.splice(0)) agentTabManager.disposeBinding(token);
 });
+
+const GOAL_BLOCKED = { goalId: '00000000-0000-4000-8000-0000000000a1', status: 'blocked' as const,
+  missionRevision: 2, lifecycleRevision: 3 };
 
 function nativeService(threadId: string, status: 'notLoaded' | 'idle', options: {
   loadedThreadIds?: string[];
@@ -47,6 +51,12 @@ function nativeService(threadId: string, status: 'notLoaded' | 'idle', options: 
       startedTurns++;
       return { id: 'native-turn', status: 'inProgress', items: [], error: null };
     },
+    // A confirmed Goal resume by exact revision.
+    threadGoalRevisionSet: async () => ({
+      goal: { threadId, objective: 'Mission', status: 'active', tokenBudget: null, tokensUsed: 0,
+        timeUsedSeconds: 0, createdAt: 1, updatedAt: 2 },
+      revision: { ...GOAL_BLOCKED, status: 'active', lifecycleRevision: GOAL_BLOCKED.lifecycleRevision + 1 },
+    }),
   } as unknown as CodexClient;
   return { service: new CodexService(client), resumeConfigs, startedTurns: () => startedTurns };
 }
@@ -359,20 +369,26 @@ describe('native wake on a saved thread that is not loaded', () => {
     expect(native.startedTurns()).toBe(1);
   });
 
-  test('keeps a narrower prior caller and resumes without a new shell policy', async () => {
+  test('replaces a narrower prior caller with a fresh caller of the same scope', async () => {
     restores.push(installUnloadedThreadCarrier());
     const threadId = crypto.randomUUID();
     const callerToken = `agtok_${crypto.randomUUID()}`;
+    const allowedToolNames = ['builtin-interpreter.interpreter_browser_page_inspect'];
     agentTabManager.bindThread({ agentId: `existing-${crypto.randomUUID()}`, callerToken, threadId,
-      workspacePath: '/workspace/worker', allowedToolNames: ['builtin-interpreter.interpreter_browser_page_inspect'] });
+      workspacePath: '/workspace/worker', allowedToolNames, toolProfileId: 'profile-narrow' });
     boundTokens.push(callerToken);
     const native = nativeService(threadId, 'notLoaded');
 
-    // The wake still runs; the thread simply resumes as it did before.
     expect(await startWakeThreadTurn(threadId, 'wake', native.service)).toBe('native-turn');
-    expect(native.resumeConfigs).toEqual([{ mcp_servers: {} }]);
+    const binding = agentTabManager.getBindingForThread(threadId);
+    if (binding) boundTokens.push(binding.callerToken);
+    expect(binding?.callerToken).not.toBe(callerToken);
+    expect(binding?.allowedToolNames).toEqual(allowedToolNames);
+    expect(binding?.toolProfileId).toBe('profile-narrow');
+    const policy = native.resumeConfigs[0]?.shell_environment_policy as { set: Record<string, string> };
+    expect(policy.set[INTERPRETER_CALLER_TOKEN_ENV]).toBe(binding?.callerToken);
     expect(native.startedTurns()).toBe(1);
-    expect(agentTabManager.getBindingForThread(threadId)?.callerToken).toBe(callerToken);
+    expect(agentTabManager.getBindingForCallerToken(callerToken)).toBeUndefined();
   });
 
   test('a loaded thread keeps its shell scope and gains no caller', async () => {
@@ -381,6 +397,192 @@ describe('native wake on a saved thread that is not loaded', () => {
     const native = nativeService(threadId, 'idle');
     expect(await startWakeThreadTurn(threadId, 'wake', native.service)).toBe('native-turn');
     expect(native.resumeConfigs).toEqual([{ mcp_servers: {} }]);
+    expect(agentTabManager.getBindingForThread(threadId)).toBeUndefined();
+  });
+
+  test('replaces an open prior caller with the fresh caller it loads the thread with', async () => {
+    restores.push(installUnloadedThreadCarrier());
+    const threadId = crypto.randomUUID();
+    const priorToken = `agtok_${crypto.randomUUID()}`;
+    agentTabManager.bindThread({ agentId: `prior-${crypto.randomUUID()}`, callerToken: priorToken, threadId,
+      workspacePath: '/workspace/worker' });
+    boundTokens.push(priorToken);
+    const native = nativeService(threadId, 'notLoaded');
+
+    expect(await startWakeThreadTurn(threadId, 'wake', native.service)).toBe('native-turn');
+    const binding = agentTabManager.getBindingForThread(threadId);
+    if (binding) boundTokens.push(binding.callerToken);
+    const policy = native.resumeConfigs[0]?.shell_environment_policy as { set: Record<string, string> };
+    expect(policy.set[INTERPRETER_CALLER_TOKEN_ENV]).toBe(binding?.callerToken);
+    expect(policy.set[INTERPRETER_CALLER_TOKEN_ENV]).not.toBe(priorToken);
+    expect(agentTabManager.getBindingForCallerToken(priorToken)).toBeUndefined();
+  });
+});
+
+describe('Goal resume by exact revision on a saved thread that is not loaded', () => {
+  function captureWarnings() {
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(' ')); };
+    restores.push(() => { console.warn = original; });
+    return warnings;
+  }
+
+  test('loads the thread with a fresh app CLI caller when no caller is bound', async () => {
+    restores.push(installUnloadedThreadCarrier());
+    const threadId = crypto.randomUUID();
+    const native = nativeService(threadId, 'notLoaded');
+
+    const result = await native.service.resumeThreadGoalWithRevision(threadId, GOAL_BLOCKED);
+    expect(result.continuation).toBe('loaded');
+    const binding = agentTabManager.getBindingForThread(threadId);
+    expect(binding?.workspacePath).toBe('/workspace/worker');
+    if (binding) boundTokens.push(binding.callerToken);
+    expect(native.resumeConfigs).toHaveLength(1);
+    const policy = native.resumeConfigs[0]?.shell_environment_policy as { set: Record<string, string> };
+    expect(policy.set[INTERPRETER_CLI_SERVER_CONNECTION_ENV]).toBeTruthy();
+    expect(policy.set[INTERPRETER_CLI_PATH_ENV]).toBeTruthy();
+    expect(policy.set[INTERPRETER_CALLER_TOKEN_ENV]).toBe(binding?.callerToken);
+    // The runtime, not the app, starts the continuation turn.
+    expect(native.startedTurns()).toBe(0);
+  });
+
+  test('replaces an open in-memory caller with the fresh caller', async () => {
+    restores.push(installUnloadedThreadCarrier());
+    const threadId = crypto.randomUUID();
+    const priorToken = `agtok_${crypto.randomUUID()}`;
+    agentTabManager.bindThread({ agentId: `prior-${crypto.randomUUID()}`, callerToken: priorToken, threadId,
+      workspacePath: '/workspace/worker' });
+    boundTokens.push(priorToken);
+    const native = nativeService(threadId, 'notLoaded');
+
+    expect((await native.service.resumeThreadGoalWithRevision(threadId, GOAL_BLOCKED)).continuation)
+      .toBe('loaded');
+    const binding = agentTabManager.getBindingForThread(threadId);
+    if (binding) boundTokens.push(binding.callerToken);
+    const policy = native.resumeConfigs[0]?.shell_environment_policy as { set: Record<string, string> };
+    expect(policy.set[INTERPRETER_CALLER_TOKEN_ENV]).toBe(binding?.callerToken);
+    expect(binding?.callerToken).not.toBe(priorToken);
+    expect(agentTabManager.getBindingForCallerToken(priorToken)).toBeUndefined();
+  });
+
+  test('loads with a fresh caller that keeps a narrower prior tool profile', async () => {
+    restores.push(installUnloadedThreadCarrier());
+    const warnings = captureWarnings();
+    const threadId = crypto.randomUUID();
+    const callerToken = `agtok_${crypto.randomUUID()}`;
+    agentTabManager.bindThread({ agentId: `existing-${crypto.randomUUID()}`, callerToken, threadId,
+      workspacePath: '/workspace/worker', toolProfileId: 'profile-narrow' });
+    boundTokens.push(callerToken);
+    const native = nativeService(threadId, 'notLoaded');
+
+    expect((await native.service.resumeThreadGoalWithRevision(threadId, GOAL_BLOCKED)).continuation)
+      .toBe('loaded');
+    const binding = agentTabManager.getBindingForThread(threadId);
+    if (binding) boundTokens.push(binding.callerToken);
+    expect(binding?.callerToken).not.toBe(callerToken);
+    expect(binding?.toolProfileId).toBe('profile-narrow');
+    expect(binding?.allowedToolNames).toBeUndefined();
+    const policy = native.resumeConfigs[0]?.shell_environment_policy as { set: Record<string, string> };
+    expect(policy.set[INTERPRETER_CALLER_TOKEN_ENV]).toBe(binding?.callerToken);
+    expect(policy.set[INTERPRETER_CLI_SERVER_CONNECTION_ENV]).toBeTruthy();
+    expect(warnings.some(line => line.startsWith('[Unloaded thread carrier]'))).toBe(false);
+  });
+
+  test('keeps a window-scoped prior caller, loads without a new caller and logs only the cause', async () => {
+    restores.push(installUnloadedThreadCarrier());
+    const warnings = captureWarnings();
+    const threadId = crypto.randomUUID();
+    const callerToken = `agtok_${crypto.randomUUID()}`;
+    agentTabManager.bindThread({ agentId: `existing-${crypto.randomUUID()}`, callerToken, threadId,
+      workspacePath: '/workspace/worker', windowSessionKey: 'window-a' });
+    boundTokens.push(callerToken);
+    const native = nativeService(threadId, 'notLoaded');
+
+    expect((await native.service.resumeThreadGoalWithRevision(threadId, GOAL_BLOCKED)).continuation)
+      .toBe('loaded');
+    expect(native.resumeConfigs).toEqual([{ mcp_servers: {} }]);
+    expect(agentTabManager.getBindingForThread(threadId)?.callerToken).toBe(callerToken);
+    expect(warnings).toContain(`[Unloaded thread carrier] ${JSON.stringify({ threadId,
+      carrier: 'not_given', cause: 'carrier_refused' })}`);
+  });
+
+  (process.platform === 'linux' ? test : test.skip)(
+    'persisted prior callers that disagree on scope load without a new caller, revoke nothing and log the cause',
+    async () => {
+      restores.push(installUnloadedThreadCarrier());
+      const warnings = captureWarnings();
+      const dataDir = await mkdtemp(path.join(os.tmpdir(), 'wake-carrier-scope-'));
+      const priorDataDir = process.env.INTERPRETER_USER_DATA_DIR;
+      process.env.INTERPRETER_USER_DATA_DIR = dataDir;
+      restores.push(() => {
+        if (priorDataDir === undefined) delete process.env.INTERPRETER_USER_DATA_DIR;
+        else process.env.INTERPRETER_USER_DATA_DIR = priorDataDir;
+      });
+      try {
+        const threadId = crypto.randomUUID();
+        for (const toolProfileId of ['profile-a', 'profile-b']) {
+          persistNativeCallerBinding({ agentId: `prior-${toolProfileId}`, callerToken: `agtok_${crypto.randomUUID()}`,
+            threadId, workspacePath: '/workspace/worker', toolProfileId }, dataDir);
+        }
+        const native = nativeService(threadId, 'notLoaded');
+
+        expect((await native.service.resumeThreadGoalWithRevision(threadId, GOAL_BLOCKED)).continuation)
+          .toBe('loaded');
+        expect(native.resumeConfigs).toEqual([{ mcp_servers: {} }]);
+        expect(agentTabManager.getBindingForThread(threadId)).toBeUndefined();
+        expect(listNativeCallerScopesForThread(threadId, dataDir)).toHaveLength(2);
+        expect(warnings).toContain(`[Unloaded thread carrier] ${JSON.stringify({ threadId,
+          carrier: 'not_given', cause: 'carrier_refused' })}`);
+      } finally { await rm(dataDir, { recursive: true, force: true }); }
+    },
+  );
+
+  (process.platform === 'linux' ? test : test.skip)(
+    'a prior caller in another workspace with a different scope, or saved callers that disagree on model, refuse the carrier and log the cause',
+    async () => {
+      restores.push(installUnloadedThreadCarrier());
+      const warnings = captureWarnings();
+      const dataDir = await mkdtemp(path.join(os.tmpdir(), 'wake-carrier-workspace-'));
+      const priorDataDir = process.env.INTERPRETER_USER_DATA_DIR;
+      process.env.INTERPRETER_USER_DATA_DIR = dataDir;
+      restores.push(() => {
+        if (priorDataDir === undefined) delete process.env.INTERPRETER_USER_DATA_DIR;
+        else process.env.INTERPRETER_USER_DATA_DIR = priorDataDir;
+      });
+      const model = { provider: 'openai-oauth' as const, modelId: 'model-a' };
+      try {
+        for (const priors of [
+          [{ toolProfileId: 'profile-a' }, { toolProfileId: 'profile-b', workspacePath: '/workspace' }],
+          [{ toolProfileId: 'profile-a', modelConfig: model },
+            { toolProfileId: 'profile-a', modelConfig: { ...model, modelId: 'model-b' } }],
+        ]) {
+          const threadId = crypto.randomUUID();
+          for (const prior of priors) {
+            persistNativeCallerBinding({ agentId: `prior-${crypto.randomUUID()}`, callerToken: `agtok_${crypto.randomUUID()}`,
+              threadId, workspacePath: '/workspace/worker', ...prior }, dataDir);
+          }
+          const native = nativeService(threadId, 'notLoaded');
+
+          expect((await native.service.resumeThreadGoalWithRevision(threadId, GOAL_BLOCKED)).continuation)
+            .toBe('loaded');
+          expect(native.resumeConfigs).toEqual([{ mcp_servers: {} }]);
+          expect(agentTabManager.getBindingForThread(threadId)).toBeUndefined();
+          expect(listNativeCallerScopesForThread(threadId, dataDir)).toHaveLength(2);
+          expect(warnings).toContain(`[Unloaded thread carrier] ${JSON.stringify({ threadId,
+            carrier: 'not_given', cause: 'carrier_refused' })}`);
+        }
+      } finally { await rm(dataDir, { recursive: true, force: true }); }
+    },
+  );
+
+  test('a loaded thread is not resumed and gains no caller', async () => {
+    restores.push(installUnloadedThreadCarrier());
+    const threadId = crypto.randomUUID();
+    const native = nativeService(threadId, 'idle');
+    expect((await native.service.resumeThreadGoalWithRevision(threadId, GOAL_BLOCKED)).continuation)
+      .toBe('already_loaded');
+    expect(native.resumeConfigs).toEqual([]);
     expect(agentTabManager.getBindingForThread(threadId)).toBeUndefined();
   });
 });

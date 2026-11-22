@@ -8,6 +8,8 @@ Set an ISO-8601 first time and a message. A repeat interval, if present, must be
 
 For a daily **civil clock** instead of a fixed elapsed interval, provide `dailyAt` (`HH:mm`) and an IANA `timeZone` such as `America/Los_Angeles`, without `at` or `everyMs`. The next eligible local calendar day is recalculated after admission; the clock time remains stable across daylight-saving changes. On a spring-forward day when that wall time does not exist, that day is skipped. On a fall-back day when a wall time occurs twice, only the first occurrence is used. Restarts coalesce missed days to at most one input and resume on the next eligible local day after admission.
 
+For an existing errored recurring schedule with a reviewed **held** occurrence, the calling thread can use `inspect-recovery` with its exact source ID to obtain a source-and-events revision. `recover-future` requires that revision and the exact held event ID. It retains the held occurrence and starts only a future recurrence: the next civil clock time for `dailyAt`/`timeZone`, or the current time plus `everyMs` for a valid fixed-interval `at`/`everyMs` source. An unresolved pending or offered occurrence, mismatched revision, paused source, malformed schedule, or unknown custody refuses without changing any source or event. This operation does not admit or replay the held occurrence. Inspect and decide its custody separately before invoking a future-only recovery; do not create a replacement source.
+
 From the conversation itself, `interpreter-app tools builtin-interpreter interpreter_wake_schedule --json '{"action":"list"}'` lists schedules. Use `{"action":"upsert","message":"...","at":"2026-10-01T09:00:00Z"}` to create one, add `everyMs` for recurrence, and supply an existing `id` to change or cancel (`{"action":"cancel","id":"..."}`). This supported tool is scoped to its calling thread; it cannot schedule another conversation.
 For daily local time use `{"action":"upsert","message":"...","dailyAt":"07:00","timeZone":"America/Los_Angeles"}` instead of `at`/`everyMs`.
 
@@ -222,14 +224,35 @@ unconfirmed-offer proof rule, never on elapsed time. A source-only
 fix does not resolve a previously offered event or prove that a running host
 has been updated.
 
+Loading a saved thread fixes its shell environment for every later turn,
+including Goal continuations the runtime starts on its own, so every load of a
+thread that is not loaded carries the current `interpreter-app` launcher path
+and server connection. `POST /api/agent/threads/:threadId/resume` uses the
+thread's own existing caller and refuses when none is bound; wake input, other
+input and a Goal resume by exact revision give the thread a fresh caller under
+the same scope rules as a cold bind, and log `[Unloaded thread carrier]` with
+the cause whenever a thread is loaded without one. A thread that is already
+loaded keeps its live environment until it is next loaded.
+
+A fresh caller carries exactly the tool scope (tool profile and allowed tools)
+of the thread's prior caller, so a restart never widens a restricted caller and
+never leaves it without the app CLI. The prior scope is the live binding when
+there is one; otherwise it is the tool scope and stored model shared by every
+saved caller of the thread in the same workspace. A saved caller of the thread
+in another workspace must have that same tool scope and is never revoked: only
+older callers in the fresh caller's own workspace are replaced. A delegated,
+window-scoped or other-workspace live caller, or saved callers that disagree
+on tool scope or model, still refuse the fresh caller.
+
 If an older saved thread has **no** usable CLI carrier, an authenticated
 loopback operator may cold-bind the existing thread with
 `POST /api/agent/threads/:threadId/caller/cold-bind` and JSON
 `{"workspace":"/absolute/original/workspace"}` using the already-configured
 `WORKSTATION_WAKE_TOKEN`. This submits no user input. It rejects a loaded or
 active thread, any native/app queued input, pending approval or tab request,
-pending/offered wake event, workspace mismatch, or a previously restricted
-tool caller. The server rechecks native custody before resuming and leaves the
+pending/offered wake event, workspace mismatch, or prior callers whose scope
+cannot be carried under the rule above; a restricted prior caller is replaced
+by a fresh caller with the same scope. The server rechecks native custody before resuming and leaves the
 existing model/provider settings unchanged. Do not use it to mutate a loaded
 thread's shell environment or to dispose held events. A successful response
 is **not** proof of model output or that the CLI tool catalog is available in
