@@ -169,6 +169,15 @@ export async function resumeAgentTaskThread(
   // as Goal. Provision the provider in OIX first so those later turns retain
   // environment-backed auth after the request-scoped resume overrides are gone.
   await service.ensureProvider(profile, true);
+  // Loading a saved thread fixes its shell environment for every later turn,
+  // including Goal continuations the runtime starts on its own. Carry the
+  // thread's own existing caller and the current app CLI connection so those
+  // turns can reach `interpreter-app`. The service applies this only when the
+  // exact thread is not loaded; a loaded thread keeps its live environment.
+  // Delegated callers keep their owner's ordinary path.
+  const shellPolicy = binding.parentOwner
+    ? undefined
+    : buildCallerShellPolicy(binding.callerToken, workspace);
   const threadId = await service.resumeThread({
     threadId: options.threadId,
     model: modelConfig.modelId,
@@ -179,10 +188,10 @@ export async function resumeAgentTaskThread(
       ...(modelConfig.reasoningEffort
         ? { model_reasoning_effort: modelConfig.reasoningEffort }
         : {}),
-      // Preserve the verified original native caller and bridge on loaded
-      // Goal continuations; changing shell keys is not a supported resume.
       mcp_servers: {},
+      ...(shellPolicy ? { shell_environment_policy: shellPolicy as unknown as JsonValue } : {}),
     },
+    ...(shellPolicy ? { callerBoundShellPolicy: true } : {}),
   });
 
   return { threadId };
@@ -191,7 +200,8 @@ export async function resumeAgentTaskThread(
 const COLD_BIND_CUSTODY_ERROR =
   'Cold caller bind requires the exact unloaded idle thread, workspace and empty native queues';
 
-function buildFreshCallerShellPolicy(callerToken: string, workspace: string) {
+/** App CLI shell policy for `callerToken` with the current server connection. */
+function buildCallerShellPolicy(callerToken: string, workspace: string) {
   return buildInterpreterCliShellEnvironmentPolicy(
     callerToken, process.env, process.platform, workspace,
     buildInterpreterCliServerConnection(getServerPort(), {
@@ -231,7 +241,7 @@ function prepareColdCallerCarrier(
 ): UnloadedThreadCarrier & { callerToken: string; commit(): number } {
   const callerToken = `agtok_${nanoid()}`;
   const oldBinding = assertOpenCallerScope(threadId, workspace, callerToken);
-  const shellPolicy = buildFreshCallerShellPolicy(callerToken, workspace);
+  const shellPolicy = buildCallerShellPolicy(callerToken, workspace);
   // Register before native resume so autonomous native turns cannot race the
   // caller binding.
   agentTabManager.bindThread({ agentId: `cold-${nanoid()}`, callerToken, threadId, workspacePath: workspace });
@@ -322,7 +332,7 @@ export async function forkAgentTaskThread(
         ? { model_reasoning_effort: modelConfig.reasoningEffort }
         : {}),
       ...(openScope
-        ? { shell_environment_policy: buildFreshCallerShellPolicy(callerToken, workspace) as unknown as JsonValue }
+        ? { shell_environment_policy: buildCallerShellPolicy(callerToken, workspace) as unknown as JsonValue }
         : {}),
     },
   });

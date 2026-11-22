@@ -224,6 +224,17 @@ unconfirmed-offer proof rule, never on elapsed time. A source-only
 fix does not resolve a previously offered event or prove that a running host
 has been updated.
 
+Loading a saved thread fixes its shell environment for every later turn,
+including Goal continuations the runtime starts on its own, so every load of a
+thread that is not loaded carries the current `interpreter-app` launcher path
+and server connection. `POST /api/agent/threads/:threadId/resume` uses the
+thread's own existing caller and refuses when none is bound; wake input, other
+input and a Goal resume by exact revision give the thread a fresh caller under
+the same scope rules as a cold bind, keep a narrower prior caller instead, and
+log `[Unloaded thread carrier]` with the cause whenever a thread is loaded
+without one. A thread that is already loaded keeps its live environment until
+it is next loaded.
+
 If an older saved thread has **no** usable CLI carrier, an authenticated
 loopback operator may cold-bind the existing thread with
 `POST /api/agent/threads/:threadId/caller/cold-bind` and JSON

@@ -3,14 +3,22 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 
 import { clearConfigCache, setConfigOverride } from './configStore';
-import { forkAgentTaskThread, resumeAgentTaskThread, startAgentTask } from './agentTaskService';
-import { agentTabManager } from './agentTabManager';
-import { getCodexService } from '../src/lib/codex/service';
 import {
+  coldBindAgentTaskThread,
+  forkAgentTaskThread,
+  resumeAgentTaskThread,
+  startAgentTask,
+} from './agentTaskService';
+import { agentTabManager } from './agentTabManager';
+import { getCodexService, type CodexService } from '../src/lib/codex/service';
+import { resolveAgentInterpreterCliTransport } from './utils/codexRuntime';
+import {
+  buildInterpreterCliServerConnection,
   INTERPRETER_CALLER_TOKEN_ENV,
   INTERPRETER_CLI_PATH_ENV,
   INTERPRETER_CLI_SERVER_CONNECTION_ENV,
 } from './utils/interpreterCliRuntime';
+import { setServerPort } from './utils/serverPort';
 
 type CreateHeadedTask = NonNullable<Parameters<typeof startAgentTask>[0]['createHeadedTask']>;
 
@@ -41,6 +49,119 @@ describe('resumeAgentTaskThread caller ownership', () => {
       workspace: '/tmp/owned-workspace', modelConfig: { ...modelConfig, modelId: 'other-model' } }),
     /owner scope differs/);
     assert.equal(agentTabManager.getBindingForThread('thr_bound'), original);
+  });
+});
+
+describe('resumeAgentTaskThread shell environment', () => {
+  const modelConfig = { provider: 'api' as const, modelId: 'test-model',
+    apiFormat: 'openai' as const, baseURL: 'https://example.test/v1' };
+  const threadId = '00000000-0000-4000-8000-0000000000e1';
+  const workspace = '/tmp/owned-workspace';
+
+  async function withStubbedResume<T>(
+    run: (resumes: Array<Parameters<CodexService['resumeThread']>[0]>) => Promise<T>,
+  ): Promise<T> {
+    const service = getCodexService();
+    const original = { ensureProvider: service.ensureProvider, resumeThread: service.resumeThread };
+    const resumes: Array<Parameters<CodexService['resumeThread']>[0]> = [];
+    service.ensureProvider = async () => {};
+    service.resumeThread = async (options) => {
+      resumes.push(options);
+      return options.threadId;
+    };
+    try { return await run(resumes); }
+    finally { Object.assign(service, original); }
+  }
+
+  afterEach(() => setServerPort(0));
+
+  test('carries the thread\'s existing caller and the current app CLI connection', async () => {
+    setServerPort(43_211);
+    agentTabManager.bindThread({ agentId: 'original-agent', callerToken: 'agtok_existing_caller',
+      threadId, workspacePath: workspace, modelConfig });
+    const original = agentTabManager.getBindingForThread(threadId);
+    await withStubbedResume(async (resumes) => {
+      assert.deepEqual(await resumeAgentTaskThread({ threadId, workspace, modelConfig }), { threadId });
+      assert.equal(resumes.length, 1);
+      assert.equal(resumes[0]?.callerBoundShellPolicy, true);
+      assert.equal(resumes[0]?.coldShellPolicy, undefined);
+      const config = resumes[0]?.config as {
+        mcp_servers: unknown; shell_environment_policy: { set: Record<string, string> } };
+      assert.deepEqual(config.mcp_servers, {});
+      const set = config.shell_environment_policy.set;
+      assert.equal(set[INTERPRETER_CALLER_TOKEN_ENV], 'agtok_existing_caller');
+      assert.equal(set[INTERPRETER_CLI_SERVER_CONNECTION_ENV], buildInterpreterCliServerConnection(43_211, {
+        transport: resolveAgentInterpreterCliTransport(process.platform),
+      }));
+      const launcherDir = path.dirname(set[INTERPRETER_CLI_PATH_ENV]);
+      const pathKey = Object.keys(set).find(key => key.toUpperCase() === 'PATH')!;
+      assert.equal(set[pathKey].split(path.delimiter)[0], launcherDir);
+    });
+    // The caller identity and binding are unchanged.
+    assert.equal(agentTabManager.getBindingForThread(threadId), original);
+    assert.equal(agentTabManager.getBindingForCallerToken('agtok_existing_caller')?.threadId, threadId);
+  });
+
+  test('keeps a delegated caller on its ordinary resume without a shell policy', async () => {
+    agentTabManager.bindThread({ agentId: 'delegated-agent', callerToken: 'agtok_delegated_caller',
+      threadId, workspacePath: workspace, modelConfig,
+      parentOwner: { approvalOwnerKind: 'normal-agent', agentId: 'parent-agent', windowSessionKey: null,
+        workspacePath: workspace } });
+    await withStubbedResume(async (resumes) => {
+      await resumeAgentTaskThread({ threadId, workspace, modelConfig });
+      assert.equal(resumes.length, 1);
+      assert.equal('callerBoundShellPolicy' in (resumes[0] ?? {}), false);
+      assert.equal('shell_environment_policy' in (resumes[0]?.config ?? {}), false);
+    });
+  });
+
+  test('does not resume when the binding cannot be verified', async () => {
+    await withStubbedResume(async (resumes) => {
+      await assert.rejects(resumeAgentTaskThread({ threadId, workspace, modelConfig }),
+        /caller is unavailable/);
+      agentTabManager.bindThread({ agentId: 'original-agent', callerToken: 'agtok_existing_caller',
+        threadId, workspacePath: workspace, modelConfig });
+      await assert.rejects(resumeAgentTaskThread({ threadId, workspace: '/tmp/other-workspace', modelConfig }),
+        /owner scope differs/);
+      await assert.rejects(resumeAgentTaskThread({ threadId, workspace,
+        modelConfig: { ...modelConfig, modelId: 'other-model' } }), /owner scope differs/);
+      assert.equal(resumes.length, 0);
+    });
+  });
+});
+
+describe('coldBindAgentTaskThread caller carrier', () => {
+  test('still binds a fresh caller through the guarded cold shell policy', async () => {
+    const threadId = '00000000-0000-4000-8000-0000000000e2';
+    const workspace = '/tmp/owned-workspace';
+    agentTabManager.bindThread({ agentId: 'original-agent', callerToken: 'agtok_prior_caller',
+      threadId, workspacePath: workspace });
+    const service = getCodexService();
+    const original = {
+      readThread: service.readThread, readNativeCustody: service.readNativeCustody,
+      readGlobalNativeCustody: service.readGlobalNativeCustody, resumeThread: service.resumeThread,
+    };
+    const resumes: Array<Parameters<CodexService['resumeThread']>[0]> = [];
+    service.readThread = (async () => ({ id: threadId, cwd: workspace })) as never;
+    service.readNativeCustody = (async () => ({ status: 'notLoaded', queuedSubmissionCount: 0 })) as never;
+    service.readGlobalNativeCustody = (async () => ({ queuedSubmissionCount: 0, loadedThreadIds: [],
+      threads: [{ threadId }] })) as never;
+    service.resumeThread = async (options) => {
+      resumes.push(options);
+      return options.threadId;
+    };
+    try {
+      await coldBindAgentTaskThread({ threadId, workspace });
+    } finally {
+      Object.assign(service, original);
+    }
+    assert.equal(resumes.length, 1);
+    assert.equal(resumes[0]?.coldShellPolicy, true);
+    assert.equal(resumes[0]?.callerBoundShellPolicy, undefined);
+    const token = (resumes[0]?.config as { shell_environment_policy: { set: Record<string, string> } })
+      .shell_environment_policy.set[INTERPRETER_CALLER_TOKEN_ENV];
+    assert.notEqual(token, 'agtok_prior_caller');
+    assert.equal(agentTabManager.getBindingForThread(threadId)?.callerToken, token);
   });
 });
 
