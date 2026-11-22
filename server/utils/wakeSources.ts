@@ -62,6 +62,9 @@ export type WakeEvent = {
   sender?: SubmissionSender;
   /** The admission of a sender-attributed input has been recorded for its outcome return. */
   outcomeWatched?: true;
+  /** When the receipt was observed. An admitted input without it was admitted
+   * by an earlier release. */
+  admittedAt?: string;
   /** The runtime refused direct input to this thread (a sub-agent thread
    * takes work only through its parent). The input was never admitted. */
   refusal?: { code: typeof SUBAGENT_DIRECT_INPUT_UNSUPPORTED; parentThreadId: string | null };
@@ -460,6 +463,7 @@ export class WakeSources {
         }
       }
     }
+    this.retireEarlierHandOvers();
     await this.save();
     this.started = true;
     if (this.timing.intervalMs) {
@@ -477,9 +481,24 @@ export class WakeSources {
     } catch (error) { await this.stop(); throw error; }
   }
 
-  /** Hand over every admitted, sender-attributed input whose outcome watch is not recorded. */
+  /** Hand over every admitted, sender-attributed input whose outcome watch is
+   * not recorded. An input admitted by this release is offered until its
+   * watch is recorded, however long that takes. */
   private retryHandOvers(): void {
+    if (this.stopping) return;
     for (const event of this.state.events) this.handOverAdmission(event);
+  }
+
+  /** Mark admissions that carry no admission time and still await their
+   * hand-over as handled, without handing them over. They were admitted by a
+   * release that did not record one; their turns ended under that release,
+   * and handing them over now would return old outcomes. Called once at
+   * start, before the first save. */
+  private retireEarlierHandOvers(): void {
+    for (const event of this.state.events) {
+      if (event.status === 'admitted' && event.sender && event.turnId && !event.outcomeWatched &&
+          !event.admittedAt) event.outcomeWatched = true;
+    }
   }
 
   /** Track an operation that reads the runtime outside the exclusive section, so stop() waits for it. */
@@ -768,7 +787,7 @@ export class WakeSources {
 
   private admitObserved(event: WakeEvent, now: number): void {
     this.forgetEvent(event);
-    event.status = 'admitted'; event.message = '';
+    event.status = 'admitted'; event.message = ''; event.admittedAt = new Date().toISOString();
     delete event.error; delete event.failure; delete event.offeredAt; delete event.nextAttemptAt;
     // Without its turn no outcome can be watched: say so instead of staying silent.
     if (event.sender && !event.turnId) event.outcomeReturn = 'turn_unknown';

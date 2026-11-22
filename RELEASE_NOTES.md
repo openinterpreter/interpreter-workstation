@@ -1,8 +1,8 @@
-<!-- release-notes-for: 0.2.248 -->
+<!-- release-notes-for: 0.2.249 -->
 ## What's new
 
-- Fixes an upgrade problem in 0.2.247: on a computer that had already returned turn outcomes to another agent, outcome returns and Goal notices could stay switched off after the update. Records written by earlier versions are now carried over unchanged, and nothing already delivered is sent again.
-- The carried-over records are saved as soon as the app starts, rather than on the first later change.
+- Fixes an upgrade problem in 0.2.248: on a computer with a long history of messages from other agents, the first start after the update could return the outcomes of turns that had ended long before. Inputs admitted by an earlier version are no longer handed over for an outcome return after an update.
+- An input admitted from this version on keeps waiting for its outcome return to be recorded for as long as that takes, across restarts.
 
 ## Distribution
 
