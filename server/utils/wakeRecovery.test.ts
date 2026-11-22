@@ -90,8 +90,8 @@ describe('own-thread source recovery CAS', () => {
     } finally { await wake?.stop(); await rm(f.root, { recursive: true, force: true }); }
   });
 
-  test('fixed interval refuses refused, unknown or stopped custody with no write', async () => {
-    for (const otherStatus of ['refused', 'unknown', 'stopped'] as const) {
+  test('fixed interval refuses unresolved or malformed source custody with no write', async () => {
+    for (const otherStatus of ['refused', 'unknown', 'stopped', 'command-state', 'invalid-sequence'] as const) {
       const f = await fixture(17, 'held', { inspect: async () => ({ messages: [] }),
         start: async () => { throw Error('unexpected start'); },
         steer: async () => { throw Error('unexpected steer'); } });
@@ -101,13 +101,17 @@ describe('own-thread source recovery CAS', () => {
         const saved = JSON.parse(await readFile(filename, 'utf8'));
         saved.sources[0] = { ...source(17), at: '2026-10-01T00:00:00.000Z',
           everyMs: 86_400_000, dailyAt: undefined, timeZone: undefined,
-          ...(otherStatus === 'stopped' ? { stopped: 'refusal' } : {}) };
-        if (otherStatus !== 'stopped') saved.events.push({ threadId, sourceId,
+          ...(otherStatus === 'stopped' ? { stopped: 'refusal' } : {}),
+          ...(otherStatus === 'command-state' ? { moreAvailable: true } : {}),
+          ...(otherStatus === 'invalid-sequence' ? { sequence: -17 } : {}) };
+        if (otherStatus === 'invalid-sequence') saved.events[0].eventId = 'daily--17';
+        if (otherStatus === 'refused' || otherStatus === 'unknown') saved.events.push({ threadId, sourceId,
           eventId: 'daily-prior', status: otherStatus, message: 'Unresolved input', createdAt });
         await writeFile(filename, JSON.stringify(saved));
         wake = await f.make();
         const before = wake.recoverySnapshot(threadId, sourceId);
-        await expect(wake.recoverDailyFuture(threadId, sourceId, before.revision, f.eventId))
+        await expect(wake.recoverDailyFuture(threadId, sourceId, before.revision,
+          otherStatus === 'invalid-sequence' ? 'daily--17' : f.eventId))
           .rejects.toMatchObject({ category: 'refused_ambiguous' });
         expect(wake.recoverySnapshot(threadId, sourceId)).toEqual(before);
       } finally { await wake?.stop(); await rm(f.root, { recursive: true, force: true }); }
