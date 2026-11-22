@@ -10,6 +10,7 @@ import {
   INTERPRETER_CLI_PATH_ENV,
   INTERPRETER_CLI_SERVER_CONNECTION_ENV,
 } from './interpreterCliRuntime';
+import { listNativeCallerScopesForThread, persistNativeCallerBinding } from './persistedCallerBinding';
 import { JSONRPCErrorException } from 'json-rpc-2.0';
 import { ThreadNotFoundError } from '../../src/lib/codex/service';
 import { inspectThread, readTurnsSince, startWakeThreadTurn } from './wakeSourcesRuntime';
@@ -368,20 +369,26 @@ describe('native wake on a saved thread that is not loaded', () => {
     expect(native.startedTurns()).toBe(1);
   });
 
-  test('keeps a narrower prior caller and resumes without a new shell policy', async () => {
+  test('replaces a narrower prior caller with a fresh caller of the same scope', async () => {
     restores.push(installUnloadedThreadCarrier());
     const threadId = crypto.randomUUID();
     const callerToken = `agtok_${crypto.randomUUID()}`;
+    const allowedToolNames = ['builtin-interpreter.interpreter_browser_page_inspect'];
     agentTabManager.bindThread({ agentId: `existing-${crypto.randomUUID()}`, callerToken, threadId,
-      workspacePath: '/workspace/worker', allowedToolNames: ['builtin-interpreter.interpreter_browser_page_inspect'] });
+      workspacePath: '/workspace/worker', allowedToolNames, toolProfileId: 'profile-narrow' });
     boundTokens.push(callerToken);
     const native = nativeService(threadId, 'notLoaded');
 
-    // The wake still runs; the thread simply resumes as it did before.
     expect(await startWakeThreadTurn(threadId, 'wake', native.service)).toBe('native-turn');
-    expect(native.resumeConfigs).toEqual([{ mcp_servers: {} }]);
+    const binding = agentTabManager.getBindingForThread(threadId);
+    if (binding) boundTokens.push(binding.callerToken);
+    expect(binding?.callerToken).not.toBe(callerToken);
+    expect(binding?.allowedToolNames).toEqual(allowedToolNames);
+    expect(binding?.toolProfileId).toBe('profile-narrow');
+    const policy = native.resumeConfigs[0]?.shell_environment_policy as { set: Record<string, string> };
+    expect(policy.set[INTERPRETER_CALLER_TOKEN_ENV]).toBe(binding?.callerToken);
     expect(native.startedTurns()).toBe(1);
-    expect(agentTabManager.getBindingForThread(threadId)?.callerToken).toBe(callerToken);
+    expect(agentTabManager.getBindingForCallerToken(callerToken)).toBeUndefined();
   });
 
   test('a loaded thread keeps its shell scope and gains no caller', async () => {
@@ -459,13 +466,36 @@ describe('Goal resume by exact revision on a saved thread that is not loaded', (
     expect(agentTabManager.getBindingForCallerToken(priorToken)).toBeUndefined();
   });
 
-  test('keeps a narrower prior caller, loads without a new caller and logs only the cause', async () => {
+  test('loads with a fresh caller that keeps a narrower prior tool profile', async () => {
     restores.push(installUnloadedThreadCarrier());
     const warnings = captureWarnings();
     const threadId = crypto.randomUUID();
     const callerToken = `agtok_${crypto.randomUUID()}`;
     agentTabManager.bindThread({ agentId: `existing-${crypto.randomUUID()}`, callerToken, threadId,
-      workspacePath: '/workspace/worker', allowedToolNames: ['builtin-interpreter.interpreter_browser_page_inspect'] });
+      workspacePath: '/workspace/worker', toolProfileId: 'profile-narrow' });
+    boundTokens.push(callerToken);
+    const native = nativeService(threadId, 'notLoaded');
+
+    expect((await native.service.resumeThreadGoalWithRevision(threadId, GOAL_BLOCKED)).continuation)
+      .toBe('loaded');
+    const binding = agentTabManager.getBindingForThread(threadId);
+    if (binding) boundTokens.push(binding.callerToken);
+    expect(binding?.callerToken).not.toBe(callerToken);
+    expect(binding?.toolProfileId).toBe('profile-narrow');
+    expect(binding?.allowedToolNames).toBeUndefined();
+    const policy = native.resumeConfigs[0]?.shell_environment_policy as { set: Record<string, string> };
+    expect(policy.set[INTERPRETER_CALLER_TOKEN_ENV]).toBe(binding?.callerToken);
+    expect(policy.set[INTERPRETER_CLI_SERVER_CONNECTION_ENV]).toBeTruthy();
+    expect(warnings.some(line => line.startsWith('[Unloaded thread carrier]'))).toBe(false);
+  });
+
+  test('keeps a window-scoped prior caller, loads without a new caller and logs only the cause', async () => {
+    restores.push(installUnloadedThreadCarrier());
+    const warnings = captureWarnings();
+    const threadId = crypto.randomUUID();
+    const callerToken = `agtok_${crypto.randomUUID()}`;
+    agentTabManager.bindThread({ agentId: `existing-${crypto.randomUUID()}`, callerToken, threadId,
+      workspacePath: '/workspace/worker', windowSessionKey: 'window-a' });
     boundTokens.push(callerToken);
     const native = nativeService(threadId, 'notLoaded');
 
@@ -476,6 +506,37 @@ describe('Goal resume by exact revision on a saved thread that is not loaded', (
     expect(warnings).toContain(`[Unloaded thread carrier] ${JSON.stringify({ threadId,
       carrier: 'not_given', cause: 'carrier_refused' })}`);
   });
+
+  (process.platform === 'linux' ? test : test.skip)(
+    'persisted prior callers that disagree on scope load without a new caller, revoke nothing and log the cause',
+    async () => {
+      restores.push(installUnloadedThreadCarrier());
+      const warnings = captureWarnings();
+      const dataDir = await mkdtemp(path.join(os.tmpdir(), 'wake-carrier-scope-'));
+      const priorDataDir = process.env.INTERPRETER_USER_DATA_DIR;
+      process.env.INTERPRETER_USER_DATA_DIR = dataDir;
+      restores.push(() => {
+        if (priorDataDir === undefined) delete process.env.INTERPRETER_USER_DATA_DIR;
+        else process.env.INTERPRETER_USER_DATA_DIR = priorDataDir;
+      });
+      try {
+        const threadId = crypto.randomUUID();
+        for (const toolProfileId of ['profile-a', 'profile-b']) {
+          persistNativeCallerBinding({ agentId: `prior-${toolProfileId}`, callerToken: `agtok_${crypto.randomUUID()}`,
+            threadId, workspacePath: '/workspace/worker', toolProfileId }, dataDir);
+        }
+        const native = nativeService(threadId, 'notLoaded');
+
+        expect((await native.service.resumeThreadGoalWithRevision(threadId, GOAL_BLOCKED)).continuation)
+          .toBe('loaded');
+        expect(native.resumeConfigs).toEqual([{ mcp_servers: {} }]);
+        expect(agentTabManager.getBindingForThread(threadId)).toBeUndefined();
+        expect(listNativeCallerScopesForThread(threadId, dataDir)).toHaveLength(2);
+        expect(warnings).toContain(`[Unloaded thread carrier] ${JSON.stringify({ threadId,
+          carrier: 'not_given', cause: 'carrier_refused' })}`);
+      } finally { await rm(dataDir, { recursive: true, force: true }); }
+    },
+  );
 
   test('a loaded thread is not resumed and gains no caller', async () => {
     restores.push(installUnloadedThreadCarrier());

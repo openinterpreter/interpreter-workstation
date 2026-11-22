@@ -23,14 +23,20 @@ import {
 } from './utils/interpreterCliRuntime';
 import { buildGroqProxyBaseUrl, routeGroqProfileThroughProxy } from './utils/groqResponsesProxy';
 import { getServerPort } from './utils/serverPort';
-import { revokeOtherNativeCallerBindingsForThread } from './utils/persistedCallerBinding';
+import {
+  listNativeCallerScopesForThread,
+  revokeOtherNativeCallerBindingsForThread,
+  sameNativeCallerScope,
+  type NativeCallerScope,
+  type PersistedNativeCallerScope,
+} from './utils/persistedCallerBinding';
 import { IPC_CHANNELS } from '../electron/ipc/registry';
 import type { AgentModelConfig } from '../shared/types/model';
 import type { AgentPermissionOwnerReference } from '../shared/types/approval';
 import type { StreamImageAttachment, StreamSkillReference } from '../src/lib/codex/api-types';
 import { mapNotificationToUiEvents, type UiStreamEvent } from '../src/lib/codex/event-mapper';
 import { getDefaultModelConfig, profileToModelConfig } from '../shared/types/profile';
-import type { AgentCompletionDisposition } from './agentTabManager';
+import type { AgentCompletionDisposition, AgentThreadBinding } from './agentTabManager';
 import {
   HEADLESS_TASK_WORKSPACE_ERROR,
   normalizeHeadlessTaskWorkspace,
@@ -236,25 +242,81 @@ async function assertColdBindCustody(service: CodexService, threadId: string) {
   }
 }
 
+type PriorCallerScope = NativeCallerScope & { modelConfig?: AgentModelConfig };
+
+const PRIOR_SCOPE_ERROR = 'Existing caller owner or tool scope differs';
+
+/** The scope a fresh caller of `threadId` must carry, so a restart never turns
+ * a restricted caller into an open one. A live binding is authoritative; it
+ * must be an undelegated, unwindowed caller of the same workspace. Otherwise
+ * every persisted caller of the thread in this workspace must share one tool
+ * scope; with none, the scope is open. Every other persisted caller of the
+ * thread, in any workspace, must have that same scope. */
+function resolvePriorCallerScope(
+  threadId: string, workspace: string, callerToken: string,
+): { scope: PriorCallerScope; oldBinding?: AgentThreadBinding } {
+  const oldBinding = agentTabManager.getBindingForThread(threadId);
+  let scope: PriorCallerScope;
+  if (oldBinding) {
+    if (oldBinding.workspacePath !== workspace || oldBinding.windowSessionKey || oldBinding.parentOwner) {
+      throw new Error(PRIOR_SCOPE_ERROR);
+    }
+    scope = {
+      ...(oldBinding.allowedToolNames?.length ? { allowedToolNames: [...oldBinding.allowedToolNames] } : {}),
+      ...(oldBinding.toolProfileId ? { toolProfileId: oldBinding.toolProfileId } : {}),
+      ...(oldBinding.modelConfig ? { modelConfig: oldBinding.modelConfig } : {}),
+    };
+  } else {
+    const current = listNativeCallerScopesForThread(threadId).filter(record => record.workspacePath === workspace);
+    const first = current[0];
+    // Ambiguous prior scopes are refused; the wider one is never chosen.
+    if (first && current.some(record => !sameNativeCallerScope(record, first))) {
+      throw new Error(PRIOR_SCOPE_ERROR);
+    }
+    const modelKey = (record: PersistedNativeCallerScope) => JSON.stringify(record.model ?? null);
+    const model = first?.model && current.every(record => modelKey(record) === modelKey(first))
+      ? first.model : undefined;
+    scope = {
+      ...(first?.allowedToolNames?.length ? { allowedToolNames: [...first.allowedToolNames] } : {}),
+      ...(first?.toolProfileId ? { toolProfileId: first.toolProfileId } : {}),
+      // Recovered callers carry this same stored model subset.
+      ...(model ? { modelConfig: model as AgentModelConfig } : {}),
+    };
+  }
+  // Older callers in any workspace must not differ from the chosen scope.
+  revokeOtherNativeCallerBindingsForThread(threadId, callerToken, undefined, true, scope);
+  return { scope, oldBinding };
+}
+
 function prepareColdCallerCarrier(
   threadId: string, workspace: string,
 ): UnloadedThreadCarrier & { callerToken: string; commit(): number } {
   const callerToken = `agtok_${nanoid()}`;
-  const oldBinding = assertOpenCallerScope(threadId, workspace, callerToken);
+  const { scope, oldBinding } = resolvePriorCallerScope(threadId, workspace, callerToken);
   const shellPolicy = buildCallerShellPolicy(callerToken, workspace);
+  const restorePrior = () => {
+    agentTabManager.disposeBinding(callerToken);
+    if (oldBinding) agentTabManager.bindThread({ ...oldBinding, threadId });
+  };
   // Register before native resume so autonomous native turns cannot race the
-  // caller binding.
-  agentTabManager.bindThread({ agentId: `cold-${nanoid()}`, callerToken, threadId, workspacePath: workspace });
+  // caller binding. The fresh caller carries exactly the prior scope.
+  const binding = agentTabManager.bindThread({
+    agentId: `cold-${nanoid()}`, callerToken, threadId, workspacePath: workspace,
+    ...(scope.allowedToolNames ? { allowedToolNames: scope.allowedToolNames } : {}),
+    ...(scope.toolProfileId ? { toolProfileId: scope.toolProfileId } : {}),
+    ...(scope.modelConfig ? { modelConfig: scope.modelConfig } : {}),
+  });
+  if (!sameNativeCallerScope(binding, scope)) {
+    restorePrior();
+    throw new Error('Fresh caller scope differs from the prior caller');
+  }
   return {
     callerToken,
     shellPolicy: shellPolicy as unknown as JsonValue,
-    rollback() {
-      agentTabManager.disposeBinding(callerToken);
-      if (oldBinding) agentTabManager.bindThread({ ...oldBinding, threadId });
-    },
+    rollback: restorePrior,
     commit() {
       if (oldBinding) agentTabManager.disposeBinding(oldBinding.callerToken);
-      return revokeOtherNativeCallerBindingsForThread(threadId, callerToken);
+      return revokeOtherNativeCallerBindingsForThread(threadId, callerToken, undefined, false, scope);
     },
   };
 }
