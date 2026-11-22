@@ -197,9 +197,17 @@ router.get('/custody/native-global', async (req: Request, res: Response) => {
     const category = error instanceof NativeCustodyPhaseError || error instanceof NativeGlobalInventoryError
       ? error.category : 'native_unavailable';
     recordPhase(phase, category);
+    // An operator can correlate these digests with its own bounded native/DB
+    // metadata without publishing a loaded thread UUID or exception prose.
+    // This is diagnostic only: a mismatch is still an absolute custody failure.
+    const missingLoadedThreadDigests = error instanceof NativeGlobalInventoryError &&
+      error.category === 'loaded_missing' && error.missingLoadedThreadDigests &&
+      error.missingLoadedThreadDigests.length > 0 && error.missingLoadedThreadDigests.length <= 500 &&
+      error.missingLoadedThreadDigests.every((digest) => /^[a-f0-9]{64}$/.test(digest))
+      ? error.missingLoadedThreadDigests : undefined;
     return res.status(503).json({ error: 'Native or Computer Use custody inspection unavailable.',
       phase, category,
-      custodyVerified: false, inspectionId });
+      custodyVerified: false, inspectionId, ...(missingLoadedThreadDigests && { missingLoadedThreadDigests }) });
   }
 });
 
