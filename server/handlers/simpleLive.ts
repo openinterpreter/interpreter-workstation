@@ -43,7 +43,10 @@ async function resolveLiveCredential(): Promise<LiveCredential | null> {
     if (stored) return { apiKey: stored, source: 'profile' };
   }
 
-  const environmentKey = process.env.OPENAI_API_KEY?.trim();
+  // A voice-only key lets a host enable GPT Live without OPENAI_API_KEY, which
+  // also influences model-provider detection. Only this function reads it.
+  const environmentKey = process.env.INTERPRETER_LIVE_OPENAI_API_KEY?.trim()
+    || process.env.OPENAI_API_KEY?.trim();
   return environmentKey ? { apiKey: environmentKey, source: 'environment' } : null;
 }
 

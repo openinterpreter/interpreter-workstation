@@ -117,6 +117,8 @@ const MOTION_PACKAGE = `${JSON.stringify({
 
 const pendingRefreshes = new Map<string, Promise<SimpleAppStatus>>();
 const projectRuntimeTokens = new Map<string, string>();
+/** The Simple project most recently reported to a renderer; the preview proxy targets it. */
+let previewProjectPath: string | null = null;
 
 const PROJECT_TOOL_NAMES = [
   'interpreter_whole_computer_state_get',
@@ -336,6 +338,7 @@ async function refreshProject(workstationOrigin: string): Promise<SimpleAppStatu
     [INTERPRETER_CLI_SERVER_CONNECTION_ENV]: workstationOrigin,
     [INTERPRETER_CALLER_TOKEN_ENV]: projectRuntimeToken(project.path),
   }, 120_000); // Cold Next compilation can outlast the generic project budget.
+  previewProjectPath = project.path;
   return {
     revision: project.metadata.id,
     sourceRevision: fingerprint,
@@ -358,6 +361,7 @@ export async function promoteSimpleProjectApp(workstationOrigin: string): Promis
 export async function readSimpleProjectAppStatus(): Promise<SimpleAppStatus> {
   const project = await getActiveSimpleProject();
   const result = await trustedProjectRunner.status(project.path);
+  if (result.state.status === 'running') previewProjectPath = project.path;
   const fingerprint = await readInstallMarker(project.path);
   return {
     revision: project.metadata.id,
@@ -369,7 +373,17 @@ export async function readSimpleProjectAppStatus(): Promise<SimpleAppStatus> {
   };
 }
 
+/** Loopback port of the running Simple project server, or null when it is not running. */
+export async function getSimplePreviewPort(): Promise<number | null> {
+  if (!previewProjectPath) return null;
+  const { state } = await trustedProjectRunner.status(previewProjectPath);
+  if (state.status !== 'running' || !state.url) return null;
+  const port = Number(new URL(state.url).port);
+  return Number.isInteger(port) && port > 0 ? port : null;
+}
+
 export async function resetSimpleProjectRuntimeForTest(projectPath: string): Promise<void> {
+  if (previewProjectPath === projectPath) previewProjectPath = null;
   pendingRefreshes.delete(projectPath);
   await trustedProjectRunner.stop(projectPath);
   const token = projectRuntimeTokens.get(projectPath);
