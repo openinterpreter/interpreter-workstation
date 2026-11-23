@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { resolveInventoryPath } from './release-license-cli.mjs';
+import { mergeLicenseInventories, productionLicenseFilters } from './release-license-inventory.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const policyPath = path.join(root, 'licenses', 'release-policy.json');
@@ -16,11 +17,13 @@ function readInventory() {
     return JSON.parse(readFileSync(inventoryPath, 'utf8'));
   }
   const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
-  const output = execFileSync(pnpm, ['licenses', 'list', '--prod', '--json'], {
-    cwd: root,
-    encoding: 'utf8',
-  });
-  return JSON.parse(output);
+  return mergeLicenseInventories(productionLicenseFilters.map(project => {
+    const output = execFileSync(pnpm,
+      ['--filter', project, 'licenses', 'list', '--prod', '--json'], {
+        cwd: root, encoding: 'utf8',
+      });
+    return JSON.parse(output);
+  }));
 }
 
 function wildcardMatches(pattern, value) {

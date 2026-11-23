@@ -27,6 +27,7 @@ const ROOT_DIRS = [
   join('src', 'lib'),
   join('apps', 'interpreter-overlay', 'electron'),
   join('apps', 'interpreter-overlay', 'renderer'),
+  join('packages', 'browser-agent-core', 'src'),
 ];
 const LEGACY_BUN_BATCH_SIZE = 1;
 

@@ -30,6 +30,7 @@ import { isWorkstationReadOnly } from "../../remote/workstationConnection";
 import { ExperienceSectionContent } from "../settings/ExperienceSection";
 import { ProfilesSectionContent } from "../settings/ProfilesSection";
 import {
+  getHostCapabilities,
   openFolderDialog,
   quickActions,
   simplePrimaryThread,
@@ -1186,7 +1187,8 @@ export function SimpleShell({
                           onLeaveFeedback();
                         }}
                       />
-                      <SimpleChannelsSettings threadId={threadId} />
+                      {getHostCapabilities().onboardingSteps.whatsapp &&
+                        <SimpleChannelsSettings threadId={threadId} />}
                       <div className="mt-7 border-t border-foreground/[0.08] pt-5">
                         <SimpleConnectionsSettings />
                         {live.error && (

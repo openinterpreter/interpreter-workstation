@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { environmentDetection } from '../../../ipc';
+import { environmentDetection, getHostCapabilities } from '../../../ipc';
 import { useOnboarding } from '../OnboardingContext';
 import type { DetectionResults, OnboardingBucket } from '../OnboardingContext';
 
@@ -55,6 +55,12 @@ export function useEnvironmentDetection() {
     // Only run once
     if (hasStarted.current || isDetectionComplete) return;
     hasStarted.current = true;
+    if (!getHostCapabilities().onboardingSteps.environmentDetection) {
+      setDetectionResults({ bucket: 'non-developer', subCategories: [], detectedProviders: [],
+        detectedTools: [], isConfident: false, detectedCommands: [], detectedConfigDirs: [],
+        detectedApps: [] });
+      return;
+    }
 
     async function runDetection() {
       try {

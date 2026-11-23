@@ -15,7 +15,8 @@ import {
   setFastProfile,
   updateProfile,
 } from '../../../api';
-import { providers as providersIpc } from '../../../ipc';
+import { providers as providersIpc, getBrowserProjectModelDownload,
+  getHostCapabilities } from '../../../ipc';
 import type { Profile } from '../../../../shared/types/profile';
 import { BUILTIN_PROVIDER_IDS, isOllamaVersionBelowDeveloperRoleFloor, MIN_OLLAMA_DEVELOPER_ROLE_VERSION, type OpenRouterModelCatalogResult, type LmStudioStatus, type OllamaStatus } from '../../../../shared/types/provider';
 import { type ApiKeyProvider, type ModelPackReviewState } from './ModelSetupScreen';
@@ -47,7 +48,7 @@ import {
 
 interface ModelPackReviewScreenProps {
   reviewState: ModelPackReviewState | null;
-  onReviewComplete: (packId: ModelPackReviewState['packId']) => void;
+  onReviewComplete: (packId: ModelPackReviewState['packId']) => void | Promise<void>;
 }
 
 interface HostedFeaturedCard {
@@ -149,12 +150,15 @@ function HostedModelIcon({
 }
 
 export function ModelPackReviewScreen({
-  reviewState,
-  onReviewComplete,
+  reviewState, onReviewComplete,
 }: ModelPackReviewScreenProps) {
   "use no memo";
 
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  // The translation function can change identity on a context render. Footer
+  // registration must depend on language, not that unstable function identity.
+  const tRef = useRef(t);
+  tRef.current = t;
   const { currentStep, setFooterConfig } = useOnboarding();
   const stepRef = useRef(currentStep);
   const [reviewProfiles, setReviewProfiles] = useState<Profile[]>([]);
@@ -175,7 +179,14 @@ export function ModelPackReviewScreen({
   const [reviewApiKeyError, setReviewApiKeyError] = useState<string | null>(null);
   const [localInstallStatus, setLocalInstallStatus] = useState<string | null>(null);
   const [localInstallError, setLocalInstallError] = useState<string | null>(null);
+  const browserDownload = useRef<AbortController | null>(null);
   const deferredHostedQuery = useDeferredValue(hostedQuery);
+
+  // Leaving review must not complete an acquisition or persist the abandoned model.
+  useEffect(() => () => {
+    browserDownload.current?.abort();
+    browserDownload.current = null;
+  }, [reviewState]);
 
   useEffect(() => {
     if (!reviewState) {
@@ -214,6 +225,8 @@ export function ModelPackReviewScreen({
   const isLocalOllamaPack = reviewState?.packId === 'local:ollama';
   const isLocalLmStudioPack = reviewState?.packId === 'local:lmstudio';
   const isLocalPack = isLocalOllamaPack || isLocalLmStudioPack;
+  const isBrowserLocalPack = !!reviewState?.browserProviderId &&
+    getHostCapabilities().modelSetup.runtimeLocalModels;
   const ollamaServerVersion = isLocalOllamaPack && localRuntimeStatus && 'version' in localRuntimeStatus
     ? localRuntimeStatus.version
     : undefined;
@@ -481,6 +494,7 @@ export function ModelPackReviewScreen({
   const actionsLocked = setupLoading !== null;
 
   const handleConfirmPackReview = useCallback(async () => {
+    const t = tRef.current;
     if (!reviewState) return;
 
     if (isLocalPack && (!localRuntimeStatus?.running || localStatusLoading)) {
@@ -528,8 +542,30 @@ export function ModelPackReviewScreen({
     setSetupError(null);
     setLocalInstallError(null);
     setSetupLoading(reviewState.packId);
+    const controller = isBrowserLocalPack ? new AbortController() : null;
+    if (controller) browserDownload.current = controller;
 
     try {
+      if (isBrowserLocalPack) {
+        const download = getBrowserProjectModelDownload();
+        if (!download || !reviewState.browserProviderId)
+          throw new Error(t('onboarding.modelReview.downloadUnavailable'));
+        for (const profile of selectedProfilesWithApiKey) {
+          let progressError: string | undefined;
+          await download(reviewState.browserProviderId, profile.modelId, progress => {
+            if (controller?.signal.aborted) return;
+            if (progress.error) { progressError = progress.error; setLocalInstallError(progress.error); }
+            if (progress.total && progress.completed != null)
+              setLocalInstallStatus(t('onboarding.modelReview.downloadingPercent', {
+                percent: Math.floor(progress.completed / progress.total * 100) }));
+            else if (progress.status) setLocalInstallStatus(progress.status);
+            else setLocalInstallStatus(t('onboarding.modelReview.downloading'));
+            if (progress.done) setLocalInstallStatus(t('onboarding.modelReview.downloadReady'));
+          }, controller?.signal);
+          if (controller?.signal.aborted) return;
+          if (progressError) throw new Error(progressError);
+        }
+      }
       if (isLocalPack && localRuntime && localRuntimeStatus?.running && selectedLocalProfilesNeedingInstall.length > 0) {
         const runtimeLabel = localRuntime === 'lmstudio' ? 'LM Studio' : 'Ollama';
 
@@ -654,10 +690,13 @@ export function ModelPackReviewScreen({
         setLocalInstallStatus('Local models installed and ready.');
       }
 
+      if (controller?.signal.aborted) return;
       const { profiles: existingProfiles } = await getProfiles();
+      if (controller?.signal.aborted) return;
       const existingProfileIds = new Set(existingProfiles.map((profile) => profile.id));
 
       for (const profilePayload of profilesToPersist) {
+        if (controller?.signal.aborted) return;
         // Local packs carry no wireApi of their own; apply the pack-level toggle.
         const effectivePayload: Profile = isLocalPack
           ? { ...profilePayload, wireApi: localWireApi, useResponsesApi: localWireApi === 'responses' }
@@ -688,6 +727,7 @@ export function ModelPackReviewScreen({
         }
       }
 
+      if (controller?.signal.aborted) return;
       await setDefaultProfile(selectedDefaultProfile.id);
       if (selectedFastProfileId) {
         await setFastProfile(selectedFastProfileId);
@@ -698,16 +738,20 @@ export function ModelPackReviewScreen({
         defaultProfileId: selectedDefaultProfile.id,
         hasApiKey: !!reviewState.requiredApiKeyProvider && normalizedApiKey.length > 0,
       });
-      onReviewComplete(reviewState.packId);
+      if (controller?.signal.aborted) return;
+      await onReviewComplete(reviewState.packId);
     } catch (error) {
+      if (controller?.signal.aborted || error instanceof DOMException && error.name === 'AbortError') return;
       console.error(`[ModelSetup] ${reviewState.errorMessage}`, error);
       reportReviewError('confirm_pack_review', error, reviewState.errorMessage);
-      setSetupError(reviewState.errorMessage);
+      setSetupError(isBrowserLocalPack && error instanceof Error ? error.message : reviewState.errorMessage);
     } finally {
+      if (browserDownload.current === controller) browserDownload.current = null;
       setSetupLoading(null);
     }
   }, [
     isLocalPack,
+    isBrowserLocalPack,
     isLocalLmStudioPack,
     localRuntime,
     localStatusLoading,
@@ -721,18 +765,18 @@ export function ModelPackReviewScreen({
     selectedLocalProfilesNeedingInstall,
     selectedProfiles,
     reportReviewError,
-    t,
   ]);
 
   // Set footer config for the "Add Models" button
   useEffect(() => {
     if (!reviewState) return;
-    let continueLabel = continueWillInstallSelectedModels
+    const t = tRef.current;
+    let continueLabel = continueWillInstallSelectedModels || isBrowserLocalPack
       ? formatInstallModelsLabel(selectedCount)
       : formatAddModelsLabel(selectedCount);
 
     if (setupLoading === reviewState.packId) {
-      continueLabel = continueWillInstallSelectedModels
+      continueLabel = continueWillInstallSelectedModels || isBrowserLocalPack
         ? t('onboarding.modelReview.installingSelectedModels')
         : t('onboarding.modelReview.addingModels');
     }
@@ -747,7 +791,7 @@ export function ModelPackReviewScreen({
         || (requiresInlineApiKey && reviewApiKeyValue.trim().length === 0),
       continueLoading: setupLoading === reviewState.packId,
     });
-  }, [reviewState, setupLoading, actionsLocked, continueWillInstallSelectedModels, localPackReadyToContinue, selectedCount, handleConfirmPackReview, requiresInlineApiKey, reviewApiKeyValue, setFooterConfig, t]);
+  }, [reviewState, setupLoading, actionsLocked, continueWillInstallSelectedModels, isBrowserLocalPack, localPackReadyToContinue, selectedCount, handleConfirmPackReview, requiresInlineApiKey, reviewApiKeyValue, setFooterConfig, i18n.resolvedLanguage]);
 
   if (!reviewState) {
     return null;
@@ -775,6 +819,10 @@ export function ModelPackReviewScreen({
           descriptionClassName="max-w-[26rem] text-[12px] leading-5"
         />
 
+        {isBrowserLocalPack && (localInstallStatus || localInstallError) &&
+          <div role={localInstallError ? 'alert' : 'status'}>
+            {localInstallError || localInstallStatus}
+          </div>}
         {isLocalPack && (
           <div
             className="w-full max-w-[520px] space-y-2 rounded-[16px] px-3.5 py-3"
@@ -952,6 +1000,15 @@ export function ModelPackReviewScreen({
                       checked={isSelected}
                       onChange={(event) => {
                         const checked = event.target.checked;
+                        if (isBrowserLocalPack) {
+                          const next = new Set(selectedReviewProfileIds);
+                          if (checked) next.add(profile.id);
+                          else next.delete(profile.id);
+                          if (!next.has(reviewDefaultProfileId))
+                            setReviewDefaultProfileId(reviewProfiles.find(item => next.has(item.id))?.id ?? '');
+                          setSelectedReviewProfileIds(next);
+                          return;
+                        }
                         setSelectedReviewProfileIds((prev) => {
                           const next = new Set(prev);
                           if (checked) {

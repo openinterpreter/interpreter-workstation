@@ -27,7 +27,7 @@ import { AuthSignIn } from '../../auth/AuthSignIn';
 import { OpenAIIcon, AnthropicIcon, GroqIcon, OpenRouterIcon, DeepSeekIcon } from '../../icons/BrandIcons';
 import { InterpreterLogoMark } from '../../InterpreterLogoMark';
 import { useAuth } from '../../../contexts/AuthContext';
-import { providers as providersIpc, openExternal } from '../../../ipc';
+import { providers as providersIpc, openExternal, getHostCapabilities } from '../../../ipc';
 import { inferProfileIdFromEndpoint } from '@/lib/codex/profile-options';
 import {
   AUTH_URL_COPIED_MESSAGE,
@@ -529,6 +529,7 @@ export interface ModelPackReviewState {
   initialSelectedProfileIds?: string[];
   errorMessage: string;
   requiredApiKeyProvider?: ApiKeyProvider;
+  browserProviderId?: string;
 }
 
 export function resolveOnboardingReviewDefaultProfileId(
@@ -546,6 +547,7 @@ export function ModelSetupScreen({
   "use no memo";
 
   const { t } = useTranslation();
+  const capabilities = getHostCapabilities().modelSetup;
   const { detectionResults } = useOnboarding();
   const { isAuthenticated, user } = useAuth();
 
@@ -561,6 +563,7 @@ export function ModelSetupScreen({
   const [onboardingModelPreferenceText, setOnboardingModelPreferenceText] = useState('');
 
   const [showCustomModel, setShowCustomModel] = useState(initialShowCustomModel);
+  const [runtimeModelError, setRuntimeModelError] = useState<string | null>(null);
 
   const [customName, setCustomName] = useState('');
   const [customModelId, setCustomModelId] = useState('');
@@ -664,10 +667,14 @@ export function ModelSetupScreen({
     let cancelled = false;
 
     Promise.all([
-      providersIpc.getOAuthStatus('openai').catch(() => ({ isConnected: false })),
-      providersIpc.getEnvApiKeys().catch(() => null),
-      providersIpc.getOllamaStatus().catch(() => ({ running: false })),
-      providersIpc.getLmStudioStatus().catch(() => ({ running: false })),
+      capabilities.chatgptSignIn !== 'unavailable'
+        ? providersIpc.getOAuthStatus('openai').catch(() => ({ isConnected: false }))
+        : Promise.resolve({ isConnected: false }),
+      capabilities.apiKeyProviders ? providersIpc.getEnvApiKeys().catch(() => null) : Promise.resolve(null),
+      capabilities.localRuntimeProbes ? providersIpc.getOllamaStatus().catch(() => ({ running: false }))
+        : Promise.resolve({ running: false }),
+      capabilities.localRuntimeProbes ? providersIpc.getLmStudioStatus().catch(() => ({ running: false }))
+        : Promise.resolve({ running: false }),
     ]).then(([openaiStatus, envKeys, ollama, lmStudio]) => {
       if (cancelled) return;
       setOpenAIOAuthStatus(openaiStatus);
@@ -680,7 +687,8 @@ export function ModelSetupScreen({
       cancelled = true;
       clearOAuthTimers('openai');
     };
-  }, [clearOAuthTimers]);
+  }, [clearOAuthTimers, capabilities.apiKeyProviders, capabilities.chatgptSignIn,
+    capabilities.localRuntimeProbes]);
 
   const openPackReview = useCallback((
     packId: string,
@@ -1285,10 +1293,31 @@ export function ModelSetupScreen({
         ids.add(packId);
       }
     }
-    return ONBOARDING_OPTIONAL_MODEL_PACK_ORDER.filter((packId) => ids.has(packId));
-  }, [runtimeProviders]);
+    return ONBOARDING_OPTIONAL_MODEL_PACK_ORDER.filter((packId) => ids.has(packId)
+      && (packId.startsWith('local:') ? capabilities.localRuntimeProbes : capabilities.apiKeyProviders));
+  }, [runtimeProviders, capabilities.localRuntimeProbes, capabilities.apiKeyProviders]);
 
   const actionsLocked = setupLoading !== null || oauthLoading !== null;
+
+  const openRuntimeProvider = useCallback(async (providerId: string, title: string) => {
+    setSetupLoading(`browser:${providerId}`);
+    setRuntimeModelError(null);
+    try {
+      const { models } = await providersIpc.listInterpreterModels(providerId);
+      if (!models.length) throw new Error(t('onboarding.modelSetup.noRuntimeModels'));
+      const profiles: Profile[] = models.map(model => ({
+        id: `onboarding:browser-${providerId}-${model.id}`, name: model.name,
+        provider: 'local', providerId, modelId: model.id, isBuiltin: false,
+      }));
+      onOpenPackReview({ packId: `browser:${providerId}`, title,
+        subtitle: t('onboarding.modelSetup.chooseModelsFromSubtitle', { provider: title }),
+        profiles, browserProviderId: providerId, defaultProfileId: profiles[0].id,
+        initialSelectedProfileIds: [profiles[0].id],
+        errorMessage: t('onboarding.modelSetup.failedProviders') });
+    } catch (reason) {
+      setRuntimeModelError(reason instanceof Error ? reason.message : String(reason));
+    } finally { setSetupLoading(null); }
+  }, [onOpenPackReview, t]);
 
   const renderOptionalPackCard = useCallback((packId: OptionalPackId) => {
     const isDetected = detectedPackIds.includes(packId);
@@ -1389,7 +1418,9 @@ export function ModelSetupScreen({
       <div className="flex w-full flex-col items-center space-y-3.5">
         <OnboardingHeading
           title="Models"
-          description={hostedDistributionEnabled
+          description={capabilities.runtimeLocalModels
+            ? t('onboarding.modelSetup.runtimeLocalDescription')
+            : hostedDistributionEnabled
             ? 'Pick Interpreter or connect a provider you already use.'
             : 'Connect a provider you already use.'}
           className="space-y-1"
@@ -1410,8 +1441,9 @@ export function ModelSetupScreen({
             providersIpc.listOpenAIOAuthModels()), so it stays a recommended card
             and is not part of the app-server-driven optional grid below.
         */}
+        {(capabilities.hostedAccount || capabilities.chatgptSignIn !== 'unavailable') &&
         <div className={`grid w-full max-w-[720px] gap-3 py-4 md:items-stretch ${hostedDistributionEnabled ? 'md:grid-cols-2' : 'md:grid-cols-1'}`}>
-          {hostedDistributionEnabled && <ModelPackCard
+          {capabilities.hostedAccount && hostedDistributionEnabled && <ModelPackCard
             icon={<InterpreterLogoMark fitSquare size={32} segmentClassName="bg-current" className="text-foreground" />}
             title={t('onboarding.modelSetup.interpreterTitle')}
             description="Use any model, fastest setup."
@@ -1426,7 +1458,7 @@ export function ModelSetupScreen({
             onAction={handleUseHostedPack}
           />}
 
-          <ModelPackCard
+          {capabilities.chatgptSignIn !== 'unavailable' && <ModelPackCard
             icon={<OpenAIIcon className="size-9 text-foreground" />}
             title={t('onboarding.modelSetup.chatgptTitle')}
             description="Reuse your subscription."
@@ -1475,8 +1507,8 @@ export function ModelSetupScreen({
             actionLoading={setupLoading === 'openai-oauth'}
             actionDisabled={actionsLocked}
             onAction={() => void handleUseOpenAIOAuthPack()}
-          />
-        </div>
+          />}
+        </div>}
 
         <div className="w-full max-w-[720px] space-y-2.5">
           {providersError ? (
@@ -1504,10 +1536,21 @@ export function ModelSetupScreen({
           ) : null}
 
           <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
+            {capabilities.runtimeLocalModels && runtimeProviders?.map(provider =>
+              <CompactProviderGridItem key={`browser:${provider.id}`}
+                icon={<Plus className="size-5 text-foreground" />}
+                title={t('onboarding.modelSetup.runtimeLocalTitle')}
+                status={t('onboarding.modelSetup.runtimeLocalStatus')}
+                badge={t('onboarding.modelSetup.runtimeLocalBadge')}
+                loading={setupLoading === `browser:${provider.id}`}
+                disabled={actionsLocked || !provider.configured}
+                addLabel={t('onboarding.toolAddons.add')}
+                onAdd={() => void openRuntimeProvider(provider.id,
+                  t('onboarding.modelSetup.runtimeLocalTitle'))} />)}
             {!providersLoading && !providersError
               ? visibleOptionalPackIds.map((packId) => renderOptionalPackCard(packId))
               : null}
-            <CompactProviderGridItem
+            {capabilities.customEndpoint && <CompactProviderGridItem
               icon={<Plus className="size-5 text-foreground" />}
               title={t('onboarding.modelSetup.customModelTitle')}
               status="Use a supported Chat Completions or Responses API endpoint."
@@ -1517,11 +1560,12 @@ export function ModelSetupScreen({
               addLabel={t('onboarding.toolAddons.add')}
               onAdd={() => setShowCustomModel(true)}
               cardClassName={showCustomModel ? 'ring-1 ring-border/70' : undefined}
-            />
+            />}
           </div>
+          {runtimeModelError && <p role="alert">{runtimeModelError}</p>}
         </div>
 
-        <OnboardingModal
+        {capabilities.customEndpoint && <OnboardingModal
           open={showCustomModel}
           onClose={() => setShowCustomModel(false)}
           panelClassName="max-w-[720px] space-y-4 rounded-[24px] p-6 text-left"
@@ -1624,7 +1668,7 @@ export function ModelSetupScreen({
                 </Button>
               </div>
           </div>
-        </OnboardingModal>
+        </OnboardingModal>}
 
         {setupError && (
           <p className="text-center text-ui-sm text-destructive">

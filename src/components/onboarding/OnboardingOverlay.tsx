@@ -22,6 +22,7 @@ import { NavigationFooter } from './components/NavigationFooter';
 import { ONBOARDING_TOUR_VIDEO_URLS } from './tourVideos';
 import {
   ENABLED_ONBOARDING_STEP_INDICES,
+  hostOnboardingStepIndices,
   getOnboardingStepId,
   getOnboardingStepTelemetryName,
   ONBOARDING_STEP_INDEX,
@@ -68,6 +69,7 @@ import {
   theme as themeIpc,
   workspace as workspaceIpc,
   showContextMenu,
+  getHostCapabilities,
   type ContextMenuItem,
 } from '../../ipc';
 import { useAuth } from '../../contexts/AuthContext';
@@ -309,6 +311,7 @@ function OnboardingOverlayContent({ onComplete, simpleMode }: OnboardingOverlayC
   "use no memo";
 
   const { t } = useTranslation();
+  const hostCapabilities = getHostCapabilities();
   const {
     currentStep,
     direction,
@@ -325,18 +328,19 @@ function OnboardingOverlayContent({ onComplete, simpleMode }: OnboardingOverlayC
   const { totalCredits } = useInterpreterTokenUsage();
   const [showInterpreterCreditsStep, setShowInterpreterCreditsStep] = useState(false);
   const [simpleMcpSummary, setSimpleMcpSummary] = useState<SimpleMcpSummary | null>(null);
-  const [simpleDiscoveryReady, setSimpleDiscoveryReady] = useState(!simpleMode);
+  const [simpleDiscoveryReady, setSimpleDiscoveryReady] = useState(
+    !simpleMode || !hostCapabilities.onboardingSteps.mcpDiscovery);
   const restoredStepFromProgressRef = useRef(false);
 
   useEffect(() => {
-    if (!simpleMode) return;
+    if (!simpleMode || !hostCapabilities.onboardingSteps.mcpDiscovery) return;
     let active = true;
     void discoverSimpleMcps()
       .then((summary) => { if (active) setSimpleMcpSummary(summary); })
       .catch(() => { /* Optional discovery must not show an empty MCP step. */ })
       .finally(() => { if (active) setSimpleDiscoveryReady(true); });
     return () => { active = false; };
-  }, [simpleMode]);
+  }, [simpleMode, hostCapabilities.onboardingSteps.mcpDiscovery]);
 
   // Track every onboarding step transition
   useEffect(() => {
@@ -368,15 +372,19 @@ function OnboardingOverlayContent({ onComplete, simpleMode }: OnboardingOverlayC
       : isDetectionComplete && detectionResults?.isConfident
         ? STEPS_WITHOUT_BUCKET
         : ENABLED_STEPS;
-    return withInterpreterCreditsStep(steps, showInterpreterCreditsStep);
-  }, [detectionResults?.isConfident, isDetectionComplete, showInterpreterCreditsStep, simpleMode, simpleMcpSummary]);
+    return hostOnboardingStepIndices(withInterpreterCreditsStep(steps, showInterpreterCreditsStep),
+      hostCapabilities);
+  }, [hostCapabilities, detectionResults?.isConfident, isDetectionComplete,
+    showInterpreterCreditsStep, simpleMode, simpleMcpSummary]);
 
   useEffect(() => {
     setActiveSteps(activeStepIndices);
   }, [activeStepIndices, setActiveSteps]);
 
   useEffect(() => {
-    if (restoredStepFromProgressRef.current || !isDetectionComplete || !simpleDiscoveryReady) return;
+    if (restoredStepFromProgressRef.current ||
+      (hostCapabilities.onboardingSteps.environmentDetection && !isDetectionComplete) ||
+      !simpleDiscoveryReady) return;
     restoredStepFromProgressRef.current = true;
     getOnboardingState()
       .then(({ state }) => {
@@ -392,7 +400,8 @@ function OnboardingOverlayContent({ onComplete, simpleMode }: OnboardingOverlayC
       .catch((error) => {
         console.error('[Onboarding] Failed to restore onboarding progress:', error);
       });
-  }, [activeStepIndices, currentStep, goToStep, isDetectionComplete, simpleDiscoveryReady]);
+  }, [activeStepIndices, currentStep, goToStep, hostCapabilities.onboardingSteps.environmentDetection,
+    isDetectionComplete, simpleDiscoveryReady]);
 
   useEffect(() => {
     if (!isDetectionComplete || !detectionResults) return;
@@ -475,6 +484,9 @@ function OnboardingOverlayContent({ onComplete, simpleMode }: OnboardingOverlayC
 
   // Right-click anywhere during onboarding to quickly change app theme.
   const handleOverlayContextMenu = useCallback(async (event: MouseEvent<HTMLDivElement>) => {
+    // The browser project host has no native theme/settings capability. Let
+    // the browser handle its own context menu instead of offering dead actions.
+    if (!hostCapabilities.nativeContextMenu) return;
     event.preventDefault();
 
     let activeTheme: ThemeOption = 'system';
@@ -512,7 +524,7 @@ function OnboardingOverlayContent({ onComplete, simpleMode }: OnboardingOverlayC
     } catch (error) {
       console.error('[Onboarding] Failed to set theme from context menu:', error);
     }
-  }, [t]);
+  }, [hostCapabilities.nativeContextMenu, t]);
 
   // ---- Screen callbacks ----
 
@@ -569,7 +581,7 @@ function OnboardingOverlayContent({ onComplete, simpleMode }: OnboardingOverlayC
 
     // Provision the private control workspace automatically before the first
     // Simple conversation. The user can move it later from Settings.
-    if (simpleMode) await workspaceIpc.getSimple();
+    if (simpleMode && hostCapabilities.workspace === 'filesystem') await workspaceIpc.getSimple();
 
     telemetryIpc.trackOnboarding('onboarding_completed', {}).catch(() => {});
     const { state } = await getOnboardingState();
@@ -581,7 +593,7 @@ function OnboardingOverlayContent({ onComplete, simpleMode }: OnboardingOverlayC
     completeOnboarding();
     onComplete();
     return true;
-  }, [activeStepIndices, completeOnboarding, goToStep, onComplete, simpleMode]);
+  }, [activeStepIndices, completeOnboarding, goToStep, hostCapabilities.workspace, onComplete, simpleMode]);
 
   const handleWorkspaceChoiceFinish = useCallback(async () => {
     goToStep(STEP_FEEDBACK);
@@ -671,9 +683,15 @@ function OnboardingOverlayContent({ onComplete, simpleMode }: OnboardingOverlayC
       }
     }
     setShowInterpreterCreditsStep(false);
+    if (activeStepIndices[activeStepIndices.length - 1] === STEP_MODEL_REVIEW) {
+      await handleOnboardingComplete();
+      setModelPackReviewState(null);
+      return;
+    }
     setModelPackReviewState(null);
     goForward();
-  }, [goForward, goToStep, resolveInterpreterCreditsIntroEligibility]);
+  }, [activeStepIndices, goForward, goToStep, handleOnboardingComplete,
+    resolveInterpreterCreditsIntroEligibility]);
 
   const handleInterpreterCreditsContinue = useCallback(() => {
     goForward();

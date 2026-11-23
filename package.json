@@ -142,7 +142,7 @@
     "test:live:lmstudio": "bun test src/lib/codex/lmstudio.live.test.ts",
     "test:coverage": "playwright test --grep-invert @voice && open tests/coverage-report/index.html",
     "install:all": "pnpm install",
-    "typecheck": "pnpm run ensure:codex-generated-types && tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "typecheck": "pnpm run ensure:codex-generated-types && tsc --noEmit && tsc -p tsconfig.electron.json --noEmit && tsc -p packages/browser-agent-core/tsconfig.json --noEmit",
     "precommit": "pnpm run typecheck && pnpm run test:unit && pnpm run test:vitest",
     "release:licenses": "pnpm licenses list --prod --json",
     "release:licenses:check": "node scripts/check-production-licenses.mjs",

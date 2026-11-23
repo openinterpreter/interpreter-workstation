@@ -1,0 +1,18 @@
+{
+  "name": "@openinterpreter/browser-agent-core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./app-server": "./src/appServer.ts",
+    "./catalog": "./src/modelCatalog.ts",
+    "./transcript": "./src/piTranscript.ts"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "1.5.2",
+    "@earendil-works/pi-ai": "1.5.2",
+    "@noble/hashes": "1.8.0",
+    "@wllama/wllama": "3.13.0"
+  }
+}
