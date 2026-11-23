@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import express from 'express';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import request from 'supertest';
 import { getCodexService } from '../../src/lib/codex/service';
 import type { v2 } from '../handlers/codex-generated-types/index';
@@ -80,6 +83,36 @@ describe('thread history page HTTP', () => {
       const hard = await request(app).get(`/api/agent/threads/${id}?limit=24`);
       expect(hard.status).toBe(500);
     } finally { restore(); }
+  });
+
+  test('a page restores saved tool source and older reasoning from the end of the saved history', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'thread-page-route-'));
+    const path = join(dir, 'rollout.jsonl');
+    writeFileSync(path, [
+      { type: 'turn_context', payload: { turn_id: 'turn_1' } },
+      { type: 'response_item', payload: { type: 'custom_tool_call', name: 'js_repl', call_id: 'cmd_1', input: 'await page.reload();' } },
+      { type: 'response_item', payload: { type: 'reasoning', summary: [], content: [{ type: 'reasoning_text', text: 'saved thought' }] } },
+      { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Done' }] } },
+    ].map((line) => JSON.stringify(line)).join('\n') + '\n');
+    const items = [
+      { type: 'commandExecution', id: 'cmd_1', command: 'js_repl', cwd: '/workspace', processId: null, status: 'completed',
+        commandActions: [], aggregatedOutput: 'ok', exitCode: 0, durationMs: 1 },
+      { type: 'agentMessage', id: 'a1', text: 'Done', phase: 'final_answer' },
+    ] as v2.ThreadItem[];
+    const { restore } = stubService(async () => ({
+      thread: { ...shell, path, turns: [{ ...turn('turn_1', 'completed'), items }] },
+      nextCursor: null,
+    }));
+    try {
+      const response = await request(app).get(`/api/agent/threads/${id}?limit=24`);
+      expect(response.status).toBe(200);
+      const saved = response.body.thread.turns[0].items;
+      expect(saved.map((item: v2.ThreadItem) => item.type)).toEqual(['commandExecution', 'reasoning', 'agentMessage']);
+      expect(saved[0]).toMatchObject({ sourceInput: 'await page.reload();', sourceToolName: 'js_repl' });
+    } finally {
+      restore();
+      rmSync(dir, { recursive: true });
+    }
   });
 
   test('a read without a limit still returns the whole thread', async () => {

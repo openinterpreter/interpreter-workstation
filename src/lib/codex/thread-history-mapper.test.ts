@@ -703,6 +703,40 @@ describe("mapThreadToChatMessages", () => {
     assert.equal(toolCall.target, "script");
   });
 
+  test("should_preserve_reloaded_custom_tool_source_on_commandExecution", () => {
+    const thread = makeThread([
+      makeTurn([
+        {
+          type: "userMessage",
+          id: "item_1",
+          content: [{ type: "text", text: "Open the page", text_elements: [] }],
+        },
+        {
+          type: "commandExecution",
+          id: "item_2",
+          command: "js_repl",
+          cwd: "/workspace",
+          processId: null,
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "ok",
+          exitCode: 0,
+          durationMs: 10,
+          sourceInput: 'await page.goto("https://example.com");',
+          sourceToolName: "js_repl",
+        } as v2.ThreadItem & { sourceInput: string; sourceToolName: string },
+      ]),
+    ]);
+
+    const result = mapThreadToChatMessages(thread);
+    const assistant = result[1]!;
+    const toolCall = msgToolCalls(assistant)[0]!;
+
+    assert.equal(toolCall.type, "commandExecution");
+    assert.equal(toolCall.sourceToolName, "js_repl");
+    assert.equal(toolCall.sourceInput, 'await page.goto("https://example.com");');
+  });
+
   test("should_map_file_change_to_tool_call", () => {
     const thread = makeThread([
       makeTurn([

@@ -15,6 +15,7 @@ import { getCustomInstructions } from '../configStore';
 import { getServerJWT } from '../lib/jwtStore';
 import { AgentModelConfig } from '../../shared/types/model';
 import { messageQueueStore } from '../utils/messageQueueStore';
+import { enrichThreadTurnsFromRollout } from '../utils/threadRolloutEnrichment';
 import { readCuaProcessLockCustody } from '../utils/cuaProcessLockMetadata';
 import { cleanupACPProvider } from '../utils/acpProvider';
 import { getCurrentWorkspace, requireExistingWorkspacePath } from '../utils/workspace';
@@ -143,6 +144,9 @@ import {
   isThreadHistoryCursor,
   parseThreadHistoryLimit,
 } from '../utils/threadHistoryPagination';
+
+/** Saved-history bytes the repeating history refresh may read per request. */
+const PASSIVE_REFRESH_ROLLOUT_BYTE_BUDGET = 1024 * 1024;
 
 const router = Router();
 
@@ -1469,15 +1473,29 @@ router.get('/threads/:threadId', async (req: Request, res: Response) => {
   }
   try {
     if (limit === null) {
-      res.json({ thread: await getCodexService().readThread(req.params.threadId) });
+      const thread = await getCodexService().readThread(req.params.threadId);
+      // Saved tool source and older reasoning are restored for the newest
+      // turns only, as far back as the fixed read budget reaches.
+      const { thread: enriched } = await enrichThreadTurnsFromRollout(thread, { partial: true });
+      res.json({ thread: enriched });
       return;
     }
 
     // A page costs one bounded native read regardless of how long the
     // conversation is; `before` is the runtime's opaque cursor.
     const page = await getCodexService().readThreadPage(req.params.threadId, { limit, cursor: before });
+    // Restores saved tool source and older reasoning for this page by reading
+    // only the end of the saved history, within a fixed budget. The passive
+    // refresh poll repeats every few seconds, and a single turn can itself be
+    // very long, so it gets a much smaller budget and keeps whatever newest
+    // turns that budget covers.
+    const passiveRefresh = req.query.bestEffort === '1' || req.query.bestEffort === 'true';
+    const { thread: pageThread } = await enrichThreadTurnsFromRollout(
+      page.thread,
+      passiveRefresh ? { byteBudget: PASSIVE_REFRESH_ROLLOUT_BYTE_BUDGET, partial: true } : undefined,
+    );
     res.json({
-      thread: page.thread,
+      thread: pageThread,
       historyPage: {
         nextCursor: page.nextCursor,
         hasMore: page.nextCursor !== null,

@@ -8,6 +8,19 @@ type MappedItem =
   | { kind: "text"; text: string }
   | { kind: "tool"; toolCall: ToolCallInfo };
 
+type ThreadItemWithSource = v2.ThreadItem & {
+  sourceInput?: string;
+  sourceToolName?: string;
+};
+
+function mapToolItem(item: v2.ThreadItem): ToolCallInfo {
+  const sourceItem = item as ThreadItemWithSource;
+  return buildToolCallInfoFromItem(item, {
+    sourceInput: sourceItem.sourceInput,
+    sourceToolName: sourceItem.sourceToolName,
+  });
+}
+
 function mapThreadItem(item: v2.ThreadItem): MappedItem {
   switch (item.type) {
     case "userMessage":
@@ -27,7 +40,7 @@ function mapThreadItem(item: v2.ThreadItem): MappedItem {
         text: '<compaction reason="context_limit"></compaction>',
       };
     default:
-      return { kind: "tool", toolCall: buildToolCallInfoFromItem(item) };
+      return { kind: "tool", toolCall: mapToolItem(item) };
   }
 }
 

@@ -21,6 +21,10 @@ import {
   runtimeRestartContinuationStorageKey,
   mergeChatHistory,
   findInProgressTurnId,
+  collectKnownTurnIds,
+  historyPageConnects,
+  joinReconciledPages,
+  MAX_GAP_RECONCILE_PAGES,
   type ChatMessage,
   type ChatMessagePart,
   type ToolCallInfo,
@@ -174,6 +178,56 @@ describe("mergeChatHistory", () => {
     const merged = mergeChatHistory([older, live], [confirmed], "newer");
 
     assert.deepEqual(merged.map((entry) => entry.id), ["a1", "a2"]);
+  });
+});
+
+describe("refresh gap reconciliation helpers", () => {
+  const assistant = (id: string, turnId: string): ChatMessage => ({
+    id, role: "assistant", parts: [{ kind: "text", content: id }], serverMessageId: turnId,
+  });
+  const turns = (...ids: string[]) => ids.map((id) => ({ id }));
+
+  test("known turn ids come from assistant rows and loaded history", () => {
+    const known = collectKnownTurnIds(
+      [{ id: "u1", role: "user", parts: [] }, assistant("a1", "turn_1")],
+      ["turn_0"],
+    );
+    assert.deepEqual([...known].sort(), ["turn_0", "turn_1"]);
+  });
+
+  test("a page connects when it holds a shown turn or nothing is shown yet", () => {
+    assert.equal(historyPageConnects(turns("turn_2", "turn_3"), new Set(["turn_2"])), true);
+    assert.equal(historyPageConnects(turns("turn_4", "turn_5"), new Set(["turn_2"])), false);
+    assert.equal(historyPageConnects(turns("turn_4"), new Set()), true);
+    assert.equal(historyPageConnects([], new Set(["turn_2"])), true);
+  });
+
+  test("older pages join before newer ones, from the oldest shown turn, without duplicates", () => {
+    const joined = joinReconciledPages(
+      [turns("t7", "t8"), turns("t5", "t6", "t7"), turns("t1", "t2", "t3", "t4", "t5")],
+      new Set(["t2", "t3"]),
+    );
+    assert.deepEqual(joined.map((turn) => turn.id), ["t2", "t3", "t4", "t5", "t6", "t7", "t8"]);
+  });
+
+  test("a repeated turn keeps its position and takes the newer page's content", () => {
+    const joined = joinReconciledPages(
+      [[{ id: "t2", v: "new" }], [{ id: "t1", v: "x" }, { id: "t2", v: "old" }]],
+      new Set(["t1"]),
+    );
+    assert.deepEqual(joined, [{ id: "t1", v: "x" }, { id: "t2", v: "new" }]);
+  });
+
+  test("merging joined older pages after a newer page keeps server order", () => {
+    const current = [assistant("a1", "t1")];
+    const joined = joinReconciledPages([turns("t4", "t5"), turns("t1", "t2", "t3")], new Set(["t1"]));
+    const incoming = joined.map((turn) => assistant(`a${turn.id.slice(1)}`, turn.id));
+    const merged = mergeChatHistory(current, incoming, "newer");
+    assert.deepEqual(merged.map((entry) => entry.id), ["a1", "a2", "a3", "a4", "a5"]);
+  });
+
+  test("the page cap is a small fixed number", () => {
+    assert.equal(MAX_GAP_RECONCILE_PAGES, 4);
   });
 });
 
