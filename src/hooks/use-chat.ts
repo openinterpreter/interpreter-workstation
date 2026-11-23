@@ -807,6 +807,9 @@ export type UseChatReturn = {
   stopGeneration: () => void;
   stopBackgroundProcess: (toolCallIds?: string[]) => Promise<void>;
   threadId: string | null;
+  /** In-progress turn seen in the thread's saved history, including one this
+   * client did not start; null while the thread is not active. */
+  observedActiveTurnId: string | null;
 };
 
 export type UseChatOptions = {
@@ -847,6 +850,77 @@ function readThreadHistoryPageMetadata(value: unknown): ThreadHistoryPageMetadat
   };
 }
 
+/** The newest in-progress turn of a thread read, if any. Lets this client
+ * steer a turn that another client or a wake source started. */
+export function findInProgressTurnId(thread: {
+  turns: ReadonlyArray<{ id?: unknown; status?: unknown }>;
+}): string | null {
+  for (let index = thread.turns.length - 1; index >= 0; index -= 1) {
+    const turn = thread.turns[index];
+    if (turn?.status === 'inProgress' && typeof turn.id === 'string' && turn.id) {
+      return turn.id;
+    }
+  }
+  return null;
+}
+
+/** Turns read by one reconnect refresh: the newest two. */
+export const REFRESH_NEWEST_TURNS = 2;
+/** Ordinary history page size, also used to page back over a gap. */
+export const HISTORY_PAGE_TURNS = 24;
+/** Most older pages one refresh reads to reach turns already shown. */
+export const MAX_GAP_RECONCILE_PAGES = 4;
+
+/** Turn ids already represented in the view. Assistant messages carry their
+ * turn id; `loaded` adds turns read from history that had no assistant row. */
+export function collectKnownTurnIds(
+  messages: ReadonlyArray<ChatMessage>,
+  loaded: Iterable<string> = [],
+): Set<string> {
+  const known = new Set(loaded);
+  for (const message of messages) {
+    if (message.serverMessageId) known.add(message.serverMessageId);
+  }
+  return known;
+}
+
+/** Whether a fetched page reaches turns already shown, so merging it leaves
+ * no hole. Nothing shown yet, or an empty page, trivially connects. */
+export function historyPageConnects(
+  turns: ReadonlyArray<{ id: string }>,
+  known: ReadonlySet<string>,
+): boolean {
+  return known.size === 0 || turns.length === 0 || turns.some((turn) => known.has(turn.id));
+}
+
+/**
+ * Join pages read newest first (each oldest first) into one ascending run of
+ * turns, and drop the turns before the oldest one already shown: those are
+ * older than the shown window and stay reachable through older history.
+ * A turn repeated across pages keeps its position and its newest content.
+ */
+export function joinReconciledPages<T extends { id: string }>(
+  pagesNewestFirst: ReadonlyArray<ReadonlyArray<T>>,
+  known: ReadonlySet<string>,
+): T[] {
+  const ordered: T[] = [];
+  const indexById = new Map<string, number>();
+  for (let page = pagesNewestFirst.length - 1; page >= 0; page -= 1) {
+    for (const turn of pagesNewestFirst[page]!) {
+      const existing = indexById.get(turn.id);
+      if (existing === undefined) {
+        indexById.set(turn.id, ordered.length);
+        ordered.push(turn);
+      } else {
+        ordered[existing] = turn;
+      }
+    }
+  }
+  if (known.size === 0) return ordered;
+  const firstKnown = ordered.findIndex((turn) => known.has(turn.id));
+  return firstKnown < 0 ? ordered : ordered.slice(firstKnown);
+}
+
 export function mergeChatHistory(
   current: ChatMessage[],
   incoming: ChatMessage[],
@@ -854,7 +928,24 @@ export function mergeChatHistory(
 ): ChatMessage[] {
   const incomingById = new Map(incoming.map((message) => [message.id, message]));
   const consumedIncomingIds = new Set<string>();
-  const updatedCurrent = current.flatMap((message) => {
+  // A newer page covers only the latest turns. Messages up to the last one
+  // from a turn outside that page are older history: they may be updated by
+  // exact ID, but never matched or dropped by content, so a repeated short
+  // message ("continue") in older history is not mistaken for a new one.
+  const incomingTurnIds = new Set(incoming.flatMap((message) => (
+    message.serverMessageId ? [message.serverMessageId] : []
+  )));
+  let olderHistoryEnd = -1;
+  if (direction === 'newer') {
+    for (let index = current.length - 1; index >= 0; index -= 1) {
+      const turnId = current[index]?.serverMessageId;
+      if (turnId && !incomingTurnIds.has(turnId)) {
+        olderHistoryEnd = index;
+        break;
+      }
+    }
+  }
+  const updatedCurrent = current.flatMap((message, index) => {
     const matchingId = incomingById.get(message.id);
     if (matchingId) {
       if (consumedIncomingIds.has(matchingId.id)) {
@@ -890,7 +981,7 @@ export function mergeChatHistory(
       }
     }
 
-    if (direction === 'newer') {
+    if (direction === 'newer' && index > olderHistoryEnd) {
       const matchingContent = incoming.find((candidate) => (
         !consumedIncomingIds.has(candidate.id)
         && candidate.role === message.role
@@ -1084,6 +1175,7 @@ export function useChat(
   const [historyLoaded, setHistoryLoaded] = useState(!options.initialThreadId);
   const [hasOlderHistory, setHasOlderHistory] = useState(false);
   const [loadingOlderHistory, setLoadingOlderHistory] = useState(false);
+  const [observedActiveTurnId, setObservedActiveTurnId] = useState<string | null>(null);
   const [runtimeContinuationNonce, setRuntimeContinuationNonce] = useState(0);
 
   const abortRef = useRef<AbortController | null>(null);
@@ -1106,6 +1198,11 @@ export function useChat(
   );
   const toolStartTimesRef = useRef<Map<string, number>>(new Map());
   const olderHistoryCursorRef = useRef<string | null>(null);
+  // Turn ids read from saved history, including turns with no assistant row.
+  const loadedTurnIdsRef = useRef<Set<string>>(new Set());
+  // Advances whenever the shown history window is replaced, so an older-page
+  // load started against the previous window is discarded.
+  const historyEpochRef = useRef(0);
 
   // Keep the telemetry context in sync with the chat's active profile so
   // every emitted event is enriched with activeProfileId/activeModel — not
@@ -1282,8 +1379,12 @@ export function useChat(
             threadId: initialThreadId,
             planChecklist: null,
           };
+          const active = payload.thread.status?.type === 'active';
           setMessages(nextMessages);
-          setIsStreaming(payload.thread.status?.type === 'active');
+          setIsStreaming(active);
+          setObservedActiveTurnId(active ? findInProgressTurnId(payload.thread) : null);
+          historyEpochRef.current += 1;
+          loadedTurnIdsRef.current = new Set(payload.thread.turns.map((turn) => turn.id));
           olderHistoryCursorRef.current = historyPage.nextCursor;
           setHasOlderHistory(historyPage.hasMore);
           setPlanChecklist(null);
@@ -1331,6 +1432,7 @@ export function useChat(
     }
 
     setLoadingOlderHistory(true);
+    const epoch = historyEpochRef.current;
     try {
       const response = await fetch(
         await getApiUrl(
@@ -1345,7 +1447,11 @@ export function useChat(
       if (!isThreadReadResponse(payload)) {
         throw new Error('Invalid thread history response shape.');
       }
+      // The shown window was replaced while this page loaded; its cursor no
+      // longer describes the history above the window.
+      if (historyEpochRef.current !== epoch) return;
       const historyPage = readThreadHistoryPageMetadata(payload);
+      for (const turn of payload.thread.turns) loadedTurnIdsRef.current.add(turn.id);
       const olderMessages = mapThreadToChatMessages(payload.thread).filter(
         (message) => !isHiddenRuntimeContinuationMessage(message),
       );
@@ -1376,31 +1482,89 @@ export function useChat(
     }
 
     let cancelled = false;
+    // At most one refresh, including any gap reconciliation, is in flight: a
+    // slow read skips later ticks rather than stacking requests behind it.
+    let inFlight: AbortController | null = null;
     const refresh = async () => {
-      try {
+      if (inFlight) return;
+      const controller = new AbortController();
+      inFlight = controller;
+      const readPage = async (query: string) => {
         const response = await fetch(
           await getApiUrl(
-            `/api/agent/threads/${encodeURIComponent(activeThreadId)}?limit=24&bestEffort=1`,
+            `/api/agent/threads/${encodeURIComponent(activeThreadId)}?${query}&bestEffort=1`,
           ),
-          { credentials: 'include' },
+          { credentials: 'include', signal: controller.signal },
         );
-        if (!response.ok || cancelled) return;
+        if (!response.ok || cancelled) return null;
         const payload: unknown = await response.json();
-        if (!isThreadReadResponse(payload) || cancelled) return;
-        const refreshed = mapThreadToChatMessages(payload.thread).filter(
+        if (!isThreadReadResponse(payload) || cancelled) return null;
+        return { thread: payload.thread, historyPage: readThreadHistoryPageMetadata(payload) };
+      };
+      try {
+        const epoch = historyEpochRef.current;
+        // Normally only the latest turns change; mergeChatHistory keeps the rest.
+        const newest = await readPage(`limit=${REFRESH_NEWEST_TURNS}`);
+        if (!newest) return;
+        const known = collectKnownTurnIds(stateRef.current.messages, loadedTurnIdsRef.current);
+        // If more turns finished since the last refresh than this page holds,
+        // page back until the fetched turns reach a turn already shown.
+        const pages: v2.Turn[][] = [newest.thread.turns];
+        let connected = historyPageConnects(newest.thread.turns, known);
+        let cursor = newest.historyPage.nextCursor;
+        let olderPagesRead = 0;
+        while (!connected && cursor && olderPagesRead < MAX_GAP_RECONCILE_PAGES) {
+          const older = await readPage(
+            `limit=${HISTORY_PAGE_TURNS}&before=${encodeURIComponent(cursor)}`,
+          );
+          // A failed page leaves the view as it was; the next tick retries.
+          if (!older) return;
+          olderPagesRead += 1;
+          pages.push(older.thread.turns);
+          connected = historyPageConnects(older.thread.turns, known);
+          if (older.historyPage.nextCursor === cursor) return;
+          cursor = older.historyPage.nextCursor;
+        }
+        if (cancelled || historyEpochRef.current !== epoch) return;
+
+        // Ascending from the oldest turn already shown. mergeChatHistory
+        // updates shown turns in place by id and appends the rest in this
+        // order after the current tail, so turns joined from several older
+        // pages land in server order, newest last, without duplicates.
+        const turns = joinReconciledPages(pages, known);
+        const refreshed = mapThreadToChatMessages({ ...newest.thread, turns }).filter(
           (message) => !isHiddenRuntimeContinuationMessage(message),
         );
-        const nextMessages = mergeChatHistory(
-          stateRef.current.messages,
-          refreshed,
-          'newer',
-        );
+        let nextMessages: ChatMessage[];
+        if (connected) {
+          nextMessages = mergeChatHistory(stateRef.current.messages, refreshed, 'newer');
+        } else {
+          // The page cap was reached with turns still missing between the
+          // shown history and the fetched ones (or the thread's first turn
+          // was reached without meeting a shown turn). Show the fetched newest
+          // turns as the window and expose everything above them through
+          // older history, so "load older" fills the gap in order instead of
+          // the gap staying hidden. Unsent local messages stay at the end.
+          nextMessages = [
+            ...refreshed,
+            ...stateRef.current.messages.filter((message) => message.pendingServerEchoText),
+          ];
+          historyEpochRef.current += 1;
+          loadedTurnIdsRef.current = new Set();
+          olderHistoryCursorRef.current = cursor;
+          setHasOlderHistory(cursor !== null);
+        }
+        for (const turn of turns) loadedTurnIdsRef.current.add(turn.id);
+        const active = newest.thread.status?.type === 'active';
         stateRef.current = { ...stateRef.current, messages: nextMessages };
         setMessages(nextMessages);
-        setIsStreaming(payload.thread.status?.type === 'active');
+        setIsStreaming(active);
+        setObservedActiveTurnId(active ? findInProgressTurnId(newest.thread) : null);
       } catch {
         // Reconnect polling is best-effort. The normal history error remains the
         // authoritative failure surface and the next interval tries again.
+      } finally {
+        if (inFlight === controller) inFlight = null;
       }
     };
 
@@ -1409,6 +1573,7 @@ export function useChat(
     return () => {
       cancelled = true;
       window.clearInterval(intervalId);
+      inFlight?.abort();
     };
   }, [historyLoaded, marketingDemoMode, options.initialThreadId]);
 
@@ -2398,5 +2563,6 @@ export function useChat(
     stopGeneration,
     stopBackgroundProcess,
     threadId,
+    observedActiveTurnId,
   };
 }

@@ -379,6 +379,7 @@ function AgentThreadWithRuntime({
     stopGeneration,
     stopBackgroundProcess,
     threadId,
+    observedActiveTurnId,
   } = useChat(modelConfig.profileId || '', {
     agentId,
     callerToken,
@@ -423,7 +424,7 @@ function AgentThreadWithRuntime({
   const closeOnStartupCompletionRef = useRef(false);
   const startupRunStartedRef = useRef(false);
   const startupCompletionRequestIdRef = useRef<string | null>(null);
-  const currentTurnId = streamingMessage?.serverMessageId ?? null;
+  const currentTurnId = streamingMessage?.serverMessageId ?? observedActiveTurnId ?? null;
 
   useEffect(() => {
     layoutRef.current = layout;

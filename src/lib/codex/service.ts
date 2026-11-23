@@ -1579,6 +1579,25 @@ export class CodexService {
     throw new Error('Native turn history exceeds the scan bound');
   }
 
+  /** One page of a thread's newest turns before `cursor`, oldest first, with
+   * the thread's metadata and current status. Reads the metadata without
+   * turns plus a single bounded turn page; never the whole history.
+   * `nextCursor` is the runtime's opaque cursor for the next older page. */
+  async readThreadPage(threadId: string, options: { limit: number; cursor?: string }):
+    Promise<{ thread: v2.Thread; nextCursor: string | null }> {
+    const [{ thread }, page] = await Promise.all([
+      this.client.threadRead({ threadId, includeTurns: false }),
+      this.client.threadTurnsList({ threadId, limit: options.limit, sortDirection: 'desc', itemsView: 'full',
+        ...(options.cursor ? { cursor: options.cursor } : {}) }),
+    ]);
+    if (!thread || thread.id !== threadId) throw new Error('Native thread identity mismatch');
+    if (!page || !Array.isArray(page.data) || page.data.length > options.limit ||
+        page.data.some(turn => turn.itemsView !== 'full')) {
+      throw new Error('Invalid native turn page');
+    }
+    return { thread: { ...thread, turns: [...page.data].reverse() }, nextCursor: page.nextCursor ?? null };
+  }
+
   /** Exact durable saved-thread binding for a caller that already has access
    * to the ordinary local agent HTTP surface. Never hydrate turn history or
    * use the observed active/idle status to decide whether input is admissible. */
