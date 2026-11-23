@@ -4,14 +4,24 @@ import {
   ENABLED_ONBOARDING_STEP_INDICES,
   getOnboardingStepId,
   getOnboardingStepTelemetryName,
+  hostOnboardingStepIndices,
   ONBOARDING_STEP_INDEX,
   ONBOARDING_STEPS,
   ONBOARDING_STEPS_WITHOUT_BUCKET_INDICES,
   resolveNextIncompleteOnboardingStepIndex,
   TOTAL_ONBOARDING_STEPS,
 } from './onboardingSteps';
+import { BROWSER_PROJECT_CAPABILITIES, DESKTOP_HOST_CAPABILITIES } from '../../../shared/types/hostCapabilities';
 
 describe('onboarding step registry', () => {
+  test('filters the ordinary simple steps per host capability, preserving desktop options', () => {
+    const ordinary = ['name', 'privacy', 'tool-addons', 'simple-mcp', 'model-setup',
+      'model-review', 'model-credits', 'simple-whatsapp']
+      .map(id => ONBOARDING_STEP_INDEX[id as keyof typeof ONBOARDING_STEP_INDEX]);
+    expect(hostOnboardingStepIndices(ordinary, DESKTOP_HOST_CAPABILITIES)).toEqual(ordinary);
+    expect(hostOnboardingStepIndices(ordinary, BROWSER_PROJECT_CAPABILITIES)
+      .map(getOnboardingStepId)).toEqual(['name', 'privacy', 'model-setup', 'model-review']);
+  });
   test('keeps one ordered source of truth for step indices', () => {
     expect(TOTAL_ONBOARDING_STEPS).toBe(24);
     expect(ONBOARDING_STEP_INDEX.name).toBe(0);
