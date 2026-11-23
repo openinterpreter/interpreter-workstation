@@ -17,6 +17,7 @@ import {
   forwardedSimplePreviewHeaders,
   namespacedSimplePreviewSetCookies,
   simplePreviewCookiePrefix,
+  simplePreviewUpgradeResponseHead,
 } from './simplePreviewHeaders';
 
 export const SIMPLE_PREVIEW_PROXY_PORT_ENV = 'INTERPRETER_SIMPLE_PREVIEW_PROXY_PORT';
@@ -25,6 +26,7 @@ export const SIMPLE_PREVIEW_PUBLIC_ORIGIN_ENV = 'INTERPRETER_SIMPLE_PREVIEW_PUBL
 const LOOPBACK_HOST = '127.0.0.1';
 const UNAVAILABLE_MESSAGE = 'The interface project is not running.\n';
 const HOP_BY_HOP_HEADERS = new Set(['connection', 'keep-alive', 'proxy-connection']);
+const MAX_UPGRADE_RESPONSE_HEAD_BYTES = 64 * 1024;
 
 /**
  * The running project server: its loopback port and a cookie scope that is
@@ -215,7 +217,39 @@ async function forwardUpgrade(
     target.write(upgradeRequestHead(request, upstreamHost, cookieScope));
     if (head.length > 0) target.write(head);
     socket.pipe(target);
-    target.pipe(socket);
+    // The project's answer to the upgrade is an HTTP response head like any
+    // other. Its headers are rewritten before anything reaches the browser,
+    // so a cookie set there lands in the project's own namespace too; only
+    // after an accepted upgrade are the raw bytes piped.
+    let pending = Buffer.alloc(0);
+    const onHead = (chunk: Buffer) => {
+      pending = Buffer.concat([pending, chunk]);
+      const end = pending.indexOf('\r\n\r\n');
+      if (end < 0) {
+        if (pending.length > MAX_UPGRADE_RESPONSE_HEAD_BYTES) {
+          target.off('data', onHead);
+          target.destroy();
+          socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+        }
+        return;
+      }
+      target.off('data', onHead);
+      const rewritten = simplePreviewUpgradeResponseHead(pending.subarray(0, end).toString('latin1'), cookieScope);
+      // Anything but an accepted upgrade is answered by the proxy itself and
+      // the connection is closed. Passing a refusal through would leave an
+      // ordinary HTTP connection open to the project server with no header
+      // filtering on whatever followed.
+      if (rewritten === null || !/^HTTP\/1\.[01] 101(?: |$)/.test(rewritten)) {
+        target.destroy();
+        socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+        return;
+      }
+      socket.write(Buffer.from(`${rewritten}\r\n\r\n`, 'latin1'));
+      const rest = pending.subarray(end + 4);
+      if (rest.length > 0) socket.write(rest);
+      target.pipe(socket);
+    };
+    target.on('data', onHead);
   });
   target.on('error', () => socket.destroy());
   target.on('close', () => socket.destroy());

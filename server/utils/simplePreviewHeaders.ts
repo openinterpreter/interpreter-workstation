@@ -102,6 +102,33 @@ export function projectSimplePreviewCookies(cookieHeader: string, scope: string)
 }
 
 /**
+ * A project server's raw response head to a WebSocket upgrade (status line and
+ * header lines, without the terminating blank line), rewritten for the
+ * browser: every Set-Cookie is moved into the project's namespace or dropped,
+ * exactly as for an ordinary response, whatever the status. Returns null for a
+ * head that cannot be rewritten safely (not an HTTP response, a folded header
+ * line, or a line without a header name); the caller must then refuse it.
+ */
+export function simplePreviewUpgradeResponseHead(head: string, scope: string): string | null {
+  const [statusLine, ...headerLines] = head.split('\r\n');
+  if (!/^HTTP\/1\.[01] \d{3}(?: .*)?$/.test(statusLine)) return null;
+  const rewritten = [statusLine];
+  for (const line of headerLines) {
+    // A folded continuation line could carry on a Set-Cookie value unseen.
+    if (line === '' || /^[ \t]/.test(line) || /[\r\n\0]/.test(line)) return null;
+    const separator = line.indexOf(':');
+    if (separator <= 0 || /[\s]/.test(line.slice(0, separator))) return null;
+    if (line.slice(0, separator).toLowerCase() !== 'set-cookie') {
+      rewritten.push(line);
+      continue;
+    }
+    const cookie = namespacedSimplePreviewSetCookie(line.slice(separator + 1).trim(), scope);
+    if (cookie !== null) rewritten.push(`Set-Cookie: ${cookie}`);
+  }
+  return rewritten.join('\r\n');
+}
+
+/**
  * The header list to send upstream, in order, with Host and Origin naming the
  * project server. `rawHeaders` is Node's alternating name/value list; `scope`
  * selects which project's cookies may be returned.

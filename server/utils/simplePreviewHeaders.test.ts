@@ -6,6 +6,7 @@ import {
   namespacedSimplePreviewSetCookies,
   projectSimplePreviewCookies,
   simplePreviewCookiePrefix,
+  simplePreviewUpgradeResponseHead,
 } from './simplePreviewHeaders';
 import { startSimplePreviewProxy } from './simplePreviewProxy';
 
@@ -120,6 +121,48 @@ describe('Simple preview project cookies', () => {
     const forwarded = forwardedSimplePreviewHeaders(['Cookie', browserCookies], UPSTREAM, SCOPE_A);
     expect(forwarded).toEqual([['Host', UPSTREAM], ['Cookie', 'front_session=attacker']]);
     expect(JSON.stringify(forwarded)).not.toContain('real-front-credential');
+  });
+});
+
+describe('Simple preview upgrade response head', () => {
+  test('moves a cookie set on an accepted upgrade into the project namespace', () => {
+    const head = [
+      'HTTP/1.1 101 Switching Protocols',
+      'Upgrade: websocket',
+      'Connection: Upgrade',
+      'Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=',
+      'Set-Cookie: front_session=attacker; Domain=example.com; Path=/',
+      'set-cookie: theme=dark',
+    ].join('\r\n');
+    expect(simplePreviewUpgradeResponseHead(head, SCOPE_A)).toBe([
+      'HTTP/1.1 101 Switching Protocols',
+      'Upgrade: websocket',
+      'Connection: Upgrade',
+      'Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=',
+      `Set-Cookie: ${A}front_session=attacker; Path=/`,
+      `Set-Cookie: ${A}theme=dark`,
+    ].join('\r\n'));
+  });
+
+  test('rewrites cookies whatever the status and drops unusable ones', () => {
+    const rewritten = simplePreviewUpgradeResponseHead(
+      ['HTTP/1.1 403 Forbidden', 'Set-Cookie: front_session=attacker', 'Set-Cookie: =bad', 'Content-Length: 0'].join('\r\n'),
+      SCOPE_A,
+    );
+    expect(rewritten).toBe(['HTTP/1.1 403 Forbidden', `Set-Cookie: ${A}front_session=attacker`, 'Content-Length: 0'].join('\r\n'));
+  });
+
+  test('refuses a head it cannot rewrite safely', () => {
+    for (const head of [
+      'not http',
+      'HTTP/1.1 101 Switching Protocols\r\nSet-Cookie: a=1\r\n continued=front_session',
+      'HTTP/1.1 101 Switching Protocols\r\n\tfolded: x',
+      'HTTP/1.1 101 Switching Protocols\r\nno separator here',
+      'HTTP/1.1 101 Switching Protocols\r\nbad name: value',
+      'HTTP/1.1 101 Switching Protocols\r\n: nameless',
+    ]) {
+      expect(simplePreviewUpgradeResponseHead(head, SCOPE_A)).toBeNull();
+    }
   });
 });
 
