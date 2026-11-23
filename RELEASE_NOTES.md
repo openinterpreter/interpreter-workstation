@@ -1,8 +1,9 @@
-<!-- release-notes-for: 0.2.252 -->
+<!-- release-notes-for: 0.2.253 -->
 ## What's new
 
-- Bounds native submission lookup by paging saved turns instead of loading an entire thread history.
-- Treats incomplete history and duplicate submission IDs as unknown rather than returning a potentially incorrect result.
+- Reads requested thread-history pages with bounded native requests and reconnects a second window without loading the full thread history.
+- Limits historical tool-output reads so large saved results do not block the current conversation.
+- Updates the bundled app preset's Next.js dependency and CI cache action.
 
 ## Distribution
 
