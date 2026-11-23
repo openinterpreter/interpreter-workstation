@@ -105,7 +105,7 @@ jobs:
       # keys each helper by a hash of its inputs, so restoring its cache
       # directory is safe: a changed input simply misses and is rebuilt.
       - name: Restore native build cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             .cache/trycua-cua-driver
@@ -117,7 +117,7 @@ jobs:
           E2E_SHARD: ${{ matrix.shard }}/3
       - name: Save native build cache
         if: success()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             .cache/trycua-cua-driver
@@ -222,7 +222,7 @@ jobs:
       - run: pnpm run build:js-repl-runtime
       - name: Restore native build cache
         if: runner.os == 'macOS'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             .cache/trycua-cua-driver

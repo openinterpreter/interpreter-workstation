@@ -28,7 +28,13 @@ async function listen(server: http.Server | net.Server): Promise<number> {
 }
 
 async function proxyTo(upstream: () => number | null): Promise<SimplePreviewProxyHandle> {
-  const proxy = await startSimplePreviewProxy({ port: 0, upstream });
+  const proxy = await startSimplePreviewProxy({
+    port: 0,
+    upstream: () => {
+      const port = upstream();
+      return port === null ? null : { port, cookieScope: 'testscope' };
+    },
+  });
   closers.push(() => proxy.close());
   return proxy;
 }

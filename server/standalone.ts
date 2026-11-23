@@ -297,9 +297,9 @@ export async function runStandaloneCli(argv: string[] = process.argv.slice(2)) {
       resolve();
     });
   });
-  const { getSimplePreviewPort } = await import("./handlers/simpleProjectRuntime");
+  const { getSimplePreviewTarget } = await import("./handlers/simpleProjectRuntime");
   const simplePreviewProxy = await startSimplePreviewProxyFromEnvironment(
-    getSimplePreviewPort,
+    getSimplePreviewTarget,
     process.env,
     createPreviewAccess,
   );

@@ -17,6 +17,7 @@ import { getCurrentWindowSessionKey } from '../utils/windowSessions';
 import {
   reportedSimplePreviewTarget,
   resolveSimplePreviewTargetPort,
+  sameSimplePreviewTarget,
   type SimplePreviewTarget,
 } from '../utils/simplePreviewTarget';
 import { prefixToolName } from '../../shared/utils/mcpToolName';
@@ -28,7 +29,7 @@ const CORE_DEPENDENCIES: Record<string, string> = {
   '@interpreter/motion': 'file:.interpreter/packages/motion',
   '@interpreter/workstation': 'file:.interpreter/packages/workstation',
   motion: '12.23.26',
-  next: '16.4.3',
+  next: '16.4.5',
   react: '19.3.0',
   'react-dom': '19.3.0',
   'react-markdown': '10.1.0',
@@ -132,13 +133,17 @@ let previewProject: SimplePreviewTarget | null = null;
 async function reportPreviewProject(projectPath: string, running: boolean): Promise<void> {
   // A report about a project that is not running, or that is not what the
   // reporting session has selected, clears the target, so the proxy never
-  // keeps serving a project the renderer has moved away from. The target is
-  // cleared before the selection is read so nothing stale survives the wait.
-  const sessionKey = getCurrentWindowSessionKey();
-  previewProject = null;
+  // keeps serving a project the renderer has moved away from. A different or
+  // stopped project clears the target before the selection is read, so nothing
+  // stale survives the wait; a repeated report of the same running project
+  // keeps it, and every proxy request re-validates the selection anyway.
+  const sessionKey = getCurrentWindowSessionKey() ?? null;
+  const current = previewProject;
+  if (!running || !current || current.path !== projectPath || current.sessionKey !== sessionKey) {
+    previewProject = null;
+  }
   if (!running) return;
-  const next = reportedSimplePreviewTarget(projectPath, running, sessionKey, await peekSelectedSimpleProject(sessionKey));
-  previewProject = next;
+  previewProject = reportedSimplePreviewTarget(projectPath, running, sessionKey, await peekSelectedSimpleProject(sessionKey));
 }
 
 const PROJECT_TOOL_NAMES = [
@@ -394,15 +399,26 @@ export async function readSimpleProjectAppStatus(): Promise<SimpleAppStatus> {
   };
 }
 
-/** Loopback port of the running Simple project server, or null when it is not running. */
-export async function getSimplePreviewPort(): Promise<number | null> {
+/** A cookie scope that is stable for one project and differs between projects. */
+export function simplePreviewCookieScope(projectPath: string): string {
+  return createHash('sha256').update(projectPath).digest('hex').slice(0, 24);
+}
+
+/**
+ * The running Simple project server for the preview proxy, or null when it is
+ * not running: its loopback port and the cookie scope of that project.
+ */
+export async function getSimplePreviewTarget(): Promise<{ port: number; cookieScope: string } | null> {
   const target = previewProject;
   const { port, stale } = await resolveSimplePreviewTargetPort(target, {
     selected: peekSelectedSimpleProject,
     status: async (projectPath) => (await trustedProjectRunner.status(projectPath)).state,
+    isCurrent: () => sameSimplePreviewTarget(previewProject, target),
   });
-  if (stale && previewProject === target) previewProject = null;
-  return port;
+  if (stale && sameSimplePreviewTarget(previewProject, target)) previewProject = null;
+  // Nothing awaits between the checks inside the resolver and this return.
+  if (port === null || !target || !sameSimplePreviewTarget(previewProject, target)) return null;
+  return { port, cookieScope: simplePreviewCookieScope(target.path) };
 }
 
 export async function resetSimpleProjectRuntimeForTest(projectPath: string): Promise<void> {

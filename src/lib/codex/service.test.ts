@@ -46,6 +46,71 @@ function terminalPage(turns: v2.Turn[]) {
   };
 }
 
+describe('bounded thread page', () => {
+  test('reads metadata plus one newest-first page and returns it oldest first', async () => {
+    const reads: Array<v2.ThreadReadParams | v2.ThreadTurnsListParams> = [];
+    const client = createFakeClient({
+      threadRead: async (params) => {
+        reads.push(params);
+        return { thread: { id: 'thr_new', preview: 'p', createdAt: 1, updatedAt: 2, path: '/saved.jsonl',
+          cwd: '/workspace', name: 'Named', status: { type: 'active', activeFlags: [] }, turns: [] } as unknown as v2.Thread };
+      },
+      threadTurnsList: async (params) => {
+        reads.push(params);
+        return { data: [
+          { ...createTurn('turn_3', 'inProgress'), itemsView: 'full' },
+          { ...createTurn('turn_2', 'completed'), itemsView: 'full' },
+        ] as v2.Turn[], nextCursor: 'opaque-older', backwardsCursor: 'opaque-newer' };
+      },
+    }).client;
+
+    const page = await new CodexService(client).readThreadPage('thr_new', { limit: 2, cursor: 'opaque-before' });
+
+    assert.deepEqual(page.thread.turns.map(turn => turn.id), ['turn_2', 'turn_3']);
+    assert.equal(page.nextCursor, 'opaque-older');
+    assert.equal(page.thread.status.type, 'active');
+    assert.equal(page.thread.path, '/saved.jsonl');
+    assert.equal(page.thread.name, 'Named');
+    assert.deepEqual(reads, [
+      { threadId: 'thr_new', includeTurns: false },
+      { threadId: 'thr_new', limit: 2, sortDirection: 'desc', itemsView: 'full', cursor: 'opaque-before' },
+    ]);
+  });
+
+  test('reports the last page with a null cursor and omits an absent cursor', async () => {
+    let listed: v2.ThreadTurnsListParams | undefined;
+    const client = createFakeClient({
+      threadTurnsList: async (params) => {
+        listed = params;
+        return { data: [{ ...createTurn('only', 'completed'), itemsView: 'full' } as v2.Turn],
+          nextCursor: null, backwardsCursor: null };
+      },
+    }).client;
+    const page = await new CodexService(client).readThreadPage('thr_new', { limit: 24 });
+    assert.equal(page.nextCursor, null);
+    assert.equal(listed && 'cursor' in listed, false);
+  });
+
+  test('rejects an oversized or summary page and a mismatched thread', async () => {
+    const oversized = createFakeClient({
+      threadTurnsList: async () => ({ data: [
+        { ...createTurn('a', 'completed'), itemsView: 'full' },
+        { ...createTurn('b', 'completed'), itemsView: 'full' },
+      ] as v2.Turn[], nextCursor: null, backwardsCursor: null }),
+    }).client;
+    await assert.rejects(new CodexService(oversized).readThreadPage('thr_new', { limit: 1 }),
+      /Invalid native turn page/);
+    const summary = createFakeClient({
+      threadTurnsList: async () => ({ data: [{ ...createTurn('a', 'completed'), itemsView: 'summary' } as v2.Turn],
+        nextCursor: null, backwardsCursor: null }),
+    }).client;
+    await assert.rejects(new CodexService(summary).readThreadPage('thr_new', { limit: 1 }),
+      /Invalid native turn page/);
+    await assert.rejects(new CodexService(createFakeClient().client).readThreadPage('thr_other', { limit: 1 }),
+      /identity mismatch/);
+  });
+});
+
 describe('native custody metadata', () => {
   test('inspects only metadata and the latest full turn, never hydrated history', async () => {
     const client = createFakeClient({}).client;
@@ -122,17 +187,20 @@ describe('native custody metadata', () => {
   });
   test('links one exact persisted client ID to its native user item and saved command, not another turn', async () => {
     const id = '00000000-0000-4000-8000-000000000001';
-    const client = createFakeClient({ threadRead: async () => ({ thread: {
-      id, status: { type: 'idle' }, turns: [{ ...createTurn('turn_one', 'completed'), items: [
-        { type: 'userMessage', id: 'user_one', clientId: 'owned_1',
-          content: [{ type: 'text', text: 'PRIVATE INPUT' }] },
+    const client = createFakeClient({ threadRead: async ({ includeTurns }) => {
+      assert.equal(includeTurns, false);
+      return { thread: { id, status: { type: 'idle' }, turns: [] } as v2.Thread };
+    } }).client;
+    client.threadTurnsList = async () => ({ data: [
+      { ...createTurn('turn_other', 'completed'), itemsView: 'full', items: [
+        { type: 'userMessage', id: 'user_other', clientId: 'other_2', content: [{ type: 'text', text: 'OTHER PRIVATE' }] },
+      ] },
+      { ...createTurn('turn_one', 'completed'), itemsView: 'full', items: [
+        { type: 'userMessage', id: 'user_one', clientId: 'owned_1', content: [{ type: 'text', text: 'PRIVATE INPUT' }] },
         { type: 'commandExecution', id: 'cmd_one', processId: 'process_1', status: 'completed',
           aggregatedOutput: 'PRIVATE OUTPUT', exitCode: 0 },
-      ] }, { ...createTurn('turn_other', 'completed'), items: [
-        { type: 'userMessage', id: 'user_other', clientId: 'other_2',
-          content: [{ type: 'text', text: 'OTHER PRIVATE' }] },
-      ] }],
-    } as unknown as v2.Thread }) }).client;
+      ] },
+    ] as v2.Turn[], nextCursor: null, backwardsCursor: null });
     client.threadQueueList = async () => ({ data: [], nextCursor: null });
     const receipt = await new CodexService(client).readNativeSubmissionCustody(id, 'owned_1');
     assert.equal(receipt.linkage, 'native_user_item');
@@ -141,6 +209,63 @@ describe('native custody metadata', () => {
     assert.equal(receipt.nativeMatch?.commandSessions[0]?.processId, 'process_1');
     assert.equal(receipt.nativeMatch?.commandSessions[0]?.exitCode, 0);
     assert.doesNotMatch(JSON.stringify(receipt), /PRIVATE|OTHER/);
+  });
+  test('pages an exact submission without hydrating the thread and rejects duplicates across pages', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    const reads: Array<{ includeTurns?: boolean; cursor?: string | null; itemsView?: string }> = [];
+    const client = createFakeClient({ threadRead: async params => {
+      reads.push({ includeTurns: params.includeTurns });
+      assert.equal(params.includeTurns, false);
+      return { thread: { id, status: { type: 'idle' }, turns: [] } as v2.Thread };
+    } }).client;
+    const makePage = (turnId: string) => ({ ...createTurn(turnId, 'completed'), itemsView: 'full' as const,
+      items: [{ type: 'userMessage', id: `user_${turnId}`, clientId: 'owned_1',
+        content: [{ type: 'text', text: 'PRIVATE INPUT' }] }] }) as v2.Turn;
+    let duplicate = false;
+    client.threadTurnsList = async params => {
+      reads.push({ cursor: params.cursor, itemsView: params.itemsView });
+      return params.cursor === 'older'
+        ? { data: duplicate ? [makePage('older')] : [], nextCursor: null, backwardsCursor: null }
+        : { data: [makePage('newer')], nextCursor: 'older', backwardsCursor: null };
+    };
+    const service = new CodexService(client);
+    const first = await service.readNativeSubmissionCustody(id, 'owned_1');
+    assert.equal(first.linkage, 'native_user_item');
+    assert.equal(first.nativeMatch?.turnId, 'newer');
+    assert.equal(first.custodyVerified, true);
+    assert.deepEqual(reads, [
+      { includeTurns: false }, { cursor: undefined, itemsView: 'full' },
+      { cursor: 'older', itemsView: 'full' },
+    ]);
+    duplicate = true;
+    const second = await service.readNativeSubmissionCustody(id, 'owned_1');
+    assert.equal(second.linkage, 'ambiguous');
+    assert.equal(second.nativeMatch, null);
+    assert.equal(second.custodyVerified, false);
+    assert.doesNotMatch(JSON.stringify(second), /PRIVATE/);
+  });
+  test('an incomplete or cyclic native turn page cannot become a negative admission result', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    const client = createFakeClient({ threadRead: async () => ({ thread:
+      { id, turns: [], status: { type: 'idle' } } as v2.Thread }) }).client;
+    client.threadTurnsList = async () => ({ data: [{ ...createTurn('turn_1', 'completed'), itemsView: 'full' } as v2.Turn],
+      nextCursor: 'loop', backwardsCursor: null });
+    await assert.rejects(new CodexService(client).readNativeSubmissionCustody(id, 'missing_1'),
+      { phase: 'thread_read', category: 'native_unavailable' });
+  });
+  test('a saved history beyond the bounded paginated scan remains unknown, not empty', async () => {
+    const id = '00000000-0000-4000-8000-000000000001';
+    const client = createFakeClient({ threadRead: async () => ({ thread:
+      { id, turns: [], status: { type: 'idle' } } as v2.Thread }) }).client;
+    client.threadTurnsList = async params => {
+      const offset = Number(params.cursor ?? '0');
+      const data = Array.from({ length: 20 }, (_, index) => ({
+        ...createTurn(`turn_${offset + index}`, 'completed'), itemsView: 'full' as const,
+      })) as v2.Turn[];
+      return { data, nextCursor: String(offset + 20), backwardsCursor: null };
+    };
+    await assert.rejects(new CodexService(client).readNativeSubmissionCustody(id, 'missing_1'),
+      { phase: 'thread_read', category: 'native_unavailable' });
   });
   test('a late thread read cannot turn a deadline into empty custody or stop the RPC', async () => {
     const id = '00000000-0000-4000-8000-000000000001';

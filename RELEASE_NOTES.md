@@ -1,8 +1,9 @@
-<!-- release-notes-for: 0.2.251 -->
+<!-- release-notes-for: 0.2.254 -->
 ## What's new
 
-- Restores the app CLI environment when an eligible saved agent thread is loaded after a restart, so later turns on that thread can access its existing tools.
-- Preserves saved caller tool and model scope during cold recovery; conflicting scopes are refused rather than widened, and callers from another workspace are not revoked.
+- Aligns the bundled Simple project runtime and generated projects on Next.js 16.4.5.
+- Allows voice input while an agent response is in progress without replacing the stop control.
+- Refreshes application dependencies and their lockfile.
 
 ## Distribution
 

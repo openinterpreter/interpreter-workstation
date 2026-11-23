@@ -23,6 +23,12 @@ import {
   DEVICE_GATEWAY_PUBLIC_ORIGIN_ENV,
   parseDeviceGatewayPublicOrigin,
 } from '../deviceConnections/deviceGateway';
+import {
+  forwardedSimplePreviewHeaders,
+  namespacedSimplePreviewSetCookies,
+  simplePreviewCookiePrefix,
+  simplePreviewUpgradeResponseHead,
+} from './simplePreviewHeaders';
 
 export const SIMPLE_PREVIEW_PROXY_PORT_ENV = 'INTERPRETER_SIMPLE_PREVIEW_PROXY_PORT';
 export const SIMPLE_PREVIEW_PUBLIC_ORIGIN_ENV = 'INTERPRETER_SIMPLE_PREVIEW_PUBLIC_ORIGIN';
@@ -35,6 +41,7 @@ export const MAX_REMEMBERED_PREVIEW_TICKETS = 10_000;
 const LOOPBACK_HOST = '127.0.0.1';
 const UNAVAILABLE_MESSAGE = 'The interface project is not running.\n';
 const HOP_BY_HOP_HEADERS = new Set(['connection', 'keep-alive', 'proxy-connection']);
+const MAX_UPGRADE_RESPONSE_HEAD_BYTES = 64 * 1024;
 
 /**
  * Access control for a publicly reachable preview. `subject` names who the
@@ -174,8 +181,15 @@ function respondUnauthorized(response: http.ServerResponse): void {
   response.end();
 }
 
-/** Resolves the running project server's loopback port, or null when none is running. */
-export type SimplePreviewUpstream = () => Promise<number | null> | number | null;
+/**
+ * The running project server: its loopback port and a cookie scope that is
+ * stable for that project and differs between projects.
+ */
+export type SimplePreviewUpstreamTarget = { port: number; cookieScope: string };
+
+/** Resolves the running project server, or null when none is running. */
+export type SimplePreviewUpstream = () =>
+  Promise<SimplePreviewUpstreamTarget | null> | SimplePreviewUpstreamTarget | null;
 
 export type SimplePreviewProxyHandle = {
   host: string;
@@ -245,45 +259,38 @@ export function resolveSimplePreviewRuntimeUrl(
   return `${publicOrigin}${path}${source.search}${source.hash}`;
 }
 
-function rewrittenHeaderValue(name: string, value: string, upstreamHost: string): string {
-  const lower = name.toLowerCase();
-  if (lower === 'host') return upstreamHost;
-  if (lower === 'origin') return `http://${upstreamHost}`;
-  return value;
-}
-
-function requestHeaders(rawHeaders: string[], upstreamHost: string): http.OutgoingHttpHeaders {
+// Only allowlisted headers and the project's own cookies go upstream; the
+// front's credentials and identity headers never reach a project server.
+function requestHeaders(rawHeaders: string[], upstreamHost: string, cookieScope: string): http.OutgoingHttpHeaders {
   const headers: http.OutgoingHttpHeaders = {};
-  for (let index = 0; index + 1 < rawHeaders.length; index += 2) {
-    const name = rawHeaders[index];
+  for (const [name, value] of forwardedSimplePreviewHeaders(rawHeaders, upstreamHost, cookieScope)) {
     const lower = name.toLowerCase();
-    if (HOP_BY_HOP_HEADERS.has(lower)) continue;
-    const value = rewrittenHeaderValue(name, rawHeaders[index + 1], upstreamHost);
+    if (lower === 'upgrade') continue; // Only an upgrade request carries it.
     const existing = headers[lower];
     headers[lower] = existing === undefined
       ? value
       : Array.isArray(existing) ? [...existing, value] : [String(existing), value];
   }
-  headers.host = upstreamHost;
   return headers;
 }
 
-function upgradeRequestHead(request: http.IncomingMessage, upstreamHost: string): string {
+function upgradeRequestHead(request: http.IncomingMessage, upstreamHost: string, cookieScope: string): string {
   const lines = [`${request.method ?? 'GET'} ${request.url ?? '/'} HTTP/1.1`];
-  let sawHost = false;
-  for (let index = 0; index + 1 < request.rawHeaders.length; index += 2) {
-    const name = request.rawHeaders[index];
-    if (name.toLowerCase() === 'host') sawHost = true;
-    lines.push(`${name}: ${rewrittenHeaderValue(name, request.rawHeaders[index + 1], upstreamHost)}`);
+  for (const [name, value] of forwardedSimplePreviewHeaders(request.rawHeaders, upstreamHost, cookieScope)) {
+    lines.push(`${name}: ${value}`);
   }
-  if (!sawHost) lines.push(`Host: ${upstreamHost}`);
+  lines.push('Connection: Upgrade');
   return `${lines.join('\r\n')}\r\n\r\n`;
 }
 
-async function resolveUpstream(upstream: SimplePreviewUpstream): Promise<number | null> {
+// A target without a usable port or cookie scope is treated as no target, so
+// a project is never served without its own cookie namespace.
+async function resolveUpstream(upstream: SimplePreviewUpstream): Promise<SimplePreviewUpstreamTarget | null> {
   try {
-    const port = await upstream();
-    return typeof port === 'number' && Number.isInteger(port) && port > 0 ? port : null;
+    const target = await upstream();
+    if (!target || !Number.isInteger(target.port) || target.port <= 0) return null;
+    simplePreviewCookiePrefix(target.cookieScope);
+    return { port: target.port, cookieScope: target.cookieScope };
   } catch {
     return null;
   }
@@ -342,21 +349,26 @@ async function forwardRequest(
       return;
     }
   }
-  const port = await resolveUpstream(upstream);
-  if (port === null) {
+  const target = await resolveUpstream(upstream);
+  if (target === null) {
     request.resume();
     respondUnavailable(response);
     return;
   }
+  const { port, cookieScope } = target;
   const upstreamHost = `${LOOPBACK_HOST}:${port}`;
   const proxied = http.request({
     host: LOOPBACK_HOST,
     port,
     method: request.method,
     path: request.url,
-    headers: requestHeaders(request.rawHeaders, upstreamHost),
+    headers: requestHeaders(request.rawHeaders, upstreamHost, cookieScope),
   }, (upstreamResponse) => {
     const headers = { ...upstreamResponse.headers };
+    // Project cookies are stored under that project's own namespace (see simplePreviewHeaders).
+    const setCookies = namespacedSimplePreviewSetCookies(headers['set-cookie'], cookieScope);
+    if (setCookies.length > 0) headers['set-cookie'] = setCookies;
+    else delete headers['set-cookie'];
     for (const name of HOP_BY_HOP_HEADERS) delete headers[name];
     response.writeHead(upstreamResponse.statusCode ?? 502, withFrameAncestors(headers, frameAncestor));
     upstreamResponse.pipe(response);
@@ -384,8 +396,8 @@ async function forwardUpgrade(
     }
     if (authorization.strippedUrl !== null) request.url = authorization.strippedUrl;
   }
-  const port = await resolveUpstream(upstream);
-  if (port === null) {
+  const resolved = await resolveUpstream(upstream);
+  if (resolved === null) {
     const body = Buffer.from(UNAVAILABLE_MESSAGE);
     socket.end(
       'HTTP/1.1 503 Service Unavailable\r\n'
@@ -396,13 +408,46 @@ async function forwardUpgrade(
     );
     return;
   }
+  const { port, cookieScope } = resolved;
   const upstreamHost = `${LOOPBACK_HOST}:${port}`;
   const target = net.connect(port, LOOPBACK_HOST);
   target.on('connect', () => {
-    target.write(upgradeRequestHead(request, upstreamHost));
+    target.write(upgradeRequestHead(request, upstreamHost, cookieScope));
     if (head.length > 0) target.write(head);
     socket.pipe(target);
-    target.pipe(socket);
+    // The project's answer to the upgrade is an HTTP response head like any
+    // other. Its headers are rewritten before anything reaches the browser,
+    // so a cookie set there lands in the project's own namespace too; only
+    // after an accepted upgrade are the raw bytes piped.
+    let pending = Buffer.alloc(0);
+    const onHead = (chunk: Buffer) => {
+      pending = Buffer.concat([pending, chunk]);
+      const end = pending.indexOf('\r\n\r\n');
+      if (end < 0) {
+        if (pending.length > MAX_UPGRADE_RESPONSE_HEAD_BYTES) {
+          target.off('data', onHead);
+          target.destroy();
+          socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+        }
+        return;
+      }
+      target.off('data', onHead);
+      const rewritten = simplePreviewUpgradeResponseHead(pending.subarray(0, end).toString('latin1'), cookieScope);
+      // Anything but an accepted upgrade is answered by the proxy itself and
+      // the connection is closed. Passing a refusal through would leave an
+      // ordinary HTTP connection open to the project server with no header
+      // filtering on whatever followed.
+      if (rewritten === null || !/^HTTP\/1\.[01] 101(?: |$)/.test(rewritten)) {
+        target.destroy();
+        socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');
+        return;
+      }
+      socket.write(Buffer.from(`${rewritten}\r\n\r\n`, 'latin1'));
+      const rest = pending.subarray(end + 4);
+      if (rest.length > 0) socket.write(rest);
+      target.pipe(socket);
+    };
+    target.on('data', onHead);
   });
   target.on('error', () => socket.destroy());
   target.on('close', () => socket.destroy());
