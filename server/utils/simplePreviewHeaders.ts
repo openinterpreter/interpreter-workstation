@@ -51,14 +51,20 @@ function forwardable(lowerName: string): boolean {
  * after the front's session cookie and be handed the browser's credential, or
  * overwrite it. So every cookie a project sets is stored in the browser under
  * this prefix, and only cookies carrying the prefix are returned to it, with
- * the prefix removed. No other cookie on the origin can reach a project, and a
- * project can neither read nor replace one. A cookie written by page script
- * rather than by the project server has no prefix and is not sent to it.
+ * the prefix removed. No other cookie on the origin is sent to a project
+ * server, and a project server cannot set one outside its namespace. A cookie
+ * written by page script rather than by the project server has no prefix and
+ * is not sent to it.
  *
  * The namespace is per project. All projects share the one preview origin,
  * so the prefix carries a scope derived from the project: when another
  * project is selected, the previous project's cookies stay in the browser but
- * are never sent to the new one.
+ * are never sent to the new project's server.
+ *
+ * This bounds what the proxy forwards. It does not isolate projects from each
+ * other in the browser: their pages share the preview origin, so page script
+ * can read and write any script-visible cookie there. The front's own cookie
+ * on this origin must therefore be HttpOnly.
  */
 export const SIMPLE_PREVIEW_COOKIE_PREFIX = 'interpreter_preview_app_';
 

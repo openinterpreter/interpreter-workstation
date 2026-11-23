@@ -192,9 +192,21 @@ Cookies a project sets are stored in the browser under an
 `interpreter_preview_app_<project scope>_` prefix, without a `Domain`
 attribute, and only cookies with that project's prefix are returned to it
 under their original names. All projects share the one preview origin, so the
-scope is derived from the project: a project cannot read or replace another
-cookie on the preview origin, including another project's, and selecting a
-different project never sends it the previous project's cookies. A cookie written by page script rather than by the project
+scope is derived from the project: a project *server* is never sent a cookie
+it did not set, and selecting a different project never sends its server the
+previous project's cookies.
+
+That is a boundary for what the proxy forwards, not isolation between
+projects in the browser. Every project's pages run on the same preview origin,
+so page script in one project can read and write the origin's script-visible
+cookies (any cookie without `HttpOnly`, whatever its prefix or `Path`), local
+storage and other origin-scoped state, including another project's. Projects
+on one Workstation belong to the same person and are not treated as mutually
+untrusted; isolating them from each other would need a separate origin per
+project. Two consequences for a deployment: the front's own session cookie on
+the preview origin must be `HttpOnly`, because project page script shares that
+origin, and a project should mark any cookie it does not want other projects'
+pages to read as `HttpOnly`. A cookie written by page script rather than by the project
 server is not sent to it, and a project that depends on a custom request
 header does not receive that header through the preview origin.
 
