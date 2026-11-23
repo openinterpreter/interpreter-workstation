@@ -223,7 +223,7 @@ describe('bounded native history reads', () => {
   test('an outcome read pages back only as far as its turn', async () => {
     const history = pagedHistory(100);
     expect(await readEndedTurn('thread-1', 'turn-90', history.service))
-      .toEqual({ outcome: 'completed', summary: 'answer 90' });
+      .toEqual({ outcome: 'completed', summary: 'answer 90', items: history.turns[90]!.items });
     expect(history.pages).toEqual([null]);
     expect(await readEndedTurn('thread-1', 'turn-99', history.service)).toBeNull(); // still running
     expect(history.reads).toEqual([]);

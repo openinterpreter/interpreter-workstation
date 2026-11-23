@@ -4,7 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   GOAL_ASSIGNER_LIMIT,
+  NO_SEPARATE_REPLY_SUMMARY,
   OUTCOME_RETURN_LIMIT,
+  UNKNOWN_REPLY_SUMMARY,
   OUTCOME_SUMMARY_LIMIT,
   OutcomeReturns,
   earlierOutcomeReturnId,
@@ -18,6 +20,11 @@ import {
 
 const thread = '00000000-0000-4000-8000-000000000001';
 const sender = { computer: 'peer-host', thread: 'origin_thread' };
+const secondSender = { computer: 'second-host', thread: 'second_thread' };
+/** Native turn items, in order. */
+const userItem = (clientId: string | null) => ({ type: 'userMessage', id: `user_${clientId}`, clientId,
+  content: [{ type: 'text', text: 'input' }] });
+const agentItem = (text: string) => ({ type: 'agentMessage', id: `agent_${text}`, text, phase: null });
 
 async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), 'outcome-returns-'));
@@ -62,7 +69,7 @@ describe('outcome returns', () => {
       const id = outcomeReturnId(thread, 'turn_1', 'handoff_1');
       expect(await f.received()).toEqual([{ version: 1, kind: 'turn', id, to: sender,
         from: { threadId: thread, turnId: 'turn_1' }, clientUserMessageId: 'handoff_1',
-        outcome: 'completed', summary: 'All done.' }]);
+        outcome: 'completed', admission: 'unknown', reply: 'turn_reply', summary: 'All done.' }]);
       const [entry] = store.list();
       expect(entry).toMatchObject({ id, status: 'delivered', outcome: 'completed', attempts: 0, sender });
       expect(entry).not.toHaveProperty('summary');
@@ -451,7 +458,10 @@ describe('outcome returns', () => {
         [outcomeReturnId(thread, 'turn_shared', 'handoff_first'), sender, 'handoff_first'],
         [outcomeReturnId(thread, 'turn_shared', 'handoff_second'), other, 'handoff_second'],
       ]);
-      expect(received.every(payload => payload.summary === 'Both handled.')).toBe(true);
+      // Recorded without their items' IDs, two inputs of one turn never borrow its final text.
+      expect(received.map(payload => [payload.admission, payload.reply, payload.summary])).toEqual([
+        ['unknown', 'no_separate_reply', NO_SEPARATE_REPLY_SUMMARY],
+        ['unknown', 'no_separate_reply', NO_SEPARATE_REPLY_SUMMARY]]);
       // A sender joining after the turn ended still gets the outcome; a delivery never does.
       expect(await store.watch(thread, 'turn_shared', { computer: 'third-host' }, 'handoff_third')).toBe(true);
       expect(await store.watch(thread, 'turn_shared', other, 'outcome-abc')).toBe(true);
@@ -563,4 +573,180 @@ describe('outcome returns', () => {
         .toEqual([['turn_done', 'pending'], ['turn_live', 'watching']]);
     } finally { await f.cleanup(); }
   });
+});
+
+describe('outcome of each input of a turn', () => {
+  type Payload = Record<string, unknown> & { summary: string };
+  const byInput = async (received: () => Promise<unknown[]>) =>
+    new Map((await received() as Payload[]).map(payload => [payload.clientUserMessageId as string, payload]));
+
+  test('two inputs steered into one turn and answered in order each get only their own answer', async () => {
+    const f = await fixture();
+    try {
+      const store = await f.make(0);
+      await store.watch(thread, 'turn_both', sender, 'handoff_a', 'wake_a');
+      await store.watch(thread, 'turn_both', secondSender, 'handoff_b', 'wake_b');
+      await store.turnEnded(thread, 'turn_both', 'completed', 'MARKER_BRAVO answer.', [
+        userItem('wake_a'), agentItem('MARKER_ALPHA draft.'), agentItem('MARKER_ALPHA answer.'),
+        userItem('wake_b'), agentItem('MARKER_BRAVO answer.')]);
+      await store.deliverDue();
+      const payloads = await byInput(f.received);
+      expect(payloads.get('handoff_a')).toMatchObject({ to: sender, outcome: 'completed', admission: 'started',
+        reply: 'own_reply', summary: 'MARKER_ALPHA answer.' });
+      expect(payloads.get('handoff_b')).toMatchObject({ to: secondSender, outcome: 'completed', admission: 'steered',
+        reply: 'own_reply', summary: 'MARKER_BRAVO answer.' });
+      // Nothing of one input's part of the turn reaches the other's outcome.
+      expect(JSON.stringify(payloads.get('handoff_a'))).not.toContain('MARKER_BRAVO');
+      expect(JSON.stringify(payloads.get('handoff_b'))).not.toContain('MARKER_ALPHA');
+      expect(store.list().map(entry => [entry.admission, entry.reply]))
+        .toEqual([['started', 'own_reply'], ['steered', 'own_reply']]);
+    } finally { await f.cleanup(); }
+  }, 30_000);
+
+  test('an input the agent did not answer separately says so instead of taking the next answer', async () => {
+    const f = await fixture();
+    try {
+      const store = await f.make(0);
+      await store.watch(thread, 'turn_one_answer', sender, 'handoff_a', 'wake_a');
+      await store.watch(thread, 'turn_one_answer', secondSender, 'handoff_b', 'wake_b');
+      await store.turnEnded(thread, 'turn_one_answer', 'completed', 'MARKER_BRAVO answer.', [
+        userItem('wake_a'), userItem('wake_b'), agentItem('MARKER_BRAVO answer.')]);
+      await store.deliverDue();
+      const payloads = await byInput(f.received);
+      expect(payloads.get('handoff_a')).toMatchObject({ admission: 'started', reply: 'no_separate_reply',
+        summary: NO_SEPARATE_REPLY_SUMMARY });
+      expect(payloads.get('handoff_b')).toMatchObject({ admission: 'steered', reply: 'own_reply',
+        summary: 'MARKER_BRAVO answer.' });
+      expect(JSON.stringify(payloads.get('handoff_a'))).not.toContain('MARKER_BRAVO');
+      // The last input of a turn that ended without answering it says the same.
+      await store.watch(thread, 'turn_unanswered', sender, 'handoff_c', 'wake_c');
+      await store.turnEnded(thread, 'turn_unanswered', 'interrupted', 'MARKER_LOCAL answer.', [
+        userItem('local_input'), agentItem('MARKER_LOCAL answer.'), userItem('wake_c')]);
+      await store.deliverDue();
+      const late = (await byInput(f.received)).get('handoff_c');
+      expect(late).toMatchObject({ outcome: 'interrupted', admission: 'steered', reply: 'no_separate_reply',
+        summary: NO_SEPARATE_REPLY_SUMMARY });
+      expect(JSON.stringify(late)).not.toContain('MARKER_LOCAL');
+    } finally { await f.cleanup(); }
+  }, 30_000);
+
+  test('a single input that started its own turn gets the turn\'s final answer, as before', async () => {
+    const f = await fixture();
+    try {
+      const store = await f.make(0);
+      await store.watch(thread, 'turn_single', sender, 'handoff_single', 'wake_single');
+      await store.turnEnded(thread, 'turn_single', 'completed', 'All done.', [
+        userItem('wake_single'), agentItem('Working on it.'), { type: 'commandExecution', id: 'cmd_1' },
+        agentItem('All done.')]);
+      await store.deliverDue();
+      expect(await f.received()).toEqual([{ version: 1, kind: 'turn',
+        id: outcomeReturnId(thread, 'turn_single', 'handoff_single'), to: sender,
+        from: { threadId: thread, turnId: 'turn_single' }, clientUserMessageId: 'handoff_single',
+        outcome: 'completed', admission: 'started', reply: 'own_reply', summary: 'All done.' }]);
+    } finally { await f.cleanup(); }
+  }, 30_000);
+
+  test('an input whose item is not in its turn gets an explicit unknown outcome, never the final text', async () => {
+    const f = await fixture();
+    try {
+      const store = await f.make(0);
+      await store.watch(thread, 'turn_missing', sender, 'handoff_missing', 'wake_missing');
+      await store.turnEnded(thread, 'turn_missing', 'completed', 'MARKER_OTHER answer.', [
+        userItem('wake_other'), agentItem('MARKER_OTHER answer.')]);
+      // The same ID twice is not trusted either.
+      await store.watch(thread, 'turn_twice', sender, 'handoff_twice', 'wake_twice');
+      await store.turnEnded(thread, 'turn_twice', 'completed', 'MARKER_TWICE answer.', [
+        userItem('wake_twice'), agentItem('MARKER_TWICE first.'), userItem('wake_twice'),
+        agentItem('MARKER_TWICE answer.')]);
+      await store.deliverDue();
+      const payloads = await byInput(f.received);
+      for (const id of ['handoff_missing', 'handoff_twice']) {
+        expect(payloads.get(id)).toMatchObject({ outcome: 'completed', admission: 'unknown', reply: 'unknown',
+          summary: UNKNOWN_REPLY_SUMMARY });
+      }
+      expect(JSON.stringify([...payloads.values()])).not.toMatch(/MARKER_/);
+    } finally { await f.cleanup(); }
+  }, 30_000);
+
+  test('a turn reported without its items is read once for them before its outcome is set', async () => {
+    const f = await fixture();
+    try {
+      let ended = false;
+      const reads: string[] = [];
+      const store = await f.make(0, { readTurn: async (_thread, turnId) => {
+        reads.push(turnId);
+        return ended ? { outcome: 'completed', summary: 'MARKER_BRAVO answer.', items: [
+          userItem('wake_a'), agentItem('MARKER_ALPHA answer.'), userItem('wake_b'),
+          agentItem('MARKER_BRAVO answer.')] } : null;
+      } });
+      await store.watch(thread, 'turn_live', sender, 'handoff_a', 'wake_a');
+      await store.watch(thread, 'turn_live', secondSender, 'handoff_b', 'wake_b');
+      expect(reads).toEqual(['turn_live', 'turn_live']);
+      ended = true;
+      // The live notification carries only the turn's final text.
+      await store.turnEnded(thread, 'turn_live', 'completed', 'MARKER_BRAVO answer.');
+      expect(reads).toHaveLength(3);
+      // A later watch of the ended turn uses the items already read.
+      await store.watch(thread, 'turn_live', { computer: 'third-host' }, 'handoff_c', 'wake_c');
+      expect(reads).toHaveLength(3);
+      await store.deliverDue();
+      const payloads = await byInput(f.received);
+      expect(payloads.get('handoff_a')).toMatchObject({ admission: 'started', summary: 'MARKER_ALPHA answer.' });
+      expect(payloads.get('handoff_b')).toMatchObject({ admission: 'steered', summary: 'MARKER_BRAVO answer.' });
+      expect(payloads.get('handoff_c')).toMatchObject({ admission: 'unknown', reply: 'unknown',
+        summary: UNKNOWN_REPLY_SUMMARY });
+      // Without a successful read the watch stays watching rather than taking the final text.
+      ended = false;
+      await store.watch(thread, 'turn_unread', sender, 'handoff_d', 'wake_d');
+      await store.turnEnded(thread, 'turn_unread', 'completed', 'MARKER_FINAL answer.');
+      expect(store.list().find(entry => entry.turnId === 'turn_unread')).toMatchObject({ status: 'watching' });
+    } finally { await f.cleanup(); }
+  }, 30_000);
+
+  test('entries stored before inputs had their own outcome still load and never borrow another answer', async () => {
+    const f = await fixture();
+    try {
+      const at = '2026-11-16T00:00:00.000Z';
+      const stored = (turnId: string, clientUserMessageId: string, extra: Record<string, unknown> = {}) => ({
+        id: outcomeReturnId(thread, turnId, clientUserMessageId), threadId: thread, turnId, sender,
+        clientUserMessageId, status: 'watching', attempts: 0, createdAt: at, updatedAt: at, ...extra });
+      const entries = [
+        stored('turn_old_single', 'handoff_single'),
+        stored('turn_old_shared', 'handoff_first'),
+        stored('turn_old_shared', 'handoff_second'),
+        stored('turn_old_pending', 'handoff_pending', { status: 'pending', outcome: 'completed',
+          summary: 'Resolved earlier.', nextAttemptAt: at }),
+      ];
+      await writeFile(path.join(f.root, 'outcome-returns-2.json'),
+        JSON.stringify({ version: 2, entries, goalAssigners: [] }));
+      const store = await f.make(0);
+      expect(store.list().map(entry => [entry.turnId, entry.status, entry.admission])).toEqual([
+        ['turn_old_single', 'watching', undefined], ['turn_old_shared', 'watching', undefined],
+        ['turn_old_shared', 'watching', undefined], ['turn_old_pending', 'pending', undefined]]);
+      await store.turnEnded(thread, 'turn_old_single', 'completed', 'MARKER_SINGLE answer.', [
+        userItem('wake_unrecorded'), agentItem('MARKER_SINGLE answer.')]);
+      await store.turnEnded(thread, 'turn_old_shared', 'completed', 'MARKER_SHARED answer.', [
+        userItem('wake_first'), agentItem('MARKER_FIRST answer.'), userItem('wake_second'),
+        agentItem('MARKER_SHARED answer.')]);
+      await store.deliverDue();
+      const payloads = await byInput(f.received);
+      // One input in its turn: as before, the turn's final text.
+      expect(payloads.get('handoff_single')).toMatchObject({ admission: 'unknown', reply: 'turn_reply',
+        summary: 'MARKER_SINGLE answer.' });
+      // Several inputs, and no item ID to tell them apart: no input takes another's answer.
+      for (const id of ['handoff_first', 'handoff_second']) {
+        expect(payloads.get(id)).toMatchObject({ admission: 'unknown', reply: 'no_separate_reply',
+          summary: NO_SEPARATE_REPLY_SUMMARY });
+        expect(JSON.stringify(payloads.get(id))).not.toMatch(/MARKER_/);
+      }
+      // An entry resolved earlier is delivered with the text it was given then.
+      expect(payloads.get('handoff_pending')).toMatchObject({ admission: 'unknown', reply: 'turn_reply',
+        summary: 'Resolved earlier.' });
+      await store.stop();
+      // The resolved entries reload with their new fields.
+      const restarted = await f.make(null);
+      expect(restarted.list().map(entry => entry.reply))
+        .toEqual(['turn_reply', 'no_separate_reply', 'no_separate_reply', undefined]);
+    } finally { await f.cleanup(); }
+  }, 30_000);
 });
