@@ -105,7 +105,11 @@ that happened while the sidecar was down is still reported. See
 
 Persist the OIX home directory and the workspace used by the thread. The OIX
 rollout is the durable conversation record; Workstation loads the newest page
-first and retrieves older history as the user scrolls upward. The same thread
+first and retrieves older history as the user scrolls upward. Each page is a
+single bounded native turn read, so long conversations open as quickly as
+short ones. Saved tool source and older reasoning are restored for the turns
+being shown by reading only the end of the saved history, within a fixed
+budget. The same thread
 id restores its Goal after an app, renderer, or browser reconnect.
 
 An authenticated browser Workstation uses these same Goal controls when its

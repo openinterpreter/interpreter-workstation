@@ -11,6 +11,20 @@ vi.mock('../configStore', async (importOriginal) => ({
   getAllProviders,
 }));
 
+const { readThread, readThreadPage } = vi.hoisted(() => ({
+  readThread: vi.fn(),
+  readThreadPage: vi.fn(),
+}));
+
+vi.mock('../../src/lib/codex/service', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../src/lib/codex/service')>(),
+  getCodexService: () => ({ readThread, readThreadPage }),
+}));
+
+vi.mock('./simplePrimaryThread', () => ({
+  getSimplePrimaryThread: vi.fn(async () => ({ threadId: 'primary-thread' })),
+}));
+
 import { createSimpleLiveSession, getSimpleLiveStatus } from './simpleLive';
 
 describe('Simple GPT Live', () => {
@@ -77,6 +91,36 @@ describe('Simple GPT Live', () => {
     const [, init] = fetchMock.mock.calls[0];
     expect(init?.headers).toMatchObject({ Authorization: 'Bearer desktop-secret' });
     expect(String(init?.body)).not.toContain('desktop-secret');
+  });
+
+  test('seeds history from the newest turns without reading the whole thread', async () => {
+    process.env.OPENAI_API_KEY = 'secret';
+    readThread.mockReset().mockRejectedValue(new Error('must not read the whole thread'));
+    readThreadPage.mockReset().mockResolvedValue({
+      thread: {
+        id: 'primary-thread',
+        turns: [{
+          id: 'turn-1',
+          status: 'completed',
+          items: [
+            { type: 'userMessage', id: 'u1', content: [{ type: 'text', text: 'Plan the launch', text_elements: [] }] },
+            { type: 'agentMessage', id: 'a1', text: 'Here is the plan.', phase: 'final_answer' },
+          ],
+        }],
+      },
+      nextCursor: 'older',
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      session: { id: 'seeded-session' },
+      transport: { type: 'webrtc', sdp: 'seeded-answer' },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+    await createSimpleLiveSession({ offerSdp: 'v=0\r\na=offer-with-enough-content' });
+
+    expect(readThread).not.toHaveBeenCalled();
+    expect(readThreadPage).toHaveBeenCalledWith('primary-thread', { limit: 12 });
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.session.input.map((message: { role: string }) => message.role)).toEqual(['user', 'assistant']);
   });
 
   test('fails closed when no OpenAI key is configured', async () => {
