@@ -1,5 +1,8 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import { agentTabManager } from "../agentTabManager";
+import { getServerLocalOrigin } from "../utils/serverPort";
+import { resolveSimplePreviewRuntimeUrl } from "../utils/simplePreviewProxy";
+import type { SimpleAppStatus } from "../handlers/simpleApp";
 import { getCurrentWindowSessionKey, getWindowSessionByKey } from "../utils/windowSessions";
 import { answerBrowserTabCapture, listBrowserTabCaptures, stopBrowserTabCapture } from "../utils/browserExtensionRelay";
 import { readSimpleInterfaceAsset } from "../handlers/simpleAssets";
@@ -93,10 +96,21 @@ function errorResponse(error: unknown): { status: number; message: string } {
   return { status, message };
 }
 
-router.get("/", async (_req, res) => {
+/** A browser on another device loads the preview through its public origin. */
+function forRenderer(req: Request, status: SimpleAppStatus): SimpleAppStatus {
+  return {
+    ...status,
+    runtimeUrl: resolveSimplePreviewRuntimeUrl(status.runtimeUrl, {
+      host: req.headers.host,
+      forwardedHost: req.header("x-forwarded-host"),
+    }),
+  };
+}
+
+router.get("/", async (req, res) => {
   try {
     res.setHeader("Cache-Control", "no-store");
-    res.json(await readSimpleProjectAppStatus());
+    res.json(forRenderer(req, await readSimpleProjectAppStatus()));
   } catch (error) {
     const { status, message } = errorResponse(error);
     res.status(status).json({ error: message });
@@ -106,9 +120,9 @@ router.get("/", async (_req, res) => {
 router.post("/promote", async (req, res) => {
   try {
     res.setHeader("Cache-Control", "no-store");
-    const host = req.get("host");
-    if (!host) throw new Error("The Workstation host is unavailable.");
-    res.json(await promoteSimpleProjectApp(`${req.protocol}://${host}`));
+    // The project server calls back over loopback regardless of how this
+    // request reached the sidecar.
+    res.json(forRenderer(req, await promoteSimpleProjectApp(getServerLocalOrigin())));
   } catch (error) {
     const { status, message } = errorResponse(error);
     res.status(status).json({ error: message });
