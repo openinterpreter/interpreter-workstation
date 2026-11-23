@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import express from 'express';
+import { request as httpRequest } from 'node:http';
 import request from 'supertest';
 import { createEnterpriseAdminMutationRouter, createEnterpriseBrowserRouter, createEnterpriseLogoutRouter, createOidcHttpRouter } from './oidcHttp';
 import { OidcIntegration, type OidcConfiguration } from './oidc';
@@ -64,6 +65,17 @@ describe('unmounted HTTP boundary, deterministic local callback fixture', () => 
     expect(started.headers['set-cookie'][0]).toContain('SameSite=Lax');
     expect(started.headers['cache-control']).toBe('no-store');
   });
+  test('attempt-capacity denial cannot issue a browser binding or a redirect', async () => {
+    const app = express();
+    app.use(createOidcHttpRouter({ config, integration: {
+      begin: async () => { throw new Error('OIDC login capacity reached'); },
+    } as OidcIntegration, applicationOrigin: origin, successPath: '/settings' }));
+    const response = await request(app).get('/organizations/org-a/login').set('Host', host);
+    expect(response.status).toBe(503);
+    expect(response.headers['set-cookie']).toBeUndefined();
+    expect(response.headers.location).toBeUndefined();
+    expect(response.headers['cache-control']).toBe('no-store');
+  });
 
   test('callback requires one state/code and exact bound cookie; session is cookie-only', async () => {
     const { app, completed } = fixture();
@@ -86,12 +98,81 @@ describe('unmounted HTTP boundary, deterministic local callback fixture', () => 
     expect(completed()).toBe(1);
   });
 
+  test('absolute-form callback targets cannot override the pinned application origin', async () => {
+    const { app, completed } = fixture();
+    const server = app.listen(0, '127.0.0.1');
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Loopback fixture unavailable');
+      const status = await new Promise<number>((resolve, reject) => {
+        const call = httpRequest({ host: '127.0.0.1', port: address.port,
+          path: `http://untrusted.test/enterprise/callback?code=fixture-code&state=${state}`,
+          headers: { Host: host, Cookie: `interpreter-oidc-binding=${binding}` } }, (response) => {
+          response.resume(); response.on('end', () => resolve(response.statusCode ?? 0));
+        });
+        call.on('error', reject); call.end();
+      });
+      expect(status).toBe(403);
+      expect(completed()).toBe(0);
+    } finally { server.close(); }
+  });
+
+  test('absolute-form login target cannot issue a browser binding for a foreign authority', async () => {
+    let begins = 0;
+    const app = express();
+    app.use(createOidcHttpRouter({ config, integration: {
+      begin: async () => { begins++; return { authorizationUrl: config.authorizationEndpoint, state, browserBinding: binding }; },
+    } as OidcIntegration, applicationOrigin: origin, successPath: '/settings' }));
+    const server = app.listen(0, '127.0.0.1');
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Loopback fixture unavailable');
+      const response = await new Promise<{ status: number; cookie: string | string[] | undefined }>((resolve, reject) => {
+        const call = httpRequest({ host: '127.0.0.1', port: address.port,
+          path: 'http://untrusted.test/organizations/org-a/login', headers: { Host: host } }, (incoming) => {
+          incoming.resume(); incoming.on('end', () => resolve({ status: incoming.statusCode ?? 0,
+            cookie: incoming.headers['set-cookie'] }));
+        });
+        call.on('error', reject); call.end();
+      });
+      expect(response.status).toBe(403);
+      expect(response.cookie).toBeUndefined();
+      expect(begins).toBe(0);
+    } finally { server.close(); }
+  });
+
+  test('absolute-form admin read cannot consult a session under a foreign authority', async () => {
+    let verified = 0;
+    const app = express();
+    app.use(createEnterpriseBrowserRouter({ applicationOrigin: origin, allowInsecureLoopbackForTests: true,
+      verifySession: async () => { verified++; return null; }, directory: {} as ServerDirectory }));
+    const server = app.listen(0, '127.0.0.1');
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Loopback fixture unavailable');
+      const status = await new Promise<number>((resolve, reject) => {
+        const call = httpRequest({ host: '127.0.0.1', port: address.port,
+          path: 'http://untrusted.test/organizations/org-a/overview',
+          headers: { Host: host, Cookie: `interpreter-enterprise-session=${session}` } }, (incoming) => {
+          incoming.resume(); incoming.on('end', () => resolve(incoming.statusCode ?? 0));
+        });
+        call.on('error', reject); call.end();
+      });
+      expect(status).toBe(403);
+      expect(verified).toBe(0);
+    } finally { server.close(); }
+  });
+
   test('rejects unsafe callback origins and success destinations at construction', () => {
     const integration = {} as OidcIntegration;
     for (const applicationOrigin of ['https://untrusted.test', 'http://untrusted.test', 'http://127.0.0.1:39394/path', 'http://user:secret@127.0.0.1:39394']) {
       expect(() => createOidcHttpRouter({ config, integration, applicationOrigin, successPath: '/settings' })).toThrow();
     }
     expect(() => createOidcHttpRouter({ config, integration, applicationOrigin: origin, successPath: '//untrusted.test' })).toThrow();
+    for (const successPath of ['/\t/untrusted.test', '/\n/untrusted.test', '/\r/untrusted.test']) {
+      expect(new URL(successPath, origin).origin).toBe('http://untrusted.test');
+      expect(() => createOidcHttpRouter({ config, integration, applicationOrigin: origin, successPath })).toThrow();
+    }
     expect(() => createOidcHttpRouter({ config: { ...config, allowInsecureLoopbackForTests: false }, integration, applicationOrigin: origin, successPath: '/settings' })).toThrow();
     expect(() => createOidcHttpRouter({ config: { ...config, redirectUri: 'http://user:secret@127.0.0.1:39394/enterprise/callback' },
       integration, applicationOrigin: origin, successPath: '/settings' })).toThrow();
@@ -99,7 +180,15 @@ describe('unmounted HTTP boundary, deterministic local callback fixture', () => 
 
   test('forwarded HTTPS headers do not authorize a plain HTTP production callback', async () => {
     let started = 0;
-    const productionConfig = { ...config, redirectUri: 'https://enterprise.example/enterprise/callback', allowInsecureLoopbackForTests: false };
+    const productionConfig = { ...config, redirectUri: 'https://enterprise.example/enterprise/callback',
+      allowInsecureLoopbackForTests: false, accountDomain: 'enterprise.example' };
+    expect(() => createOidcHttpRouter({ config: { ...productionConfig, accountDomain: undefined },
+      integration: {} as OidcIntegration, applicationOrigin: 'https://enterprise.example', successPath: '/settings' }))
+      .toThrow('pinned account domain');
+    expect(() => new OidcIntegration({ ...productionConfig, accountDomain: undefined,
+      issuer: 'https://issuer.example/tenant', authorizationEndpoint: 'https://issuer.example/tenant/authorize',
+      tokenEndpoint: 'https://issuer.example/tenant/token', jwksUri: 'https://issuer.example/tenant/keys' }, {} as ServerDirectory))
+      .toThrow('pinned account domain');
     const app = express();
     app.use(createOidcHttpRouter({ config: productionConfig, integration: {
       begin: async () => { started++; throw new Error('must not run'); },

@@ -38,6 +38,54 @@ async function fixture() {
 }
 
 describe('unmounted same-origin member deactivation', () => {
+  test('opaque OIDC subjects survive encoded admin URLs without crossing tenant or prototype boundaries', async () => {
+    const { directory, identity, post } = await fixture();
+    const foreignBefore = (await directory.auditSummary('org-b')).eventCount;
+    const subjects = ['auth0|dave', 'org/team', '__proto__', 'S'.repeat(255), ' ', 'zero\u0000byte', 'quote"slash\\'];
+    for (const subject of subjects) {
+      await directory.setMember(identity, { organizationId: 'org-a', subject,
+        displayName: 'Synthetic member', role: 'member', active: true });
+      const session = await directory.createSession(issuer, 'org-a', subject, Date.now() + 60_000);
+      expect((await post(`/api/enterprise/organizations/org-a/members/${encodeURIComponent(subject)}/deactivate`)).status)
+        .toBe(204);
+      expect((await directory.getMember('org-a', subject))?.active).toBe(false);
+      expect(await directory.verifySession(session.token)).toBeNull();
+    }
+    const scoped = await directory.listAudit(identity);
+    expect(scoped.filter((event) => event.action === 'organization.member.deactivate' &&
+      event.outcome === 'allowed').map((event) => event.targetSubject))
+      .toEqual(subjects);
+    expect((await directory.auditSummary('org-b')).eventCount).toBe(foreignBefore);
+  });
+
+  test('administrator demotion preserves a recoverable admin, revokes sessions and audits only the actor tenant', async () => {
+    const { directory, admin, member, identity, post } = await fixture();
+    const path = '/api/enterprise/organizations/org-a/members/dave/demote';
+    const before = (await directory.auditSummary('org-a')).eventCount;
+    const foreign = (await directory.auditSummary('org-b')).eventCount;
+    expect((await post('/api/enterprise/organizations/org-a/members/alice/demote')).status).toBe(403);
+    expect((await post('/api/enterprise/organizations/org-a/members/carol/demote', member)).status).toBe(403);
+    await directory.setMember(identity, { organizationId: 'org-a', subject: 'dave',
+      displayName: 'Dave', role: 'admin', active: true });
+    const second = await directory.createSession(issuer, 'org-a', 'dave', Date.now() + 60_000);
+    expect((await post(path).unset('Origin')).status).toBe(403);
+    expect((await post(path).unset('X-Interpreter-CSRF')).status).toBe(403);
+    expect((await post(path, member)).status).toBe(403);
+    expect((await post('/api/enterprise/organizations/org-b/members/bob/demote')).status).toBe(403);
+    expect((await directory.auditSummary('org-b')).eventCount).toBe(foreign);
+    expect((await post(path)).status).toBe(204);
+    expect((await directory.getMember('org-a', 'dave'))?.role).toBe('member');
+    expect((await directory.getMember('org-a', 'dave'))?.active).toBe(true);
+    expect(await directory.verifySession(second.token)).toBeNull();
+    expect(await directory.verifySession(admin)).not.toBeNull();
+    expect((await directory.auditSummary('org-a')).eventCount).toBe(before + 7);
+    const events = await directory.listAudit(identity);
+    expect(events.at(-1)).toMatchObject({ action: 'organization.member.demote',
+      subject: 'alice', targetSubject: 'dave', outcome: 'allowed' });
+    const subsequent = await directory.createSession(issuer, 'org-a', 'dave', Date.now() + 60_000);
+    expect((await directory.verifySession(subsequent.token))?.subject).toBe('dave');
+    expect((await post(path)).status).toBe(403); // Cannot silently repeat or promote.
+  });
   test('active member and last-admin mutation denials commit to the actor tenant only', async () => {
     const { directory, admin, member, identity, path, post } = await fixture();
     const before = (await directory.auditSummary('org-a')).eventCount;

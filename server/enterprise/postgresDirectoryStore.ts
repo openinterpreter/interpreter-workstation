@@ -1,6 +1,6 @@
 import pg, { type Pool, type PoolClient } from 'pg';
 import {
-  blankDirectoryState, decodeDirectoryState, MAX_DIRECTORY_BYTES, validateDirectoryState,
+  blankDirectoryState, decodeDirectoryState, EnterpriseDomainClaimConflict, MAX_DIRECTORY_BYTES, validateDirectoryState,
   type DirectoryState, type EnterpriseStateStore,
 } from './serverDirectory';
 
@@ -18,8 +18,13 @@ export const ENTERPRISE_TENANT_DIRECTORY_SCHEMA = `CREATE TABLE public.interpret
 )`;
 
 /** Operator applies this schema and pre-provisions one row with an independent
- * NOINHERIT/NOBYPASSRLS LOGIN role per tenant. Only SELECT and UPDATE(content)
- * are granted to that role; no application role owns this table or has INSERT. */
+ * NOINHERIT/NOBYPASSRLS LOGIN role per tenant. On the directory grant only
+ * SELECT and UPDATE(content); audit gets SELECT/column-limited INSERT and
+ * domain claims get SELECT/column-limited INSERT. No app role owns a table.
+ * Existing opt-in jsonb audit installations need the operator-owned,
+ * backup-verified scripts/migrate-enterprise-rls-audit-jsonb-to-text.sql
+ * migration before this version can serve them. The runtime
+ * refuses the old column type; it never silently reinitializes their ledger. */
 export const ENTERPRISE_RLS_TENANT_DIRECTORY_SCHEMA = `CREATE TABLE public.interpreter_enterprise_rls_directory (
   organization_id text PRIMARY KEY CHECK (char_length(organization_id) BETWEEN 1 AND 160 AND organization_id ~ '^[A-Za-z0-9._@:-]+$'),
   database_role name NOT NULL UNIQUE,
@@ -32,12 +37,17 @@ CREATE POLICY enterprise_tenant_role_scope ON public.interpreter_enterprise_rls_
 CREATE TABLE public.interpreter_enterprise_rls_audit (
   id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   organization_id text NOT NULL,
-  content jsonb NOT NULL CHECK (jsonb_typeof(content) = 'object' AND
-    jsonb_typeof(content->'organizationId') IS NOT DISTINCT FROM 'string' AND content->>'organizationId' = organization_id AND
-    jsonb_typeof(content->'subject') IS NOT DISTINCT FROM 'string' AND btrim(content->>'subject') <> '' AND
-    jsonb_typeof(content->'action') IS NOT DISTINCT FROM 'string' AND btrim(content->>'action') <> '' AND
-    jsonb_typeof(content->'outcome') IS NOT DISTINCT FROM 'string' AND content->>'outcome' IN ('allowed', 'denied') AND
-    jsonb_typeof(content->'at') IS NOT DISTINCT FROM 'string' AND btrim(content->>'at') <> '')
+  -- Keep the canonical JSON spelling: PostgreSQL jsonb cannot represent an
+  -- escaped U+0000 in an otherwise valid opaque OIDC Core ASCII subject.
+  content text NOT NULL CHECK (octet_length(content) BETWEEN 2 AND 16384 AND
+    -- Canonical JSON.stringify order is validated again by the application
+    -- against the row-locked directory. Even json operators convert an
+    -- unrelated escaped NUL to PostgreSQL text and cannot be used here.
+    left(content, char_length(organization_id) + 21) = '{"organizationId":"' || organization_id || '",' AND
+    content LIKE '%"subject":"_%' AND content NOT LIKE '%"subject":""%' AND
+    content LIKE '%"action":"_%' AND content NOT LIKE '%"action":""%' AND
+    content LIKE '%"at":"_%' AND content NOT LIKE '%"at":""%' AND
+    (content LIKE '%"outcome":"allowed"%' OR content LIKE '%"outcome":"denied"%'))
 );
 CREATE INDEX enterprise_rls_audit_tenant_order ON public.interpreter_enterprise_rls_audit (organization_id, id);
 ALTER TABLE public.interpreter_enterprise_rls_audit ENABLE ROW LEVEL SECURITY;
@@ -46,11 +56,49 @@ CREATE POLICY enterprise_audit_role_scope ON public.interpreter_enterprise_rls_a
   USING (organization_id IN (SELECT d.organization_id FROM public.interpreter_enterprise_rls_directory d
     WHERE d.database_role = current_user))
   WITH CHECK (organization_id IN (SELECT d.organization_id FROM public.interpreter_enterprise_rls_directory d
-    WHERE d.database_role = current_user))`;
+    WHERE d.database_role = current_user));
+CREATE TABLE public.interpreter_enterprise_rls_domain_claim (
+  domain text PRIMARY KEY CHECK (char_length(domain) BETWEEN 3 AND 253 AND domain ~ '^[a-z0-9][a-z0-9.-]*[a-z0-9]$'),
+  organization_id text NOT NULL REFERENCES public.interpreter_enterprise_rls_directory(organization_id),
+  database_role name NOT NULL,
+  issuer text NOT NULL
+);
+ALTER TABLE public.interpreter_enterprise_rls_domain_claim ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.interpreter_enterprise_rls_domain_claim FORCE ROW LEVEL SECURITY;
+CREATE POLICY enterprise_domain_role_scope ON public.interpreter_enterprise_rls_domain_claim
+  USING (database_role = current_user)
+  WITH CHECK (database_role = current_user AND organization_id IN
+    (SELECT d.organization_id FROM public.interpreter_enterprise_rls_directory d WHERE d.database_role = current_user))`;
 
-type QueryResult = { rows: Array<{ content?: unknown; audit_matches?: unknown }>; rowCount: number | null };
+type QueryResult = { rows: Array<{ content?: unknown; audit_contents?: unknown; boundary_ok?: unknown }>; rowCount: number | null };
 type TransactionClient = Pick<PoolClient, 'query' | 'release'>;
 type DirectoryPool = { query(sql: string, values?: unknown[]): Promise<QueryResult>; connect(): Promise<TransactionClient> };
+
+/** This is a per-operation guard, not a substitute for an operator's grants,
+ * migration or independent role audit. Never cache a positive result across
+ * pooled connections or after a privileged schema/role change. */
+const RLS_BOUNDARY_QUERY = `SELECT
+  (SELECT NOT r.rolsuper AND NOT r.rolbypassrls AND NOT r.rolinherit
+    FROM pg_catalog.pg_roles r WHERE r.rolname = current_user)
+  AND (SELECT count(*) = 3 AND bool_and(c.relrowsecurity AND c.relforcerowsecurity
+      AND NOT pg_catalog.pg_has_role(current_user, c.relowner, 'MEMBER'))
+    FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relname IN
+      ('interpreter_enterprise_rls_directory', 'interpreter_enterprise_rls_audit',
+       'interpreter_enterprise_rls_domain_claim') AND c.relkind = 'r')
+  AND NOT pg_catalog.has_table_privilege(current_user, 'public.interpreter_enterprise_rls_directory', 'INSERT, DELETE')
+  AND NOT pg_catalog.has_column_privilege(current_user, 'public.interpreter_enterprise_rls_directory', 'organization_id', 'UPDATE')
+  AND NOT pg_catalog.has_column_privilege(current_user, 'public.interpreter_enterprise_rls_directory', 'database_role', 'UPDATE')
+  AND (SELECT a.atttypid = 'text'::regtype FROM pg_catalog.pg_attribute a
+    WHERE a.attrelid = 'public.interpreter_enterprise_rls_audit'::regclass
+      AND a.attname = 'content' AND a.attnum > 0 AND NOT a.attisdropped)
+  AND NOT pg_catalog.has_table_privilege(current_user, 'public.interpreter_enterprise_rls_audit', 'UPDATE, DELETE')
+  AND NOT pg_catalog.has_table_privilege(current_user, 'public.interpreter_enterprise_rls_domain_claim', 'UPDATE, DELETE')
+  AND pg_catalog.has_column_privilege(current_user, 'public.interpreter_enterprise_rls_domain_claim', 'database_role', 'UPDATE')
+  AND NOT pg_catalog.has_column_privilege(current_user, 'public.interpreter_enterprise_rls_domain_claim', 'domain', 'UPDATE')
+  AND NOT pg_catalog.has_column_privilege(current_user, 'public.interpreter_enterprise_rls_domain_claim', 'organization_id', 'UPDATE')
+  AND NOT pg_catalog.has_column_privilege(current_user, 'public.interpreter_enterprise_rls_domain_claim', 'issuer', 'UPDATE')
+  AS boundary_ok`;
 
 /** A shared database is required for multiple server hosts. No connection string:
  * URI sslmode overrides can silently replace a pinned CA in node-postgres. */
@@ -138,6 +186,16 @@ function scopedTenantState(state: DirectoryState, organizationId: string): Direc
   return state;
 }
 
+function assertAuditMatches(state: DirectoryState, result: QueryResult): void {
+  const ledger = result.rows[0]?.audit_contents;
+  // Compare canonical append-only serialized events. Never coerce the ledger
+  // through jsonb, which rejects valid escaped-NUL subjects on read as well.
+  if (!Array.isArray(ledger) || !ledger.every((event) => typeof event === 'string') ||
+      JSON.stringify(state.audit) !== `[${ledger.join(',')}]`) {
+    throw new Error('Tenant audit ledger is out of sync');
+  }
+}
+
 /** One pinned organization per row/ServerDirectory instance. The legacy pilot
  * uses a shared table role. The opt-in 'rls' mode uses an operator-provisioned
  * row and separate database role, and never inserts an absent row. Neither
@@ -159,24 +217,59 @@ export class TenantPostgresDirectoryStore implements EnterpriseStateStore {
     return scopedTenantState(stateFrom(result), this.organizationId);
   }
 
+  private async assertRlsBoundary(connection: Pick<DirectoryPool, 'query'>): Promise<void> {
+    if (this.table !== 'public.interpreter_enterprise_rls_directory') return;
+    const result = await connection.query(RLS_BOUNDARY_QUERY);
+    if (result.rowCount !== 1 || result.rows[0]?.boundary_ok !== true) {
+      throw new Error('Enterprise tenant database boundary is unsafe');
+    }
+  }
+
+  /** A pilot row has no global registry. Missing RLS registry, role or claim
+   * must not be mistaken for a verified globally unique domain. */
+  async domainClaimStatus(organizationId: string, issuer: string, domain: string): Promise<boolean> {
+    if (organizationId !== this.organizationId || this.table !== 'public.interpreter_enterprise_rls_directory') return false;
+    await this.assertRlsBoundary(this.pool);
+    const result = await this.pool.query(`SELECT domain FROM public.interpreter_enterprise_rls_domain_claim
+      WHERE domain = $1 AND organization_id = $2 AND issuer = $3 AND database_role = current_user`,
+    [domain, organizationId, issuer]);
+    return result.rowCount === 1;
+  }
+
   async read(): Promise<DirectoryState> {
     if (this.table === 'public.interpreter_enterprise_rls_directory') {
+      await this.assertRlsBoundary(this.pool);
       // One statement snapshot: check ordered event content, not just count;
       // a concurrent committed write cannot split the directory and ledger.
       // This detects drift but is not a cryptographic proof against a database
       // operator who can deliberately rewrite both copies and backups.
       const result = await this.pool.query(`SELECT d.content,
-        (d.content::jsonb->'audit' = COALESCE((SELECT jsonb_agg(a.content ORDER BY a.id)
-          FROM public.interpreter_enterprise_rls_audit a WHERE a.organization_id = d.organization_id), '[]'::jsonb)) AS audit_matches
+        COALESCE((SELECT array_agg(a.content ORDER BY a.id)
+          FROM public.interpreter_enterprise_rls_audit a WHERE a.organization_id = d.organization_id), ARRAY[]::text[]) AS audit_contents
         FROM ${this.table} d WHERE d.organization_id = $1`, [this.organizationId]);
       const state = this.state(result);
-      if (result.rows[0]?.audit_matches !== true) throw new Error('Tenant audit ledger is out of sync');
+      assertAuditMatches(state, result);
       return state;
     }
     return this.state(await this.pool.query(`SELECT content FROM ${this.table} WHERE organization_id = $1`, [this.organizationId]));
   }
 
   async change<T>(fn: (state: DirectoryState) => T, create = false): Promise<T> {
+    return this.changeInternal(fn, create);
+  }
+
+  /** Lock the operator-owned claim row through session issuance. A claim
+   * release waits for this commit, or this transaction sees its deletion. */
+  async changeWithDomainClaim<T>(organizationId: string, issuer: string, domain: string,
+    fn: (state: DirectoryState) => T): Promise<T> {
+    if (this.table !== 'public.interpreter_enterprise_rls_directory' || organizationId !== this.organizationId) {
+      throw new Error('Verified account domain required');
+    }
+    return this.changeInternal(fn, false, { issuer, domain });
+  }
+
+  private async changeInternal<T>(fn: (state: DirectoryState) => T, create = false,
+    claim?: { issuer: string; domain: string }): Promise<T> {
     const client = await this.pool.connect();
     let transaction = false;
     let discard = false;
@@ -185,6 +278,7 @@ export class TenantPostgresDirectoryStore implements EnterpriseStateStore {
       transaction = true;
       await client.query("SET LOCAL lock_timeout = '2000ms'");
       await client.query("SET LOCAL statement_timeout = '5000ms'");
+      await this.assertRlsBoundary(client);
       if (create && this.table === 'public.interpreter_enterprise_tenant_directory') {
         // Only ServerDirectory.bootstrap passes create=true; ordinary reads and
         // HTTP handlers never provision an absent tenant on demand.
@@ -193,19 +287,26 @@ export class TenantPostgresDirectoryStore implements EnterpriseStateStore {
       }
       const state = this.state(await client.query(
         `SELECT content FROM ${this.table} WHERE organization_id = $1 FOR UPDATE`, [this.organizationId]));
+      if (claim) {
+        const owned = await client.query(`SELECT domain FROM public.interpreter_enterprise_rls_domain_claim
+          WHERE domain = $1 AND organization_id = $2 AND issuer = $3 AND database_role = current_user FOR KEY SHARE`,
+        [claim.domain, this.organizationId, claim.issuer]);
+        if (owned.rowCount !== 1) throw new Error('Verified account domain required');
+      }
       if (this.table === 'public.interpreter_enterprise_rls_directory') {
         const ledger = await client.query(
-          `SELECT (d.content::jsonb->'audit' = COALESCE((SELECT jsonb_agg(a.content ORDER BY a.id)
-            FROM public.interpreter_enterprise_rls_audit a WHERE a.organization_id = d.organization_id), '[]'::jsonb)) AS audit_matches
+          `SELECT COALESCE((SELECT array_agg(a.content ORDER BY a.id)
+            FROM public.interpreter_enterprise_rls_audit a WHERE a.organization_id = d.organization_id), ARRAY[]::text[]) AS audit_contents
             FROM public.interpreter_enterprise_rls_directory d WHERE d.organization_id = $1`,
           [this.organizationId]);
-        if (ledger.rowCount !== 1 || ledger.rows[0]?.audit_matches !== true) {
-          throw new Error('Tenant audit ledger is out of sync');
-        }
+        if (ledger.rowCount !== 1) throw new Error('Tenant audit ledger is out of sync');
+        assertAuditMatches(state, ledger);
       }
       const originalAudit = this.table === 'public.interpreter_enterprise_rls_directory'
         ? JSON.stringify(state.audit) : '';
       const originalAuditCount = state.audit.length;
+      const priorProofs = new Map(Object.entries(state.organizations[this.organizationId]?.domainProofs ?? {})
+        .map(([domain, proof]) => [domain, `${proof.challengeHash}:${proof.verifiedUntil ?? 0}`]));
       const result = fn(state);
       scopedTenantState(state, this.organizationId);
       if (!state.organizations[this.organizationId]) throw new Error('Tenant is not bootstrapped');
@@ -216,8 +317,26 @@ export class TenantPostgresDirectoryStore implements EnterpriseStateStore {
       const content = JSON.stringify(state);
       if (Buffer.byteLength(content, 'utf8') > MAX_DIRECTORY_BYTES) throw new Error('Tenant directory capacity reached');
       if (this.table === 'public.interpreter_enterprise_rls_directory') {
+        // Reserve a name in the same row-locked transaction as its challenge,
+        // confirmation and audit append. A foreign claim is invisible under
+        // RLS but the unique index prevents concurrent cross-tenant overlap.
+        for (const [domain, proof] of Object.entries(state.organizations[this.organizationId]?.domainProofs ?? {})) {
+          if (priorProofs.get(domain) === `${proof.challengeHash}:${proof.verifiedUntil ?? 0}`) continue;
+          const owned = await client.query(`SELECT domain FROM public.interpreter_enterprise_rls_domain_claim
+            WHERE domain = $1 AND organization_id = $2 AND issuer = $3 AND database_role = current_user`,
+          [domain, this.organizationId, proof.issuer]);
+          if (owned.rowCount === 1) continue;
+          const inserted = await client.query(`INSERT INTO public.interpreter_enterprise_rls_domain_claim
+            (domain, organization_id, database_role, issuer)
+            SELECT $1, $2, current_user, $3 WHERE EXISTS
+              (SELECT 1 FROM public.interpreter_enterprise_rls_directory
+                WHERE organization_id = $2 AND database_role = current_user)
+            ON CONFLICT (domain) DO NOTHING RETURNING domain`,
+          [domain, this.organizationId, proof.issuer]);
+          if (inserted.rowCount !== 1) throw new EnterpriseDomainClaimConflict();
+        }
         for (const event of state.audit.slice(originalAuditCount)) {
-          await client.query('INSERT INTO public.interpreter_enterprise_rls_audit (organization_id, content) VALUES ($1, $2::jsonb)',
+          await client.query('INSERT INTO public.interpreter_enterprise_rls_audit (organization_id, content) VALUES ($1, $2)',
             [this.organizationId, JSON.stringify(event)]);
         }
       }

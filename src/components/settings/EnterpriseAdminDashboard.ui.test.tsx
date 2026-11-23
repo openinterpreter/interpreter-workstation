@@ -1,18 +1,146 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { EnterpriseAdminDashboard } from './EnterpriseAdminDashboard';
 
 afterEach(() => vi.unstubAllGlobals());
 
 const overview = { organization: { id: 'org-a', name: 'Acme' }, users: { total: 1, active: 1, admins: 1 },
-  audit: { eventCount: 3, latestAt: null }, identity: { issuer: 'https://idp.example/tenant', status: 'verified session' },
+  audit: { eventCount: 3, latestAt: null }, identity: { issuer: 'https://idp.example/tenant', subject: 'alice', status: 'verified session' },
   controls: { policy: 'not enforced', provisioning: 'not configured', modelRegistry: 'not configured' } };
 
 describe('admin dashboard shell', () => {
+  test('an administrator can end another admin session without silently demoting them or ending their own', async () => {
+    let revoked = false;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/members/dave/revoke-sessions')) {
+        expect(init).toMatchObject({ method: 'POST', credentials: 'same-origin', body: '{}' });
+        expect(init?.headers).toMatchObject({ 'X-Interpreter-CSRF': '1' });
+        revoked = true;
+        return { status: 204 };
+      }
+      return { ok: true, json: async () => url.endsWith('/members')
+        ? { organizationId: 'org-a', members: [
+          { subject: 'alice', displayName: 'Alice', role: 'admin', active: true },
+          { subject: 'dave', displayName: 'Dave', role: 'admin', active: true },
+        ] } : { ...overview, users: { total: 2, active: 2, admins: 2 },
+          audit: { eventCount: revoked ? 4 : 3, latestAt: null } } };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<EnterpriseAdminDashboard organizationId="org-a" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'End sessions' }));
+    expect(screen.getByText(/End Dave's current sessions/)).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm end sessions' }));
+    await waitFor(() => expect(screen.getByText('4')).toBeInTheDocument());
+    expect(screen.getByText(/Sessions ended\. This person can sign in again/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Demote admin' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'End sessions' })).toBeInTheDocument();
+    expect(JSON.stringify(fetchMock.mock.calls)).not.toContain('/members/alice/revoke-sessions');
+  });
+  test('another administrator can be deactivated in one confirmed action without stranding the last admin', async () => {
+    let deactivated = false;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/members/dave/deactivate')) {
+        expect(init).toMatchObject({ method: 'POST', credentials: 'same-origin', body: '{}' });
+        expect(init?.headers).toMatchObject({ 'X-Interpreter-CSRF': '1' });
+        deactivated = true;
+        return { status: 204 };
+      }
+      return { ok: true, json: async () => url.endsWith('/members')
+        ? { organizationId: 'org-a', members: [
+          { subject: 'alice', displayName: 'Alice', role: 'admin', active: true },
+          { subject: 'dave', displayName: 'Dave', role: 'admin', active: !deactivated },
+        ] } : { ...overview, users: { total: 2, active: deactivated ? 1 : 2,
+          admins: deactivated ? 1 : 2 }, audit: { eventCount: deactivated ? 4 : 3, latestAt: null } } };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<EnterpriseAdminDashboard organizationId="org-a" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Deactivate admin' }));
+    expect(screen.getByText(/Deactivate administrator Dave and end their sessions/)).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm deactivation' }));
+    await waitFor(() => expect(screen.getByText('Inactive')).toBeInTheDocument());
+    expect(screen.getByText('Dave')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Deactivate admin' })).not.toBeInTheDocument();
+    expect(JSON.stringify(fetchMock.mock.calls)).not.toContain('/members/alice/deactivate');
+  });
+  test('confirmed admin demotion refetches authority, never offers self or last-admin demotion', async () => {
+    let demoted = false;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/members/dave/demote')) {
+        expect(init).toMatchObject({ method: 'POST', credentials: 'same-origin', body: '{}' });
+        expect(init?.headers).toMatchObject({ 'X-Interpreter-CSRF': '1' });
+        demoted = true;
+        return { status: 204 };
+      }
+      return { ok: true, json: async () => url.endsWith('/members')
+        ? { organizationId: 'org-a', members: [
+          { subject: 'alice', displayName: 'Alice', role: 'admin', active: true },
+          { subject: 'dave', displayName: 'Dave', role: demoted ? 'member' : 'admin', active: true },
+        ] }
+        : { ...overview, users: { total: 2, active: 2, admins: demoted ? 1 : 2 },
+          audit: { eventCount: demoted ? 4 : 3, latestAt: null } } };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<EnterpriseAdminDashboard organizationId="org-a" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Demote admin' }));
+    expect(screen.getByText(/Remove Dave's administrator role and end their sessions/)).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm demotion' }));
+    await waitFor(() => expect(screen.getByText(/Administrator role removed and existing sessions ended/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('4')).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Demote admin' })).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+  test('unconfirmed administrator demotion hides stale tenant data and reports no role change', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url.endsWith('/members/dave/demote') ? { status: 503 } :
+      { ok: true, json: async () => url.endsWith('/members')
+        ? { organizationId: 'org-a', members: [
+          { subject: 'alice', displayName: 'Alice', role: 'admin', active: true },
+          { subject: 'dave', displayName: 'Dave', role: 'admin', active: true },
+        ] } : { ...overview, users: { total: 2, active: 2, admins: 2 } } }));
+    render(<EnterpriseAdminDashboard organizationId="org-a" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Demote admin' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm demotion' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('The change was not confirmed');
+    expect(screen.queryByText('Dave')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Administrator role removed/)).not.toBeInTheDocument();
+  });
+  test('opt-in workspace mutation refetches the organization audit summary', async () => {
+    let count = 3;
+    const workspaces: { id: string; name: string; active: boolean }[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/workspaces') && init?.method === 'POST') {
+        workspaces.push({ ...JSON.parse(String(init.body)), active: true }); count++;
+        return { status: 204 };
+      }
+      return { status: 200, ok: true, json: async () => url.endsWith('/workspaces')
+        ? { organizationId: 'org-a', workspaces: structuredClone(workspaces) }
+        : url.endsWith('/members') ? { organizationId: 'org-a', members: [] }
+          : { ...overview, audit: { eventCount: count, latestAt: null } } };
+    }));
+    render(<EnterpriseAdminDashboard organizationId="org-a" workspaceAdministrationEnabled />);
+    expect(await screen.findByText('No workspaces registered.')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Workspace identifier'), { target: { value: 'research' } });
+    fireEvent.change(screen.getByLabelText('Workspace name'), { target: { value: 'Research' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Register workspace' }));
+    await waitFor(() => expect(screen.getByText('4')).toBeInTheDocument());
+    expect(await screen.findByText('research · Active registry entry')).toBeInTheDocument();
+  });
+  test('workspace inventory outage hides the rest of the organization dashboard', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url.endsWith('/workspaces') ? { status: 503 }
+      : { ok: true, json: async () => url.endsWith('/members')
+        ? { organizationId: 'org-a', members: [] } : overview }));
+    render(<EnterpriseAdminDashboard organizationId="org-a" workspaceAdministrationEnabled />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Organization data is hidden');
+    expect(screen.queryByText('Acme')).not.toBeInTheDocument();
+  });
   test('loads only tenant-scoped recent audit on request, never an export or bearer', async () => {
     const fetchMock = vi.fn(async (url: string) => ({ ok: true, json: async () =>
       url.endsWith('/activity') ? { organizationId: 'org-a', events: [{ organizationId: 'org-a', subject: 'alice',
         action: 'organization.member.sessions.revoke', outcome: 'allowed', at: '2026-11-08T10:00:00Z' },
+      { organizationId: 'org-a', subject: 'alice', targetDomain: 'acme.example',
+        action: 'organization.domain.verify', outcome: 'allowed', at: '2026-11-08T10:00:30Z' },
       { organizationId: 'org-a', subject: 'alice', targetOrganizationId: 'org-b',
         action: 'organization.overview.cross-tenant', outcome: 'denied', at: '2026-11-08T10:01:00Z' }] } :
         url.endsWith('/members') ? { organizationId: 'org-a', members: [] } : overview }));
@@ -23,6 +151,7 @@ describe('admin dashboard shell', () => {
     fireEvent.click(screen.getByRole('button', { name: 'View recent activity' }));
     expect(await screen.findByText(/organization.member.sessions.revoke/)).toBeInTheDocument();
     expect(screen.getByText(/attempted org-b/)).toBeInTheDocument();
+    expect(screen.getByText('Domain: acme.example')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(fetchMock).toHaveBeenCalledWith('/api/enterprise/organizations/org-a/activity',
       expect.objectContaining({ credentials: 'same-origin', cache: 'no-store' }));
@@ -62,7 +191,7 @@ describe('admin dashboard shell', () => {
     fireEvent.click(screen.getByRole('button', { name: 'End sessions' }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm end sessions' }));
     await waitFor(() => expect(screen.getByText('4')).toBeInTheDocument());
-    expect(screen.getByText(/Sessions ended\. This member can sign in again/)).toBeInTheDocument();
+    expect(screen.getByText(/Sessions ended\. This person can sign in again/)).toBeInTheDocument();
     expect(screen.getAllByText('Active')).toHaveLength(2);
     expect(screen.getByRole('button', { name: 'End sessions' })).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(5);
@@ -86,6 +215,31 @@ describe('admin dashboard shell', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Signed out');
     expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument();
     expect(JSON.stringify(fetchMock.mock.calls)).not.toContain('Authorization');
+  });
+
+  test('a late tenant-A sign-out cannot replace tenant-B directory or notice', async () => {
+    let resolveLogout!: (value: { status: number }) => void;
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.endsWith('/org-a/session/logout')) {
+        return new Promise<{ status: number }>((resolve) => { resolveLogout = resolve; });
+      }
+      const second = url.includes('/org-b/');
+      return { ok: true, json: async () => url.endsWith('/members')
+        ? { organizationId: second ? 'org-b' : 'org-a', members: [{ subject: second ? 'bob' : 'alice',
+          displayName: second ? 'Bob' : 'Alice', role: 'admin', active: true }] }
+        : { ...overview, identity: { ...overview.identity, subject: second ? 'bob' : 'alice' },
+          organization: { id: second ? 'org-b' : 'org-a', name: second ? 'Beta' : 'Acme' } } };
+    }));
+    const dashboard = render(<EnterpriseAdminDashboard organizationId="org-a" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
+    dashboard.rerender(<EnterpriseAdminDashboard organizationId="org-b" />);
+    expect(await screen.findByText('Beta')).toBeInTheDocument();
+    expect(screen.getByText('Bob')).toBeInTheDocument();
+    await act(async () => { resolveLogout({ status: 204 }); });
+    expect(screen.getByText('Beta')).toBeInTheDocument();
+    expect(screen.getByText('Bob')).toBeInTheDocument();
+    expect(screen.queryByText('Alice')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Signed out of this organization session/)).not.toBeInTheDocument();
   });
 
   test('failed sign out never claims the session was revoked', async () => {
