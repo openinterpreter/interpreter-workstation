@@ -1,8 +1,7 @@
-<!-- release-notes-for: 0.2.255 -->
+<!-- release-notes-for: 0.2.256 -->
 ## What's new
 
-- Attributes each remote input's outcome to its own saved turn item instead of returning another input's reply.
-- Fails closed when an older input has no separately attributable answer.
+- Prevents an in-flight organization sign-in from restoring a session after its administrative revocation.
 
 ## Distribution
 
