@@ -2,6 +2,7 @@
 
 import { execFileSync, spawn } from 'node:child_process';
 import { constants, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -283,12 +284,27 @@ process.stdout.write(${JSON.stringify(`${PACKAGE_SMOKE_PROJECT_RUNTIME_SENTINEL}
   }
 }
 
+/**
+ * A loopback port the operating system reports as free. A guessed port can
+ * fall inside a range the platform has reserved, where listening is refused.
+ */
+function findFreeLoopbackPort() {
+  return new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const { port } = probe.address();
+      probe.close((error) => (error ? reject(error) : resolve(port)));
+    });
+  });
+}
+
 async function runBundledNextOfflineSmoke() {
   const resourcesRoot = findBundledResourcesRoot();
   const appBinary = resolvePackagedAppBinary(resourcesRoot);
   const runtime = path.join(resourcesRoot, 'simple-interface-runtime');
   const project = mkdtempSync(path.join(tmpdir(), 'interpreter-packaged-next-'));
-  const port = 45000 + Math.floor(Math.random() * 10000);
+  const port = await findFreeLoopbackPort();
   let child;
   try {
     cpSync(path.join(runtime, 'node_modules'), path.join(project, 'node_modules'), {
