@@ -33,19 +33,21 @@ export function NameScreen({ onNext, initialName = '' }: NameScreenProps) {
   const stepRef = useRef(currentStep);
   const [name, setName] = useState(initialName);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const commitName = useCallback(async () => {
     const trimmed = name.trim();
     if (!trimmed || isSubmitting) return;
     setIsSubmitting(true);
-    let submitError: unknown;
+    setSaveError(null);
     try {
       await onNext(trimmed);
     } catch (error) {
-      submitError = error;
+      console.error('[Onboarding] Cannot save name', error);
+      setSaveError(t('onboarding.name.saveError'));
+    } finally {
+      setIsSubmitting(false);
     }
-    setIsSubmitting(false);
-    if (submitError) throw submitError;
-  }, [isSubmitting, name, onNext]);
+  }, [isSubmitting, name, onNext, t]);
 
   useEffect(() => {
     setFooterConfig({
@@ -118,6 +120,7 @@ export function NameScreen({ onNext, initialName = '' }: NameScreenProps) {
           >
             {isSubmitting ? t('onboarding.name.saving') : '\u00A0'}
           </p>
+          {saveError && <p role="alert" className="text-ui-sm text-destructive">{saveError}</p>}
         </div>
       </form>
     </OnboardingScreenShell>

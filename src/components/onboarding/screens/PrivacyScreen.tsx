@@ -22,10 +22,13 @@ export function PrivacyScreen({ onNext }: PrivacyScreenProps) {
   "use no memo";
 
   const { t } = useTranslation();
+  const tRef = useRef(t);
+  tRef.current = t;
   const { currentStep, setFooterConfig } = useOnboarding();
   const stepRef = useRef(currentStep);
   const [selectedOption, setSelectedOption] = useState<'private' | 'share' | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
 
   const blurActiveChoice = useCallback(() => {
@@ -40,8 +43,12 @@ export function PrivacyScreen({ onNext }: PrivacyScreenProps) {
     blurActiveChoice();
     setSelectedOption(option);
     setIsSubmitting(true);
+    setSaveError(null);
     try {
       await onNext(option === 'share');
+    } catch (error) {
+      console.error('[Onboarding] Cannot save privacy choice', error);
+      setSaveError(tRef.current('onboarding.privacy.saveError'));
     } finally {
       setIsSubmitting(false);
     }
@@ -86,8 +93,12 @@ export function PrivacyScreen({ onNext }: PrivacyScreenProps) {
   const handleContinue = useCallback(async () => {
     if (!selectedOption || isSubmitting) return;
     setIsSubmitting(true);
+    setSaveError(null);
     try {
       await onNext(selectedOption === 'share');
+    } catch (error) {
+      console.error('[Onboarding] Cannot save privacy choice', error);
+      setSaveError(tRef.current('onboarding.privacy.saveError'));
     } finally {
       setIsSubmitting(false);
     }
@@ -136,6 +147,8 @@ export function PrivacyScreen({ onNext }: PrivacyScreenProps) {
         <p className="text-center text-ui-sm leading-6 text-[var(--oa-text-muted)] text-pretty">
           {t('onboarding.privacy.providerNote')}
         </p>
+        {saveError && <p role="alert" className="text-center text-ui-sm text-destructive">
+          {saveError}</p>}
 
         <div className="space-y-3 text-center">
           <button

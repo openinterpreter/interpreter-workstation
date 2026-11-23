@@ -12,6 +12,7 @@ export default defineConfig({
   test: {
     include: [
       'src/**/*.ui.test.tsx',
+      'packages/browser-agent-core/src/**/*.ui.test.tsx',
       'src/**/*.vitest.test.ts',
       'agent/**/*.ui.test.tsx',
       'agent/**/*.vitest.test.ts',

@@ -1,3 +1,5 @@
+import type { HostCapabilities } from '../../../shared/types/hostCapabilities';
+
 export interface OnboardingStepDefinition {
   id: string;
   telemetryName: string;
@@ -47,6 +49,21 @@ export const ENABLED_ONBOARDING_STEP_INDICES = ONBOARDING_STEPS
 export const ONBOARDING_STEPS_WITHOUT_BUCKET_INDICES = ONBOARDING_STEPS
   .map((step, index) => (step.enabled && step.includeWhenBucketDetected ? index : null))
   .filter((index): index is number => index !== null);
+
+/** Browser-local setup uses the normal overlay, without desktop-only steps. */
+/** Filter the ordinary step sequence by host capabilities, never by a model kind. */
+export function hostOnboardingStepIndices(steps: readonly number[], host: HostCapabilities): number[] {
+  return steps.filter(step => {
+    const id = getOnboardingStepId(step);
+    if (id === 'tool-addons') return host.onboardingSteps.browserExtension;
+    if (id === 'simple-mcp') return host.onboardingSteps.mcpDiscovery;
+    if (id === 'simple-whatsapp') return host.onboardingSteps.whatsapp;
+    if (id === 'model-credits') return host.modelSetup.hostedAccount;
+    if (id === 'workspace-choice') return host.workspace === 'filesystem';
+    if (id === 'ai-setup') return host.onboardingSteps.environmentDetection;
+    return true;
+  });
+}
 
 export function getOnboardingStepTelemetryName(stepIndex: number): string {
   return ONBOARDING_STEPS[stepIndex]?.telemetryName ?? `step_${stepIndex}`;
