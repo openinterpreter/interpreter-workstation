@@ -8,7 +8,7 @@ import express from 'express';
 import request from 'supertest';
 import pg from 'pg';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
-import { MAX_ACTIVE_LOGIN_ATTEMPTS_PER_ORGANIZATION, ServerDirectory, type EnterpriseStateStore } from './serverDirectory';
+import { MAX_ACTIVE_LOGIN_ATTEMPTS_PER_CLIENT, ServerDirectory, type EnterpriseStateStore } from './serverDirectory';
 import { createEnterprisePostgresPool, PostgresDirectoryStore, TenantPostgresDirectoryStore } from './postgresDirectoryStore';
 import { mountEnterpriseAdminRoutes } from './adminMount';
 import { OidcIntegration, providerMetadataUri, type OidcConfiguration } from './oidc';
@@ -105,6 +105,11 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
       expect((await a.verifySession(sessionA.token))?.organizationId).toBe('rls-a');
       const alphaChallenge = await a.beginDomainProof(sessionA.identity, 'fixture.test');
       expect(alphaChallenge.name).toBe('_interpreter-workstation.fixture.test');
+      // A challenge alone reserves nothing; the claim is taken at verification.
+      expect((await poolA.query('SELECT domain FROM public.interpreter_enterprise_rls_domain_claim')).rowCount).toBe(0);
+      const rlsVerifier = (pool: typeof poolA, tenant: string, value: string) =>
+        new ServerDirectory(new TenantPostgresDirectoryStore(pool, tenant, 'rls'), async () => [[value]]);
+      await rlsVerifier(otherA, 'rls-a', alphaChallenge.value).confirmDomainProof(sessionA.identity, 'fixture.test');
       expect((await poolA.query('SELECT domain FROM public.interpreter_enterprise_rls_domain_claim')).rows)
         .toEqual([{ domain: 'fixture.test' }]);
       expect((await poolB.query('SELECT domain FROM public.interpreter_enterprise_rls_domain_claim')).rowCount).toBe(0);
@@ -119,18 +124,56 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
         .rejects.toThrow(/row-level security|permission denied/i);
       expect((await poolA.query(`UPDATE public.interpreter_enterprise_rls_domain_claim
         SET database_role = current_user WHERE domain = 'fixture.test'`)).rowCount).toBe(1);
-      await expect(b.beginDomainProof(sessionB.identity, 'fixture.test')).rejects.toThrow('Access denied');
-      expect((await b.domainProofStatus(sessionB.identity, 'fixture.test')).challengeExpiresAt).toBeNull();
-      expect((await a.domainProofStatus(sessionA.identity, 'fixture.test')).challengeExpiresAt).toBeGreaterThan(Date.now());
+      // Another tenant may still create a challenge (same response shape),
+      // but its correct DNS answer cannot take the verified foreign claim.
+      const betaFixture = await b.beginDomainProof(sessionB.identity, 'fixture.test');
+      expect(betaFixture.name).toBe('_interpreter-workstation.fixture.test');
+      expect(betaFixture.value).toMatch(/^interpreter-workstation-verification=[A-Za-z0-9_-]{43}$/);
+      expect((await b.domainProofStatus(sessionB.identity, 'fixture.test')).challengeExpiresAt).toBe(betaFixture.expiresAt);
+      await expect(rlsVerifier(poolB, 'rls-b', betaFixture.value).confirmDomainProof(sessionB.identity, 'fixture.test'))
+        .rejects.toThrow('Access denied');
+      expect(await b.domainVerified('rls-b', 'https://issuer.invalid/b', 'fixture.test')).toBe(false);
+      expect((await b.domainProofStatus(sessionB.identity, 'fixture.test')).verifiedUntil).toBeNull();
+      expect((await a.domainProofStatus(sessionA.identity, 'fixture.test')).verifiedUntil).toBeGreaterThan(Date.now());
       expect((await poolB.query(`SELECT content FROM public.interpreter_enterprise_rls_audit
         WHERE organization_id = $1 ORDER BY id DESC LIMIT 2`, ['rls-b'])).rows
-        .some((row) => auditEvent(row)?.action === 'organization.domain.challenge' && auditEvent(row)?.outcome === 'denied')).toBe(true);
+        .some((row) => auditEvent(row)?.action === 'organization.domain.verify' && auditEvent(row)?.outcome === 'denied')).toBe(true);
+      expect((await poolB.query('SELECT domain FROM public.interpreter_enterprise_rls_domain_claim')).rowCount).toBe(0);
       await b.beginDomainProof(sessionB.identity, 'different.test');
       expect((await poolA.query('SELECT domain FROM public.interpreter_enterprise_rls_domain_claim')).rows)
         .toEqual([{ domain: 'fixture.test' }]);
-      const race = await Promise.allSettled([
+      // A pending challenge does not block another tenant; after that tenant
+      // verifies, the first tenant's correct answer is denied and unmarked.
+      const pendingA = await a.beginDomainProof(sessionA.identity, 'contested.test');
+      const winningB = await b.beginDomainProof(sessionB.identity, 'contested.test');
+      await rlsVerifier(poolB, 'rls-b', winningB.value).confirmDomainProof(sessionB.identity, 'contested.test');
+      expect(await b.domainVerified('rls-b', 'https://issuer.invalid/b', 'contested.test')).toBe(true);
+      await expect(rlsVerifier(otherA, 'rls-a', pendingA.value).confirmDomainProof(sessionA.identity, 'contested.test'))
+        .rejects.toThrow('Access denied');
+      expect(await a.domainVerified('rls-a', 'https://issuer.invalid/a', 'contested.test')).toBe(false);
+      expect((await a.domainProofStatus(sessionA.identity, 'contested.test')).verifiedUntil).toBeNull();
+      expect(auditEvent((await poolA.query(`SELECT content FROM public.interpreter_enterprise_rls_audit
+        WHERE organization_id = 'rls-a' ORDER BY id DESC LIMIT 1 OFFSET 1`)).rows[0]))
+        .toMatchObject({ action: 'organization.domain.verify', targetDomain: 'contested.test', outcome: 'denied' });
+      const againA = await a.beginDomainProof(sessionA.identity, 'contested.test');
+      expect(againA.name).toBe(pendingA.name);
+      expect(againA.value).toMatch(/^interpreter-workstation-verification=[A-Za-z0-9_-]{43}$/);
+      expect((await poolA.query(`SELECT domain FROM public.interpreter_enterprise_rls_domain_claim
+        WHERE domain = 'contested.test'`)).rowCount).toBe(0);
+      expect((await poolB.query(`SELECT domain FROM public.interpreter_enterprise_rls_domain_claim
+        WHERE domain = 'contested.test'`)).rowCount).toBe(1);
+      // Concurrent challenges both succeed; concurrent verifications cannot both win.
+      const [raceA, raceB] = await Promise.all([
         aOther.beginDomainProof(sessionA.identity, 'race.test'),
         b.beginDomainProof(sessionB.identity, 'race.test'),
+      ]);
+      expect((await poolA.query(`SELECT domain FROM public.interpreter_enterprise_rls_domain_claim
+        WHERE domain = 'race.test'`)).rowCount +
+        (await poolB.query(`SELECT domain FROM public.interpreter_enterprise_rls_domain_claim
+          WHERE domain = 'race.test'`)).rowCount).toBe(0);
+      const race = await Promise.allSettled([
+        rlsVerifier(otherA, 'rls-a', raceA.value).confirmDomainProof(sessionA.identity, 'race.test'),
+        rlsVerifier(poolB, 'rls-b', raceB.value).confirmDomainProof(sessionB.identity, 'race.test'),
       ]);
       expect(race.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
       expect(race.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1);
@@ -138,13 +181,20 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
         WHERE domain = 'race.test'`)).rowCount +
         (await poolB.query(`SELECT domain FROM public.interpreter_enterprise_rls_domain_claim
           WHERE domain = 'race.test'`)).rowCount).toBe(1);
+      expect(Number(await a.domainVerified('rls-a', 'https://issuer.invalid/a', 'race.test')) +
+        Number(await b.domainVerified('rls-b', 'https://issuer.invalid/b', 'race.test'))).toBe(1);
       await a.setMember(sessionA.identity, { organizationId: 'rls-a', subject: 'worker', displayName: 'Worker', role: 'member', active: true });
       await a.setMember(sessionA.identity, { organizationId: 'rls-a', subject: 'admin-c', displayName: 'Admin C', role: 'admin', active: true });
       const worker = await a.createSession('https://issuer.invalid/a', 'rls-a', 'worker', Date.now() + 60_000);
       const demotedSession = await aOther.createSession('https://issuer.invalid/a', 'rls-a', 'admin-c', Date.now() + 60_000);
+      // Denied reads and cross-tenant probes are counted in the row's open
+      // window and reach the append-only ledger as one row when it closes.
+      const heldA = async () => ((JSON.parse((await poolA.query(`SELECT content FROM public.interpreter_enterprise_rls_directory
+        WHERE organization_id = 'rls-a'`)).rows[0]!.content as string).pendingAudit ?? []) as Array<{ event: Record<string, unknown> }>)
+        .map(({ event }) => event);
       await expect(aOther.listAudit(worker.identity)).rejects.toThrow('Access denied');
-      expect(auditEvent((await poolA.query('SELECT content FROM public.interpreter_enterprise_rls_audit WHERE organization_id = $1 ORDER BY id DESC LIMIT 1', ['rls-a'])).rows[0]))
-        .toMatchObject({ organizationId: 'rls-a', subject: 'worker', action: 'organization.audit.read', outcome: 'denied' });
+      expect((await heldA()).at(-1))
+        .toMatchObject({ organizationId: 'rls-a', subject: 'worker', action: 'organization.audit.read', outcome: 'denied', count: 1 });
       expect((await poolB.query('SELECT content FROM public.interpreter_enterprise_rls_audit WHERE organization_id = $1', ['rls-a'])).rowCount).toBe(0);
       const origin = 'http://127.0.0.1:39394';
       const appA = express(), appB = express();
@@ -199,16 +249,35 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
         finally { expect(roleCapability('NOBYPASSRLS').status).toBe(0); }
         expect((await read(httpA, 'rls-a', sessionA.token)).status).toBe(200);
         expect((await read(httpA, 'rls-b', sessionA.token)).status).toBe(403);
-        expect(auditEvent((await poolA.query('SELECT content FROM public.interpreter_enterprise_rls_audit WHERE organization_id = $1 ORDER BY id DESC LIMIT 1', ['rls-a']))
-          .rows[0])).toMatchObject({ organizationId: 'rls-a', targetOrganizationId: 'rls-b',
-          action: 'organization.overview.cross-tenant', outcome: 'denied' });
+        const foreignDigest = `organization:${createHash('sha256').update('rls-b').digest('hex').slice(0, 16)}`;
+        expect((await heldA()).at(-1)).toMatchObject({ organizationId: 'rls-a', targetDigest: foreignDigest,
+          action: 'organization.overview.cross-tenant', outcome: 'denied', count: 1 });
         expect((await request(httpA).post('/api/enterprise/organizations/rls-b/session/logout')
           .set('Host', '127.0.0.1:39394').set('Origin', origin).set('Sec-Fetch-Site', 'same-origin')
           .set('X-Interpreter-CSRF', '1').set('Cookie', `interpreter-enterprise-session=${sessionA.token}`)
           .set('Content-Type', 'application/json').send({})).status).toBe(403);
-        expect(auditEvent((await poolA.query('SELECT content FROM public.interpreter_enterprise_rls_audit WHERE organization_id = $1 ORDER BY id DESC LIMIT 1', ['rls-a']))
-          .rows[0])).toMatchObject({ organizationId: 'rls-a', targetOrganizationId: 'rls-b',
-          action: 'organization.logout.cross-tenant', outcome: 'denied' });
+        expect((await heldA()).at(-1)).toMatchObject({ organizationId: 'rls-a', targetDigest: foreignDigest,
+          action: 'organization.logout.cross-tenant', outcome: 'denied', count: 1 });
+        expect((await read(httpA, 'rls-b', sessionA.token)).status).toBe(403);
+        expect((await heldA()).find((event) => event.action === 'organization.overview.cross-tenant')).toMatchObject({ count: 2 });
+        // Simulate the window closing (the app role may update its own row's
+        // content). The next probe appends each closed window as ONE ledger
+        // row in the same transaction; the ordered ledger still equals the
+        // snapshot, so later locked reads and writes keep passing.
+        const held = JSON.parse((await poolA.query(`SELECT content FROM public.interpreter_enterprise_rls_directory
+          WHERE organization_id = 'rls-a'`)).rows[0]!.content as string);
+        const closing = held.pendingAudit.length as number;
+        for (const entry of held.pendingAudit) entry.event.firstAt = new Date(Date.now() - 11 * 60_000).toISOString();
+        expect((await poolA.query(`UPDATE public.interpreter_enterprise_rls_directory SET content = $1
+          WHERE organization_id = 'rls-a'`, [JSON.stringify(held)])).rowCount).toBe(1);
+        expect((await read(httpA, 'rls-b', sessionA.token)).status).toBe(403);
+        const summaries = (await poolA.query(`SELECT content FROM public.interpreter_enterprise_rls_audit
+          WHERE organization_id = 'rls-a' ORDER BY id DESC LIMIT ${closing}`)).rows.map(auditEvent);
+        expect(summaries.find((event) => event?.action === 'organization.overview.cross-tenant'))
+          .toMatchObject({ count: 2, outcome: 'denied', targetDigest: foreignDigest });
+        expect(summaries.every((event) => event?.targetOrganizationId === undefined)).toBe(true);
+        expect((await heldA()).map((event) => [event.action, event.count])).toEqual([['organization.overview.cross-tenant', 1]]);
+        expect((await a.verifySession(sessionA.token))?.subject).toBe('alice'); // Ledger comparison passes.
         expect((await read(httpA, 'rls-b', sessionB.token)).status).toBe(403);
         expect((await read(httpB, 'rls-b', sessionB.token)).status).toBe(200);
         expect((await read(httpB, 'rls-a', sessionA.token)).status).toBe(403);
@@ -254,10 +323,14 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
         expect(await aOther.authorizeRuntime(worker.identity, 'tool.invoke', 'engineering')).toBe(false);
         expect((await runtime(worker.token)).status).toBe(403);
         expect((await b.auditSummary('rls-b')).eventCount).toBe(foreignRuntimeBefore);
-        expect((await request(httpB).post('/api/enterprise/organizations/rls-b/domains/challenge')
+        // A challenge for a foreign-claimed name is issued like any other; it
+        // neither reserves the name nor reveals the existing claim.
+        const foreignClaimChallenge = await request(httpB).post('/api/enterprise/organizations/rls-b/domains/challenge')
           .set('Host', '127.0.0.1:39394').set('Origin', origin).set('Sec-Fetch-Site', 'same-origin')
           .set('X-Interpreter-CSRF', '1').set('Cookie', `interpreter-enterprise-session=${sessionB.token}`)
-          .set('Content-Type', 'application/json').send({ domain: 'fixture.test' })).status).toBe(403);
+          .set('Content-Type', 'application/json').send({ domain: 'fixture.test' });
+        expect(foreignClaimChallenge.status).toBe(200);
+        expect(foreignClaimChallenge.body).toMatchObject({ name: '_interpreter-workstation.fixture.test' });
         const exportAudit = (server: typeof httpA, tenant: string, token: string) => request(server)
           .get(`/api/enterprise/organizations/${tenant}/activity/export`)
           .set('Host', '127.0.0.1:39394').set('Cookie', `interpreter-enterprise-session=${token}`);
@@ -506,8 +579,17 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
       expect((await boundOverview()).status).toBe(403);
       expect((await domainStatus(fresh.token)).body.verifiedUntil).toBeNull();
       expect((await startDomainLogin()).status).toBe(503);
-      await b.beginDomainProof(sessionB.identity, 'fixture.test');
-      await expect(a.beginDomainProof(fresh.identity, 'fixture.test')).rejects.toThrow('Access denied');
+      // After operator release, another tenant takes the name only by
+      // verifying it; the former holder can challenge but not re-verify.
+      const transfer = await b.beginDomainProof(sessionB.identity, 'fixture.test');
+      expect((await poolB.query(`SELECT domain FROM public.interpreter_enterprise_rls_domain_claim
+        WHERE domain = 'fixture.test'`)).rowCount).toBe(0);
+      await rlsVerifier(poolB, 'rls-b', transfer.value).confirmDomainProof(sessionB.identity, 'fixture.test');
+      const reclaim = await a.beginDomainProof(fresh.identity, 'fixture.test');
+      await expect(rlsVerifier(otherA, 'rls-a', reclaim.value).confirmDomainProof(fresh.identity, 'fixture.test'))
+        .rejects.toThrow('Access denied');
+      expect(await a.domainVerified('rls-a', 'https://issuer.invalid/a', 'fixture.test')).toBe(false);
+      expect(await b.domainVerified('rls-b', 'https://issuer.invalid/b', 'fixture.test')).toBe(true);
       expect((await poolA.query(`SELECT domain FROM public.interpreter_enterprise_rls_domain_claim
         WHERE domain = 'fixture.test'`)).rowCount).toBe(0);
       expect((await poolB.query(`SELECT domain FROM public.interpreter_enterprise_rls_domain_claim
@@ -552,10 +634,19 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
       expect(await aOther.verifySession(actionSession.token)).toBeNull();
       const pending = { organizationId: 'rls-a', issuer: 'https://issuer.invalid/a', nonce: 'synthetic',
         verifier: 'synthetic', bindingHash: 'a'.repeat(64), expiresAt: Date.now() + 60_000 };
-      for (let i = 0; i < MAX_ACTIVE_LOGIN_ATTEMPTS_PER_ORGANIZATION; i++) {
-        await (i % 2 ? aOther : a).putAttempt(`quota-${i}`, pending);
+      const attemptsA = async () => Object.values(JSON.parse((await poolA.query(
+        `SELECT content FROM public.interpreter_enterprise_rls_directory WHERE organization_id = 'rls-a'`)).rows[0]!.content).attempts) as
+        Array<{ expiresAt: number; clientHash: string }>;
+      for (let i = 0; i <= MAX_ACTIVE_LOGIN_ATTEMPTS_PER_CLIENT; i++) {
+        await (i % 2 ? aOther : a).putAttempt(`quota-${i}`, { ...pending, expiresAt: pending.expiresAt + i }, '198.51.100.7');
       }
-      await expect(aOther.putAttempt('quota-denied', pending)).rejects.toThrow('login capacity reached');
+      // A full client allowance evicts that client's own oldest attempt across hosts; nothing is refused.
+      const quotaClient = (await attemptsA()).find((attempt) => attempt.expiresAt === pending.expiresAt + 1)!.clientHash;
+      expect((await attemptsA()).filter((attempt) => attempt.clientHash === quotaClient)).toHaveLength(MAX_ACTIVE_LOGIN_ATTEMPTS_PER_CLIENT);
+      expect((await attemptsA()).some((attempt) => attempt.clientHash === quotaClient && attempt.expiresAt === pending.expiresAt)).toBe(false);
+      await aOther.putAttempt('other-client-not-starved', pending, '203.0.113.9');
+      expect((await attemptsA()).filter((attempt) => attempt.clientHash !== quotaClient &&
+        attempt.expiresAt === pending.expiresAt)).toHaveLength(1);
       await b.putAttempt('tenant-b-not-starved', { ...pending, organizationId: 'rls-b', issuer: 'https://issuer.invalid/b' });
       expect((await b.takeAttempt('tenant-b-not-starved', 'wrong'))).toBeNull();
       // The fixture operator can simulate loss of one audit record. The app
@@ -883,8 +974,8 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
         const callback = (state: string, binding: string) => request(http).get(`/enterprise/callback?code=fixture-code&state=${state}`)
           .set('Host', '127.0.0.1:39394').set('Cookie', binding);
         expect((await callback(rejected.state, `interpreter-oidc-binding=${'x'.repeat(43)}`)).status).toBe(401);
-        expect((await callback(rejected.state, rejected.cookie)).status).toBe(401); // Wrong binding consumes state across the store.
-        expect(tokenRequests).toBe(0);
+        expect((await callback(`${'d'.repeat(43)}`, rejected.cookie)).status).toBe(401); // Unknown state, genuine cookie.
+        expect(tokenRequests).toBe(0); // A wrong binding is rejected by a read and leaves the attempt unused.
         const valid = await begin();
         const completed = await callback(valid.state, valid.cookie);
         expect(completed.status).toBe(303);
@@ -925,7 +1016,9 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
         const challenge = await loginStore.beginDomainProof(aFresh.identity, 'shared.test');
         const verifier = new ServerDirectory(new PostgresDirectoryStore(second), async () => [[challenge.value]]);
         await verifier.confirmDomainProof(aFresh.identity, 'shared.test');
-        await expect(adminStore.beginDomainProof(bFresh.identity, 'shared.test')).rejects.toThrow('Access denied');
+        const contested = await adminStore.beginDomainProof(bFresh.identity, 'shared.test'); // Reserves nothing.
+        await expect(new ServerDirectory(new PostgresDirectoryStore(first), async () => [[contested.value]])
+          .confirmDomainProof(bFresh.identity, 'shared.test')).rejects.toThrow('Access denied');
         expect(await verifier.domainVerified('oidc-a', config.issuer, 'shared.test')).toBe(true);
         expect(await verifier.domainVerified('oidc-b', 'http://127.0.0.1:39393/issuer-b', 'shared.test')).toBe(false);
       } finally { http.close(); }
