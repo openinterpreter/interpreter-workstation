@@ -1203,6 +1203,28 @@ describe('interpreterCliRuntime', () => {
       const launcherPath = ensureInterpreterCliLauncher('win32');
       const powershellScriptPath = path.join(path.dirname(launcherPath), 'interpreter-app.ps1');
       const powershellScript = readFileSync(powershellScriptPath, 'utf8');
+      expect(powershellScript).toContain('Add-Type -AssemblyName System.Net.Http');
+      expect(powershellScript.indexOf('Add-Type -AssemblyName System.Net.Http')).toBeLessThan(
+        powershellScript.indexOf('[System.Net.Http.HttpClientHandler]::new()'),
+      );
+      if (process.platform === 'win32') {
+        // The Windows package-smoke job runs this suite with Windows PowerShell 5.1.
+        // The help path executes Add-Type before any transport or credential use.
+        const help = await spawnProcess(
+          'powershell.exe',
+          ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', powershellScriptPath, '--help'],
+          {
+            ...process.env,
+            INTERPRETER_HOME: tempHome,
+            [INTERPRETER_CALLER_TOKEN_ENV]: 'agtok_win_ps_help',
+            [INTERPRETER_CLI_SERVER_CONNECTION_ENV]: 'http:http://127.0.0.1:9',
+          },
+        );
+        expect(help.error).toBeUndefined();
+        expect(help.signal).toBeNull();
+        expect(help.status).toBe(0);
+        expect(help.stderr).toContain('Usage:');
+      }
 
       expect(powershellScript).toContain(
         'Invoke-InterpreterCliToolStream "$transportTarget/api/interpreter-cli/tools/$serverId/$($toolName)/stream?$query" $argsJson',
