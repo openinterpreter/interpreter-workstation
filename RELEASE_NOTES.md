@@ -1,8 +1,8 @@
-<!-- release-notes-for: 0.2.258 -->
+<!-- release-notes-for: 0.2.259 -->
 ## What's new
 
-- Improves the Windows command-line fallback by loading its HTTP assembly explicitly.
-- Strengthens safeguards for optional organization account administration and sign-in.
+- Reports native thread-list failures instead of treating them as an empty thread list.
+- Bounds thread-list requests so a delayed native response cannot silently mask an error.
 
 ## Distribution
 
