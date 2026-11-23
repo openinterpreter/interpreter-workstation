@@ -1,0 +1,43 @@
+name: Recover published 0.2.221 distribution pointers
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type recover-0.2.221 to reconcile the published release pointers
+        required: true
+        type: string
+
+# The ordinary release and this exact recovery share one non-cancelling writer.
+concurrency:
+  group: official-production-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    if: >-
+      github.actor == 'interpreterwork-automation[bot]' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.confirm == 'recover-0.2.221'
+    runs-on: ubuntu-24.04
+    environment: production-release
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_RECOVERY_CONFIRM: ${{ inputs.confirm }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: us-west-1
+      AWS_ENDPOINT_URL: https://neyguovvcjxfzhqpkicj.storage.supabase.co/storage/v1/s3
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - name: Reconcile verified immutable objects, aliases, and updater pointers
+        run: node scripts/ci/recover-published-aliases.mjs

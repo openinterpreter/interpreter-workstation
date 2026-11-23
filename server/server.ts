@@ -25,9 +25,11 @@ Sentry.init({
       return null;
     }
   },
-  // Disable OpenTelemetry auto-instrumentation to reduce dependency footprint
-  // and avoid electron-builder packaging issues on macOS
-  registerEsmLoaderHooks: false,
+  // Keep the server's existing no-auto-instrumentation policy under Sentry 11.
+  // Runtime channel injection can register module hooks; neither that nor
+  // OpenTelemetry setup belongs in the packaged Electron sidecar.
+  enableRuntimeChannelInjection: false,
+  enableOpenTelemetrySetup: false,
 });
 
 import express from "express";
@@ -49,7 +51,16 @@ import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import { join as pathJoin, dirname, normalize as pathNormalize, resolve as pathResolve, sep as pathSep } from "node:path";
 import os from "node:os";
 import agentRouter from "./routes/agent";
-import { startWakeSources } from './utils/wakeSourcesRuntime';
+import { createSupervisorPeerRouter } from './routes/supervisorPeer';
+import { createSupervisorPeerVerifier } from './utils/supervisorPeerVerifier';
+import { supervisorSignerSetting } from './utils/supervisorPeerSigner';
+import { getCodexService } from '../src/lib/codex/service';
+import { readStableSupervisorGoal } from './utils/supervisorGoalRead';
+import { readyWakeSources, startWakeSources, wakeSources } from './utils/wakeSourcesRuntime';
+import { THREAD_INPUT_SOURCE, threadInputCustody } from './utils/wakeSources';
+import { startOutcomeReturns } from './utils/outcomeReturnsRuntime';
+import { startGoalAutoResume } from './utils/goalAutoResumeRuntime';
+import { startGoalNotices } from './utils/goalNoticesRuntime';
 import authRouter from "./routes/auth";
 import { ENTERPRISE_READINESS } from './enterprise/controlPlane';
 import workspaceRouter from "./routes/workspace";
@@ -71,8 +82,17 @@ import { broadcastEvent } from './handlers/broadcast';
 import { initializeWhatsAppBridge } from './services/whatsappBridge';
 import { refreshImportedAiSetup } from './handlers/importedAiSetup';
 import { PRELAUNCH_SECURITY_DISABLE_HTTP_TOOL_EXECUTION } from './securityFlags';
+import { installUnloadedThreadCarrier } from './agentTaskService';
+// Input to a saved thread that is not loaded gives it a fresh app CLI caller.
+installUnloadedThreadCarrier();
 // Resume due schedules and retained inputs even with no conversation tab open.
 if (process.env.NODE_ENV !== 'test') startWakeSources();
+// Return sender-attributed turn outcomes through the configured command.
+if (process.env.NODE_ENV !== 'test') startOutcomeReturns();
+// Resume Goals that a temporary model-capacity refusal blocked.
+if (process.env.NODE_ENV !== 'test') startGoalAutoResume();
+// Tell a thread's most recent sender when its Goal stops, completes or resumes.
+if (process.env.NODE_ENV !== 'test') startGoalNotices();
 // normalizePath intentionally not used here - it converts Unicode chars to ASCII,
 // breaking paths with smart quotes etc. Use path.normalize (pathNormalize) instead.
 import { enterWorkspaceOverride } from "./utils/workspace";
@@ -112,6 +132,16 @@ const app = express();
 // CORS to configured origins and enables credentialed sessions.
 app.use(workstationCorsMiddleware);
 
+// Parsed once. A present but invalid request-signer setting mounts no peer
+// route at all; it never falls back to the cloud instance identity.
+const SUPERVISOR_SIGNER = supervisorSignerSetting();
+
+if (process.env.INTERPRETER_SUPERVISOR_VERIFY_URL &&
+    process.env.INTERPRETER_SUPERVISOR_VERIFY_AUDIENCE &&
+    process.env.INTERPRETER_SUPERVISOR_TARGET_COMPUTER && SUPERVISOR_SIGNER !== 'invalid') {
+  app.use('/api/interpreter-peer/threads/:threadId/goal/document',
+    express.json({ limit: '6292000b' }));
+}
 app.use(express.json({ limit: '50mb' }));
 
 // NOTE(victor): express.json() throws a SyntaxError with status 400 for malformed
@@ -275,6 +305,39 @@ app.get('/api/enterprise/readiness', (_req, res) => {
   res.json(ENTERPRISE_READINESS);
 });
 app.use('/api/agent', agentRouter);
+// Enrolled peers use the same verified, machine-scoped native Goal transport
+// as the desktop server. An incomplete verifier configuration grants nothing.
+if (process.env.INTERPRETER_SUPERVISOR_VERIFY_URL &&
+    process.env.INTERPRETER_SUPERVISOR_VERIFY_AUDIENCE &&
+    process.env.INTERPRETER_SUPERVISOR_TARGET_COMPUTER && SUPERVISOR_SIGNER !== 'invalid') {
+  const targetComputer = process.env.INTERPRETER_SUPERVISOR_TARGET_COMPUTER;
+  app.use('/api/interpreter-peer', createSupervisorPeerRouter({
+    targetComputer,
+    verify: createSupervisorPeerVerifier({
+      verifyUrl: process.env.INTERPRETER_SUPERVISOR_VERIFY_URL,
+      audience: process.env.INTERPRETER_SUPERVISOR_VERIFY_AUDIENCE,
+      targetComputer,
+      ...(SUPERVISOR_SIGNER ?? {}),
+    }),
+    readGoal: (id) => readStableSupervisorGoal(getCodexService(), id),
+    resumeGoal: async (id, expected) => {
+      const { revision, continuation } = await getCodexService().resumeThreadGoalWithRevision(id, expected);
+      return { revision, continuation };
+    },
+    updateGoalStatus: async (id, expected, status) =>
+      (await getCodexService().setThreadGoalWithRevision(id, expected, { status })).revision,
+    updateGoalObjective: async (id, expected, objective) =>
+      (await getCodexService().setThreadGoalWithRevision(id, expected, { objective })).revision,
+    updateGoalDocument: async (id, expected, document) =>
+      getCodexService().setThreadGoalDocumentWithRevision({ threadId: id, document }, expected),
+    readTerminal: (request) => getCodexService().readNativeTerminalStatus(request),
+    readThreadInput: async (id, clientUserMessageId) => {
+      await readyWakeSources();
+      const event = wakeSources.find(id, THREAD_INPUT_SOURCE, clientUserMessageId);
+      return event ? threadInputCustody(event) : null;
+    },
+  }));
+}
 app.use('/api/workspace', workspaceRouter);
 app.use('/api/activity', activityRouter);
 app.use('/api/servers/nylas', nylasRouter);

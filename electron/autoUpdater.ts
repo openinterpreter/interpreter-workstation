@@ -78,7 +78,11 @@ export function installDownloadedUpdate(): boolean {
   // `nsProcess::FindProcess` instead of buggy `tasklist | find.exe` (UTF-8 bug #6865).
   // quitAndInstall() handles elevation fallback via elevate.exe for EACCES errors.
   // (PR #9069 PowerShell fix is in v26.0.20+, not this version.)
-  autoUpdater.quitAndInstall(false, true);
+  // The per-machine installer may be elevated via elevate.exe. Never force a
+  // post-install launch under that token: Electron would create Local Storage
+  // and Session Storage in userData with the wrong owner. Users can reopen the
+  // updated app from their ordinary desktop session after installation.
+  autoUpdater.quitAndInstall(false, false);
 
   // HISTORY: Previous manual spawn approach for electron-builder v25.x
   // Abandoned due to EACCES permission errors (issue #48) - manual spawn lacks

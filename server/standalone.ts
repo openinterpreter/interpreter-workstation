@@ -59,6 +59,14 @@ import {
   shutdownBrowserExtensionRelay,
 } from "./utils/browserExtensionRelay";
 import { stopWakeSources } from "./utils/wakeSourcesRuntime";
+import { stopOutcomeReturns } from "./utils/outcomeReturnsRuntime";
+import { stopGoalAutoResume } from "./utils/goalAutoResumeRuntime";
+import { stopGoalNotices } from "./utils/goalNoticesRuntime";
+import { setServerHost } from "./utils/serverPort";
+import {
+  startSimplePreviewProxyFromEnvironment,
+  type SimplePreviewProxyHandle,
+} from "./utils/simplePreviewProxy";
 
 const DEFAULT_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 5177;
 const DEFAULT_WORKSPACE = process.env.WORKSPACE || process.cwd();
@@ -70,6 +78,7 @@ async function shutdownServer(
   deps: {
     interpreterCliFileBridge: InterpreterCliFileBridgeHandle;
     interpreterCliSocketServer: InterpreterCliSocketServerHandle | null;
+    simplePreviewProxy: SimplePreviewProxyHandle | null;
     cleanupFileWatcher: () => Promise<void>;
     cleanupSandbox: () => Promise<void>;
     cleanupAllACPProviders: () => Promise<void>;
@@ -82,6 +91,9 @@ async function shutdownServer(
   // admission and fsynced receipt settle. Incoming World events remain with
   // their approved source while this sidecar is unavailable.
   await stopWakeSources();
+  stopGoalNotices();
+  await stopOutcomeReturns();
+  stopGoalAutoResume();
 
   await deps.cleanupFileWatcher();
   await deps.cleanupSandbox();
@@ -92,6 +104,7 @@ async function shutdownServer(
   if (deps.interpreterCliSocketServer) {
     await deps.interpreterCliSocketServer.close();
   }
+  await deps.simplePreviewProxy?.close();
 
   await new Promise<void>((resolve) => {
     server.close(() => {
@@ -225,6 +238,7 @@ export async function runStandaloneCli(argv: string[] = process.argv.slice(2)) {
   }
 
   setServerPort(serverPort);
+  setServerHost(standaloneHost);
 
   const server = http.createServer(app);
   const interpreterCliFileBridge = await startInterpreterCliFileBridge(serverPort);
@@ -269,6 +283,11 @@ export async function runStandaloneCli(argv: string[] = process.argv.slice(2)) {
       resolve();
     });
   });
+  const { getSimplePreviewTarget } = await import("./handlers/simpleProjectRuntime");
+  const simplePreviewProxy = await startSimplePreviewProxyFromEnvironment(getSimplePreviewTarget);
+  if (simplePreviewProxy && !cliOptions.quietStartup) {
+    console.log(`  Simple preview proxy: http://127.0.0.1:${simplePreviewProxy.port}`);
+  }
 
   let shuttingDown = false;
   const cleanup = async (exitCode = 0) => {
@@ -277,6 +296,7 @@ export async function runStandaloneCli(argv: string[] = process.argv.slice(2)) {
     await shutdownServer(server, exitCode, {
       interpreterCliFileBridge,
       interpreterCliSocketServer,
+      simplePreviewProxy,
       cleanupFileWatcher,
       cleanupSandbox,
       cleanupAllACPProviders,

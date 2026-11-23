@@ -48,7 +48,7 @@ describe('standalone Simple interface projects', () => {
     expect(packageManifest.dependencies).toMatchObject({
       '@interpreter/interface': 'file:.interpreter/packages/interface',
       '@interpreter/motion': 'file:.interpreter/packages/motion',
-      next: '16.4.3',
+      next: '16.4.5',
     });
     expect(readFileSync(join(projectPath, 'AGENTS.md'), 'utf8')).toContain('full-stack Next.js interface project');
     const skill = readFileSync(join(projectPath, '.interpreter', 'skills', 'interface-design', 'SKILL.md'), 'utf8');

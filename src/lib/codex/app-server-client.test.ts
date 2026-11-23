@@ -380,6 +380,61 @@ describe("CodexAppServerClient", () => {
     client.shutdown();
   });
 
+  test('completed-predecessor creation uses its exact ID and cannot reconnect after a late reply', async () => {
+    const transport = new FakeTransport();
+    const client = new CodexAppServerClient(transport, null);
+    const params = { threadId: '00000000-0000-4000-8000-000000000077',
+      creationId: 'new-job-unique', objective: 'new mission pointer', document: '# Full mission',
+      status: 'active' as const, precondition: { kind: 'completed' as const,
+        expectedGoalId: '00000000-0000-4000-8000-000000000088',
+        expectedStatus: 'complete' as const, expectedMissionRevision: 2,
+        expectedLifecycleRevision: 3 } };
+    await assert.rejects(client.threadGoalDocumentCreate(params), /unavailable/);
+    assert.equal(transport.sent.length, 0);
+    const connected = client.ensureConnected();
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await connected;
+    const before = transport.sent.length;
+    const pending = client.threadGoalDocumentCreate(params);
+    await waitFor(() => transport.sent.length === before + 1);
+    const request = assertSentRequest(transport, before, CLIENT_METHOD.threadGoalDocumentCreate);
+    assert.deepEqual(request.params, params);
+    transport.close(new Error('disconnected'));
+    transport.respond(request, { creationId: params.creationId, replayed: false });
+    await assert.rejects(pending);
+    assert.equal(transport.sent.length, before + 1,
+      'no second native request or runtime start follows late creation');
+    client.shutdown();
+  });
+
+  test('initial creation sends only the explicit tagged noGoal wire claim on the live connection', async () => {
+    const transport = new FakeTransport();
+    const client = new CodexAppServerClient(transport, null);
+    const params = { threadId: '00000000-0000-4000-8000-000000000077',
+      creationId: 'first-job-unique', objective: 'initial mission pointer',
+      document: '# Full initial mission', status: 'active' as const,
+      precondition: { kind: 'absent' as const, admissionState: 'noGoal' as const } };
+    const connected = client.ensureConnected();
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await connected;
+    const before = transport.sent.length;
+    const pending = client.threadGoalDocumentCreate(params);
+    await waitFor(() => transport.sent.length === before + 1);
+    const request = assertSentRequest(transport, before, CLIENT_METHOD.threadGoalDocumentCreate);
+    assert.deepEqual(request.params, params);
+    assert.deepEqual(JSON.parse(JSON.stringify(request.params)).precondition,
+      { kind: 'absent', admissionState: 'noGoal' });
+    transport.close(new Error('disconnected'));
+    transport.respond(request, { creationId: params.creationId, previousRevision: null,
+      replayed: false });
+    await assert.rejects(pending);
+    assert.equal(transport.sent.length, before + 1,
+      'a late initial-create reply cannot reconnect or claim a second request');
+    client.shutdown();
+  });
+
   test('Goal revision CAS never connects, reconnects or replays after a disconnect', async () => {
     const transport = new FakeTransport();
     const client = new CodexAppServerClient(transport, null);
@@ -525,6 +580,55 @@ describe("CodexAppServerClient", () => {
     assert.deepEqual(listRpc.params, { threadId: owner.threadId, limit: 100 });
     transport.respond(listRpc, { data: [], nextCursor: null });
     assert.deepEqual(await listPending, { data: [], nextCursor: null });
+    client.shutdown();
+  });
+  test('supervisor snapshot sends metadata plus one unloaded page without connecting or hydrating history', async () => {
+    const transport = new FakeTransport();
+    let version = '0.0.58';
+    transport.getSelectedRuntimeVersion = async () => version;
+    const client = new CodexAppServerClient(transport, null);
+    const connected = client.ensureConnected();
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await connected;
+    const baseline = transport.sent.length;
+    await assert.rejects(client.threadSupervisorSnapshot('thread_1'), /unavailable/);
+    assert.equal(transport.sent.length, baseline);
+    version = '0.0.59';
+    const pending = client.threadSupervisorSnapshot('thread_1');
+    await waitFor(() => transport.sent.length === baseline + 1);
+    const metadata = assertSentRequest(transport, baseline, CLIENT_METHOD.threadRead);
+    assert.deepEqual(metadata.params, { threadId: 'thread_1', includeTurns: false });
+    transport.respond(metadata, { thread: { id: 'thread_1', status: { type: 'idle' },
+      preview: 'private historical instruction', turns: [] } });
+    await waitFor(() => transport.sent.length === baseline + 2);
+    const page = assertSentRequest(transport, baseline + 1, CLIENT_METHOD.threadTurnsList);
+    assert.deepEqual(page.params, { threadId: 'thread_1', limit: 1,
+      sortDirection: 'desc', itemsView: 'notLoaded' });
+    transport.respond(page, { data: [{ id: 'turn_current', status: 'completed',
+      itemsView: 'notLoaded', items: [] }], nextCursor: 'opaque', backwardsCursor: null });
+    const thread = await pending;
+    assert.equal(thread.turns[0].id, 'turn_current');
+    assert.equal(thread.turns[0].items.length, 0);
+    assert.equal(transport.sent.length, baseline + 2);
+    client.shutdown();
+  });
+  test('supervisor snapshot never starts a second RPC when the first read crosses disconnect', async () => {
+    const transport = new FakeTransport();
+    transport.getSelectedRuntimeVersion = async () => '0.0.59';
+    const client = new CodexAppServerClient(transport, null);
+    const connected = client.ensureConnected();
+    await waitFor(() => transport.sent.length >= 1);
+    completeInitHandshake(transport);
+    await connected;
+    const baseline = transport.sent.length;
+    const pending = client.threadSupervisorSnapshot('thread_1');
+    await waitFor(() => transport.sent.length === baseline + 1);
+    const rpc = assertSentRequest(transport, baseline, CLIENT_METHOD.threadRead);
+    transport.close(new Error('disconnected'));
+    transport.respond(rpc, { thread: { id: 'thread_1', status: { type: 'idle' }, turns: [] } });
+    await assert.rejects(pending);
+    assert.equal(transport.sent.length, baseline + 1);
     client.shutdown();
   });
   test('native terminal read does not reconnect when close races asynchronous runtime-version observation', async () => {
@@ -1164,11 +1268,11 @@ describe("CodexAppServerClient", () => {
     assert.equal(env.Path, "C:\\Windows\\System32");
   });
 
-  test("does not mutate PATH for non-Windows app-server process", () => {
+  test("puts the runtime bin directory first for non-Windows app-server process", () => {
     const env = buildCodexSpawnEnv({
       baseEnv: { PATH: "/usr/bin:/bin", NODE_V8_COVERAGE: "/tmp/cov" },
       codeHome: "/Users/alice/Library/Application Support/interpreter/codex-home",
-      codexBinary: "/Applications/Interpreter.app/Contents/Resources/codex",
+      codexBinary: "/Applications/Interpreter.app/Contents/Resources/oix/bin/interpreter",
       platform: "darwin",
       pathExists: () => true,
     });
@@ -1190,8 +1294,51 @@ describe("CodexAppServerClient", () => {
       env.HOME,
       "/Users/alice/Library/Application Support/interpreter/codex-home/home",
     );
-    assert.equal(env.PATH, "/usr/bin:/bin");
+    assert.equal(
+      env.PATH,
+      "/Applications/Interpreter.app/Contents/Resources/oix/bin:/usr/bin:/bin",
+    );
     assert.equal(env.NODE_V8_COVERAGE, undefined);
+  });
+
+  test("moves an existing runtime bin entry ahead of other installs without duplicating it", () => {
+    const binDir = "/home/alice/.openinterpreter/packages/standalone/releases/0.0.61-x86_64-unknown-linux-musl/bin";
+    const env = buildCodexSpawnEnv({
+      baseEnv: { PATH: `/home/alice/.local/bin:/usr/bin:${binDir}::/bin:/usr/bin` },
+      codeHome: "/home/alice/.openinterpreter",
+      codexBinary: `${binDir}/interpreter`,
+      platform: "linux",
+      pathExists: (candidatePath) => candidatePath === binDir,
+    });
+
+    assert.equal(
+      env.PATH,
+      `${binDir}:/home/alice/.local/bin:/usr/bin:/bin:/usr/bin`,
+    );
+  });
+
+  test("leaves non-Windows PATH unchanged when the runtime bin directory is absent", () => {
+    const env = buildCodexSpawnEnv({
+      baseEnv: { PATH: "/home/alice/.local/bin:/usr/bin:/bin" },
+      codeHome: "/home/alice/.openinterpreter",
+      codexBinary: "/opt/missing/bin/interpreter",
+      platform: "linux",
+      pathExists: () => false,
+    });
+
+    assert.equal(env.PATH, "/home/alice/.local/bin:/usr/bin:/bin");
+  });
+
+  test("does not invent a non-Windows PATH when none was inherited", () => {
+    const env = buildCodexSpawnEnv({
+      baseEnv: {},
+      codeHome: "/home/alice/.openinterpreter",
+      codexBinary: "/opt/oix/bin/interpreter",
+      platform: "linux",
+      pathExists: () => true,
+    });
+
+    assert.equal(env.PATH, undefined);
   });
 
   test("lists MCP auth status through interpreter CLI JSON output", async () => {

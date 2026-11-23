@@ -988,6 +988,7 @@ export class ToolManager {
       modelConfig?: import('../../shared/types/model').AgentModelConfig;
       workspace?: string;
       progressReporter?: import('./builtinTools').BuiltinToolContext['reportProgress'];
+      approvalAbortSignal?: AbortSignal;
       threadId?: string;
       /** Derived only after the CLI authenticates its caller token; survives native-thread host reload. */
       authenticatedCallerBinding?: { agentId: string; threadId: string };
@@ -1079,6 +1080,7 @@ export class ToolManager {
           agentId: effectiveAgentId,
           toolCallId,
           reportProgress: toolContext?.progressReporter,
+          approvalAbortSignal: toolContext?.approvalAbortSignal,
           saveToDiskPath: toolContext?.saveToDiskPath,
           overlayReviewedAction: toolContext?.overlayReviewedAction,
           toolCallPath,

@@ -8,6 +8,7 @@ import {
   classifyCuaDriverServeStartupOutputForTest,
   clearComputerUseTargetCacheForTest,
   computerUseToolContractForTest,
+  ensureCuaDriverDaemonForTest,
   enrichListWindowsResponseWithTargetIdentityForTest,
   filterProtectedDesktopTargetsFromTextForTest,
   formatComputerUseTreeMarkdownForModelForTest,
@@ -21,6 +22,7 @@ import {
   macToolMayRequireForegroundFocusForTest,
   nativeLaunchAppArgsForTest,
   parseComputerUseUiElementsForTest,
+  parseNativeWindowStateResponseForTest,
   resolveMacSelectOptionFromElementsForTest,
   requireWindowTargetIdentityForBoundsForTest,
   requestApprovalForTest,
@@ -32,7 +34,12 @@ import {
   sortMacComputerUseWindowIdsForTest,
   withMacCuaDriverProcessLockForTest,
   withMacCuaDriverApprovalAndProcessLock,
+  COMPUTER_USE_QUEUE_TIMEOUT_LABEL,
+  setCuaDriverBinaryResolverForTest,
+  waitForCuaDriverDaemonForTest,
+  withMacCuaDriverSerializedForTest,
 } from './tools';
+import { addClient, removeClient } from '../../../utils/sse';
 import type { BrowserControlStatus } from '../../../../shared/types/browserControl';
 import type { BrowserAccessPolicy, BrowserAccessPolicyMode, BrowserAccessProfilePolicy } from '../../../../shared/browserAccessPolicy';
 import { approvalManager } from '../../../approvalManager';
@@ -47,6 +54,37 @@ function windowsToolResponse(data: unknown): { content: [{ type: 'text'; text: s
     }],
   };
 }
+
+describe('native CUA window-state response', () => {
+  test('returns a fixed capture failure rather than parsing plain driver error as JSON', () => {
+    const result = parseNativeWindowStateResponseForTest({
+      content: [{ type: 'text', text: 'Capture error: window screenshot failed for window 17: backend unavailable' }],
+    });
+    expect(result).toEqual({
+      error: {
+        content: [{ type: 'text', text: 'Computer Use could not capture this window; no screenshot was acquired.' }],
+        isError: true,
+      },
+    });
+  });
+
+  test('preserves structured native window state', () => {
+    const result = parseNativeWindowStateResponseForTest({
+      content: [{ type: 'text', text: JSON.stringify({ pid: 9, tree_markdown: 'Window' }) }],
+    });
+    expect(result).toEqual({ state: { pid: 9, tree_markdown: 'Window' } });
+  });
+
+  test('does not echo arbitrary invalid driver output', () => {
+    const result = parseNativeWindowStateResponseForTest({
+      content: [{ type: 'text', text: 'untrusted screen text' }],
+    });
+    expect(result.error?.isError).toBe(true);
+    expect(result.error?.content[0]).toEqual({
+      type: 'text', text: 'Computer Use returned an invalid window-state response; no screenshot was acquired.',
+    });
+  });
+});
 
 async function withPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T> {
   const originalPlatform = process.platform;
@@ -149,6 +187,26 @@ describe('Computer Use tool contract', () => {
     expect(isCuaDriverSupportedPlatform('freebsd')).toBe(false);
     expect(nativeLaunchAppArgsForTest({ app: 'Browser' })).toEqual({ name: 'Browser' });
     expect(nativeLaunchAppArgsForTest({ app: 'Browser', name: 'Other' })).toEqual({ name: 'Other' });
+  });
+
+  test('maps a launch_app path onto the argument each native driver accepts', () => {
+    expect(nativeLaunchAppArgsForTest({ path: '/opt/app/AppRun' }, 'linux'))
+      .toEqual({ launch_path: '/opt/app/AppRun' });
+    expect(nativeLaunchAppArgsForTest({ executable: '/usr/bin/gedit' }, 'linux'))
+      .toEqual({ launch_path: '/usr/bin/gedit' });
+    expect(nativeLaunchAppArgsForTest({ path: '/opt/a', executable: '/opt/b' }, 'linux'))
+      .toEqual({ launch_path: '/opt/a' });
+    expect(nativeLaunchAppArgsForTest({ path: '/opt/a', launch_path: '/opt/b' }, 'linux'))
+      .toEqual({ launch_path: '/opt/b' });
+    expect(nativeLaunchAppArgsForTest({ app: 'gedit', urls: ['https://example.com'] }, 'linux'))
+      .toEqual({ name: 'gedit', urls: ['https://example.com'] });
+
+    expect(nativeLaunchAppArgsForTest({ bundle_id: 'com.apple.TextEdit', path: '/Applications/TextEdit.app' }, 'darwin'))
+      .toEqual({ bundle_id: 'com.apple.TextEdit' });
+    expect(nativeLaunchAppArgsForTest({ app: 'TextEdit', executable: '/x' }, 'darwin'))
+      .toEqual({ name: 'TextEdit' });
+    expect(() => nativeLaunchAppArgsForTest({ path: '/Applications/TextEdit.app' }, 'darwin'))
+      .toThrow('launch_app on macOS identifies the app by bundle_id or name');
   });
   test('exposes the MCP-shaped app-scoped tool surface', () => {
     const contract = computerUseToolContractForTest();
@@ -819,7 +877,7 @@ describe('macOS Computer Use wrapper behavior', () => {
         permissions: { inspect: { mode: 'ask' }, control: { mode: 'ask' } }, appPolicies: [],
       }));
       try {
-        const threadId = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
+        const threadId = '00000000-0000-7000-8000-0000000000a1';
         const verified = { threadId, verifiedCallerThreadId: threadId };
         for (const [tool, args] of [
           ['list_apps', {}], ['get_app_state', { app: 'Google Chrome' }],
@@ -848,8 +906,8 @@ describe('macOS Computer Use wrapper behavior', () => {
 
   test('operator exact-thread app-list grant never broadens inspect, control or other threads', async () => {
     await withPlatform('linux', async () => {
-      const owner = '01a0d435-bb2b-7047-afe7-0a639be8e5d4';
-      const other = '01a0d435-bb2b-7047-afe7-0a639be8e5d5';
+      const owner = '00000000-0000-7000-8000-0000000000a1';
+      const other = '00000000-0000-7000-8000-0000000000a2';
       setConfigOverride({ agents: {}, headlessToolApprovalMode: 'fail-closed',
         nativeCuaDiscoveryGrants: [{ threadId: owner, toolName: 'list_apps' }] } as any);
       setCuaAccessPolicyProviderForCuaDriverTest(async () => ({
@@ -1806,5 +1864,180 @@ describe('Interpreter self-automation guard', () => {
         { pid: 5678, title: 'Calculator' },
       ],
     });
+  });
+});
+
+describe('Computer Use calls never wait without bound', () => {
+  const askPolicy = async () => ({
+    permissions: { inspect: { mode: 'ask' as const }, control: { mode: 'ask' as const } },
+    appPolicies: [],
+  });
+
+  async function withAskPolicyOnLinux<T>(fn: () => Promise<T>): Promise<T> {
+    const previousOperatorRoute = process.env.WORKSTATION_WAKE_TOKEN;
+    delete process.env.WORKSTATION_WAKE_TOKEN;
+    const previousAutoApprove = approvalManager.isAutoApproveEnabled();
+    approvalManager.setAutoApprove(false);
+    approvalManager.clearAll();
+    setConfigOverride({ agents: {} } as any);
+    setCuaAccessPolicyProviderForCuaDriverTest(askPolicy);
+    clearComputerUseTargetCacheForTest();
+    try {
+      return await withPlatform('linux', fn);
+    } finally {
+      setCuaDriverBinaryResolverForTest(null);
+      setCuaAccessPolicyProviderForCuaDriverTest(null);
+      setConfigOverride(null);
+      approvalManager.clearAll();
+      approvalManager.setAutoApprove(previousAutoApprove);
+      if (previousOperatorRoute !== undefined) process.env.WORKSTATION_WAKE_TOKEN = previousOperatorRoute;
+    }
+  }
+
+  test('refuses an approval at once when no interactive client is attached', async () => {
+    await withAskPolicyOnLinux(async () => {
+      setCuaDriverBinaryResolverForTest(() => '/nonexistent/test-driver');
+      const progress: string[] = [];
+      const startedAt = Date.now();
+      const call = callComputerUseToolForTest('get_app_state', { app: 'Notes' }, {
+        agentId: 'agent-no-client',
+        reportProgress: (text) => { progress.push(text); },
+      });
+      await expect(call).rejects.toThrow(/^APPROVAL_UNANSWERABLE: /);
+      await call.catch((error: Error) => {
+        expect(error.message).toContain('cuaAccessPolicy');
+        expect(error.message).toContain('headlessToolApprovalMode');
+      });
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+      expect(approvalManager.getGlobalPendingRequestIds()).toEqual([]);
+      expect(progress).toEqual([]);
+    });
+  });
+
+  test('reports progress while an answerable approval is pending', async () => {
+    await withAskPolicyOnLinux(async () => {
+      setCuaDriverBinaryResolverForTest(() => '/nonexistent/test-driver');
+      const client = { write: () => true } as unknown as Parameters<typeof addClient>[0];
+      addClient(client);
+      try {
+        let pendingSeen!: () => void;
+        const seen = new Promise<void>((resolve) => { pendingSeen = resolve; });
+        const progress: string[] = [];
+        const call = callComputerUseToolForTest('get_app_state', { app: 'Notes' }, {
+          agentId: 'agent-with-client',
+          reportProgress: (text) => { progress.push(text); pendingSeen(); },
+        });
+        await seen;
+        expect(progress).toEqual([
+          'Waiting for user approval to list running apps and windows. Do not retry; this command will continue after approval.',
+        ]);
+        const [pendingId] = approvalManager.getGlobalPendingRequestIds();
+        expect(pendingId).toBeDefined();
+        approvalManager.deny(pendingId!);
+        await expect(call).rejects.toThrow('User denied native desktop driver app discovery access.');
+        expect(approvalManager.getGlobalPendingRequestIds()).toEqual([]);
+      } finally {
+        removeClient(client);
+      }
+    });
+  });
+
+  test('reports a missing driver before any approval is requested', async () => {
+    await withAskPolicyOnLinux(async () => {
+      setCuaDriverBinaryResolverForTest(() => {
+        throw new Error('Computer Use driver binary not found. Checked: /nonexistent. Build the pinned driver or set CUA_DRIVER_PATH.');
+      });
+      const original = approvalManager.createSessionAwareApproval;
+      let approvalsRequested = 0;
+      approvalManager.createSessionAwareApproval = (async (...args: Parameters<typeof original>) => {
+        approvalsRequested += 1;
+        return original.apply(approvalManager, args);
+      }) as typeof original;
+      try {
+        await expect(callComputerUseToolForTest('get_app_state', { app: 'Notes' }, { agentId: 'agent-no-driver' }))
+          .rejects.toThrow('Computer Use driver binary not found.');
+        expect(approvalsRequested).toBe(0);
+        expect(approvalManager.getGlobalPendingRequestIds()).toEqual([]);
+      } finally {
+        approvalManager.createSessionAwareApproval = original;
+      }
+    });
+  });
+
+  test.skipIf(process.platform === 'win32')('bounds each driver status probe by its own deadline', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cua-status-probe-test-'));
+    const stuckDriver = path.join(root, 'stuck-driver');
+    fs.writeFileSync(stuckDriver, '#!/bin/sh\nexec sleep 30\n', { mode: 0o755 });
+    const startedAt = Date.now();
+    try {
+      await expect(waitForCuaDriverDaemonForTest(stuckDriver, 1_200, 200))
+        .rejects.toThrow('Computer Use daemon did not become reachable within 1s.');
+      expect(Date.now() - startedAt).toBeLessThan(3_000);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(process.platform !== 'linux')('starts the driver daemon without Interpreter internal variables', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cua-daemon-env-test-'));
+    const driver = path.join(root, 'driver');
+    const envOut = path.join(root, 'daemon-env.txt');
+    fs.writeFileSync(driver, [
+      '#!/bin/sh',
+      'if [ "$1" = "serve" ]; then',
+      `  env > '${envOut}'`,
+      '  echo "daemon listening on test socket"',
+      '  exec sleep 30',
+      'fi',
+      'exit 0',
+      '',
+    ].join('\n'), { mode: 0o755 });
+    const names = ['INTERPRETER_USER_DATA_DIR', 'LOG_FILE', 'SENTRY_ENVIRONMENT', 'CUA_DRIVER_RS_ENABLE_WAYLAND'] as const;
+    const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    process.env.INTERPRETER_USER_DATA_DIR = path.join(root, 'user-data');
+    process.env.LOG_FILE = path.join(root, 'main.log');
+    process.env.SENTRY_ENVIRONMENT = 'test';
+    process.env.CUA_DRIVER_RS_ENABLE_WAYLAND = '1';
+    await shutdownCuaDriverProcesses();
+    try {
+      await ensureCuaDriverDaemonForTest(driver);
+      const daemonEnv = fs.readFileSync(envOut, 'utf-8').split('\n');
+      expect(daemonEnv.some((line) => line.startsWith('INTERPRETER_USER_DATA_DIR='))).toBe(false);
+      expect(daemonEnv.some((line) => line.startsWith('LOG_FILE='))).toBe(false);
+      expect(daemonEnv.some((line) => line.startsWith('SENTRY_ENVIRONMENT='))).toBe(false);
+      expect(daemonEnv).toContain('CUA_DRIVER_RS_ENABLE_WAYLAND=1');
+      expect(daemonEnv.some((line) => line.startsWith('PATH='))).toBe(true);
+      expect(process.env.INTERPRETER_USER_DATA_DIR).toBe(path.join(root, 'user-data'));
+    } finally {
+      await shutdownCuaDriverProcesses();
+      for (const name of names) {
+        if (previous[name] === undefined) delete process.env[name];
+        else process.env[name] = previous[name];
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a queued call gives up after the queue deadline without running', async () => {
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    let entered!: () => void;
+    const firstEntered = new Promise<void>((resolve) => { entered = resolve; });
+    const steps: string[] = [];
+    const first = withMacCuaDriverSerializedForTest(async () => {
+      steps.push('first'); entered(); await hold; steps.push('first-done');
+    }, 1_000);
+    try {
+      await firstEntered;
+      await expect(withMacCuaDriverSerializedForTest(async () => { steps.push('queued'); }, 50))
+        .rejects.toThrow(new RegExp(`^${COMPUTER_USE_QUEUE_TIMEOUT_LABEL}: `));
+      const next = withMacCuaDriverSerializedForTest(async () => { steps.push('next'); }, 1_000);
+      release();
+      await Promise.all([first, next]);
+      expect(steps).toEqual(['first', 'first-done', 'next']);
+    } finally {
+      release();
+      await first.catch(() => undefined);
+    }
   });
 });

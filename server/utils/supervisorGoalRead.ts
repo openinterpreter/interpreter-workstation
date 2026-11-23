@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { verifyGoalDocument } from '../../src/lib/codex/goal-document';
 import { verifyThreadGoalRevision } from '../../src/lib/codex/goal-revision';
 import { getCodexService } from '../../src/lib/codex/service';
@@ -26,10 +27,14 @@ export async function readStableSupervisorGoal(reader: Reader, threadId: string,
   } finally { if (deadline) clearTimeout(deadline); }
   const last = await reader.getThreadGoalWithRevision(threadId, maxWaitMs);
   verifyThreadGoalRevision(last.goal, last.revision, threadId);
-  if (JSON.stringify(first) !== JSON.stringify(last) ||
-      JSON.stringify(first.goal) !== JSON.stringify(document.goal) ||
-      (first.goal === null) !== (document.document === null) ||
-      (first.goal !== null && document.document?.missionRevision !== first.revision?.missionRevision)) {
+  if (!isDeepStrictEqual(first, last) ||
+      !isDeepStrictEqual(first.goal, document.goal) ||
+      (first.goal === null && document.document !== null) ||
+      // An objective change advances the mission revision without writing a
+      // document, so a Goal may have none, or one from an earlier revision.
+      // A document can never be newer than the Goal it belongs to.
+      (first.goal !== null && document.document !== null &&
+        document.document.missionRevision > (first.revision?.missionRevision ?? -1))) {
     throw Error('Goal read unavailable.');
   }
   verifyGoalDocument(threadId, document.document, document.content);

@@ -18,7 +18,7 @@ test('distinguishes clear from legacy held lock with unknown action and identity
 
 test('records action and thread but never arguments or process command line', () => {
   const lock = path.join(root, 'lock');
-  const owner = cuaLockOwnerForNewCall('get_app_state', '01a0d435-bb2b-7047-afe7-0a639be8e5d4');
+  const owner = cuaLockOwnerForNewCall('get_app_state', '00000000-0000-7000-8000-0000000000a1');
   fs.mkdirSync(lock);
   fs.writeFileSync(path.join(lock, 'owner'), JSON.stringify(owner));
   const result = readCuaProcessLockCustody(lock);

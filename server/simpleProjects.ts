@@ -117,7 +117,7 @@ function seedProject(projectPath: string, metadata: SimpleProjectMetadata): void
       '@interpreter/interface': 'file:.interpreter/packages/interface',
       '@interpreter/motion': 'file:.interpreter/packages/motion',
       motion: '12.23.26',
-      next: '16.4.3',
+      next: '16.4.5',
       react: '19.3.0',
       'react-dom': '19.3.0',
       'react-markdown': '10.1.0',
@@ -236,6 +236,28 @@ export async function getActiveSimpleProject(): Promise<SimpleProject> {
     } catch { /* fall through to preserved legacy prototype */ }
   }
   return getOrCreateDefaultProject();
+}
+
+/** Where a selected Simple project comes from: a window session's own choice or the global one. */
+export type SimpleProjectSelection = { path: string; scope: 'session' | 'global' };
+
+/**
+ * The project currently selected for a window session (or globally when the
+ * session has none), without creating, syncing, or activating anything.
+ * Returns null when nothing is selected or the selection cannot be resolved.
+ */
+export async function peekSelectedSimpleProject(sessionKey: string | null | undefined): Promise<SimpleProjectSelection | null> {
+  try {
+    const sessionProjectPath = sessionKey ? getWindowSessionSimpleProject(sessionKey) : null;
+    if (sessionProjectPath && existsSync(sessionProjectPath)) {
+      return { path: canonicalDirectory(sessionProjectPath), scope: 'session' };
+    }
+    const setting = await getSimpleProjectSetting();
+    if (!setting.activePath || !existsSync(setting.activePath)) return null;
+    return { path: canonicalDirectory(setting.activePath), scope: 'global' };
+  } catch {
+    return null;
+  }
 }
 
 export async function listSimpleProjects(): Promise<{ active: SimpleProject; recent: SimpleProject[] }> {

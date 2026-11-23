@@ -1084,6 +1084,8 @@ export async function callInterpreterCliTool(params: {
   saveToDisk?: boolean;
   saveToDiskPath?: string;
   onProgress?: InterpreterCliProgressHandler;
+  /** Aborts when the CLI client disconnects; tools may withdraw pending approvals. */
+  approvalAbortSignal?: AbortSignal;
 }): Promise<unknown> {
   /**
    * NOTE(interpreter-cli-mcp): `interpreter-app tools <server> <tool>` is the CLI route
@@ -1223,6 +1225,7 @@ export async function callInterpreterCliTool(params: {
             } } : {}),
             workspace: binding.workspacePath,
             progressReporter: params.onProgress,
+            approvalAbortSignal: params.approvalAbortSignal,
             saveToDiskPath: params.saveToDiskPath,
           },
           undefined,

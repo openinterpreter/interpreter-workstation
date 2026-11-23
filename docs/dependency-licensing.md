@@ -71,5 +71,22 @@ Current production audit notes (2026-08-05):
   The current compatible 3.x line has no registry-recognized patched release.
   Recheck this at every lockfile update.
 
+Audit exception (added 2026-11-17):
+
+- `GHSA-fc5q-39xc-vjpf` (picomatch, regular-expression denial of service
+  through repeated extglob patterns, affects every release up to 4.0.7) is
+  listed in `pnpm.auditConfig.ignoreGhsas` of the root package and of
+  `shadcn-preset/preset-app`, which is audited separately and reaches
+  picomatch only through its lint tooling. No patched release exists, so the
+  advisory cannot be cleared by an upgrade. The flaw needs an
+  attacker-controlled glob pattern; the application's only direct use is the
+  file watcher's fixed ignore list, and the other dependents are build and
+  test tooling.
+- This is the only ignored advisory. Every other finding at high or above
+  still fails CI.
+- Remove the entry and raise the `picomatch` override as soon as a patched
+  release is published. Check the registry at every release; review on
+  2026-12-01 and every two weeks after that while it remains.
+
 This file records engineering findings, not legal advice. Enterprise release
 owners should make and document the final distribution decision.

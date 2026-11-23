@@ -128,6 +128,20 @@ function downloadAsset(version, asset, destinationDir) {
   execFileSync('curl', getCurlDownloadArgs(version, asset, destinationPath), { stdio: 'pipe' });
 }
 
+/**
+ * The command that extracts a ZIP on Windows. The system's own tar reads ZIP
+ * archives and exits nonzero when it fails; a PowerShell `Expand-Archive`
+ * started from another shell can report success without writing the files.
+ * The absolute path avoids a different `tar` earlier on PATH that cannot
+ * read ZIP.
+ */
+export function getWindowsZipExtractCommand(assetPath, platformDir, systemRoot = process.env.SystemRoot || 'C:\\Windows') {
+  return {
+    file: path.win32.join(systemRoot, 'System32', 'tar.exe'),
+    args: ['-xf', assetPath, '-C', platformDir],
+  };
+}
+
 function extractArchive(assetPath, platformDir) {
   if (assetPath.endsWith('.tar.xz')) {
     execSync(`tar -xJf "${assetPath}" -C "${platformDir}"`, { stdio: 'pipe' });
@@ -136,7 +150,8 @@ function extractArchive(assetPath, platformDir) {
 
   if (assetPath.endsWith('.zip')) {
     if (process.platform === 'win32') {
-      execSync(`powershell -Command "Expand-Archive -Path '${assetPath}' -DestinationPath '${platformDir}' -Force"`, { stdio: 'pipe' });
+      const { file, args } = getWindowsZipExtractCommand(assetPath, platformDir);
+      execFileSync(file, args, { stdio: 'pipe' });
     } else {
       execSync(`unzip -o "${assetPath}" -d "${platformDir}"`, { stdio: 'pipe' });
     }
@@ -144,6 +159,15 @@ function extractArchive(assetPath, platformDir) {
   }
 
   throw new Error(`Unsupported archive format: ${assetPath}`);
+}
+
+/**
+ * Where the binary landed after extraction: inside the archive's top-level
+ * directory, or at the root for an archive that has none.
+ */
+export function findExtractedBinary(platformDir, config, exists = fs.existsSync) {
+  return [path.join(platformDir, config.extractedDir, config.binary), path.join(platformDir, config.binary)]
+    .find((candidate) => exists(candidate));
 }
 
 async function downloadAndExtract(version, platform) {
@@ -170,12 +194,15 @@ async function downloadAndExtract(version, platform) {
     const assetPath = path.join(tmpDir, config.asset);
     extractArchive(assetPath, platformDir);
 
-    const extractedBinaryPath = path.join(platformDir, config.extractedDir, config.binary);
-    if (!fs.existsSync(extractedBinaryPath)) {
-      throw new Error(`Binary not found after extraction: ${extractedBinaryPath}`);
+    const extractedBinaryPath = findExtractedBinary(platformDir, config);
+    if (!extractedBinaryPath) {
+      // Name what the archive produced, so a failure here explains itself.
+      const produced = fs.readdirSync(platformDir, { recursive: true }).slice(0, 20).join(', ') || 'nothing';
+      const archiveBytes = fs.statSync(assetPath).size;
+      throw new Error(`Binary not found after extraction of ${config.asset} (${archiveBytes} bytes); extracted: ${produced}`);
     }
 
-    fs.copyFileSync(extractedBinaryPath, binaryPath);
+    if (extractedBinaryPath !== binaryPath) fs.copyFileSync(extractedBinaryPath, binaryPath);
     if (!platform.startsWith('win32')) {
       fs.chmodSync(binaryPath, 0o755);
     }

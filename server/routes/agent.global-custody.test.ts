@@ -5,6 +5,7 @@ import agentRouter from './agent';
 import { messageQueueStore } from '../utils/messageQueueStore';
 import { agentTabManager } from '../agentTabManager';
 import { approvalManager } from '../approvalManager';
+import { CodexService, NativeGlobalInventoryError } from '../../src/lib/codex/service';
 
 const app = express();
 app.use(express.json());
@@ -19,6 +20,42 @@ afterEach(() => {
 });
 
 describe('global custody inventory', () => {
+  test('returns only a fixed fail-closed invariant category, never native exception text', async () => {
+    process.env.WORKSTATION_WAKE_TOKEN = 'private-test-token';
+    const read = spyOn(CodexService.prototype, 'readGlobalNativeCustody').mockRejectedValue(
+      new NativeGlobalInventoryError('loaded_missing', 'PRIVATE native inventory details'));
+    try {
+      const result = await request(app).get(nativeUrl).set('Authorization', 'Bearer private-test-token');
+      expect(result.status).toBe(503);
+      expect(result.body.phase).toBe('inventory');
+      expect(result.body.category).toBe('loaded_missing');
+      expect(result.body.custodyVerified).toBe(false);
+      expect(result.text).not.toContain('PRIVATE');
+      expect(result.body.native).toBeUndefined();
+    } finally { read.mockRestore(); }
+  });
+  test('returns bounded digests only for a loaded-missing invariant and never exposes UUID or prose', async () => {
+    process.env.WORKSTATION_WAKE_TOKEN = 'private-test-token';
+    const threadId = '00000000-0000-4000-8000-000000000123';
+    const digest = '50ea506360bd4eb049e21ee01d052f182dbcc20a89e6661cf74142f83233902d';
+    const read = spyOn(CodexService.prototype, 'readGlobalNativeCustody').mockRejectedValue(
+      new NativeGlobalInventoryError('loaded_missing', `PRIVATE ${threadId}`, [digest]));
+    try {
+      const result = await request(app).get(nativeUrl).set('Authorization', 'Bearer private-test-token');
+      expect(result.status).toBe(503);
+      expect(result.body).toMatchObject({ category: 'loaded_missing', custodyVerified: false,
+        missingLoadedThreadDigests: [digest] });
+      expect(result.text).not.toContain(threadId);
+      expect(result.text).not.toContain('PRIVATE');
+      expect((await request(app).get(nativeUrl)).body.missingLoadedThreadDigests).toBeUndefined();
+      read.mockRejectedValue(new NativeGlobalInventoryError('loaded_missing', 'PRIVATE', [threadId]));
+      expect((await request(app).get(nativeUrl).set('Authorization', 'Bearer private-test-token'))
+        .body.missingLoadedThreadDigests).toBeUndefined();
+      read.mockRejectedValue(new NativeGlobalInventoryError('queue_changed', 'PRIVATE', [digest]));
+      expect((await request(app).get(nativeUrl).set('Authorization', 'Bearer private-test-token'))
+        .body.missingLoadedThreadDigests).toBeUndefined();
+    } finally { read.mockRestore(); }
+  });
   test('cold caller bind is operator-only and requires exact thread/workspace', async () => {
     process.env.WORKSTATION_WAKE_TOKEN = 'private-test-token';
     const url = '/api/agent/threads/00000000-0000-4000-8000-000000000001/caller/cold-bind';

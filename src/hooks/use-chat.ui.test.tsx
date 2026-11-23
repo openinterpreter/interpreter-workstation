@@ -274,7 +274,7 @@ describe('useChat telemetry', () => {
       expect(
         vi.mocked(fetch).mock.calls.some(([input]) =>
           String(input).includes(
-            `/api/agent/threads/${threadId}?limit=24&bestEffort=1`,
+            `/api/agent/threads/${threadId}?limit=2&bestEffort=1`,
           ),
         ),
       ).toBe(true);
@@ -304,5 +304,287 @@ describe('useChat telemetry', () => {
       'Historical answer',
       'stop this request',
     ]);
+  });
+});
+
+describe('useChat history refresh', () => {
+  beforeEach(() => {
+    ipcMocks.getApiUrl.mockImplementation(async (path: string) => `http://localhost${path}`);
+    ipcMocks.runtime.onRestarting.mockImplementation(() => () => {});
+    ipcMocks.runtime.onRestarted.mockImplementation(() => () => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  test('skips refresh ticks while a slow refresh is still in flight and aborts it on unmount', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const threadId = 'thread-slow';
+    const refreshSignals: AbortSignal[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('bestEffort=1')) {
+        refreshSignals.push(init!.signal!);
+        return new Promise<Response>(() => {});
+      }
+      if (url.includes(`/api/agent/threads/${threadId}?limit=24`)) {
+        return threadHistoryResponse(threadId);
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    }));
+
+    const { result, unmount } = renderHook(() =>
+      useChat('interpreter', {
+        agentId: 'agent-1',
+        callerToken: 'caller-token',
+        model: 'interpreter-smart',
+        initialThreadId: threadId,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.historyLoaded).toBe(true);
+      expect(refreshSignals).toHaveLength(1);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(refreshSignals).toHaveLength(1);
+    expect(refreshSignals[0]!.aborted).toBe(false);
+
+    unmount();
+    expect(refreshSignals[0]!.aborted).toBe(true);
+  });
+
+  test('records the in-progress turn of an active thread for steering', async () => {
+    const threadId = 'thread-active';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('bestEffort=1')) {
+        return new Response(JSON.stringify({
+          thread: {
+            id: threadId,
+            preview: 'Historical question',
+            createdAt: 1,
+            updatedAt: 3,
+            status: { type: 'active', activeFlags: [] },
+            // The newest two turns: the one already shown and the new one.
+            turns: [{
+              id: 'turn-1',
+              status: 'completed',
+              items: [
+                {
+                  type: 'userMessage',
+                  id: 'user-1',
+                  content: [{ type: 'text', text: 'Historical question', text_elements: [] }],
+                },
+                { type: 'agentMessage', id: 'assistant-1', text: 'Historical answer', phase: 'final_answer' },
+              ],
+            }, {
+              id: 'turn-2',
+              status: 'inProgress',
+              items: [{
+                type: 'userMessage',
+                id: 'user-2',
+                content: [{ type: 'text', text: 'Started elsewhere', text_elements: [] }],
+              }],
+            }],
+          },
+          historyPage: { nextCursor: 'older', hasMore: true },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.includes(`/api/agent/threads/${threadId}?limit=24`)) {
+        return threadHistoryResponse(threadId);
+      }
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    }));
+
+    const { result } = renderHook(() =>
+      useChat('interpreter', {
+        agentId: 'agent-1',
+        callerToken: 'caller-token',
+        model: 'interpreter-smart',
+        initialThreadId: threadId,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.observedActiveTurnId).toBe('turn-2');
+      expect(result.current.isStreaming).toBe(true);
+      expect(messageTexts(result.current.messages)).toEqual([
+        'Historical question',
+        'Historical answer',
+        'Started elsewhere',
+      ]);
+    });
+  });
+});
+
+function qaTurn(n: number) {
+  return {
+    id: `turn-${n}`,
+    status: 'completed',
+    items: [
+      { type: 'userMessage', id: `user-${n}`, content: [{ type: 'text', text: `Q${n}`, text_elements: [] }] },
+      { type: 'agentMessage', id: `assistant-${n}`, text: `A${n}`, phase: 'final_answer' },
+    ],
+  };
+}
+
+function pageResponse(threadId: string, turnNumbers: number[], nextCursor: string | null): Response {
+  return new Response(JSON.stringify({
+    thread: {
+      id: threadId,
+      preview: 'Q1',
+      createdAt: 1,
+      updatedAt: 2,
+      turns: turnNumbers.map(qaTurn),
+    },
+    historyPage: { nextCursor, hasMore: nextCursor !== null },
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+}
+
+function qaTexts(...turnNumbers: number[]): string[] {
+  return turnNumbers.flatMap((n) => [`Q${n}`, `A${n}`]);
+}
+
+describe('useChat refresh gap reconciliation', () => {
+  beforeEach(() => {
+    ipcMocks.getApiUrl.mockImplementation(async (path: string) => `http://localhost${path}`);
+    ipcMocks.runtime.onRestarting.mockImplementation(() => () => {});
+    ipcMocks.runtime.onRestarted.mockImplementation(() => () => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  const urls = () => vi.mocked(fetch).mock.calls.map(([input]) => String(input));
+  const newestReads = () => urls().filter((url) => url.includes('limit=2&bestEffort=1'));
+  const gapReads = () => urls().filter((url) => url.includes('before=') && url.includes('bestEffort=1'));
+
+  function renderChat(threadId: string) {
+    return renderHook(() =>
+      useChat('interpreter', {
+        agentId: 'agent-1',
+        callerToken: 'caller-token',
+        model: 'interpreter-smart',
+        initialThreadId: threadId,
+      }),
+    );
+  }
+
+  test('shows every turn finished between refreshes, in order and once', async () => {
+    const threadId = 'thread-gap';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('limit=2&bestEffort=1')) return pageResponse(threadId, [4, 5], 'c-before-4');
+      if (url.includes('before=c-before-4')) return pageResponse(threadId, [1, 2, 3], null);
+      if (url.endsWith(`/api/agent/threads/${threadId}?limit=24`)) return pageResponse(threadId, [1], null);
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    }));
+
+    const { result } = renderChat(threadId);
+
+    await waitFor(() => {
+      expect(messageTexts(result.current.messages)).toEqual(qaTexts(1, 2, 3, 4, 5));
+    });
+    expect(gapReads()).toHaveLength(1);
+    expect(gapReads()[0]).toContain(`limit=24&before=c-before-4`);
+    const ids = result.current.messages.map((message) => message.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  test('a refresh that reaches a shown turn makes no extra request', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const threadId = 'thread-connected';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('limit=2&bestEffort=1')) return pageResponse(threadId, [1, 2], 'c-before-1');
+      if (url.endsWith(`/api/agent/threads/${threadId}?limit=24`)) return pageResponse(threadId, [1], null);
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    }));
+
+    const { result } = renderChat(threadId);
+    await waitFor(() => {
+      expect(messageTexts(result.current.messages)).toEqual(qaTexts(1, 2));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(newestReads().length).toBeGreaterThanOrEqual(2);
+    expect(gapReads()).toHaveLength(0);
+    expect(messageTexts(result.current.messages)).toEqual(qaTexts(1, 2));
+  });
+
+  test('stops at the page cap and exposes the gap through older history', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const threadId = 'thread-capped';
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('limit=2&bestEffort=1')) return pageResponse(threadId, [9, 10], 'p1');
+      if (url.includes('before=p1&bestEffort=1')) return pageResponse(threadId, [7, 8], 'p2');
+      if (url.includes('before=p2&bestEffort=1')) return pageResponse(threadId, [5, 6], 'p3');
+      if (url.includes('before=p3&bestEffort=1')) return pageResponse(threadId, [3, 4], 'p4');
+      if (url.includes('before=p4&bestEffort=1')) return pageResponse(threadId, [2], 'p5');
+      if (url.endsWith('limit=24&before=p5')) return pageResponse(threadId, [1], null);
+      if (url.endsWith(`/api/agent/threads/${threadId}?limit=24`)) return pageResponse(threadId, [1], null);
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    }));
+
+    const { result } = renderChat(threadId);
+    await waitFor(() => {
+      expect(messageTexts(result.current.messages)).toEqual(qaTexts(2, 3, 4, 5, 6, 7, 8, 9, 10));
+    });
+    expect(gapReads()).toHaveLength(4);
+    expect(urls().some((url) => url.includes('before=p5&bestEffort=1'))).toBe(false);
+    expect(result.current.hasOlderHistory).toBe(true);
+
+    // Later refreshes connect to the new window and read nothing further back.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(gapReads()).toHaveLength(4);
+
+    // "Load older" continues from the gap and restores the full order.
+    await act(async () => {
+      await result.current.loadOlderHistory();
+    });
+    expect(messageTexts(result.current.messages)).toEqual(qaTexts(1, 2, 3, 4, 5, 6, 7, 8, 9, 10));
+    expect(result.current.hasOlderHistory).toBe(false);
+  });
+
+  test('a reconciliation in progress blocks the next refresh tick', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const threadId = 'thread-reconciling';
+    const gapSignals: AbortSignal[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('limit=2&bestEffort=1')) return pageResponse(threadId, [4, 5], 'c-before-4');
+      if (url.includes('before=c-before-4')) {
+        gapSignals.push(init!.signal!);
+        return new Promise<Response>(() => {});
+      }
+      if (url.endsWith(`/api/agent/threads/${threadId}?limit=24`)) return pageResponse(threadId, [1], null);
+      throw new Error(`Unexpected fetch URL: ${url}`);
+    }));
+
+    const { result, unmount } = renderChat(threadId);
+    await waitFor(() => {
+      expect(result.current.historyLoaded).toBe(true);
+      expect(gapSignals).toHaveLength(1);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(newestReads()).toHaveLength(1);
+    expect(gapSignals).toHaveLength(1);
+    expect(messageTexts(result.current.messages)).toEqual(qaTexts(1));
+
+    unmount();
+    expect(gapSignals[0]!.aborted).toBe(true);
   });
 });

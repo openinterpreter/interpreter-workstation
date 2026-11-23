@@ -1,14 +1,21 @@
 import { Router, Request, Response, raw } from 'express';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { nativeSubmissionJournal, submissionTerminalPhase, SUBMISSION_ID } from '../utils/nativeSubmissionJournal';
-import { wakeTokenValid } from '../utils/wakeSources';
+import { createHash, randomUUID } from 'node:crypto';
+import { nativeSubmissionJournal, parseSubmissionSender, senderHeader,
+  type SubmissionSender } from '../utils/nativeSubmissionJournal';
+import { SubagentDirectInputError, type SubagentInputRefusal }
+  from '../../src/lib/codex/subagent-input';
+import { isAcceptedOffer, isWakeId, PausedCommandConflictError, THREAD_INPUT_SOURCE, threadInputCustody, WAKE_MESSAGE_LIMIT,
+  WakeContentConflictError, WakeSourceCancelledError, wakeTokenValid, WakeUnsavedError, type WakeEvent }
+  from '../utils/wakeSources';
 import { readyWakeSources, wakeSources } from '../utils/wakeSourcesRuntime';
+import { outcomeReturns, readyOutcomeReturns } from '../utils/outcomeReturnsRuntime';
 import { stat } from 'node:fs/promises';
 import { getCustomInstructions } from '../configStore';
 import { getServerJWT } from '../lib/jwtStore';
 import { AgentModelConfig } from '../../shared/types/model';
 import { messageQueueStore } from '../utils/messageQueueStore';
+import { enrichThreadTurnsFromRollout } from '../utils/threadRolloutEnrichment';
 import { readCuaProcessLockCustody } from '../utils/cuaProcessLockMetadata';
 import { cleanupACPProvider } from '../utils/acpProvider';
 import { getCurrentWorkspace, requireExistingWorkspacePath } from '../utils/workspace';
@@ -64,13 +71,18 @@ import {
 } from '../../src/lib/codex/lmStudioErrors';
 import {
   NativeCustodyPhaseError,
+  NativeGlobalInventoryError,
+  SavedThreadIdentityError,
+  ThreadNotFoundError,
+  type ThreadShell,
   NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS,
   NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS,
   getCodexService,
   getSteerErrorCode,
   THREAD_LIST_DEFAULTS,
 } from '../../src/lib/codex/service';
-import { enrichThreadWithReasoning } from '../../src/lib/codex/enrich-thread-reasoning';
+import { GoalRevisionConflictError, goalCasExpectedParams,
+  type ThreadGoalRevision } from '../../src/lib/codex/goal-revision';
 import {
   buildProfileFromPreset,
   getCustomPreset,
@@ -129,9 +141,12 @@ import {
 } from '../utils/headlessTaskWorkspace';
 import type { v2 } from '../handlers/codex-generated-types/index';
 import {
-  paginateThreadTurns,
+  isThreadHistoryCursor,
   parseThreadHistoryLimit,
 } from '../utils/threadHistoryPagination';
+
+/** Saved-history bytes the repeating history refresh may read per request. */
+const PASSIVE_REFRESH_ROLLOUT_BYTE_BUDGET = 1024 * 1024;
 
 const router = Router();
 
@@ -170,19 +185,32 @@ router.get('/custody/native-global', async (req: Request, res: Response) => {
     console.info(JSON.stringify({ event: 'native_global_custody_inspection', inspectionId, phase, status }));
   };
   recordPhase('request', 'received');
+  let nativeReadComplete = false;
   try {
     const native = await getCodexService().readGlobalNativeCustody(
       NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS, recordPhase);
+    nativeReadComplete = true;
     const cua = readCuaProcessLockCustody();
     recordPhase('inspection', 'completed');
     return res.json({ native, cua, inspectionId });
   } catch (error) {
-    recordPhase(error instanceof NativeCustodyPhaseError ? error.phase : 'unknown',
-      error instanceof NativeCustodyPhaseError ? error.category : 'native_unavailable');
+    const phase = error instanceof NativeCustodyPhaseError ? error.phase
+      : error instanceof NativeGlobalInventoryError ? 'inventory'
+      : nativeReadComplete ? 'cua_lock' : 'unknown';
+    const category = error instanceof NativeCustodyPhaseError || error instanceof NativeGlobalInventoryError
+      ? error.category : 'native_unavailable';
+    recordPhase(phase, category);
+    // An operator can correlate these digests with its own bounded native/DB
+    // metadata without publishing a loaded thread UUID or exception prose.
+    // This is diagnostic only: a mismatch is still an absolute custody failure.
+    const missingLoadedThreadDigests = error instanceof NativeGlobalInventoryError &&
+      error.category === 'loaded_missing' && error.missingLoadedThreadDigests &&
+      error.missingLoadedThreadDigests.length > 0 && error.missingLoadedThreadDigests.length <= 500 &&
+      error.missingLoadedThreadDigests.every((digest) => /^[a-f0-9]{64}$/.test(digest))
+      ? error.missingLoadedThreadDigests : undefined;
     return res.status(503).json({ error: 'Native or Computer Use custody inspection unavailable.',
-      phase: error instanceof NativeCustodyPhaseError ? error.phase : 'unknown',
-      category: error instanceof NativeCustodyPhaseError ? error.category : 'native_unavailable',
-      custodyVerified: false, inspectionId });
+      phase, category,
+      custodyVerified: false, inspectionId, ...(missingLoadedThreadDigests && { missingLoadedThreadDigests }) });
   }
 });
 
@@ -248,6 +276,21 @@ function wakeMutationAllowed(req: Request): boolean {
   catch { return false; }
 }
 
+// Saved-thread identity includes local filesystem paths. Matching Origin to an
+// arbitrary Host is not sufficient: a rebinding hostname can supply both.
+function savedThreadIdentityReadAllowed(req: Request): boolean {
+  if (!wakeMutationAllowed(req)) return false;
+  const host = req.get('host');
+  if (!host) return false;
+  try {
+    const parsed = new URL(`http://${host}`);
+    return parsed.host.toLowerCase() === host.toLowerCase() &&
+      ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 // Inbound producers know the explicit secret; a normal browser session never
 // receives it. This is not a public desktop or network ingress endpoint.
 router.post('/threads/:threadId/wake-events', async (req: Request, res: Response) => {
@@ -255,17 +298,49 @@ router.post('/threads/:threadId/wake-events', async (req: Request, res: Response
       !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
     return res.status(401).json({ error: 'Authentication required.' });
   }
+  const { sourceId, eventId, message } = req.body ?? {};
+  // Programmatic task input has its own source; a producer cannot claim its IDs.
+  if (sourceId === THREAD_INPUT_SOURCE) return res.status(400).json({ error: 'Reserved source ID.' });
+  if (!isWakeId(req.params.threadId)) return res.status(400).json({ error: 'Invalid thread ID.' });
+  try { await readyWakeSources(); }
+  catch { return res.status(503).json({ error: 'Wake sources unavailable.' }); }
+  const thread = await readInputThread(req.params.threadId);
+  if ('error' in thread) return res.status(thread.error.status).json({ error: thread.error.message });
   try {
-    const { sourceId, eventId, message } = req.body ?? {};
-    await readyWakeSources();
-    await getCodexService().readThread(req.params.threadId);
     const event = await wakeSources.ingest(req.params.threadId, sourceId, eventId, message);
     res.status(202).json({ eventId: event.eventId, status: event.status });
     void wakeSources.tick().catch(console.error);
   } catch (error) {
-    res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid event.' });
+    const failure = wakeIngestFailure(error);
+    res.status(failure.status).json({ error: failure.status === 400 && error instanceof Error
+      ? error.message : failure.message });
   }
 });
+
+/** Read a thread's shell for an input-path check: 404 only when the runtime
+ * says the thread does not exist, 503 when it could not be read. */
+async function readInputThread(threadId: string): Promise<{ thread: ThreadShell } |
+  { error: { status: 404 | 503; message: string } }> {
+  try { return { thread: await getCodexService().readThreadShell(threadId) }; }
+  catch (error) {
+    return error instanceof ThreadNotFoundError
+      ? { error: { status: 404, message: 'Thread not found.' } }
+      : { error: { status: 503, message: 'Thread could not be read; nothing was accepted. Retry later.' } };
+  }
+}
+
+/** HTTP status for a failed wake ingestion. */
+function wakeIngestFailure(error: unknown): { status: number; message: string } {
+  if (error instanceof WakeContentConflictError) {
+    return { status: 409, message: 'Client ID already used for different input.' };
+  }
+  if (error instanceof WakeUnsavedError) {
+    return { status: 503, message: 'Input could not be saved; retry with the same ID.' };
+  }
+  if (error instanceof WakeSourceCancelledError) return { status: 400, message: 'Source is cancelled.' };
+  if (error instanceof Error && error.message === 'Invalid wake event') return { status: 400, message: error.message };
+  return { status: 503, message: 'Input could not be retained; nothing was accepted.' };
+}
 
 // Local operator diagnostic through the *existing* native client. Return only
 // bounded queue identifiers and status, never the queued input or transcript.
@@ -432,26 +507,68 @@ router.post('/threads/:threadId/wake-events/:sourceId/:eventId/hold-historical',
 });
 
 router.get('/threads/:threadId/wake-sources', async (req: Request, res: Response) => {
-  try { await readyWakeSources(); res.json(wakeSources.list(req.params.threadId)); }
+  try { await readyWakeSources(); res.json(wakeSources.view(req.params.threadId)); }
   catch { res.status(503).json({ error: 'Wake sources unavailable.' }); }
+});
+
+// Outcome-return status only; summaries are never listed.
+router.get('/outcome-returns', async (_req: Request, res: Response) => {
+  try { await readyOutcomeReturns(); res.json({ entries: outcomeReturns.list() }); }
+  catch { res.status(503).json({ error: 'Outcome returns unavailable.' }); }
 });
 
 router.put('/threads/:threadId/wake-sources/:sourceId', async (req: Request, res: Response) => {
   if (!wakeMutationAllowed(req)) return res.status(403).json({ error: 'Local same-origin request required.' });
+  try { await readyWakeSources(); }
+  catch { return res.status(503).json({ error: 'Wake sources unavailable.' }); }
+  const thread = await readInputThread(req.params.threadId);
+  if ('error' in thread) return res.status(thread.error.status).json({ error: thread.error.message });
   try {
-    await readyWakeSources();
-    await getCodexService().readThread(req.params.threadId);
     const source = await wakeSources.put({ ...req.body, id: req.params.sourceId, threadId: req.params.threadId });
     res.json({ source });
   } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid source.' }); }
 });
 
+router.get('/threads/:threadId/wake-sources/:sourceId/paused-command', async (req: Request, res: Response) => {
+  if (!savedThreadIdentityReadAllowed(req)) return res.status(403).json({ error: 'Local same-origin request required.' });
+  try {
+    await readyWakeSources();
+    await getCodexService().readSavedThreadIdentity(req.params.threadId);
+    return res.json(await wakeSources.pausedCommandMetadata(req.params.threadId, req.params.sourceId));
+  } catch {
+    return res.status(503).json({ error: 'Exact command source metadata unavailable.' });
+  }
+});
+
+router.patch('/threads/:threadId/wake-sources/:sourceId/paused-command', async (req: Request, res: Response) => {
+  if (!savedThreadIdentityReadAllowed(req)) return res.status(403).json({ error: 'Local same-origin request required.' });
+  try {
+    await readyWakeSources();
+    await getCodexService().readSavedThreadIdentity(req.params.threadId);
+    const body = req.body;
+    if (!body || Object.keys(body).sort().join(',') !== 'expectedArgvSha256,pathComponentFrom,pathComponentTo') {
+      return res.status(400).json({ error: 'Expected command arguments required.' });
+    }
+    const source = await wakeSources.retargetPausedCommand(req.params.threadId, req.params.sourceId,
+      body.expectedArgvSha256, body.pathComponentFrom, body.pathComponentTo);
+    return res.json({ sourceId: source.id, threadId: source.threadId, paused: source.paused === true,
+      status: source.status, sequence: source.sequence,
+      argvSha256: createHash('sha256').update(JSON.stringify(source.argv)).digest('hex') });
+  } catch (error) {
+    return res.status(error instanceof PausedCommandConflictError ? 409 : 503)
+      .json({ error: error instanceof PausedCommandConflictError
+        ? 'Paused command precondition rejected.' : 'Paused command outcome unavailable; inspect custody before retry.' });
+  }
+});
+
 for (const action of ['pause', 'resume'] as const) {
   router.post(`/threads/:threadId/wake-sources/:sourceId/${action}`, async (req: Request, res: Response) => {
     if (!wakeMutationAllowed(req)) return res.status(403).json({ error: 'Local same-origin request required.' });
+    try { await readyWakeSources(); }
+    catch { return res.status(503).json({ error: 'Wake sources unavailable.' }); }
+    const thread = await readInputThread(req.params.threadId);
+    if ('error' in thread) return res.status(thread.error.status).json({ error: thread.error.message });
     try {
-      await readyWakeSources();
-      await getCodexService().readThread(req.params.threadId);
       if (action === 'pause') {
         return res.json(await wakeSources.pause(req.params.threadId, req.params.sourceId));
       }
@@ -594,7 +711,14 @@ router.post("/queue", (req: Request, res: Response) => {
 });
 
 router.post('/tasks', async (req: Request, res: Response) => {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  if (getProgrammaticClientIdError(body.clientUserMessageId)) {
+    return res.status(400).json({ success: false, error: 'Invalid clientUserMessageId.' });
+  }
+  const senderError = getProgrammaticSenderError(body);
+  if (senderError) return res.status(400).json({ success: false, error: senderError });
   try {
+    const task = parseProgrammaticTaskBody(body);
     const {
       message,
       system,
@@ -607,7 +731,7 @@ router.post('/tasks', async (req: Request, res: Response) => {
       model,
       reasoningEffort,
       runtimeConfig,
-    } = parseProgrammaticTaskBody((req.body ?? {}) as Record<string, unknown>);
+    } = task;
 
     if (!isAgentTaskMode(mode)) {
       return res.status(400).json({
@@ -642,6 +766,18 @@ router.post('/tasks', async (req: Request, res: Response) => {
       });
     }
 
+    // Input to an existing thread is retained and queued; it never waits for the turn.
+    if (threadId) {
+      const custody = await enqueueThreadInput(body, { ...task, threadId });
+      if ('error' in custody) {
+        return res.status(custody.error.status).json({ success: false, error: custody.error.message });
+      }
+      void wakeSources.tick().catch(console.error);
+      const { event } = custody;
+      return res.status(202).json({ threadId, clientUserMessageId: event.eventId, status: event.status,
+        ...(event.refusal && { code: event.refusal.code, parentThreadId: event.refusal.parentThreadId }) });
+    }
+
     await applyProgrammaticTaskRuntimeConfigFromBody(runtimeConfig);
     const resolvedModelConfig = await resolveAgentModelConfig(modelConfig, {
       modelId: model,
@@ -656,7 +792,6 @@ router.post('/tasks', async (req: Request, res: Response) => {
       idleTimeoutMs,
       workspace,
       modelConfig: resolvedModelConfig,
-      threadId,
       notifyStarted: true,
     });
 
@@ -674,9 +809,13 @@ router.post('/tasks', async (req: Request, res: Response) => {
 });
 
 router.post('/tasks/stream', async (req: Request, res: Response) => {
-  if (getProgrammaticClientIdError((req.body ?? {}).clientUserMessageId)) {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  if (getProgrammaticClientIdError(body.clientUserMessageId)) {
     return res.status(400).json({ error: 'Invalid clientUserMessageId.' });
   }
+  const senderError = getProgrammaticSenderError(body);
+  if (senderError) return res.status(400).json({ error: senderError });
+  const task = parseProgrammaticTaskBody(body);
   const {
     message,
     system,
@@ -690,7 +829,7 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
     model,
     reasoningEffort,
     runtimeConfig,
-  } = parseProgrammaticTaskBody((req.body ?? {}) as Record<string, unknown>);
+  } = task;
 
   if (!isAgentTaskMode(mode)) {
     return res.status(400).json({
@@ -721,16 +860,11 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
     });
   }
 
-  // Persist a stable exact-thread receipt before acknowledging a saved task.
-  // A retry of its client ID never submits a second native input.
-  let receipt: Awaited<ReturnType<typeof nativeSubmissionJournal.begin>> = null;
-  try {
-    if (threadId) {
-      receipt = await nativeSubmissionJournal.begin(threadId, clientUserMessageId);
-      if (!receipt) return res.status(409).json({ error: 'Submission client ID already recorded; inspect exact custody.' });
-    }
-  } catch {
-    return res.status(503).json({ error: 'Submission receipt unavailable; native input not started.' });
+  // Input to an existing thread is retained and queued; the stream observes it.
+  if (threadId) {
+    const custody = await enqueueThreadInput(body, { ...task, threadId });
+    if ('error' in custody) return res.status(custody.error.status).json({ error: custody.error.message });
+    return streamThreadInput(res, custody.event);
   }
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -740,8 +874,6 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
 
   let streamClosed = false;
   let observedTurn = false;
-  let observedTurnId: string | null = null;
-  let receiptProgress = Promise.resolve();
   res.on('close', () => {
     streamClosed = true;
   });
@@ -753,9 +885,6 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
       streamClosed = true;
     }
   };
-
-  if (receipt) emit('submission', { requestId: receipt.requestId,
-    threadId: receipt.threadId, clientUserMessageId: receipt.clientUserMessageId, phase: receipt.phase });
 
   try {
     await applyProgrammaticTaskRuntimeConfigFromBody(runtimeConfig);
@@ -772,75 +901,174 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
       idleTimeoutMs,
       workspace,
       modelConfig: resolvedModelConfig,
-      threadId,
-      clientUserMessageId: receipt?.clientUserMessageId ?? clientUserMessageId,
+      clientUserMessageId,
       notifyStarted: true,
       onProgress: (progress) => {
-        if (progress.kind === 'turn') {
-          observedTurn = true;
-          observedTurnId = progress.turnId;
-          if (receipt) {
-            receiptProgress = receiptProgress.then(async () => {
-              await nativeSubmissionJournal.advance(receipt!, 'turn_started', progress.turnId);
-              for (const event of toProgrammaticTaskProgressSseEvents(progress)) emit(event.event, event.payload);
-            });
-            return;
-          }
-        }
+        if (progress.kind === 'turn') observedTurn = true;
         for (const event of toProgrammaticTaskProgressSseEvents(progress)) {
           emit(event.event, event.payload);
         }
       },
     });
 
-    await receiptProgress;
-    if (receipt) await nativeSubmissionJournal.advance(receipt,
-      submissionTerminalPhase(result.completed, observedTurn), observedTurnId);
+    const refusal = !observedTurn ? result.refusal : undefined;
     emit('result', result);
-    const unacknowledged = getUnacknowledgedTaskError(result, observedTurn);
-    if (unacknowledged) emit('error', unacknowledged);
+    if (refusal) emit('error', { message: result.error, ...subagentRefusalFields(refusal) });
+    else {
+      const unacknowledged = getUnacknowledgedTaskError(result, observedTurn);
+      if (unacknowledged) emit('error', unacknowledged);
+    }
     res.end();
   } catch (error) {
-    if (receipt) {
-      try {
-        await receiptProgress;
-        await nativeSubmissionJournal.advance(receipt, submissionTerminalPhase(false, observedTurn), observedTurnId);
-      } catch { /* Unknown receipt state: never imply absent native admission. */ }
-    }
     const message = error instanceof Error ? error.message : String(error);
-    emit('error', { message });
+    if (!observedTurn && error instanceof SubagentDirectInputError) {
+      emit('error', { message, ...subagentRefusalFields(error) });
+    } else emit('error', { message });
     res.end();
   }
 });
 
-// Operator-only forward receipt: no task prose, browser token, or source body.
+/** How long a thread-targeted task stream observes its input before reporting
+ * it as still queued. The input stays retained either way. */
+export const threadInputTiming = { admissionWaitMs: 90_000 };
+
+/** Per-request task settings that cannot apply to input queued for an existing thread. */
+const THREAD_INPUT_REJECTED_FIELDS = ['model', 'reasoningEffort', 'modelConfig', 'runtimeConfig', 'system',
+  'timeoutMs', 'idleTimeoutMs'] as const;
+
+type ThreadInputError = { error: { status: number; message: string } };
+
+/**
+ * Take durable custody of programmatic input to an existing thread. All such
+ * input goes through the thread's one wake queue: retained before any
+ * acknowledgement, delivered in order with schedules, commands and channel
+ * input, steering an active turn or starting an idle one, and recovered after
+ * a restart. The client message ID is the event ID, so a repeat returns the
+ * stored event instead of submitting again.
+ */
+async function enqueueThreadInput(
+  body: Record<string, unknown>,
+  task: ReturnType<typeof parseProgrammaticTaskBody> & { threadId: string },
+): Promise<ThreadInputError | { event: WakeEvent }> {
+  const fail = (status: number, message: string): ThreadInputError => ({ error: { status, message } });
+  const rejected = THREAD_INPUT_REJECTED_FIELDS.find(key => body[key] !== undefined && body[key] !== null);
+  if (rejected) return fail(400, `${rejected} cannot be set for input to an existing thread.`);
+  if (!isWakeId(task.threadId)) return fail(400, 'Invalid threadId.');
+  if (!task.clientUserMessageId) return fail(400, 'clientUserMessageId is required for input to an existing thread.');
+  // The receiving thread sees who handed it this work; the body is unchanged.
+  const message = withSenderHeader(task.sender, task.message);
+  if (message.length > WAKE_MESSAGE_LIMIT) {
+    return fail(400, `message is longer than ${WAKE_MESSAGE_LIMIT} characters (including any sender line).`);
+  }
+  try { await readyWakeSources(); }
+  catch { return fail(503, 'Thread input is unavailable; nothing was accepted.'); }
+  // A repeat of a stored ID is answered from the stored input, before any
+  // thread read or workspace check, so it works while the runtime is down.
+  // While a state write is outstanding or failed it is not answered here: it
+  // goes through ingestion below, which writes before it acknowledges.
+  try {
+    const stored = wakeSources.storedInput(task.threadId, THREAD_INPUT_SOURCE, task.clientUserMessageId,
+      message, task.sender);
+    if (stored) return { event: stored };
+  } catch (error) {
+    if (error instanceof WakeContentConflictError) return fail(409, 'Client ID already used for different input.');
+    return fail(400, 'Invalid thread input.');
+  }
+  const read = await readInputThread(task.threadId);
+  if ('error' in read) return fail(read.error.status, read.error.message);
+  if (!pathsEqualForAgentWorkspace(read.thread.cwd, task.workspace)) {
+    return fail(400, 'workspace does not match the thread workspace.');
+  }
+  try {
+    return { event: await wakeSources.ingest(task.threadId, THREAD_INPUT_SOURCE, task.clientUserMessageId,
+      message, task.sender) };
+  } catch (error) {
+    const failure = wakeIngestFailure(error);
+    return fail(failure.status, failure.status === 409 ? failure.message
+      : failure.status === 400 ? 'Invalid thread input.'
+      : error instanceof WakeUnsavedError ? 'Thread input could not be saved; retry with the same clientUserMessageId.'
+      : 'Thread input could not be retained; nothing was accepted.');
+  }
+}
+
+/** Server-Sent Events for one retained thread input: `submission` at once,
+ * `accepted` once the runtime has taken it into a turn, then its admission
+ * (`thread`, `turn`, `admitted`), its refusal (`error`), `held`, or, when it
+ * is not settled within the wait, `queued`. A client that disconnects changes
+ * nothing; the input remains queued, and no waiter outlives the connection.
+ * Exported for tests. */
+export async function streamThreadInput(res: Response, event: WakeEvent): Promise<void> {
+  const { threadId, eventId: clientUserMessageId } = event;
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+  const observer = new AbortController();
+  let closed = false;
+  const close = () => { closed = true; observer.abort(); };
+  res.on('close', close);
+  // A client that disconnected while the input was being retained has
+  // already fired 'close'; a failed write means the same.
+  if (res.destroyed || res.writableEnded) close();
+  const emit = (name: string, payload: unknown) => {
+    if (!closed && !writeCodexSse(res, name, payload)) close();
+  };
+  void wakeSources.tick().catch(console.error);
+  emit('submission', { threadId, clientUserMessageId, status: event.status });
+  if (closed) return;
+  const deadline = Date.now() + threadInputTiming.admissionWaitMs;
+  let current = await wakeSources.whenAccepted(threadId, THREAD_INPUT_SOURCE, clientUserMessageId,
+    threadInputTiming.admissionWaitMs, observer.signal) ?? event;
+  if (closed) return;
+  // `accepted` always precedes `admitted` when a turn is known, also when the
+  // receipt was observed before the acceptance could be reported.
+  if (current.turnId && (isAcceptedOffer(current) || current.status === 'admitted')) {
+    emit('accepted', { threadId, turnId: current.turnId, clientUserMessageId });
+  }
+  if (isAcceptedOffer(current)) {
+    current = await wakeSources.whenSettled(threadId, THREAD_INPUT_SOURCE, clientUserMessageId,
+      Math.max(0, deadline - Date.now()), observer.signal) ?? current;
+    if (closed) return;
+  }
+  if (current.status === 'admitted') {
+    emit('thread', { threadId });
+    // The turn holding the receipt; its status is not known here, so none is claimed.
+    if (current.turnId) emit('turn', { threadId, turnId: current.turnId });
+    emit('admitted', { threadId, turnId: current.turnId ?? null, clientUserMessageId });
+  } else if (current.status === 'refused' && current.refusal) {
+    const refusal = new SubagentDirectInputError(threadId, current.refusal.parentThreadId);
+    emit('error', { message: refusal.message, ...subagentRefusalFields(refusal) });
+  } else if (current.status === 'held') {
+    emit('held', { threadId, clientUserMessageId, status: current.status });
+  } else {
+    emit('queued', { threadId, clientUserMessageId, status: current.status });
+  }
+  res.end(); // An admitted turn continues after the observer disconnects.
+}
+
+// Operator-only custody of one thread input: status and turn, never its text.
 router.get('/threads/:threadId/submissions/:clientUserMessageId/custody', async (req: Request, res: Response) => {
   if (!wakeMutationAllowed(req) ||
       !wakeTokenValid(process.env.WORKSTATION_WAKE_TOKEN, req.header('authorization')?.replace(/^Bearer /i, ''))) {
     return res.status(401).json({ error: 'Authentication required.' });
   }
   const { threadId, clientUserMessageId } = req.params;
-  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId) ||
-      !SUBMISSION_ID.test(clientUserMessageId)) return res.status(400).json({ error: 'Invalid submission scope.' });
-  let receipt: Awaited<ReturnType<typeof nativeSubmissionJournal.lookup>> | null = null;
-  const inspectionId = randomUUID();
-  try {
-    receipt = await nativeSubmissionJournal.lookup(threadId, clientUserMessageId);
-    if (!receipt) return res.status(404).json({ error: 'Submission receipt not recorded.' });
-    const native = await getCodexService().readNativeSubmissionCustody(threadId, clientUserMessageId,
-      undefined, (phase, status) => console.info(JSON.stringify({
-        event: 'native_submission_inspection', inspectionId, phase, status,
-      })));
-    return res.json({ ...receipt, native, inspectionId });
-  } catch (error) {
-    return res.status(503).json({ error: 'Native submission custody unavailable.',
-      ...(receipt ? { requestId: receipt.requestId, clientUserMessageId: receipt.clientUserMessageId,
-        recordedPhase: receipt.phase, recordedTurnId: receipt.turnId } : {}), inspectionId,
-      phase: error instanceof NativeCustodyPhaseError ? error.phase : 'unknown',
-      category: error instanceof NativeCustodyPhaseError ? error.category : 'native_unavailable',
-      custodyVerified: false });
+  // The same thread and client ID checks as the enqueue path.
+  if (!isWakeId(threadId) || !isWakeId(clientUserMessageId)) {
+    return res.status(400).json({ error: 'Invalid submission scope.' });
   }
+  try { await readyWakeSources(); }
+  catch { return res.status(503).json({ error: 'Thread input custody unavailable.' }); }
+  const event = wakeSources.find(threadId, THREAD_INPUT_SOURCE, clientUserMessageId);
+  if (!event) return res.status(404).json({ error: 'Submission not found.', threadId, clientUserMessageId });
+  return res.json({ threadId, clientUserMessageId, ...threadInputCustody(event) });
 });
+
+/** Fixed, content-free fields of a sub-agent input refusal. The parent thread
+ * ID lets the caller send the work to the thread that can take it. */
+function subagentRefusalFields(refusal: SubagentInputRefusal) {
+  return { code: refusal.code, threadId: refusal.threadId, parentThreadId: refusal.parentThreadId };
+}
 
 /** A terminal result is not an admission receipt unless a native turn was observed. */
 export function getUnacknowledgedTaskError(
@@ -1015,6 +1243,7 @@ export function parseProgrammaticTaskBody(body: Record<string, unknown>) {
     : undefined;
   const clientUserMessageId = typeof body.clientUserMessageId === 'string'
     ? body.clientUserMessageId : undefined;
+  const sender = body.sender === undefined ? undefined : parseSubmissionSender(body.sender) ?? undefined;
   const mode = body.mode === undefined ? 'headless' : body.mode;
   const modelConfig = body.modelConfig && typeof body.modelConfig === 'object'
     ? body.modelConfig as AgentModelConfig
@@ -1037,6 +1266,7 @@ export function parseProgrammaticTaskBody(body: Record<string, unknown>) {
     workspace,
     threadId,
     clientUserMessageId,
+    sender,
     mode,
     modelConfig,
     model,
@@ -1045,8 +1275,25 @@ export function parseProgrammaticTaskBody(body: Record<string, unknown>) {
   };
 }
 
+/** A client message ID is a wake event ID, so it uses exactly that alphabet. */
 export function getProgrammaticClientIdError(value: unknown): boolean {
-  return value !== undefined && (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(value));
+  return value !== undefined && !isWakeId(value);
+}
+
+/** A sender is attribution for input to an existing thread; reject any other
+ * shape before anything is retained. (Input to an existing thread always
+ * carries a client message ID; the task routes require it.) */
+export function getProgrammaticSenderError(body: Record<string, unknown>): string | null {
+  if (body.sender === undefined) return null;
+  if (!parseSubmissionSender(body.sender)) return 'Invalid sender.';
+  const threadId = typeof body.threadId === 'string' ? body.threadId.trim() : '';
+  if (!threadId) return 'sender requires threadId.';
+  return null;
+}
+
+/** The exact text submitted to the native thread for a sender-attributed task. */
+export function withSenderHeader(sender: SubmissionSender | undefined, message: string): string {
+  return sender ? `${senderHeader(sender)}\n${message}` : message;
 }
 function toGroqProxyBaseUrl(): string {
   return `http://localhost:${getServerPort()}/api/agent/groq-proxy`;
@@ -1201,25 +1448,57 @@ router.post('/threads/:threadId/fork', async (req: Request, res: Response) => {
   }
 });
 
-router.get('/threads/:threadId', async (req: Request, res: Response) => {
+/** Metadata-only exact binding for authenticated/local saved-thread sends.
+ * No transcript, queue observation, or application active/idle gate. */
+router.get('/threads/:threadId/identity', async (req: Request, res: Response) => {
+  if (!savedThreadIdentityReadAllowed(req)) return res.status(403).json({ error: 'Local same-origin request required.' });
+  const threadId = req.params.threadId;
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(threadId)) {
+    return res.status(400).json({ error: 'Exact native thread ID required.' });
+  }
   try {
-    let thread = await getCodexService().readThread(req.params.threadId);
-    thread = enrichThreadWithReasoning(thread);
-    const limit = parseThreadHistoryLimit(req.query.limit);
+    return res.json(await getCodexService().readSavedThreadIdentity(threadId));
+  } catch (error) {
+    return res.status(error instanceof SavedThreadIdentityError ? 404 : 503)
+      .json({ error: 'Exact saved-thread identity unavailable.' });
+  }
+});
+
+router.get('/threads/:threadId', async (req: Request, res: Response) => {
+  const limit = parseThreadHistoryLimit(req.query.limit);
+  const before = req.query.before;
+  if (before !== undefined && !isThreadHistoryCursor(before)) {
+    res.status(400).json({ error: 'Invalid history cursor.' });
+    return;
+  }
+  try {
     if (limit === null) {
-      res.json({ thread });
+      const thread = await getCodexService().readThread(req.params.threadId);
+      // Saved tool source and older reasoning are restored for the newest
+      // turns only, as far back as the fixed read budget reaches.
+      const { thread: enriched } = await enrichThreadTurnsFromRollout(thread, { partial: true });
+      res.json({ thread: enriched });
       return;
     }
 
-    const before = typeof req.query.before === 'string'
-      ? req.query.before
-      : undefined;
-    const page = paginateThreadTurns(thread.turns, { limit, before });
+    // A page costs one bounded native read regardless of how long the
+    // conversation is; `before` is the runtime's opaque cursor.
+    const page = await getCodexService().readThreadPage(req.params.threadId, { limit, cursor: before });
+    // Restores saved tool source and older reasoning for this page by reading
+    // only the end of the saved history, within a fixed budget. The passive
+    // refresh poll repeats every few seconds, and a single turn can itself be
+    // very long, so it gets a much smaller budget and keeps whatever newest
+    // turns that budget covers.
+    const passiveRefresh = req.query.bestEffort === '1' || req.query.bestEffort === 'true';
+    const { thread: pageThread } = await enrichThreadTurnsFromRollout(
+      page.thread,
+      passiveRefresh ? { byteBudget: PASSIVE_REFRESH_ROLLOUT_BYTE_BUDGET, partial: true } : undefined,
+    );
     res.json({
-      thread: { ...thread, turns: page.turns },
+      thread: pageThread,
       historyPage: {
         nextCursor: page.nextCursor,
-        hasMore: page.hasMore,
+        hasMore: page.nextCursor !== null,
       },
     });
   } catch (error) {
@@ -1264,6 +1543,20 @@ router.put('/threads/:threadId/name', async (req: Request, res: Response) => {
   }
 });
 
+/** An exact native CAS identity for the existing authenticated loopback
+ * operator path. A legacy /goal read must never be promoted to a revision. */
+router.get('/threads/:threadId/goal/revision', async (req: Request, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store');
+  if (!savedThreadIdentityReadAllowed(req)) return res.status(403).json({ error: 'Local same-origin request required.' });
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(req.params.threadId))
+    return res.status(400).json({ error: 'Exact native thread ID required.' });
+  try {
+    return res.json(await getCodexService().getThreadGoalWithRevision(req.params.threadId));
+  } catch {
+    return res.status(503).json({ error: 'Native Goal revision unavailable.' });
+  }
+});
+
 router.get('/threads/:threadId/goal', async (req: Request, res: Response) => {
   try {
     const goal = await getCodexService().getThreadGoal(req.params.threadId);
@@ -1281,6 +1574,37 @@ router.get('/threads/:threadId/goal', async (req: Request, res: Response) => {
 });
 
 router.put('/threads/:threadId/goal', async (req: Request, res: Response) => {
+  if (req.body && Object.prototype.hasOwnProperty.call(req.body, 'expected')) {
+    res.setHeader('Cache-Control', 'no-store');
+    if (!savedThreadIdentityReadAllowed(req)) return res.status(403).json({ error: 'Local same-origin request required.' });
+    const expected = req.body.expected as ThreadGoalRevision;
+    const status = req.body.status;
+    try {
+      if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(req.params.threadId) ||
+          Object.keys(req.body).sort().join() !== 'expected,status' ||
+          !expected || typeof expected !== 'object' || Array.isArray(expected) ||
+          Object.keys(expected).sort().join() !== 'goalId,lifecycleRevision,missionRevision,status' ||
+          !((expected.status === 'paused' || expected.status === 'blocked') && status === 'active' ||
+            expected.status === 'active' && (status === 'paused' || status === 'blocked'))) {
+        return res.status(400).json({ error: 'Exact native Goal transition required.' });
+      }
+      goalCasExpectedParams(expected);
+    } catch {
+      return res.status(400).json({ error: 'Exact native Goal revision required.' });
+    }
+    try {
+      const service = getCodexService();
+      // A resume also makes sure a live thread owns the active Goal.
+      const result = status === 'active'
+        ? await service.resumeThreadGoalWithRevision(req.params.threadId, expected)
+        : await service.setThreadGoalWithRevision(req.params.threadId, expected, { status });
+      return res.json(result);
+    } catch (error) {
+      return res.status(error instanceof GoalRevisionConflictError ? 409 : 503)
+        .json({ error: error instanceof GoalRevisionConflictError ?
+          'Native Goal revision changed.' : 'Native Goal mutation unconfirmed.' });
+    }
+  }
   const objective = typeof req.body?.objective === 'string'
     ? req.body.objective.trim()
     : undefined;
@@ -1462,7 +1786,8 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
       : null;
     if (targetThreadId) {
       try {
-        const existingThread = await service.readThread(targetThreadId);
+        // Only the latest turn decides whether the thread can be resumed.
+        const { thread: existingThread } = await service.readThreadPage(targetThreadId, { limit: 1 });
         if (requiresFreshThread(existingThread)) {
           console.warn('[Agent API] Blocking resume of known-bad Codex thread.', {
             threadId: existingThread.id,
@@ -1638,6 +1963,16 @@ router.post('/chat/steer', async (req: Request, res: Response) => {
   }
   body = req.body;
 
+  // A client ID is a durable reservation even when the HTTP response drops
+  // before native queue/user-item observation. Never retry an uncertain steer.
+  let receipt: Awaited<ReturnType<typeof nativeSubmissionJournal.begin>> = null;
+  if (body.clientUserMessageId) {
+    try {
+      receipt = await nativeSubmissionJournal.begin(body.threadId as string, body.clientUserMessageId);
+      if (!receipt) return res.status(409).json({ code: 'submission_already_recorded' });
+    } catch { return res.status(503).json({ code: 'submission_receipt_unavailable' }); }
+  }
+
   try {
     const turnId = await getCodexService().steer(body.threadId as string, {
       turnId: body.turnId,
@@ -1646,8 +1981,11 @@ router.post('/chat/steer', async (req: Request, res: Response) => {
       attachments: body.attachments,
       skills: body.skills,
     });
+    if (receipt) await nativeSubmissionJournal.advance(receipt, 'turn_started', turnId);
     res.json({ ok: true, turnId });
   } catch (error) {
+    // A native transport error can follow acceptance. Keep the durable
+    // reservation in received state until exact native custody resolves it.
     const code = getSteerErrorCode(error);
     const status = code === 'other' ? 500 : 409;
     res.status(status).json({

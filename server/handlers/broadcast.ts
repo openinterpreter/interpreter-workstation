@@ -10,7 +10,7 @@
  * The transport (IPC vs SSE) is abstracted away.
  */
 
-import { broadcast as sseBroadcast } from '../utils/sse';
+import { broadcast as sseBroadcast, getClientCount as getSseClientCount } from '../utils/sse';
 
 export interface BroadcastScope {
   windowSessionKey?: string;
@@ -28,6 +28,34 @@ export function setElectronBroadcaster(
   broadcaster: (channel: string, data: unknown, scope?: BroadcastScope) => void
 ): void {
   electronBroadcaster = broadcaster;
+}
+
+// In Electron mode, counts the live app windows a scoped broadcast reaches.
+let electronAudienceCounter: ((scope?: BroadcastScope) => number) | null = null;
+
+/**
+ * Set the Electron window counter used by countInteractiveClients().
+ * Called from electron/ipc/handlers.ts next to setElectronBroadcaster().
+ */
+export function setElectronAudienceCounter(
+  counter: ((scope?: BroadcastScope) => number) | null
+): void {
+  electronAudienceCounter = counter;
+}
+
+/** True when an Electron host (app windows and the overlay) is registered. */
+export function hasElectronHost(): boolean {
+  return electronAudienceCounter !== null;
+}
+
+/**
+ * Number of interactive clients a broadcastEvent() with this scope reaches:
+ * Electron windows selected by the same scope rules, plus every browser SSE
+ * client (SSE delivery is not scoped, so each one receives the event).
+ */
+export function countInteractiveClients(scope?: BroadcastScope): number {
+  const windows = electronAudienceCounter ? electronAudienceCounter(scope) : 0;
+  return windows + getSseClientCount();
 }
 
 /**

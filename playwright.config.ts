@@ -98,8 +98,19 @@ console.log(
 );
 console.log("   are interleaved chronologically in each test log file.\n");
 
+// CI splits the spec files over parallel runners with E2E_SHARD=current/total.
+const shardMatch = /^([1-9][0-9]?)\/([1-9][0-9]?)$/.exec(process.env.E2E_SHARD ?? "");
+if (process.env.E2E_SHARD && (!shardMatch || Number(shardMatch[1]) > Number(shardMatch[2]))) {
+  throw new Error(`Invalid E2E_SHARD: ${process.env.E2E_SHARD}`);
+}
+const shard = shardMatch
+  ? { current: Number(shardMatch[1]), total: Number(shardMatch[2]) }
+  : undefined;
+if (shard) console.log(`🧩 Running shard ${shard.current} of ${shard.total}`);
+
 export default defineConfig({
   testDir: "./tests",
+  shard,
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: TEST_RETRY_COUNT,

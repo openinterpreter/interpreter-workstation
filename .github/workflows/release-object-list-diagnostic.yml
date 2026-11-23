@@ -1,0 +1,31 @@
+name: Read-only release object listing diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Confirm bounded read-only diagnosis of the 0.2.219 release key
+        required: true
+        type: string
+
+jobs:
+  diagnose:
+    if: >-
+      github.actor == 'interpreterwork-automation[bot]' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.confirm == 'diagnose-0.2.219'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    environment: production-release
+    permissions:
+      contents: read
+    env:
+      AWS_REGION: us-west-1
+      AWS_ENDPOINT_URL: https://neyguovvcjxfzhqpkicj.storage.supabase.co/storage/v1/s3
+    steps:
+      - uses: actions/checkout@v7
+      - name: Inspect exact key without mutation
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: node scripts/ci/diagnose-release-object-list.mjs

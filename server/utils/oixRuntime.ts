@@ -405,6 +405,50 @@ function replaceSymlink(
   }
 }
 
+/**
+ * Stable directory inside the runtime home that always points at the `bin`
+ * directory of the runtime the app is currently running. Agent shells put it
+ * first on PATH (see `buildInterpreterCliShellEnvironmentPolicy`) so that the
+ * bare `interpreter` command there is the same runtime, with the same home,
+ * rather than another installation found later on the user's PATH.
+ */
+export function getOixRuntimeCommandDir(
+  runtimeHome: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return pathApi(platform).join(runtimeHome, "runtime", "interpreter-bin");
+}
+
+/**
+ * Points the runtime command directory at the directory containing
+ * `runtimeBinary`. A directory link keeps the runtime's sibling executables
+ * next to the entrypoint. An existing non-link path is never replaced.
+ */
+export function linkOixRuntimeCommandDir(
+  runtimeHome: string,
+  runtimeBinary: string,
+): string {
+  const linkPath = getOixRuntimeCommandDir(runtimeHome);
+  let existing: ReturnType<typeof lstatSync> | null = null;
+  try {
+    existing = lstatSync(linkPath);
+  } catch {
+    existing = null;
+  }
+  if (existing && !existing.isSymbolicLink()) {
+    throw new Error(
+      `[oix-runtime] Refusing to replace non-link path at ${linkPath}`,
+    );
+  }
+  mkdirSync(path.dirname(linkPath), { recursive: true });
+  replaceSymlink(
+    linkPath,
+    path.dirname(path.resolve(runtimeBinary)),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  return linkPath;
+}
+
 function assertReplaceableManagedLink(
   linkPath: string,
   managedRoot: string,

@@ -93,6 +93,13 @@ import {
   resolveWorkstationApiUrl,
   workstationFetch,
 } from './remote/workstationConnection';
+// A call rejects with IpcUnavailableError when the current host does not
+// provide the operation at all. Features check isIpcUnavailableError() and
+// treat that as an absent capability; any other rejection is a real failure.
+import {
+  IpcUnavailableError,
+  isIpcUnavailableResponse,
+} from '../shared/ipcAvailability';
 
 // ============================================================================
 // Mode Detection
@@ -258,8 +265,11 @@ async function httpCall<T = unknown>(
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-    throw new Error(error.error || `HTTP ${response.status}`);
+    const body = await response.json().catch(() => null);
+    if (isIpcUnavailableResponse(response.status, body)) {
+      throw new IpcUnavailableError(`${namespace}.${method}`);
+    }
+    throw new Error((body ?? { error: 'Unknown error' }).error || `HTTP ${response.status}`);
   }
 
   return response.json();
@@ -450,6 +460,9 @@ function createElectronFallbackProxy(namespace: string): any {
             body: args,
           });
           if (!response.ok) {
+            if (isIpcUnavailableResponse(response.status, response.data ?? {})) {
+              throw new IpcUnavailableError(`${namespace}.${method}`);
+            }
             throw new Error((response.data as any)?.error || 'Request failed');
           }
           return response.data;

@@ -12,7 +12,7 @@
  */
 
 import { nanoid } from 'nanoid';
-import { broadcastEvent, type BroadcastScope } from './handlers/broadcast';
+import { broadcastEvent, countInteractiveClients, hasElectronHost, type BroadcastScope } from './handlers/broadcast';
 import { agentTabManager } from './agentTabManager';
 import { getToolCallMetadata } from './utils/codexMcpBridge';
 import { getCurrentWorkspace } from './utils/workspace';
@@ -31,6 +31,27 @@ import type {
 type ApprovalVisibilityContext = {
   windowSessionKey: string | null;
   workspacePath: string | null;
+};
+
+/** Fixed prefix of the error raised when nobody can answer a request. */
+export const APPROVAL_UNANSWERABLE_LABEL = 'APPROVAL_UNANSWERABLE';
+/** How long a request that only the operator route could answer may wait. */
+export const OPERATOR_ONLY_APPROVAL_WAIT_MS = 120_000;
+/** Fixed prefix of the error raised when a caller withdraws a pending request. */
+export const APPROVAL_WITHDRAWN_LABEL = 'APPROVAL_WITHDRAWN';
+
+/** Opt-in wait behaviour for a single approval request. */
+export type ApprovalWaitOptions = {
+  /**
+   * Reject at once, without creating a pending request, when no interactive
+   * client is attached that could answer it. `hint` is appended to the fixed
+   * message to tell the user how to proceed without a client.
+   */
+  refuseWhenUnanswerable?: { hint?: string };
+  /** Withdraw (reject and remove) the pending request when this signal aborts. */
+  signal?: AbortSignal;
+  /** Called once the request is pending and waiting for an answer. */
+  onPending?: (id: string) => void | Promise<void>;
 };
 
 const OWNER_COLOR_PALETTE = [
@@ -417,6 +438,46 @@ class ApprovalManager {
   }
 
   /**
+   * Whether anyone attached could answer this request:
+   * - an app window or browser client that receives its `approvals:created`
+   *   broadcast (same scope rules as delivery; browser clients are unscoped);
+   * - the in-process overlay, for overlay-agent owners in the Electron app;
+   * - the local operator decision route, for a thread-owned Computer Use
+   *   request when that route is configured (see `decideOwnedCuaApproval`).
+   */
+  private hasInteractiveAnswerer(request: QuestionRequestInternal): boolean {
+    if (countInteractiveClients(this.getBroadcastScopeForRequest(request)) > 0) {
+      return true;
+    }
+    if (request.owner?.approvalOwnerKind === 'overlay-agent' && hasElectronHost()) {
+      return true;
+    }
+    return false;
+  }
+
+  /** The local operator decision route can answer this request, but nobody
+   * is watching for it, so it is given a bounded wait instead of an open one. */
+  private operatorRouteCanAnswer(request: QuestionRequestInternal): boolean {
+    return Boolean(
+      process.env.WORKSTATION_WAKE_TOKEN?.trim()
+      && request.serverId === 'builtin-cua-driver'
+      && request.owner?.approvalOwnerKind === 'hidden-agent'
+      && request.owner.identity.threadId,
+    );
+  }
+
+  /** Remove a pending request without an answer and notify clients. */
+  private expireRequest(request: QuestionRequestInternal, error: Error, scope?: BroadcastScope): void {
+    if (!this.requests.has(request.id)) return;
+    this.resolvedIds.set(request.id, Date.now());
+    this.cleanupResolvedIds();
+    this.requests.delete(request.id);
+    broadcastEvent('approvals:timeout', { id: request.id }, scope);
+    this.emitListChanged(scope);
+    request.reject(error);
+  }
+
+  /**
    * Core method - all interactions flow through this
    * Returns QuestionResult with answers + metadata (skipped, timedOut, etc.)
    *
@@ -435,7 +496,8 @@ class ApprovalManager {
     toolCallId?: string,
     isSimpleApproval: boolean = false,
     agentId?: string,
-    replacementKey?: string
+    replacementKey?: string,
+    waitOptions?: ApprovalWaitOptions,
   ): Promise<QuestionResult> {
     // Auto-approve: return first option for each question
     // Never auto-approve ask_user_question — its purpose is user interaction
@@ -496,6 +558,22 @@ class ApprovalManager {
         reject,
       };
 
+      const refusal = waitOptions?.refuseWhenUnanswerable;
+      const unattended = Boolean(refusal) && !this.hasInteractiveAnswerer(request);
+      const operatorOnly = unattended && this.operatorRouteCanAnswer(request);
+      if (unattended && !operatorOnly) {
+        const hint = refusal?.hint?.trim();
+        reject(new Error(
+          `${APPROVAL_UNANSWERABLE_LABEL}: No interactive client is attached to answer this approval request, so it was refused instead of waiting.`
+          + (hint ? ` ${hint}` : ''),
+        ));
+        return;
+      }
+      if (waitOptions?.signal?.aborted) {
+        reject(new Error(`${APPROVAL_WITHDRAWN_LABEL}: The caller stopped waiting before the approval request was shown.`));
+        return;
+      }
+
       const previousRequest = this.findReplacementCandidate(request);
       this.requests.set(id, request);
       const scope = this.getBroadcastScopeForRequest(request);
@@ -509,18 +587,40 @@ class ApprovalManager {
 
       // Timeout handling -- pass 0 to wait indefinitely (no timeout).
       const timeoutMs = timeout ?? this.defaultTimeout;
-      if (timeoutMs > 0) {
+      if (operatorOnly) {
+        // Only the operator route could answer. Wait a bounded time for it,
+        // then refuse with the same label as an unanswerable request.
+        const operatorWaitMs = timeoutMs > 0
+          ? Math.min(timeoutMs, OPERATOR_ONLY_APPROVAL_WAIT_MS) : OPERATOR_ONLY_APPROVAL_WAIT_MS;
+        const hint = waitOptions?.refuseWhenUnanswerable?.hint?.trim();
         setTimeout(() => {
-          if (this.requests.has(id)) {
-            // Track as resolved before deleting (for idempotency)
-            this.resolvedIds.set(id, Date.now());
-            this.cleanupResolvedIds();
-            this.requests.delete(id);
-            broadcastEvent('approvals:timeout', { id }, scope);
-            this.emitListChanged(scope);
-            reject(new Error(`Request timed out after ${timeoutMs}ms`));
-          }
+          this.expireRequest(request, new Error(
+            `${APPROVAL_UNANSWERABLE_LABEL}: No interactive client is attached and no operator decision arrived within ${Math.round(operatorWaitMs / 1000)} seconds, so the approval request was refused.`
+            + (hint ? ` ${hint}` : '')), scope);
+        }, operatorWaitMs);
+      } else if (timeoutMs > 0) {
+        setTimeout(() => {
+          this.expireRequest(request, new Error(`Request timed out after ${timeoutMs}ms`), scope);
         }, timeoutMs);
+      }
+
+      const signal = waitOptions?.signal;
+      if (signal) {
+        const withdraw = () => this.expireRequest(
+          request,
+          new Error(`${APPROVAL_WITHDRAWN_LABEL}: The caller stopped waiting, so the approval request was withdrawn.`),
+          scope,
+        );
+        signal.addEventListener('abort', withdraw, { once: true });
+        const detach = () => signal.removeEventListener('abort', withdraw);
+        request.resolve = (result) => { detach(); resolve(result); };
+        request.reject = (error) => { detach(); reject(error); };
+      }
+
+      if (waitOptions?.onPending) {
+        void Promise.resolve()
+          .then(() => waitOptions.onPending?.(id))
+          .catch(() => undefined);
       }
     });
   }
@@ -535,7 +635,8 @@ class ApprovalManager {
     args: any,
     timeout: number,
     toolCallId?: string,
-    agentId?: string
+    agentId?: string,
+    waitOptions?: ApprovalWaitOptions,
   ): Promise<boolean> {
     // In auto-approve mode, immediately approve without creating an approval request
     // Excludes test_approval which is specifically for testing the approval UI flow.
@@ -562,7 +663,9 @@ class ApprovalManager {
       timeout,
       toolCallId,
       true, // isSimpleApproval flag
-      agentId
+      agentId,
+      undefined,
+      waitOptions,
     );
 
     // Type-safe extraction from QuestionResult
@@ -582,7 +685,8 @@ class ApprovalManager {
     warningMessage: string,
     timeout: number,
     toolCallId?: string,
-    agentId?: string
+    agentId?: string,
+    waitOptions?: ApprovalWaitOptions,
   ): Promise<{ approved: boolean; mode?: 'once' | 'session' }> {
     // Check if already approved for session
     if (this.isApprovedForSession(agentId, toolName, serverId)) {
@@ -613,7 +717,9 @@ class ApprovalManager {
       timeout,
       toolCallId,
       true, // isSimpleApproval flag - but we'll handle session mode in UI
-      agentId
+      agentId,
+      undefined,
+      waitOptions,
     );
 
     const answer = result.answers['0'];

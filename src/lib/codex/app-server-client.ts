@@ -20,6 +20,7 @@ import {
   isValidNotificationShape,
 } from "../validators/index";
 import type { v2 } from "../../../server/handlers/codex-generated-types/index";
+import { boundedSupervisorThread } from "../../../server/utils/boundedSupervisorThread";
 import type { JsonValue } from "../../../server/handlers/codex-generated-types/serde_json/JsonValue";
 import type {
   StreamImageAttachment,
@@ -58,6 +59,7 @@ import {
   resolveBundledResourceCandidates,
 } from "../../../server/utils/bundledRuntimePaths";
 import {
+  linkOixRuntimeCommandDir,
   resolveOrInstallOixRuntime,
   type OixRuntimeResolution,
 } from "../../../server/utils/oixRuntime";
@@ -1060,6 +1062,25 @@ function buildWindowsCodexSpawnEnv(
   return env;
 }
 
+// Put the running runtime's own bin directory first so that `interpreter`
+// started by the runtime (or by a shell that inherits this environment) is the
+// same runtime rather than another installation on the user's PATH. Matches
+// the Windows branch above. The remaining PATH order is preserved.
+function prependPosixRuntimeBinDir(
+  env: NodeJS.ProcessEnv,
+  codexBinary: string,
+  pathExists: (candidatePath: string) => boolean,
+): NodeJS.ProcessEnv {
+  const binDir = path.posix.dirname(codexBinary);
+  if (env.PATH === undefined || !pathExists(binDir)) {
+    return env;
+  }
+  const rest = env.PATH
+    .split(path.posix.delimiter)
+    .filter((entry) => entry.length > 0 && entry !== binDir);
+  env.PATH = [binDir, ...rest].join(path.posix.delimiter);
+  return env;
+}
 
 export function buildCodexSpawnEnv({
   baseEnv,
@@ -1087,7 +1108,7 @@ export function buildCodexSpawnEnv({
   delete nextEnv.NODE_V8_COVERAGE;
 
   if (platform !== "win32") {
-    return nextEnv;
+    return prependPosixRuntimeBinDir(nextEnv, codexBinary, pathExists);
   }
 
   return buildWindowsCodexSpawnEnv(
@@ -1555,6 +1576,16 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     const appServerBinary = await this.resolveInterpreterCliBinary();
     const disabledSystemSkillsConfig = formatDisabledSystemSkillsConfig(codeHome);
     console.log(`[interpreter-server] resolved app-server binary path: ${appServerBinary}`);
+    // Agent shells resolve `interpreter` through this stable directory (see
+    // buildInterpreterCliShellEnvironmentPolicy). Refresh it before the
+    // runtime starts so it always names the runtime that is running.
+    try {
+      linkOixRuntimeCommandDir(codeHome, appServerBinary);
+    } catch (error) {
+      console.warn(
+        `[interpreter-server] could not link runtime command directory: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
 
     // Start Workstation's pinned OIX `interpreter app-server` runtime with an empty MCP table so no
     // ~/.codex MCP config leaks into the runtime and no unscoped Interpreter
@@ -2364,6 +2395,22 @@ export class CodexAppServerClient {
     return this.rpcRequest(CLIENT_METHOD.threadRead, params);
   }
 
+  async threadTurnsList(params: v2.ThreadTurnsListParams): Promise<v2.ThreadTurnsListResponse> {
+    return this.rpcRequest(CLIENT_METHOD.threadTurnsList, params);
+  }
+
+  async threadSupervisorSnapshot(threadId: string): Promise<v2.Thread> {
+    const generation = await this.assertNativeTerminalStatusAvailable();
+    const thread = await boundedSupervisorThread(threadId,
+      params => this.rpcRequest(CLIENT_METHOD.threadRead, params, { skipEnsureConnected: true }),
+      params => this.rpcRequest(CLIENT_METHOD.threadTurnsList, params, { skipEnsureConnected: true }),
+      () => this.initialized && this.disconnectSequence === generation);
+    if (!this.initialized || this.disconnectSequence !== generation) {
+      throw new Error('Native supervisor observation crossed a runtime disconnect.');
+    }
+    return thread;
+  }
+
   async threadQueueList(params: RequestMap[typeof CLIENT_METHOD.threadQueueList]['params']): Promise<RequestMap[typeof CLIENT_METHOD.threadQueueList]['result']> {
     return this.rpcRequest(CLIENT_METHOD.threadQueueList, params);
   }
@@ -2418,14 +2465,27 @@ export class CodexAppServerClient {
   }
 
   async threadGoalDocumentSet(params: RequestMap[typeof CLIENT_METHOD.threadGoalDocumentSet]['params']) {
-    // An absent-Goal create is still a mutation. A lost receipt is uncertain,
+    // A document update is still a mutation. A lost receipt is uncertain,
     // and reconnecting could create an unrelated second native owner.
-    if (!this.initialized) throw new Error('Native Goal document create is unavailable.');
+    if (!this.initialized) throw new Error('Native Goal document update is unavailable.');
     const generation = this.disconnectSequence;
     const result = await this.rpcRequest(CLIENT_METHOD.threadGoalDocumentSet, params,
       { skipEnsureConnected: true });
     if (!this.initialized || generation !== this.disconnectSequence) {
-      throw new Error('Native Goal document create crossed a runtime disconnect.');
+      throw new Error('Native Goal document update crossed a runtime disconnect.');
+    }
+    return result;
+  }
+
+  /** A creation-id retry belongs to the caller after exact receipt reconciliation;
+   * this transport never reconnects, reissues, or treats a late response as success. */
+  async threadGoalDocumentCreate(params: RequestMap[typeof CLIENT_METHOD.threadGoalDocumentCreate]['params']) {
+    if (!this.initialized) throw new Error('Native Goal creation is unavailable.');
+    const generation = this.disconnectSequence;
+    const result = await this.rpcRequest(CLIENT_METHOD.threadGoalDocumentCreate, params,
+      { skipEnsureConnected: true });
+    if (!this.initialized || generation !== this.disconnectSequence) {
+      throw new Error('Native Goal creation crossed a runtime disconnect.');
     }
     return result;
   }
@@ -3167,7 +3227,8 @@ export class CodexAppServerClient {
       return typedResult;
     } catch (error) {
       if (
-        remainingReconnectAttempts <= 0
+        skipEnsureConnected
+        || remainingReconnectAttempts <= 0
         || !RETRYABLE_RPC_METHODS.has(method)
         || disconnectSequence === this.disconnectSequence
       ) {

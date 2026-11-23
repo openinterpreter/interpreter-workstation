@@ -1,7 +1,8 @@
 import { describe, test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { CodexService, type CodexClient } from './service';
-import { GoalRevisionUnavailableError, goalCasExpectedParams, verifyThreadGoalRevision } from './goal-revision';
+import { GoalRevisionConflictError, GoalRevisionUnavailableError,
+  goalCasExpectedParams, verifyThreadGoalRevision } from './goal-revision';
 
 const threadId = '00000000-0000-4000-8000-000000000077';
 const goalId = '00000000-0000-4000-8000-000000000088';
@@ -20,6 +21,18 @@ describe('exact native Goal revision read', () => {
     assert.deepEqual(await new CodexService(client).getThreadGoalWithRevision(threadId),
       { goal, revision });
     assert.equal(calls, 1);
+  });
+
+  test('preserves native zero revisions on migrated existing Goals for exact CAS', async () => {
+    const migrated = { ...revision, missionRevision: 0, lifecycleRevision: 0 };
+    const client = { subscribe: () => () => {}, threadGoalRevisionGet: async () =>
+      ({ goal, revision: migrated }) } as unknown as CodexClient;
+    assert.deepEqual(await new CodexService(client).getThreadGoalWithRevision(threadId),
+      { goal, revision: migrated });
+    assert.deepEqual(goalCasExpectedParams(migrated), {
+      expectedGoalId: goalId, expectedStatus: 'active',
+      expectedMissionRevision: 0, expectedLifecycleRevision: 0,
+    });
   });
 
   test('returns a genuinely absent Goal only with a matching absent revision', () => {
@@ -43,7 +56,7 @@ describe('exact native Goal revision read', () => {
   test('old runtime and contradictory owner, status, or revisions fail closed', async () => {
     const cases = [undefined, { ...revision, goalId: 'not-an-id' },
       { ...revision, status: 'paused' }, { ...revision, status: 'invalid' },
-      { ...revision, missionRevision: 0 },
+      { ...revision, missionRevision: -1 },
       { ...revision, lifecycleRevision: Number.MAX_SAFE_INTEGER + 1 }];
     for (const value of cases) {
       const client = { subscribe: () => () => {}, threadGoalRevisionGet: async () =>
@@ -109,7 +122,7 @@ describe('exact native Goal revision read', () => {
     const service = new CodexService(client);
     for (const [owner, expected, change] of [
       ['wrong-owner', revision, { status: 'paused' }],
-      [threadId, { ...revision, lifecycleRevision: 0 }, { status: 'paused' }],
+      [threadId, { ...revision, lifecycleRevision: -1 }, { status: 'paused' }],
       [threadId, revision, {}],
       [threadId, revision, { status: undefined }],
       [threadId, revision, { tokenBudget: -1 }],
@@ -161,6 +174,22 @@ describe('exact native Goal revision read', () => {
     await assert.rejects(new CodexService(stale).setThreadGoalWithRevision(threadId, revision,
       { status: 'paused' }), { category: 'mutation_unconfirmed' });
     assert.equal(calls, 5);
+  });
+  test('only fixed native CAS conflict code yields stale_revision; unknown failures remain unconfirmed', async () => {
+    let calls = 0;
+    const client = { subscribe: () => () => {}, threadGoalRevisionSet: async () => {
+      calls++;
+      throw { code: -32009, message: 'PRIVATE native predecessor' };
+    } } as unknown as CodexClient;
+    await assert.rejects(new CodexService(client).setThreadGoalWithRevision(threadId, revision,
+      { status: 'paused' }), error => error instanceof GoalRevisionConflictError &&
+        error.category === 'stale_revision' && !error.message.includes('PRIVATE'));
+    assert.equal(calls, 1);
+    client.threadGoalRevisionSet = async () => { calls++; throw { code: -32010,
+      message: 'PRIVATE uncertain native outcome' }; };
+    await assert.rejects(new CodexService(client).setThreadGoalWithRevision(threadId, revision,
+      { status: 'paused' }), { category: 'mutation_unconfirmed' });
+    assert.equal(calls, 2);
   });
 
   test('bounded CAS timeout leaves native RPC alive and denies a late success as unconfirmed', async () => {

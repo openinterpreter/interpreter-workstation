@@ -1,12 +1,16 @@
 import { match } from "ts-pattern";
+import { createHash } from 'node:crypto';
+import { nativeTerminalOwnerObserved } from '../../../server/utils/nativeTurnOwnership';
 import { nativeCommandSessionSnapshot, nativeTurnReceipt } from './native-turn-receipt';
 import { boundNativeTerminalStatus, validateNativeTerminalRequest, type NativeTerminalStatusRequest,
   type NativeTerminalStatusResponse } from './native-terminal-status';
 import { ManagedGoalDocumentError, validateGoalDocumentInput, verifyGoalDocument, type ThreadGoalDocumentGetResponse,
+  type ThreadGoalDocumentCreateParams, type ThreadGoalDocumentCreateResponse,
   type ThreadGoalDocumentSetParams, type ThreadGoalDocumentSetResponse } from './goal-document';
-import { GoalMutationUnconfirmedError, GoalRevisionUnavailableError, goalCasExpectedParams,
+import { GoalMutationUnconfirmedError, GoalRevisionConflictError, GoalRevisionUnavailableError, goalCasExpectedParams,
   verifyThreadGoalRevision, type ThreadGoalRevision } from './goal-revision';
 import { JSONRPCErrorException } from "json-rpc-2.0";
+import { isSubagentDirectInputRefusal, SubagentDirectInputError } from './subagent-input';
 import type { v2 } from "../../../server/handlers/codex-generated-types/index";
 import type { JsonValue } from "../../../server/handlers/codex-generated-types/serde_json/JsonValue";
 import {
@@ -46,8 +50,15 @@ const NATIVE_CUSTODY_PHASE_DEADLINE_MS = 12_000;
 // with an eight-second HTTP deadline; this cannot diagnose a request that
 // never reaches this route. An expired native RPC may still complete later.
 export const NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS = 3_000;
-export const NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS = 6_000;
-const NATIVE_CUSTODY_GLOBAL_MAX_DEADLINE_MS = 30_000;
+// The global inspection reads every saved thread's queue twice, and the
+// runtime answers those reads one after another. One pass over about ninety
+// threads takes five seconds, so a budget sized for a handful of threads can
+// never finish on a host with many. Callers of this route wait longer than
+// this budget.
+export const NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS = 40_000;
+const NATIVE_CUSTODY_GLOBAL_MAX_DEADLINE_MS = 60_000;
+/** Queue reads in flight at once during one global inspection pass. */
+const NATIVE_CUSTODY_GLOBAL_QUEUE_CONCURRENCY = 16;
 
 export type NativeCustodyPhase = 'thread_read' | 'queue_read' | 'loaded_list' | 'thread_list'
   | 'terminal_status'
@@ -61,6 +72,19 @@ export class NativeCustodyPhaseError extends Error {
   ) {
     super('Native custody inspection unavailable.');
     this.name = 'NativeCustodyPhaseError';
+  }
+}
+
+/** Fixed, content-free categories for failures after a native RPC returned. */
+export class NativeGlobalInventoryError extends Error {
+  constructor(
+    readonly category: 'invalid_page' | 'invalid_identifiers' | 'invalid_cursor'
+      | 'loaded_missing' | 'inventory_changed' | 'queue_changed',
+    message: string,
+    readonly missingLoadedThreadDigests?: readonly string[],
+  ) {
+    super(message);
+    this.name = 'NativeGlobalInventoryError';
   }
 }
 
@@ -195,6 +219,39 @@ export const THREAD_LIST_DEFAULTS: v2.ThreadListParams = {
   archived: false,
 };
 
+export class SavedThreadIdentityError extends Error {
+  constructor() { super('Exact durable saved-thread identity unavailable.'); }
+}
+
+/** The runtime answered that it has no such thread. */
+export class ThreadNotFoundError extends Error {
+  constructor(readonly threadId: string) { super('Thread not found'); this.name = 'ThreadNotFoundError'; }
+}
+
+/** A thread without its turn history: enough to check it exists and where it works. */
+export type ThreadShell = {
+  id: string;
+  cwd: string;
+  status: v2.ThreadStatus['type'];
+  parentThreadId: string | null;
+  ephemeral: boolean;
+  archived?: boolean;
+};
+
+const THREAD_SHELL_DEADLINE_MS = 10_000;
+const TURN_SCAN_PAGE_SIZE = 20;
+const TURN_SCAN_MAX_PAGES = 1_000;
+
+/** A JSON-RPC error answered by the runtime itself (it has a numeric code)
+ * saying the thread does not exist or cannot be addressed. */
+function isThreadNotFoundError(error: unknown): boolean {
+  const code = error instanceof JSONRPCErrorException ? error.code
+    : isRecord(error) ? error.code : undefined;
+  if (typeof code !== 'number') return false;
+  const message = extractJsonRpcErrorMessage(error) ?? '';
+  return /thread not found|no rollout found|invalid thread id/i.test(message);
+}
+
 export type StreamEvent =
   | { kind: "thread"; threadId: string }
   | { kind: "turn"; threadId: string; turnId: string; status: v2.TurnStatus }
@@ -233,6 +290,35 @@ type ResumeThreadOptions = {
   config?: Record<string, JsonValue> | null;
   /** Only after bounded native custody proves this saved thread is not loaded. */
   coldShellPolicy?: boolean;
+  /** The config's shell policy names the thread's own existing caller. It is
+   * applied only when the exact thread is verified not loaded; a loaded thread
+   * keeps its live shell environment. */
+  callerBoundShellPolicy?: boolean;
+};
+
+/** Whether a live thread owns an active Goal after it was resumed.
+ * - `loaded`: the thread was not loaded and has now been loaded; the runtime
+ *   starts the Goal's continuation turn once the thread is idle.
+ * - `already_loaded`: the thread was loaded and idle; the runtime applies the
+ *   status change itself and continues the Goal.
+ * - `already_running`: a turn was running; no other turn is started and the
+ *   Goal continues after it.
+ * - `not_started`: the thread could not be confirmed loaded. The Goal is
+ *   active, but nothing runs it until the thread is loaded. */
+export type GoalContinuation = 'loaded' | 'already_loaded' | 'already_running' | 'not_started';
+
+type ExistingThreadResumeOptions = {
+  threadId: string;
+  modelProvider?: string | null;
+  model?: string | null;
+  cwd?: string | null;
+  config?: Record<string, JsonValue> | null;
+  baseInstructions?: string | null;
+  developerInstructions?: string | null;
+  additionalWritableRoots?: string[];
+  coldShellPolicy?: boolean;
+  /** Keep the shell policy when the exact thread is verified not loaded. */
+  unloadedShellPolicy?: boolean;
 };
 
 type ForkThreadOptions = ResumeThreadOptions & {
@@ -401,6 +487,8 @@ export type CodexClient = {
   threadList(params?: v2.ThreadListParams): Promise<v2.ThreadListResponse>;
   threadLoadedList(params?: v2.ThreadLoadedListParams): Promise<v2.ThreadLoadedListResponse>;
   threadRead(params: v2.ThreadReadParams): Promise<v2.ThreadReadResponse>;
+  threadTurnsList(params: v2.ThreadTurnsListParams): Promise<v2.ThreadTurnsListResponse>;
+  threadSupervisorSnapshot(threadId: string): Promise<v2.Thread>;
   threadBackgroundTerminalsStatus?(params: Omit<NativeTerminalStatusRequest, 'terminalGeneration'>): Promise<NativeTerminalStatusResponse>;
   threadBackgroundTerminalsList?(params: { threadId: string; cursor?: string | null; limit?: number | null }): Promise<{
     data: Array<{ itemId: string; turnId?: string | null; nativeProcessId?: string | null;
@@ -417,6 +505,7 @@ export type CodexClient = {
   threadGoalRevisionGet?(params: v2.ThreadGoalGetParams): Promise<v2.ThreadGoalGetResponse>;
   threadGoalRevisionSet?(params: v2.ThreadGoalSetParams): Promise<v2.ThreadGoalSetResponse>;
   threadGoalDocumentGet?(params: { threadId: string }): Promise<ThreadGoalDocumentGetResponse>;
+  threadGoalDocumentCreate?(params: ThreadGoalDocumentCreateParams): Promise<ThreadGoalDocumentCreateResponse>;
   threadGoalDocumentSet?(params: ThreadGoalDocumentSetParams): Promise<ThreadGoalDocumentSetResponse>;
   threadGoalDocumentRevisionSet?(params: ThreadGoalDocumentSetParams): Promise<ThreadGoalDocumentSetResponse>;
   threadGoalClear(params: v2.ThreadGoalClearParams): Promise<v2.ThreadGoalClearResponse>;
@@ -459,6 +548,34 @@ function withElectronRunAsNodeConfig(
 function configForExistingThread(config?: Record<string, JsonValue> | null): Record<string, JsonValue> {
   const { shell_environment_policy: _retainedShellPolicy, ...rest } = config ?? {};
   return rest;
+}
+
+/** A fresh app CLI shell carrier for a saved thread that is not loaded. The
+ * provider registers its caller before returning; `rollback` restores the
+ * prior caller if the resume fails and `commit` retires it after success. */
+export type UnloadedThreadCarrier = {
+  shellPolicy: JsonValue;
+  commit(): void;
+  rollback(): void;
+};
+
+export type UnloadedThreadCarrierProvider = (request: {
+  service: CodexService;
+  threadId: string;
+  /** Working directory reported by the saved native thread. */
+  cwd: string;
+}) => Promise<UnloadedThreadCarrier>;
+
+let unloadedThreadCarrierProvider: UnloadedThreadCarrierProvider | null = null;
+
+/** Register the carrier used when input resumes an unloaded saved thread.
+ * Returns a function that restores the previous registration. */
+export function setUnloadedThreadCarrierProvider(
+  provider: UnloadedThreadCarrierProvider | null,
+): () => void {
+  const previous = unloadedThreadCarrierProvider;
+  unloadedThreadCarrierProvider = provider;
+  return () => { unloadedThreadCarrierProvider = previous; };
 }
 
 export function extractNotificationThreadId(notification: AppServerNotification) {
@@ -544,16 +661,55 @@ export function extractNotificationTurnId(notification: AppServerNotification) {
     .otherwise(() => null);
 }
 
+export type TurnEndedOutcome = "completed" | "failed" | "interrupted";
+export type TurnEndedEvent = {
+  threadId: string;
+  turnId: string;
+  outcome: TurnEndedOutcome;
+  /** Final assistant message text of the turn, or "" when none was seen. */
+  summary: string;
+};
+const turnEndedListeners = new Set<(event: TurnEndedEvent) => void>();
+
+/** Observe every native turn ending, independent of which path started it.
+ * Listeners survive a runtime restart because they are process-wide. */
+export function onTurnEnded(listener: (event: TurnEndedEvent) => void): () => void {
+  turnEndedListeners.add(listener);
+  return () => { turnEndedListeners.delete(listener); };
+}
+
+export function turnEndedOutcome(status: unknown): TurnEndedOutcome | null {
+  return status === "completed" || status === "failed" || status === "interrupted" ? status : null;
+}
+
+/** The text of the last agent message among native turn items, read defensively. */
+export function lastAgentMessageText(items: unknown): string {
+  if (!Array.isArray(items)) return "";
+  for (let index = items.length - 1; index >= 0; index--) {
+    const item = items[index] as { type?: unknown; text?: unknown } | null;
+    if (item && typeof item === "object" && item.type === "agentMessage" && typeof item.text === "string") {
+      return item.text;
+    }
+  }
+  return "";
+}
+
+const MAX_TRACKED_AGENT_MESSAGES = 256;
+
 export class CodexService {
   private readonly activeTurns = new Map<string, string | null>();
   private readonly provisionedProviders = new Set<string>();
   private reservedLocalOverridesCleared = false;
   private reservedLocalOverrideCleanup: Promise<void> | null = null;
+  /** Last completed agent message per live turn, for turn-ended listeners. A
+   * `turn/completed` notification does not necessarily carry its items. */
+  private readonly lastAgentMessages = new Map<string, string>();
 
   constructor(private readonly client: CodexClient) {
     // Native OIX features can start turns without going through runTurn(), so
     // keep their terminal failures visible in the service journal as well.
     this.client.subscribe((notification) => {
+      if (turnEndedListeners.size > 0) this.observeTurnEnding(notification);
       if (
         notification.method === SERVER_METHOD.streamError
         && !notification.params.willRetry
@@ -574,6 +730,37 @@ export class CodexService {
     });
   }
 
+  private observeTurnEnding(notification: AppServerNotification): void {
+    if (notification.method === SERVER_METHOD.itemCompleted) {
+      const params = notification.params as { threadId?: unknown; turnId?: unknown; item?: unknown };
+      const text = lastAgentMessageText([params.item]);
+      if (text && typeof params.threadId === "string" && typeof params.turnId === "string") {
+        const key = `${params.threadId}:${params.turnId}`;
+        this.lastAgentMessages.delete(key);
+        this.lastAgentMessages.set(key, text);
+        if (this.lastAgentMessages.size > MAX_TRACKED_AGENT_MESSAGES) {
+          const oldest = this.lastAgentMessages.keys().next().value;
+          if (oldest !== undefined) this.lastAgentMessages.delete(oldest);
+        }
+      }
+      return;
+    }
+    if (notification.method !== SERVER_METHOD.turnCompleted) return;
+    const { threadId, turn } = notification.params as { threadId?: unknown;
+      turn?: { id?: unknown; status?: unknown; items?: unknown } };
+    if (typeof threadId !== "string" || !turn || typeof turn.id !== "string") return;
+    const key = `${threadId}:${turn.id}`;
+    const tracked = this.lastAgentMessages.get(key) ?? "";
+    this.lastAgentMessages.delete(key);
+    const outcome = turnEndedOutcome(turn.status);
+    if (!outcome) return;
+    const event: TurnEndedEvent = { threadId, turnId: turn.id, outcome,
+      summary: lastAgentMessageText(turn.items) || tracked };
+    for (const listener of turnEndedListeners) {
+      try { listener(event); } catch (error) { console.error("[codex-native-turn] turn-ended listener failed", error); }
+    }
+  }
+
   /** All ordinary ingress converges on the same native turn/start or
    * turn/steer submission. This is an RPC receipt, not durable admission:
    * durable producers must still reconcile their client ID in native history.
@@ -581,21 +768,40 @@ export class CodexService {
   private async submitNativeInput(
     input: { kind: 'start'; params: Parameters<CodexClient['startTurn']>[0];
       existingThread?: { config?: Record<string, JsonValue>;
+        model?: string | null; modelProvider?: string | null;
+        baseInstructions?: string; developerInstructions?: string;
+        additionalWritableRoots?: string[];
+        /** The config's shell policy names a caller this producer has bound. */
+        callerBoundShellPolicy?: boolean;
+        /** UI observers already own the null reservation before turn/start. */
+        preReserved?: boolean;
         onPhase?: (phase: 'resume' | 'start') => void } }
       | { kind: 'steer'; params: Parameters<CodexClient['steerTurn']>[0] },
   ): Promise<{ turnId: string; status?: v2.TurnStatus }> {
     if (input.kind === 'start') {
       const { threadId } = input.params;
       if (input.existingThread) {
-        await this.reconcileTerminalTurn(threadId);
-        this.assertNoActiveTurn(threadId);
-        this.activeTurns.set(threadId, null);
+        if (input.existingThread.preReserved) {
+          if (!this.activeTurns.has(threadId) || this.activeTurns.get(threadId) !== null) {
+            throw new Error('Existing input reservation changed before admission');
+          }
+        } else {
+          await this.reconcileTerminalTurn(threadId);
+          this.assertNoActiveTurn(threadId);
+          this.activeTurns.set(threadId, null);
+        }
       }
       try {
         if (input.existingThread) {
           input.existingThread.onPhase?.('resume');
-          await this.resumeExistingInputThread({ threadId, modelProvider: null, model: null,
-            cwd: input.params.cwd, config: input.existingThread.config });
+          await this.resumeExistingThreadForInput({ threadId,
+            modelProvider: input.existingThread.modelProvider ?? null,
+            model: input.existingThread.model ?? null,
+            cwd: input.params.cwd, config: input.existingThread.config,
+            baseInstructions: input.existingThread.baseInstructions,
+            developerInstructions: input.existingThread.developerInstructions,
+            additionalWritableRoots: input.existingThread.additionalWritableRoots },
+          input.existingThread.callerBoundShellPolicy === true);
           input.existingThread.onPhase?.('start');
         }
         const turn = await this.client.startTurn(input.params);
@@ -603,7 +809,7 @@ export class CodexService {
         return { turnId: turn.id, status: turn.status };
       } catch (error) {
         if (this.activeTurns.get(threadId) === null) this.activeTurns.delete(threadId);
-        throw error;
+        throw input.existingThread ? await this.subagentInputRefusal(error, threadId) : error;
       }
     }
     const response = await this.client.steerTurn(input.params);
@@ -615,17 +821,7 @@ export class CodexService {
    * inputs. Producers choose their own auth and durable custody; none may
    * replace a loaded thread's shell scope or silently change its identity.
    */
-  private async resumeExistingInputThread(options: {
-    threadId: string;
-    modelProvider?: string | null;
-    model?: string | null;
-    cwd?: string | null;
-    config?: Record<string, JsonValue> | null;
-    baseInstructions?: string | null;
-    developerInstructions?: string | null;
-    additionalWritableRoots?: string[];
-    coldShellPolicy?: boolean;
-  }): Promise<string> {
+  private async resumeExistingInputThread(options: ExistingThreadResumeOptions): Promise<string> {
     if (options.coldShellPolicy) {
       const custody = await this.readNativeCustody(options.threadId);
       const global = await this.readGlobalNativeCustody();
@@ -636,13 +832,99 @@ export class CodexService {
         throw new Error('Cold caller bind requires an unloaded idle thread and empty native queues');
       }
     }
+    if (options.unloadedShellPolicy) {
+      // Only a thread with no live shell environment may receive new shell
+      // keys. Its own queued input does not matter: it is what resumes it.
+      const custody = await this.readNativeCustody(options.threadId);
+      if (custody.status !== 'notLoaded' || !options.config?.shell_environment_policy) {
+        throw new Error('Thread is loaded; its shell environment is kept');
+      }
+    }
     const resumedId = await this.client.resumeThread(
       options.threadId, options.modelProvider, options.model, options.cwd,
-      options.coldShellPolicy ? options.config : configForExistingThread(options.config), options.baseInstructions,
+      options.coldShellPolicy || options.unloadedShellPolicy
+        ? options.config : configForExistingThread(options.config), options.baseInstructions,
       options.developerInstructions, options.additionalWritableRoots,
     );
     if (resumedId !== options.threadId) throw new Error('Existing thread identity changed');
     return resumedId;
+  }
+
+  /** Resume an existing thread before admitting input to it. A loaded thread
+   * keeps its original shell scope. A saved thread that is not loaded has no
+   * live shell environment, so it is resumed with a fresh app CLI carrier:
+   * the producer's own bound policy, or one from the registered provider.
+   * When the load state cannot be read, the ordinary resume is used.
+   */
+  private async resumeExistingThreadForInput(
+    options: ExistingThreadResumeOptions,
+    callerBoundShellPolicy = false,
+    unloaded?: { cwd: string },
+  ): Promise<string> {
+    const observed = unloaded ?? await this.observeUnloadedThread(options.threadId);
+    if (!observed) return this.resumeExistingInputThread(options);
+    // A carrier is an improvement, never a condition for the turn: when one
+    // cannot be given, the thread resumes exactly as it did before. The
+    // runtime's sub-agent refusal is final; a second resume would be refused again.
+    // Such a thread then runs without the app CLI until it is next loaded, so
+    // each fallback is logged with its cause (never the error text).
+    const withoutCarrier = (cause: string) => {
+      console.warn('[Unloaded thread carrier]', JSON.stringify({ threadId: options.threadId,
+        carrier: 'not_given', cause }));
+      return this.resumeExistingInputThread(options);
+    };
+    if (callerBoundShellPolicy && options.config?.shell_environment_policy) {
+      try {
+        return await this.resumeExistingInputThread({ ...options, unloadedShellPolicy: true });
+      } catch (error) {
+        if (isSubagentDirectInputRefusal(error)) throw error;
+        return withoutCarrier('caller_policy_rejected');
+      }
+    }
+    const provider = unloadedThreadCarrierProvider;
+    if (!provider) return this.resumeExistingInputThread(options);
+    let carrier: UnloadedThreadCarrier;
+    try {
+      carrier = await provider({ service: this, threadId: options.threadId, cwd: observed.cwd });
+    } catch {
+      return withoutCarrier('carrier_refused');
+    }
+    let resumedId: string;
+    try {
+      resumedId = await this.resumeExistingInputThread({ ...options,
+        config: { ...configForExistingThread(options.config), shell_environment_policy: carrier.shellPolicy },
+        unloadedShellPolicy: true });
+    } catch (error) {
+      carrier.rollback();
+      if (isSubagentDirectInputRefusal(error)) throw error;
+      return withoutCarrier('carrier_resume_rejected');
+    }
+    carrier.commit();
+    return resumedId;
+  }
+
+  private async observeUnloadedThread(threadId: string): Promise<{ cwd: string } | null> {
+    try {
+      const { thread } = await this.client.threadRead({ threadId, includeTurns: false });
+      return thread.id === threadId && thread.status.type === 'notLoaded' ? { cwd: thread.cwd } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** The runtime's own sub-agent input refusal, with the parent thread when it
+   * can be read; every other failure is returned unchanged. The thread is read
+   * only after such a refusal, so ordinary input makes no extra request. */
+  private async subagentInputRefusal(error: unknown, threadId: string): Promise<unknown> {
+    if (error instanceof SubagentDirectInputError || !isSubagentDirectInputRefusal(error)) return error;
+    let parentThreadId: string | null = null;
+    try {
+      const { thread } = await this.client.threadRead({ threadId, includeTurns: false });
+      if (thread.id === threadId && typeof thread.parentThreadId === 'string' && thread.parentThreadId) {
+        parentThreadId = thread.parentThreadId;
+      }
+    } catch { /* The refusal stands without a parent ID. */ }
+    return new SubagentDirectInputError(threadId, parentThreadId);
   }
 
   private assertNoActiveTurn(threadId: string): void {
@@ -661,17 +943,10 @@ export class CodexService {
     const activeTurnId = this.activeTurns.get(threadId);
     if (!activeTurnId) return; // A turn still starting cannot be reconciled.
     try {
-      const { thread } = await this.client.threadRead({ threadId, includeTurns: true });
-      const last = thread.turns[thread.turns.length - 1];
-      const owned = thread.turns.find((turn) => turn.id === activeTurnId);
-      if (
-        thread.id === threadId &&
-        thread.status.type === "idle" &&
-        last && (last.status === "completed" || last.status === "failed" || last.status === "interrupted") &&
-        owned &&
-        (owned.status === "completed" || owned.status === "failed" || owned.status === "interrupted") &&
-        this.activeTurns.get(threadId) === activeTurnId
-      ) this.activeTurns.delete(threadId);
+      const terminal = await nativeTerminalOwnerObserved(threadId, activeTurnId,
+        () => this.client.threadRead({ threadId, includeTurns: false }),
+        params => this.client.threadTurnsList(params));
+      if (terminal && this.activeTurns.get(threadId) === activeTurnId) this.activeTurns.delete(threadId);
     } catch {
       // A failed or ambiguous authoritative read must not clear the guard.
     }
@@ -791,12 +1066,22 @@ export class CodexService {
       };
     }
 
-    return this.resumeExistingInputThread({
+    const existing = {
       threadId: options.threadId,
       modelProvider: options.modelProvider,
       model: options.model,
       cwd: options.cwd,
       config: runConfig,
+    };
+    // Loading a saved thread fixes its shell environment for every later turn,
+    // including the runtime's own Goal continuations. Give it the existing
+    // caller's policy when it is not loaded; never mint a carrier here.
+    if (options.callerBoundShellPolicy && !options.coldShellPolicy &&
+        isJsonObject(runConfig.shell_environment_policy)) {
+      return this.resumeExistingThreadForInput(existing, true);
+    }
+    return this.resumeExistingInputThread({
+      ...existing,
       coldShellPolicy: options.coldShellPolicy,
     });
   }
@@ -850,8 +1135,7 @@ export class CodexService {
       };
     }
 
-    const threadId = await this.resolveThread(
-      options.threadId,
+    const threadId = options.threadId ?? await this.resolveThread(
       options.model,
       options.modelProvider,
       options.cwd,
@@ -1099,7 +1383,14 @@ export class CodexService {
         effort: options.effort,
         summary: options.summary,
         additionalWritableRoots: options.additionalWritableRoots,
-      } });
+      }, ...(options.threadId ? { existingThread: {
+        preReserved: true, config: runConfig,
+        model: options.model, modelProvider: options.modelProvider,
+        baseInstructions: options.baseInstructions,
+        developerInstructions: options.developerInstructions,
+        additionalWritableRoots: options.additionalWritableRoots,
+        callerBoundShellPolicy: Boolean(runConfig.shell_environment_policy),
+      } } : {}) });
 
       turnId = turn.turnId;
       turnStarted = true;
@@ -1171,16 +1462,22 @@ export class CodexService {
           ? await read(verify ? 'verify_loaded_list' : 'loaded_list',
             () => this.client.threadLoadedList({ cursor, limit: 100 }))
           : await read(verify ? 'verify_thread_list' : 'thread_list',
-            () => this.client.threadList({ sourceKinds, modelProviders: [], archived: false, cursor, limit: 100 }));
-        if (!Array.isArray(page.data) || page.data.length > 100) throw new Error('Invalid native inventory page');
+            // Custody must enumerate the durable state DB, including threads
+            // whose rollout is absent or not yet indexed. The ordinary list
+            // can scan/repair rollouts and omit DB rows; it is not a complete
+            // inventory for a guarded host transition.
+            () => this.client.threadList({ sourceKinds, modelProviders: [], archived: false,
+              useStateDbOnly: true, cursor, limit: 100 }));
+        if (!Array.isArray(page.data) || page.data.length > 100)
+          throw new NativeGlobalInventoryError('invalid_page', 'Invalid native inventory page');
         ids.push(...page.data.map((item) => loaded ? item as string : (item as v2.Thread).id));
         if (ids.length > 500 || new Set(ids).size !== ids.length ||
             ids.some((id) => !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id))) {
-          throw new Error('Native inventory bound or identifiers invalid');
+          throw new NativeGlobalInventoryError('invalid_identifiers', 'Native inventory bound or identifiers invalid');
         }
         cursor = page.nextCursor;
         if (cursor !== null && (typeof cursor !== 'string' || seenCursors.has(cursor))) {
-          throw new Error('Invalid native inventory cursor');
+          throw new NativeGlobalInventoryError('invalid_cursor', 'Invalid native inventory cursor');
         }
         if (cursor) seenCursors.add(cursor);
       } while (cursor);
@@ -1188,22 +1485,36 @@ export class CodexService {
     };
     const loadedBefore = await collect(true);
     const threadIds = await collect(false);
-    if (loadedBefore.some((id) => !threadIds.includes(id))) throw new Error('Loaded native thread missing from inventory');
-    const rows = [];
-    for (const threadId of threadIds) {
+    const missingLoadedIds = loadedBefore.filter((id) => !threadIds.includes(id));
+    if (missingLoadedIds.length)
+      throw new NativeGlobalInventoryError('loaded_missing', 'Loaded native thread missing from inventory',
+        missingLoadedIds.map((id) => createHash('sha256').update(id).digest('hex')));
+    // A host can hold hundreds of saved threads. Reading their queues one at
+    // a time cannot finish inside the single inspection budget, so each pass
+    // runs a bounded number of reads at once. Results keep inventory order,
+    // and the first failed read still fails the whole inspection.
+    const inBatches = async <T, R>(items: readonly T[], operation: (item: T) => Promise<R>): Promise<R[]> => {
+      const results: R[] = [];
+      for (let index = 0; index < items.length; index += NATIVE_CUSTODY_GLOBAL_QUEUE_CONCURRENCY) {
+        results.push(...await Promise.all(
+          items.slice(index, index + NATIVE_CUSTODY_GLOBAL_QUEUE_CONCURRENCY).map(operation)));
+      }
+      return results;
+    };
+    const rows = await inBatches(threadIds, async (threadId) => {
       const queuedSubmissions = await read('global_queue_read', () => this.readNativeQueuedSubmissions(threadId));
-      rows.push({ threadId, queuedSubmissionCount: queuedSubmissions.length, queuedSubmissions });
-    }
+      return { threadId, queuedSubmissionCount: queuedSubmissions.length, queuedSubmissions };
+    });
     const [loadedAfter, threadIdsAfter] = await Promise.all([collect(true, true), collect(false, true)]);
     if (JSON.stringify(loadedBefore) !== JSON.stringify(loadedAfter) ||
         JSON.stringify(threadIds) !== JSON.stringify(threadIdsAfter)) {
-      throw new Error('Native inventory changed during inspection');
+      throw new NativeGlobalInventoryError('inventory_changed', 'Native inventory changed during inspection');
     }
-    for (const row of rows) {
-      if (JSON.stringify(row.queuedSubmissions) !==
-          JSON.stringify(await read('verify_queue_read', () => this.readNativeQueuedSubmissions(row.threadId)))) {
-        throw new Error('Native queue changed during inspection');
-      }
+    const verified = await inBatches(rows, (row) =>
+      read('verify_queue_read', () => this.readNativeQueuedSubmissions(row.threadId)));
+    if (rows.some((row, index) =>
+      JSON.stringify(row.queuedSubmissions) !== JSON.stringify(verified[index]))) {
+      throw new NativeGlobalInventoryError('queue_changed', 'Native queue changed during inspection');
     }
     // This is an enumerated snapshot, not an atomic freeze: the operator must
     // repeat it at a quiescent boundary immediately before the service stop.
@@ -1217,6 +1528,106 @@ export class CodexService {
     return result.thread;
   }
 
+  /** The thread's identity, workspace and status without any turn history.
+   * Rejects with ThreadNotFoundError only when the runtime answers that it has
+   * no such thread; a timeout or transport failure rejects with another error. */
+  async readThreadShell(threadId: string, deadlineMs = THREAD_SHELL_DEADLINE_MS): Promise<ThreadShell> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let thread: v2.Thread;
+    try {
+      ({ thread } = await Promise.race([
+        this.client.threadRead({ threadId, includeTurns: false }),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Native thread read timed out')), deadlineMs);
+        }),
+      ]));
+    } catch (error) {
+      throw isThreadNotFoundError(error) ? new ThreadNotFoundError(threadId) : error;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    if (!thread || thread.id !== threadId) throw new Error('Native thread identity mismatch');
+    const archived = (thread as v2.Thread & { archived?: unknown }).archived;
+    return {
+      id: thread.id,
+      cwd: thread.cwd,
+      status: thread.status?.type,
+      parentThreadId: typeof thread.parentThreadId === 'string' && thread.parentThreadId ? thread.parentThreadId : null,
+      ephemeral: thread.ephemeral === true,
+      ...(typeof archived === 'boolean' ? { archived } : {}),
+    };
+  }
+
+  /** Visit a thread's turns newest first, one page at a time, with their full
+   * items. `visit` returns true to stop; no further page is read after that.
+   * Never reads the whole history in one request. */
+  async scanTurnsNewestFirst(threadId: string, visit: (turn: v2.Turn) => boolean,
+    pageSize = TURN_SCAN_PAGE_SIZE): Promise<void> {
+    let cursor: string | null = null;
+    for (let page = 0; page < TURN_SCAN_MAX_PAGES; page++) {
+      const result: v2.ThreadTurnsListResponse = await this.client.threadTurnsList({ threadId, limit: pageSize,
+        sortDirection: 'desc', itemsView: 'full', ...(cursor ? { cursor } : {}) });
+      if (!result || !Array.isArray(result.data) || result.data.length > pageSize ||
+          result.data.some(turn => turn.itemsView !== 'full')) {
+        throw new Error('Invalid native turn page');
+      }
+      for (const turn of result.data) if (visit(turn)) return;
+      if (!result.nextCursor) return;
+      if (result.nextCursor === cursor || !result.data.length) throw new Error('Native turn pagination did not advance');
+      cursor = result.nextCursor;
+    }
+    throw new Error('Native turn history exceeds the scan bound');
+  }
+
+  /** One page of a thread's newest turns before `cursor`, oldest first, with
+   * the thread's metadata and current status. Reads the metadata without
+   * turns plus a single bounded turn page; never the whole history.
+   * `nextCursor` is the runtime's opaque cursor for the next older page. */
+  async readThreadPage(threadId: string, options: { limit: number; cursor?: string }):
+    Promise<{ thread: v2.Thread; nextCursor: string | null }> {
+    const [{ thread }, page] = await Promise.all([
+      this.client.threadRead({ threadId, includeTurns: false }),
+      this.client.threadTurnsList({ threadId, limit: options.limit, sortDirection: 'desc', itemsView: 'full',
+        ...(options.cursor ? { cursor: options.cursor } : {}) }),
+    ]);
+    if (!thread || thread.id !== threadId) throw new Error('Native thread identity mismatch');
+    if (!page || !Array.isArray(page.data) || page.data.length > options.limit ||
+        page.data.some(turn => turn.itemsView !== 'full')) {
+      throw new Error('Invalid native turn page');
+    }
+    return { thread: { ...thread, turns: [...page.data].reverse() }, nextCursor: page.nextCursor ?? null };
+  }
+
+  /** Exact durable saved-thread binding for a caller that already has access
+   * to the ordinary local agent HTTP surface. Never hydrate turn history or
+   * use the observed active/idle status to decide whether input is admissible. */
+  async readSavedThreadIdentity(threadId: string): Promise<{
+    threadId: string; cwd: string; path: string; archived: false;
+  }> {
+    const { thread } = await this.client.threadRead({ threadId, includeTurns: false });
+    const sessionPath = thread.path;
+    const cwd = thread.cwd;
+    const archived = (thread as v2.Thread & { archived?: unknown }).archived;
+    if (thread.id !== threadId || !Array.isArray(thread.turns) || thread.turns.length !== 0 ||
+        (archived !== undefined && archived !== false) ||
+        !['notLoaded', 'idle', 'active'].includes(thread.status?.type) ||
+        thread.ephemeral === true || typeof sessionPath !== 'string' ||
+        !/^\/workspace\/home\/(?:sessions|\.codex\/sessions)\/.+\.jsonl$/.test(sessionPath) ||
+        !sessionPath.endsWith(`-${threadId}.jsonl`) || sessionPath.split('/').includes('..') ||
+        typeof cwd !== 'string' || !cwd.startsWith('/workspace/') || cwd.split('/').includes('..')) {
+      throw new SavedThreadIdentityError();
+    }
+    // A native thread archived out of the active session tree cannot satisfy
+    // the exact durable active-session path predicate above.
+    return { threadId, cwd, path: sessionPath, archived: false };
+  }
+
+  /** A bounded saved-turn shell for supervisor observation. Never hydrate the
+   * full rollout or infer command/process liveness from an unloaded item view. */
+  async readSupervisorThreadSnapshot(threadId: string): Promise<v2.Thread> {
+    return this.client.threadSupervisorSnapshot(threadId);
+  }
+
   async readNativeCustody(
     threadId: string,
     deadlineMs = NATIVE_CUSTODY_PHASE_DEADLINE_MS,
@@ -1226,17 +1637,50 @@ export class CodexService {
       throw new Error('Invalid native custody deadline.');
     }
     onPhase?.('thread_read', 'started');
-    const thread = await nativeCustodyPhase('thread_read', () => this.readThread(threadId), deadlineMs,
+    // A saved thread may contain hundreds of megabytes of prior turns. Read
+    // only its status and the latest full turn; never hydrate its history just
+    // to inspect a current command. A missing/mismatched page is unknown, not
+    // evidence that the thread has no active work.
+    const readLatest = async () => {
+      const { thread } = await this.client.threadRead({ threadId, includeTurns: false });
+      if (thread.id !== threadId || thread.turns.length !== 0) throw new Error('Invalid native thread metadata');
+      const page = await this.client.threadTurnsList({ threadId, limit: 1,
+        sortDirection: 'desc', itemsView: 'full' });
+      if (page.data.length > 1 || page.data.some(turn => turn.itemsView !== 'full')) {
+        throw new Error('Invalid latest native turn page');
+      }
+      if (page.data.length === 0 && page.nextCursor !== null) throw new Error('Incomplete native turn page');
+      if (page.data.length === 0 && thread.status.type === 'active') {
+        throw new Error('Active native thread without a saved turn');
+      }
+      return { thread, lastTurn: page.data[0] };
+    };
+    const initial = await nativeCustodyPhase('thread_read', readLatest, deadlineMs,
       (phase, status) => onPhase?.(phase, status === 'completed' ? 'late_completed' : 'late_failed'));
     onPhase?.('thread_read', 'completed');
-    if (thread.id !== threadId) throw new Error('Native thread ID mismatch');
     onPhase?.('queue_read', 'started');
     const submissions = await nativeCustodyPhase('queue_read',
       () => this.readNativeQueuedSubmissions(threadId), deadlineMs,
       (phase, status) => onPhase?.(phase, status === 'completed' ? 'late_completed' : 'late_failed'));
     onPhase?.('queue_read', 'completed');
-    const lastTurn = thread.turns[thread.turns.length - 1];
-    const status = thread.status;
+    // A turn or queue may advance during observation. Do not turn a stale
+    // idle/empty snapshot into an affirmative installation fence.
+    const checked = await nativeCustodyPhase('thread_read', readLatest, deadlineMs,
+      (phase, status) => onPhase?.(phase, status === 'completed' ? 'late_completed' : 'late_failed'));
+    if (JSON.stringify(initial.thread.status) !== JSON.stringify(checked.thread.status) ||
+        initial.lastTurn?.id !== checked.lastTurn?.id ||
+        initial.lastTurn?.status !== checked.lastTurn?.status ||
+        JSON.stringify(initial.lastTurn?.items) !== JSON.stringify(checked.lastTurn?.items)) {
+      throw new NativeCustodyPhaseError('thread_read', 'native_unavailable');
+    }
+    const verifiedQueue = await nativeCustodyPhase('queue_read',
+      () => this.readNativeQueuedSubmissions(threadId), deadlineMs,
+      (phase, status) => onPhase?.(phase, status === 'completed' ? 'late_completed' : 'late_failed'));
+    if (JSON.stringify(submissions) !== JSON.stringify(verifiedQueue)) {
+      throw new NativeCustodyPhaseError('queue_read', 'native_unavailable');
+    }
+    const lastTurn = checked.lastTurn;
+    const status = checked.thread.status;
     return {
       threadId,
       status: status.type,
@@ -1261,26 +1705,38 @@ export class CodexService {
       throw new Error('Invalid exact submission inspection');
     }
     onPhase?.('thread_read', 'started');
-    const thread = await nativeCustodyPhase('thread_read', () => this.readThread(threadId), deadlineMs,
+    const matches: Array<{ turnId: string; userItemId: string; status: string;
+      commandSessions: ReturnType<typeof nativeTurnReceipt>['commandSessions'] }> = [];
+    const expiresAt = Date.now() + deadlineMs;
+    const scan = async () => {
+      // A full thread/read can hydrate hundreds of megabytes. An incomplete
+      // paginated scan is unknown, never a negative or unique admission proof.
+      const { thread } = await this.client.threadRead({ threadId, includeTurns: false });
+      if (thread.id !== threadId || !Array.isArray(thread.turns) || thread.turns.length !== 0) {
+        throw new Error('Invalid native thread shell');
+      }
+      let turnCount = 0;
+      await this.scanTurnsNewestFirst(threadId, turn => {
+        if (Date.now() >= expiresAt) throw new Error('Native submission scan deadline exceeded');
+        if (++turnCount > 2000) throw new Error('Native submission scan bound exceeded');
+        const receipt = nativeTurnReceipt(turn);
+        for (const user of receipt.userItems) {
+          if (user.clientUserMessageId === clientUserMessageId && matches.length < 2) matches.push({
+            turnId: receipt.turnId, userItemId: user.itemId, status: receipt.status,
+            commandSessions: receipt.commandSessions,
+          });
+        }
+        return false;
+      });
+    };
+    await nativeCustodyPhase('thread_read', scan, deadlineMs,
       (phase, status) => onPhase?.(phase, status === 'completed' ? 'late_completed' : 'late_failed'));
     onPhase?.('thread_read', 'completed');
-    if (thread.id !== threadId || thread.turns.length > 2000) throw new Error('Invalid native thread inspection bound');
     onPhase?.('queue_read', 'started');
     const queue = await nativeCustodyPhase('queue_read',
       () => this.readNativeQueuedSubmissions(threadId), deadlineMs,
       (phase, status) => onPhase?.(phase, status === 'completed' ? 'late_completed' : 'late_failed'));
     onPhase?.('queue_read', 'completed');
-    const matches: Array<{ turnId: string; userItemId: string; status: string;
-      commandSessions: ReturnType<typeof nativeTurnReceipt>['commandSessions'] }> = [];
-    for (const turn of thread.turns) {
-      const receipt = nativeTurnReceipt(turn);
-      for (const user of receipt.userItems) {
-        if (user.clientUserMessageId === clientUserMessageId) matches.push({
-          turnId: receipt.turnId, userItemId: user.itemId, status: receipt.status,
-          commandSessions: receipt.commandSessions,
-        });
-      }
-    }
     return { threadId, clientUserMessageId,
       linkage: matches.length === 1 ? 'native_user_item' : matches.length ? 'ambiguous' : 'not_observed',
       nativeMatch: matches.length === 1 ? matches[0] : null,
@@ -1459,7 +1915,7 @@ export class CodexService {
       const result = await Promise.race([
         this.client.threadGoalRevisionSet(params as v2.ThreadGoalSetParams),
         new Promise<never>((_, reject) => {
-          deadline = setTimeout(() => reject(new GoalMutationUnconfirmedError()), maxWaitMs);
+          deadline = setTimeout(() => reject(new GoalMutationUnconfirmedError('deadline')), maxWaitMs);
         }),
       ]);
       const revision = verifyThreadGoalRevision(result.goal,
@@ -1474,11 +1930,68 @@ export class CodexService {
         throw new GoalRevisionUnavailableError();
       }
       return { goal: result.goal, revision };
-    } catch {
-      throw new GoalMutationUnconfirmedError();
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === -32009) {
+        throw new GoalRevisionConflictError();
+      }
+      // Keep why the outcome is unknown. Only the numeric code is recorded;
+      // the runtime's message text never leaves this process.
+      const unconfirmed = error instanceof GoalMutationUnconfirmedError ? error :
+        error instanceof GoalRevisionUnavailableError ? new GoalMutationUnconfirmedError('unverified_result') :
+        new GoalMutationUnconfirmedError('native_error',
+          error && typeof error === 'object' && 'code' in error && Number.isSafeInteger(error.code)
+            ? error.code as number : undefined);
+      console.info('[Goal revision set]', JSON.stringify({ threadId, outcome: 'unconfirmed',
+        cause: unconfirmed.cause, nativeCode: unconfirmed.nativeCode ?? null }));
+      throw unconfirmed;
     } finally {
       if (deadline) clearTimeout(deadline);
     }
+  }
+
+  /** Resume a stopped Goal with native CAS, then make sure the runtime can
+   * continue it. A CAS conflict or unknown outcome throws before any thread is
+   * touched. After a confirmed CAS the Goal is active whatever happens next;
+   * `continuation` only reports whether a live thread now owns it. */
+  async resumeThreadGoalWithRevision(threadId: string, expected: ThreadGoalRevision): Promise<{
+    goal: v2.ThreadGoal; revision: ThreadGoalRevision; continuation: GoalContinuation;
+  }> {
+    const result = await this.setThreadGoalWithRevision(threadId, expected, { status: 'active' });
+    return { ...result, continuation: await this.ensureGoalContinuation(threadId) };
+  }
+
+  /** The runtime continues an active Goal only in a loaded thread: a Goal
+   * status change on a thread that is not loaded is stored and nothing runs
+   * it. Loading the thread lets the runtime start the continuation turn when
+   * the thread is idle. A loaded thread is never resumed again, so this never
+   * adds a second turn beside one already running. */
+  async ensureGoalContinuation(threadId: string): Promise<GoalContinuation> {
+    const notStarted = (cause: string, nativeCode: number | null = null) => {
+      console.warn('[Goal continuation]', JSON.stringify({ threadId, continuation: 'not_started',
+        cause, nativeCode }));
+      return 'not_started' as const;
+    };
+    let thread: v2.Thread;
+    try {
+      ({ thread } = await this.client.threadRead({ threadId, includeTurns: false }));
+    } catch {
+      return notStarted('thread_read_unavailable');
+    }
+    if (thread.id !== threadId) return notStarted('thread_identity_mismatch');
+    if (thread.status.type === 'active') return 'already_running';
+    if (thread.status.type === 'idle') return 'already_loaded';
+    if (thread.status.type !== 'notLoaded') return notStarted('thread_unavailable');
+    try {
+      // The same resume ordinary input to a saved, unloaded thread uses.
+      await this.resumeExistingThreadForInput({ threadId, cwd: thread.cwd,
+        config: { mcp_servers: {} } }, false, { cwd: thread.cwd });
+    } catch (error) {
+      return notStarted('thread_resume_failed',
+        error && typeof error === 'object' && 'code' in error && Number.isSafeInteger(error.code)
+          ? error.code as number : null);
+    }
+    console.info('[Goal continuation]', JSON.stringify({ threadId, continuation: 'loaded' }));
+    return 'loaded';
   }
 
   /** Full mission bytes remain in OIX's owned state directory, not an app file. */
@@ -1488,14 +2001,51 @@ export class CodexService {
     try {
       const result = await this.client.threadGoalDocumentGet({ threadId });
       verifyGoalDocument(threadId, result.document, result.content);
+      // A Goal that has never had a managed mission has no document; the
+      // runtime reports that as a Goal with a null document. Only a document
+      // without a Goal, or a Goal owned by another thread, is invalid.
       if (result.goal !== null && result.goal?.threadId !== threadId ||
-          (result.goal === null) !== (result.document === null)) {
+          (result.goal === null && result.document !== null)) {
         throw new Error('Invalid managed Goal document owner.');
       }
       return result;
     } catch {
       throw new ManagedGoalDocumentError('read_unavailable');
     }
+  }
+
+  /** One exact predecessor and stable creation ID, atomically enforced by OIX.
+   * Never fall back to document/set when this experimental method is absent. */
+  async createThreadGoalDocument(
+    input: ThreadGoalDocumentCreateParams,
+    maxWaitMs = 3_000,
+  ): Promise<ThreadGoalDocumentCreateResponse> {
+    validateGoalDocumentInput(input);
+    if (!this.client.threadGoalDocumentCreate || !Number.isSafeInteger(maxWaitMs) ||
+        maxWaitMs < 1 || maxWaitMs > 3_000) {
+      throw new ManagedGoalDocumentError('create_unavailable');
+    }
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        this.client.threadGoalDocumentCreate(input),
+        new Promise<never>((_, reject) => {
+          deadline = setTimeout(() => reject(new ManagedGoalDocumentError('update_unconfirmed')),
+            maxWaitMs);
+        }),
+      ]);
+      return result;
+    } catch (error) {
+      // This fixed native error code is the only authoritative CAS conflict.
+      // All transport/timeout failures remain unknown, never replay permission.
+      if (error && typeof error === 'object' && 'code' in error && error.code === -32009) {
+        throw new ManagedGoalDocumentError('stale_predecessor');
+      }
+      if (error && typeof error === 'object' && 'code' in error && error.code === -32601) {
+        throw new ManagedGoalDocumentError('create_unavailable');
+      }
+      throw new ManagedGoalDocumentError('update_unconfirmed');
+    } finally { if (deadline) clearTimeout(deadline); }
   }
 
   async setThreadGoalDocument(input: ThreadGoalDocumentSetParams): Promise<ThreadGoalDocumentSetResponse> {
@@ -1549,8 +2099,12 @@ export class CodexService {
         throw new ManagedGoalDocumentError('update_unconfirmed');
       }
       return { goal: result.goal, document: result.document, revision };
-    } catch {
-      // A transport loss does not prove native rejected this write. Reconcile; never replay.
+    } catch (error) {
+      // Only native's fixed conflict code proves this CAS was rejected. A
+      // transport loss can mean the write committed; reconcile, never replay.
+      if (error && typeof error === 'object' && 'code' in error && error.code === -32009) {
+        throw new ManagedGoalDocumentError('stale_revision');
+      }
       throw new ManagedGoalDocumentError('update_unconfirmed');
     } finally {
       if (deadline) clearTimeout(deadline);
@@ -1670,7 +2224,6 @@ export class CodexService {
   }
 
   private async resolveThread(
-    threadId: string | undefined,
     model: string,
     modelProvider?: string | null,
     cwd?: string,
@@ -1680,26 +2233,11 @@ export class CodexService {
     dynamicTools?: v2.DynamicToolSpec[] | null,
     additionalWritableRoots?: string[],
   ) {
-    const nextConfig = threadId ? config : withElectronRunAsNodeConfig(config);
-
-    if (!threadId) {
-      return this.client.startThreadWithConfig(
-        model,
-        modelProvider,
-        baseInstructions,
-        cwd,
-        nextConfig,
-        developerInstructions,
-        dynamicTools,
-        additionalWritableRoots,
-      );
-    }
-
-    // An input addressed to a retained thread must not silently create a
-    // different conversation if OIX cannot resume it. The caller can surface
-    // the native failure and preserve its own durable event for recovery.
-    return this.resumeExistingInputThread({ threadId, modelProvider, model, cwd,
-      config: nextConfig, baseInstructions, developerInstructions, additionalWritableRoots });
+    return this.client.startThreadWithConfig(
+      model, modelProvider, baseInstructions, cwd,
+      withElectronRunAsNodeConfig(config), developerInstructions,
+      dynamicTools, additionalWritableRoots,
+    );
   }
 }
 

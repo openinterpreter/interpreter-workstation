@@ -12,6 +12,12 @@ export interface BuiltinToolContext {
   modelConfig?: AgentModelConfig;
   abortSignal?: AbortSignal;
   /**
+   * Aborts when the caller stopped waiting for this call (for example a CLI
+   * client disconnected). Tools may use it to withdraw approval requests they
+   * created; it does not cancel the tool call itself.
+   */
+  approvalAbortSignal?: AbortSignal;
+  /**
    * Optional line-oriented progress reporter for long-running CLI-facing tool calls.
    * Messages should be human-readable, concise, and safe to surface directly in the CLI.
    */
@@ -196,6 +202,7 @@ const HEADLESS_BROWSER_TOOL_NAMES = new Set([
   // Thread-scoped durable schedules are hosted by the sidecar, not Electron.
   'interpreter_wake_schedule',
   'interpreter_goal_revision_get',
+  'interpreter_task_current',
   'interpreter_goal_resume',
   'interpreter_goal_document_get',
   'interpreter_goal_document_create',

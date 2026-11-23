@@ -5,7 +5,6 @@ import {
   getCodexService,
   subscribeCodexNotifications,
 } from '../../src/lib/codex/service';
-import { enrichThreadWithReasoning } from '../../src/lib/codex/enrich-thread-reasoning';
 import { mapNotificationToUiEvents } from '../../src/lib/codex/event-mapper';
 import {
   paginateThreadTurns,
@@ -22,12 +21,17 @@ import {
   type CachedPublicThreadSnapshot,
 } from '../utils/publicThreadCache';
 import { resolvePublicThreadId } from '../utils/publicThreadConfig';
+import { enrichThreadTurnsFromRollout } from '../utils/threadRolloutEnrichment';
 
 const router = Router();
 async function loadPublicThreadState(threadId: string): Promise<CachedPublicThreadSnapshot> {
   const service = getCodexService();
-  let thread = await service.readThread(threadId);
-  thread = enrichThreadWithReasoning(thread);
+  // Saved tool source and older reasoning are restored for the newest turns,
+  // as far back as the fixed read budget reaches.
+  const { thread } = await enrichThreadTurnsFromRollout(
+    await service.readThread(threadId),
+    { partial: true },
+  );
   const goal = await service.getThreadGoal(threadId);
   return {
     snapshot: buildPublicThreadSnapshot({

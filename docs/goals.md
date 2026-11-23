@@ -54,11 +54,62 @@ temporary blocker from completion, and audit what remains.
 successful completion. Workstation displays the native status rather than
 inventing a second idle timer or supervisor state.
 
+### Automatic resume after a model-capacity refusal
+
+OIX blocks an active Goal when a turn fails with any error other than a usage
+limit, including a temporary "Selected model is at capacity" refusal. For that
+one class of failure (model at capacity or overloaded, or the provider
+temporarily unavailable), the Workstation sidecar resumes the Goal on its own:
+after about 30 seconds, then 2, 5 and 10 minutes, then every 15 minutes, for at
+most two hours from the first such block. A turn that completes or runs for at
+least five minutes starts the schedule over. Usage and quota limits, rate
+limits, authorization, context-length, policy and interrupted turns are never
+resumed automatically.
+
+The resume uses the same exact four-field revision transition as a manual
+resume, so a Goal that someone resumed, paused, edited, cleared or replaced in
+the meantime is never overridden. A pending resume is cancelled by any Goal
+change, by any new turn on the thread, and when the sidecar stops. Each
+scheduled, cancelled, completed or abandoned attempt is written to the sidecar
+log with a `[goal-auto-resume]` prefix. The schedule is kept in memory only: a
+Goal that is still blocked when the sidecar restarts stays blocked until it is
+resumed.
+
+### Notices to the agent that assigned the work
+
+When another agent host handed work to the thread (a sender-attributed task,
+see [Thread wake sources](wake-sources.md#work-handed-over-by-another-agent-host)),
+Workstation tells the agent that assigned the Goal when it settles as
+`paused`, `blocked`, `usageLimited`, `budgetLimited` or `complete`, and once
+more when a stopped Goal becomes `active` again. The assigner is bound once per
+Goal, when the Goal is first observed: the one sender with a thread among the
+inputs of the turn in which the Goal appeared, otherwise the thread's only
+sender with a thread. Later senders to the thread never replace it. When no
+sender named a thread, or several did, the Goal is unrouted: its notices are
+recorded and listed but not delivered. A Goal on a thread that never received
+attributed work is not reported.
+
+A change must stay settled for 25 seconds, so a flapping Goal produces at most
+one notice per settled state. A model-capacity block that the automatic resume
+above has scheduled is reported once with reason `capacity_retry_pending`; its
+outcome follows as an `active` notice when the resume works, or as a second
+`blocked` notice with reason `model_capacity_exhausted` when it gives up.
+Notices contain status words, the Goal's own times, its native Goal id and
+revisions when the runtime reports them, and a fixed reason, never the
+objective, and are delivered through the configured outcome return command.
+At startup, Goals of recently attributed threads are read once so a change
+that happened while the sidecar was down is still reported. See
+[Goal notices](wake-sources.md#goal-notices) for the payload and reasons.
+
 ## Persistence and reconnection
 
 Persist the OIX home directory and the workspace used by the thread. The OIX
 rollout is the durable conversation record; Workstation loads the newest page
-first and retrieves older history as the user scrolls upward. The same thread
+first and retrieves older history as the user scrolls upward. Each page is a
+single bounded native turn read, so long conversations open as quickly as
+short ones. Saved tool source and older reasoning are restored for the turns
+being shown by reading only the end of the saved history, within a fixed
+budget. The same thread
 id restores its Goal after an app, renderer, or browser reconnect.
 
 An authenticated browser Workstation uses these same Goal controls when its
@@ -140,21 +191,22 @@ and the last conversation message remain separate historical observations.
 
 ## Programmatic task receipts
 
-For an authenticated saved-thread task, assign one stable
-`clientUserMessageId` before sending it. A broken progress stream is not proof
-that the native turn failed to start. Workstation binds progress arriving before
-the `turn/start` response only after that response identifies the exact turn;
-notifications from an older turn are not completion receipts for the new task.
-If the progress observer fails, the native turn can continue independently.
+A task for an existing thread requires one stable `clientUserMessageId`. It is
+retained in that thread's wake queue before it is acknowledged and delivered in
+order with the thread's other inputs; see
+[Programmatic input to an existing thread](wake-sources.md#programmatic-input-to-an-existing-thread).
+A broken or ended progress stream, or a `503`, is not proof that the input was
+lost: repeat the request with the **same** client ID and the same message,
+which never submits a second input. The same ID with a different message or
+sender is refused with `409`.
 
 Use the authenticated, exact-thread and exact-client-ID custody read at
 `GET /api/agent/threads/:threadId/submissions/:clientUserMessageId/custody`
-to distinguish a recorded request, an observed native user item, a native
-queue item, and an unverified or timed-out inspection. A request receipt alone
-does not prove a model response, a command result, or external delivery. A
-timeout does not cancel an outstanding native call and must not cause a blind
-retry with a different client ID. Saved command records also do not establish
-whether an operating-system process remains live.
+to see whether the input is `pending`, `offered`, `admitted` (with its turn),
+`held` or `refused`. Admission does not prove a model response, a command
+result, or external delivery. Never retry with a different client ID. Saved
+command records also do not establish whether an operating-system process
+remains live.
 
 The exact-thread native custody read exposes command item ID, opaque native
 process ID, saved status, exit code, and bounded output digest/size from its
@@ -164,3 +216,71 @@ process ID, saved status, exit code, and bounded output digest/size from its
 Neither a previous conversational message nor that saved snapshot is a live
 process observation. A consumer displaying a previous message must label it
 historical rather than presenting it as the result of a newer turn.
+
+## Enrolled supervisor peers
+
+An operator can let an enrolled peer machine read and conditionally control
+native Goals on this machine through `/api/interpreter-peer/threads/:threadId/…`.
+The route is mounted only when all of these service environment settings are
+present:
+
+- `INTERPRETER_SUPERVISOR_VERIFY_URL`: the HTTPS verification endpoint, for
+  example `https://verifier.example/v1/supervisor-verify`.
+- `INTERPRETER_SUPERVISOR_VERIFY_AUDIENCE`: the exact origin of that URL, for
+  example `https://verifier.example`.
+- `INTERPRETER_SUPERVISOR_TARGET_COMPUTER`: this machine's enrolled name, for
+  example `example-computer`.
+
+For every peer request, Workstation forwards the caller's assertion to the
+verifier and accepts only an exact grant for this machine, thread, and
+capability. By default it proves its own machine identity with the host's cloud
+instance identity.
+
+A machine without a cloud instance identity can instead set
+`INTERPRETER_SUPERVISOR_SIGNER_COMMAND` to a JSON array of 1 to 8 non-empty
+strings: an argv with an absolute executable path, run without a shell, at most
+1024 characters in total. When it is set, the cloud identity is never
+requested. For each verification the command runs once and receives on
+standard input:
+
+```json
+{"path":"/v1/supervisor-verify","bodyBase64":"<base64 of the exact request body>"}
+```
+
+It must exit 0 within 8 seconds and print at most 2048 bytes: one JSON object
+with exactly the keys `version` (1), `sourceComputer` (the target computer
+name above), `instanceId`, `controlGeneration`, `audience` (the audience above),
+`method` (`POST`), `path` (the verification URL path), `bodySha256` (lowercase
+hex SHA-256 of the body bytes), `issuedAtMs`, `nonce`, and `signature` (86
+base64url characters). Workstation validates the object against the exact
+request, then sends the same body with the proof in a request header and no
+`Authorization` header. Proofs are single-use; any signer failure denies the
+request. The header that carries the proof is named by
+`INTERPRETER_SUPERVISOR_PROOF_HEADER`, a lowercase `x-` extension header name
+of at most 64 characters chosen by the verifier's operator. The two settings
+are required together. A present but invalid value of either, or one without
+the other, disables the supervisor peer route entirely rather than falling
+back to the cloud identity. An empty value is treated as unset.
+
+`POST …/goal/resume` resumes a paused, blocked, or usage-limited Goal with the
+native compare-and-swap on the caller's exact `expected` revision, and returns
+`{ available: true, revision, continuation }`. The runtime continues an active
+Goal only in a loaded thread, so after a confirmed swap Workstation loads a
+thread that is not loaded. `continuation` reports the outcome: `loaded` (the
+thread was loaded now and the runtime starts the Goal's next turn when it is
+idle), `already_loaded` (the thread was loaded and idle), `already_running` (a
+turn was already running; no second turn is started), or `not_started` (the
+thread could not be confirmed loaded). `not_started` is still a successful
+resume: the Goal is active, but nothing runs it until the thread is loaded, for
+example by its next message. A stale revision returns `409` and never loads the
+thread. The local Goal resume API and the automatic resume after a temporary
+model-capacity refusal load the thread the same way.
+
+`GET …/submissions/:clientUserMessageId` needs the `task:read` grant. For input
+that went through the thread's input queue (a task sent to an existing thread),
+it answers from that queue's record, keyed by the caller's own client ID:
+`{ available: true, threadId, clientUserMessageId, input: { status, turnId?,
+code?, parentThreadId? }, observation: "thread-input-queue-record" }`, with the
+same statuses as the local custody read above and never the message. For any
+other client ID (for example an interactive steer) it reports the submission
+journal and saved native history as before.

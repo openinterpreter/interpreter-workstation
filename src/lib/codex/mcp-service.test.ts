@@ -398,6 +398,7 @@ describe("McpService", () => {
       runtimeStatus: null,
       pluginId: null,
       serverInfo: null,
+      serverCapabilities: null,
       tools: {},
       toolsError: null,
       resources: [],

@@ -1,6 +1,9 @@
+<!-- release-notes-for: 0.2.254 -->
 ## What's new
 
-- Raw Markdown edits in Simple interfaces now persist when the interface refreshes or you leave the editor.
+- Aligns the bundled Simple project runtime and generated projects on Next.js 16.4.5.
+- Allows voice input while an agent response is in progress without replacing the stop control.
+- Refreshes application dependencies and their lockfile.
 
 ## Distribution
 

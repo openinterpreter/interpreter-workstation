@@ -14,7 +14,9 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  getOixRuntimeCommandDir,
   getOixStandalonePaths,
+  linkOixRuntimeCommandDir,
   resolveOrInstallOixRuntime,
 } from "./oixRuntime";
 
@@ -69,6 +71,71 @@ afterEach(() => {
   while (tempDirs.length > 0) {
     rmSync(tempDirs.pop()!, { recursive: true, force: true });
   }
+});
+
+describe("OIX runtime command directory", () => {
+  test("places the command directory inside the runtime home on each platform", () => {
+    expect(getOixRuntimeCommandDir("/home/alex/.openinterpreter", "linux")).toBe(
+      "/home/alex/.openinterpreter/runtime/interpreter-bin",
+    );
+    expect(
+      getOixRuntimeCommandDir("C:\\Users\\alex\\.openinterpreter", "win32"),
+    ).toBe("C:\\Users\\alex\\.openinterpreter\\runtime\\interpreter-bin");
+  });
+
+  test("links the running runtime's bin directory and follows runtime updates", async () => {
+    const runtimeHome = await tempDir("oix-command-home-");
+    const firstPackage = await tempDir("oix-command-first-");
+    const secondPackage = await tempDir("oix-command-second-");
+    const firstBinary = writePackage(firstPackage, "0.0.60");
+    const secondBinary = writePackage(secondPackage, "0.0.61");
+    const binaryName = path.basename(firstBinary);
+
+    const linkPath = linkOixRuntimeCommandDir(runtimeHome, firstBinary);
+    expect(linkPath).toBe(getOixRuntimeCommandDir(runtimeHome));
+    expect(lstatSync(linkPath).isSymbolicLink()).toBe(true);
+    expect(realpathSync(path.join(linkPath, binaryName))).toBe(
+      realpathSync(firstBinary),
+    );
+    // Sibling executables stay next to the entrypoint.
+    expect(existsSync(path.join(linkPath, "codex-code-mode-host"))).toBe(true);
+
+    // Relinking to the same runtime is a no-op; a different runtime replaces it.
+    linkOixRuntimeCommandDir(runtimeHome, firstBinary);
+    linkOixRuntimeCommandDir(runtimeHome, secondBinary);
+    expect(realpathSync(path.join(linkPath, binaryName))).toBe(
+      realpathSync(secondBinary),
+    );
+  });
+
+  test("replaces a dangling link left by a removed runtime", async () => {
+    const runtimeHome = await tempDir("oix-command-dangling-");
+    const packageDir = await tempDir("oix-command-package-");
+    const binary = writePackage(packageDir, "0.0.61");
+    const linkPath = getOixRuntimeCommandDir(runtimeHome);
+    mkdirSync(path.dirname(linkPath), { recursive: true });
+    symlinkSync(path.join(runtimeHome, "missing-bin"), linkPath, "dir");
+
+    linkOixRuntimeCommandDir(runtimeHome, binary);
+
+    expect(realpathSync(linkPath)).toBe(realpathSync(path.dirname(binary)));
+  });
+
+  test("never replaces a real directory at the command directory path", async () => {
+    const runtimeHome = await tempDir("oix-command-real-dir-");
+    const packageDir = await tempDir("oix-command-real-package-");
+    const binary = writePackage(packageDir, "0.0.61");
+    const linkPath = getOixRuntimeCommandDir(runtimeHome);
+    mkdirSync(linkPath, { recursive: true });
+    writeFileSync(path.join(linkPath, "keep.txt"), "user file");
+
+    expect(() => linkOixRuntimeCommandDir(runtimeHome, binary)).toThrow(
+      /Refusing to replace non-link path/,
+    );
+    expect(readFileSync(path.join(linkPath, "keep.txt"), "utf8")).toBe(
+      "user file",
+    );
+  });
 });
 
 describe("OIX shared runtime resolution", () => {

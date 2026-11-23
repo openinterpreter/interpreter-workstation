@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { BuiltinToolContext } from '../../builtinTools';
+import { GoalRevisionConflictError } from '../../../../src/lib/codex/goal-revision';
 import { goalRevisionTool, goalResumeTool, readGoalRevisionForCaller,
   resumeGoalForCaller } from './goalRevisionTool';
 
@@ -120,7 +121,7 @@ describe('exact same-Goal conditional resume', () => {
       expect(JSON.parse(result.content[0]!.text).category).toBe('caller_unavailable');
     }
     for (const input of [undefined, { ...paused, goalId: 'bad' },
-      { ...paused, missionRevision: 0 }, { ...paused, status: 'complete' }]) {
+      { ...paused, missionRevision: -1 }, { ...paused, status: 'complete' }]) {
       const result = await resumeGoalForCaller({ threadId, verifiedCallerThreadId: threadId },
         input, resume);
       expect(JSON.parse(result.content[0]!.text).category).toBe('invalid_revision');
@@ -136,5 +137,13 @@ describe('exact same-Goal conditional resume', () => {
     expect(JSON.parse(result.content[0]!.text)).toEqual({ resumed: false,
       category: 'mutation_unconfirmed' });
     expect(JSON.stringify(result)).not.toContain('PRIVATE');
+  });
+  test('an exact native conflict is stale, while transport uncertainty is not', async () => {
+    let calls = 0;
+    const result = await resumeGoalForCaller({ threadId, verifiedCallerThreadId: threadId }, paused,
+      async () => { calls++; throw new GoalRevisionConflictError(); });
+    expect(calls).toBe(1);
+    expect(JSON.parse(result.content[0]!.text)).toEqual({ resumed: false,
+      category: 'stale_revision' });
   });
 });

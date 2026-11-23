@@ -224,4 +224,35 @@ describe('VideoViewer timestamped voice notes', () => {
     expect(play).not.toHaveBeenCalled();
     expect(screen.queryByText('The skyline needs attention.')).not.toBeInTheDocument();
   });
+
+  test('a delayed old file URL cannot replace the new video after switching files', async () => {
+    let finishOld!: (url: string) => void;
+    mock.getFileUrl.mockImplementation((path: string) => path.includes('old.mp4')
+      ? new Promise(resolve => { finishOld = resolve; }) : Promise.resolve('blob:new-video'));
+    const view = render(<VideoViewer filePath="/private/old.mp4" />);
+    await waitFor(() => expect(mock.getFileUrl).toHaveBeenCalledWith('/private/old.mp4'));
+    view.rerender(<VideoViewer filePath="/private/new.mp4" />);
+    await waitFor(() => expect(view.container.querySelector('video')).toHaveAttribute('src', 'blob:new-video'));
+    await act(async () => { finishOld('blob:old-video'); });
+    expect(view.container.querySelector('video')).toHaveAttribute('src', 'blob:new-video');
+  });
+
+  test('an old manual save failure cannot disable review on the newly selected video', async () => {
+    let finishWrite!: (result: { success: boolean }) => void;
+    mock.writeFile.mockImplementation(() => new Promise(resolve => { finishWrite = resolve; }));
+    const view = render(<VideoViewer filePath="/private/old.mp4" />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Speak a note' })).toBeEnabled());
+    fireEvent.change(screen.getByRole('textbox', { name: 'Review note' }), {
+      target: { value: 'A note for the old video.' },
+    });
+    fireEvent.submit(screen.getByRole('button', { name: 'Save note' }).closest('form')!);
+    await waitFor(() => expect(mock.writeFile).toHaveBeenCalledOnce());
+    expect(mock.writeFile.mock.calls[0]![0]).toBe('/private/old.mp4.review.json');
+    view.rerender(<VideoViewer filePath="/private/new.mp4" />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Speak a note' })).toBeEnabled());
+    await act(async () => { finishWrite({ success: true }); });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Review note' })).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Speak a note' })).toBeEnabled();
+  });
 });

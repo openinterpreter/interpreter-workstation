@@ -19,6 +19,7 @@ export type SimpleLiveInputMessage = {
 };
 
 const MAX_HISTORY_MESSAGES = 24;
+const MAX_HISTORY_TURNS = 12;
 const MAX_HISTORY_CHARACTERS = 24_000;
 
 type LiveCredential = { apiKey: string; source: 'profile' | 'environment' };
@@ -43,7 +44,10 @@ async function resolveLiveCredential(): Promise<LiveCredential | null> {
     if (stored) return { apiKey: stored, source: 'profile' };
   }
 
-  const environmentKey = process.env.OPENAI_API_KEY?.trim();
+  // A voice-only key lets a host enable GPT Live without OPENAI_API_KEY, which
+  // also influences model-provider detection. Only this function reads it.
+  const environmentKey = process.env.INTERPRETER_LIVE_OPENAI_API_KEY?.trim()
+    || process.env.OPENAI_API_KEY?.trim();
   return environmentKey ? { apiKey: environmentKey, source: 'environment' } : null;
 }
 
@@ -98,7 +102,8 @@ async function loadBoundedPrimaryThreadHistory(): Promise<SimpleLiveInputMessage
   try {
     const { threadId } = await getSimplePrimaryThread();
     if (!threadId) return [];
-    const thread = await getCodexService().readThread(threadId);
+    // The seed keeps only recent messages, so read only the newest turns.
+    const { thread } = await getCodexService().readThreadPage(threadId, { limit: MAX_HISTORY_TURNS });
     return buildBoundedLiveHistory(thread);
   } catch (error) {
     console.warn('[SimpleLive] Could not seed bounded durable-thread history:', error instanceof Error ? error.message : error);

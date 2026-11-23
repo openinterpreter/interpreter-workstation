@@ -23,8 +23,10 @@ const GOAL_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 function validRevision(value: Partial<ThreadGoalRevision>): value is ThreadGoalRevision {
   return typeof value.goalId === 'string' && GOAL_ID.test(value.goalId) &&
     typeof value.status === 'string' && GOAL_STATUSES.includes(value.status) &&
-    Number.isSafeInteger(value.missionRevision) && (value.missionRevision ?? 0) >= 1 &&
-    Number.isSafeInteger(value.lifecycleRevision) && (value.lifecycleRevision ?? 0) >= 1;
+    // OIX backfills pre-existing Goals with revision zero. Zero is native CAS
+    // identity, not an absent revision; only negative/non-integral values are invalid.
+    Number.isSafeInteger(value.missionRevision) && (value.missionRevision ?? -1) >= 0 &&
+    Number.isSafeInteger(value.lifecycleRevision) && (value.lifecycleRevision ?? -1) >= 0;
 }
 
 export class GoalRevisionUnavailableError extends Error {
@@ -40,9 +42,26 @@ export class GoalRevisionUnavailableError extends Error {
 export class GoalMutationUnconfirmedError extends Error {
   readonly category = 'mutation_unconfirmed';
 
-  constructor() {
+  /** Why the outcome is unknown: the runtime did not answer in time, it
+   * answered with an error, or it answered with a result that did not verify.
+   * `nativeCode` is the runtime's numeric error code when it gave one. */
+  constructor(
+    readonly cause: 'deadline' | 'native_error' | 'unverified_result' = 'native_error',
+    readonly nativeCode?: number,
+  ) {
     super('Native Goal mutation outcome is unconfirmed.');
     this.name = 'GoalMutationUnconfirmedError';
+  }
+}
+
+/** Only native's fixed CAS-conflict code establishes that the old revision was
+ * rejected. Transport failure or a late response never establishes this. */
+export class GoalRevisionConflictError extends Error {
+  readonly category = 'stale_revision';
+
+  constructor() {
+    super('Native Goal revision changed; obtain a fresh revision.');
+    this.name = 'GoalRevisionConflictError';
   }
 }
 

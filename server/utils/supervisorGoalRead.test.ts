@@ -35,6 +35,49 @@ describe('stable managed supervisor Goal read', () => {
     await expect(readStableSupervisorGoal(reader({ getThreadGoalDocument: async () => ({ goal,
       document: managed, content: content + 'late mutation' }) }), threadId)).rejects.toThrow();
   });
+  it('accepts semantically identical native readbacks with reordered JSON fields', async () => {
+    let reads = 0;
+    const reorderedGoal = { objective, status: goal.status, threadId };
+    const reorderedRevision = { lifecycleRevision: revision.lifecycleRevision,
+      missionRevision: revision.missionRevision, status: revision.status,
+      goalId: revision.goalId };
+    const stable = reader({
+      getThreadGoalWithRevision: async () => ++reads === 1
+        ? { goal, revision } : { revision: reorderedRevision, goal: reorderedGoal },
+      getThreadGoalDocument: async () => ({ goal: reorderedGoal, document: managed, content }),
+    });
+    expect((await readStableSupervisorGoal(stable, threadId)).revision).toEqual(revision);
+    expect(reads).toBe(2);
+    await expect(readStableSupervisorGoal(reader({
+      getThreadGoalDocument: async () => ({ goal: { ...goal, objective: 'different mission' },
+        document: managed, content }),
+    }), threadId)).rejects.toThrow('unavailable');
+  });
+  it('reads a Goal without a document, or with an older one, after an objective-only change', async () => {
+    const initial = { ...revision, missionRevision: 0 };
+    const unmanaged = (rev: typeof revision) => reader({
+      getThreadGoalWithRevision: async () => ({ goal, revision: rev }),
+      getThreadGoalDocument: async () => ({ goal, document: null, content: null }),
+    });
+    expect(await readStableSupervisorGoal(unmanaged(initial), threadId))
+      .toEqual({ goal, revision: initial, document: null });
+    // An objective change advances the mission revision without a document.
+    expect(await readStableSupervisorGoal(unmanaged(revision), threadId))
+      .toEqual({ goal, revision, document: null });
+    const later = { ...revision, missionRevision: 5 };
+    expect((await readStableSupervisorGoal(reader({
+      getThreadGoalWithRevision: async () => ({ goal, revision: later }),
+    }), threadId)).document?.missionRevision).toBe(4);
+    // A document newer than its Goal is never returned.
+    await expect(readStableSupervisorGoal(reader({
+      getThreadGoalWithRevision: async () => ({ goal, revision: { ...revision, missionRevision: 3 } }),
+    }), threadId)).rejects.toThrow('unavailable');
+    // No Goal never has a document.
+    await expect(readStableSupervisorGoal(reader({
+      getThreadGoalWithRevision: async () => ({ goal: null, revision: null }),
+      getThreadGoalDocument: async () => ({ goal: null, document: managed, content }),
+    }), threadId)).rejects.toThrow();
+  });
   it('times out without claiming an absent or cancelled native read; late result is not returned', async () => {
     let finish!: (value: unknown) => void;
     let reads = 0;

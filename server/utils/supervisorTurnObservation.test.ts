@@ -29,7 +29,9 @@ describe('bounded saved native turn observation', () => {
   it('denies cross-thread reads and does not turn an empty saved history into command liveness', () => {
     expect(() => projectSupervisorTurn(thread([]), '00000000-0000-4000-8000-000000000002')).toThrow();
     expect(projectSupervisorTurn(thread([]), id)).toEqual({ threadId: id, turn: null,
-      latestMessage: null, command: null, observation: 'saved-native-thread-only' });
+      latestMessage: null, command: null,
+      modelPhase: { available: false, category: 'native_model_phase_unavailable' },
+      observation: 'saved-native-thread-only' });
   });
   it('returns typed unavailability when a native turn omits full items', () => {
     const partial = { ...turn('current', 'inProgress', []), itemsView: 'summary' as const };

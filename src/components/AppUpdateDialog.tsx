@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { appUpdate } from '@/ipc';
+import { appUpdate, getRuntimeSystemInfo } from '@/ipc';
 import { X } from 'lucide-react';
 import { InterpreterLogoMark } from '@/components/InterpreterLogoMark';
 import { useTranslation } from 'react-i18next';
@@ -27,6 +27,7 @@ export function resetAppUpdateDismissalForTests(): void {
 
 export function AppUpdateDialog() {
   const { t } = useTranslation();
+  const isWindows = getRuntimeSystemInfo().platform === 'win32';
   const { showToast } = useToast();
   const [version, setVersion] = useState<string | null>(null);
   const [isInstalling, setIsInstalling] = useState(false);
@@ -127,7 +128,7 @@ export function AppUpdateDialog() {
     isInstalling,
     didDelayExpire: didInstallHintDelayExpire,
   });
-  const installHintMessage = installHintKey ? t(installHintKey) : null;
+  const installHintMessage = !isWindows && installHintKey ? t(installHintKey) : null;
 
   const content = version ? (
     <div className="w-full max-w-[20rem] transition-all duration-300 ease-out animate-in fade-in slide-in-from-bottom-2">
@@ -158,7 +159,7 @@ export function AppUpdateDialog() {
               {t('appUpdate.title')}
             </span>
             <span className="mt-0.5 block text-ui-xs leading-4 text-muted-foreground">
-              {t(subtitleKey)}
+              {t(isWindows ? 'appUpdate.windowsSubtitle' : subtitleKey)}
             </span>
             {errorMessage && (
               <span className="mt-1 block text-ui-xs leading-4 text-status-error">{errorMessage}</span>
@@ -183,7 +184,9 @@ export function AppUpdateDialog() {
                 size="sm"
                 className="h-8 px-3"
               >
-                {isInstalling ? t('appUpdate.restarting') : t('appUpdate.restart')}
+                {isWindows
+                  ? t(isInstalling ? 'appUpdate.windowsInstalling' : 'appUpdate.windowsInstall')
+                  : t(isInstalling ? 'appUpdate.restarting' : 'appUpdate.restart')}
               </Button>
             </div>
           </div>

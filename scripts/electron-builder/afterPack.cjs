@@ -9,6 +9,28 @@ function listAsarEntries(archivePath) {
   return listPackage(archivePath);
 }
 
+// A transitive Jimp/whatwg-url import runs before the main window exists. The
+// dependency is explicit in package.json so electron-builder keeps it, and the
+// final archive must contain the entry points used by whatwg-url. Fail the
+// build rather than shipping another installer that crashes on first launch.
+function assertStartupUrlDependencies(resourcesRoot, listEntries = listAsarEntries) {
+  const archivePath = path.join(resourcesRoot, 'app.asar');
+  if (!fs.existsSync(archivePath)) {
+    throw new Error('[afterPack] Missing app.asar for startup dependency verification');
+  }
+  const entries = new Set(listEntries(archivePath).map((entry) => entry.replaceAll('\\', '/').replace(/^\//, '')));
+  for (const required of [
+    'node_modules/whatwg-url/lib/url-state-machine.js',
+    'node_modules/@exodus/bytes/package.json',
+    'node_modules/@exodus/bytes/encoding.js',
+    'node_modules/@exodus/bytes/whatwg.js',
+  ]) {
+    if (!entries.has(required)) {
+      throw new Error(`[afterPack] Missing main-process startup dependency in app.asar: ${required}`);
+    }
+  }
+}
+
 function copyOptionalFile(source, destination) {
   if (!fs.existsSync(source)) return false;
   fs.mkdirSync(path.dirname(destination), { recursive: true });
@@ -296,6 +318,7 @@ async function afterPack(context) {
   }
 
   assertRequiredBundledResources(resourcesRoot, platform, arch);
+  assertStartupUrlDependencies(resourcesRoot);
 
   if (isWin) {
     console.log('[afterPack] Copying Windows runtime DLLs for packaged app...');
@@ -482,4 +505,5 @@ module.exports.assertRequiredBundledResources = assertRequiredBundledResources;
 module.exports.assertBundledRelayLibvipsPolicy = assertBundledRelayLibvipsPolicy;
 module.exports.copyWindowsRuntimeDlls = copyWindowsRuntimeDlls;
 module.exports.assertWindowsDelayLoadDlls = assertWindowsDelayLoadDlls;
+module.exports.assertStartupUrlDependencies = assertStartupUrlDependencies;
 module.exports.getMacExtraResourceBinariesForSigning = getMacExtraResourceBinariesForSigning;

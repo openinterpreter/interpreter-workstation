@@ -19,6 +19,7 @@ import { LayoutContext } from '../../../src/contexts/LayoutContext';
 import type { Tab } from '../../../shared/types/layout';
 import type { SkillOption } from '../../../shared/types/skill';
 import { serializeSkillMentionToken } from '../../../shared/utils/skillMentions';
+import { isIpcUnavailableError } from '../../../shared/ipcAvailability';
 import { findPaneById } from '../../../src/utils/treeOperations';
 import { skills as skillsIpc, theme as themeIpc } from '../../../src/ipc';
 import type { ThemeChangedEvent } from '../../../electron/ipc/registry';
@@ -241,7 +242,7 @@ export const SuggestionChips: FC<SuggestionChipsProps> = ({
       try {
         response = await skillsIpc.list({ workspacePath: null });
       } catch (error) {
-        console.error('Failed to load skill creator:', error);
+        if (!isIpcUnavailableError(error)) console.error('Failed to load skill creator:', error);
         if (!cancelled) {
           setRememberSkillSuggestion(null);
         }

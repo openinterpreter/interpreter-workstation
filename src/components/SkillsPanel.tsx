@@ -4,6 +4,7 @@ import { BookOpen, Globe, Play, Plus, X } from 'lucide-react';
 import { showContextMenu, showItemInFolder, skills as skillsIpc, workspace, type ContextMenuItem } from '@/ipc';
 import { useLayout } from '../hooks/useLayout';
 import { serializeSkillMentionToken } from '../../shared/utils/skillMentions';
+import { isIpcUnavailableError } from '../../shared/ipcAvailability';
 import {
   AGENT_SEED_COMPOSER_EVENT,
   enqueuePendingAgentComposerSeed,
@@ -198,7 +199,7 @@ export function SkillsPanel({ isOpen, onOpenChange, onFileOpen }: SkillsPanelPro
       }
       setData(null);
     } catch (error) {
-      console.error('[SkillsPanel] Failed to load skills:', error);
+      if (!isIpcUnavailableError(error)) console.error('[SkillsPanel] Failed to load skills:', error);
       setData(null);
     }
   }, []);

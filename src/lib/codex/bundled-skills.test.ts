@@ -287,7 +287,9 @@ describe('bundled Codex skills', () => {
     expect(content).toContain('`computer-use`');
     expect(content).toContain('interpreter-app tools builtin-cua-driver get_app_state');
     expect(content).toContain('The tool surface is app-scoped and intentionally matches Computer Use');
-    expect(content).toContain('launch_app({app?, name?, bundle_id?, path?, executable?, urls?})');
+    expect(content).toContain('launch_app({app?, name?, bundle_id?, path?, urls?})');
+    expect(content).toContain('Linux: pass `path` with an absolute executable path');
+    expect(content).toContain('`path` is\n  not supported.');
     expect(content).toContain('When `builtin-cua-driver__...` tools are visible as top-level tools');
     expect(content).toContain("Otherwise use `builtin-cua-driver` through Interpreter's normal CLI transport");
     expect(content).toContain('Do not use shell commands, AppleScript, AppKit, Quartz');

@@ -6,10 +6,12 @@ import {
   getAgentServiceTierConfig,
   getProgrammaticTaskHttpError,
   getProgrammaticClientIdError,
+  getProgrammaticSenderError,
   getUnacknowledgedTaskError,
   parseProgrammaticTaskBody,
   resolveTestModelRuntime,
   toProgrammaticTaskProgressSseEvents,
+  withSenderHeader,
 } from './agent';
 
 describe('Simple mode service tier', () => {
@@ -22,7 +24,7 @@ describe('Simple mode service tier', () => {
 });
 
 describe('programmatic task HTTP transport', () => {
-  test('accepts an exact optional native client ID and rejects malformed values before admission', () => {
+  test('accepts a native client ID in the wake event ID alphabet and rejects malformed values before admission', () => {
     expect(parseProgrammaticTaskBody({ message: 'task', clientUserMessageId: 'origin_01' }).clientUserMessageId)
       .toBe('origin_01');
     expect(getProgrammaticClientIdError(undefined)).toBe(false);
@@ -30,6 +32,46 @@ describe('programmatic task HTTP transport', () => {
     for (const invalid of ['', 'a b', '../bad', 'x'.repeat(161), 1, null]) {
       expect(getProgrammaticClientIdError(invalid)).toBe(true);
     }
+  });
+  test('accepts an exact sender for existing-thread work and prefixes one header line', () => {
+    const thread = '00000000-0000-4000-8000-000000000001';
+    const body = { message: 'Run the report.', threadId: thread, clientUserMessageId: 'handoff_1',
+      sender: { computer: 'build-host-2', thread: 'origin_thread-7' } };
+    expect(getProgrammaticSenderError(body)).toBeNull();
+    const parsed = parseProgrammaticTaskBody(body);
+    expect(parsed.sender).toEqual({ computer: 'build-host-2', thread: 'origin_thread-7' });
+    expect(withSenderHeader(parsed.sender, parsed.message))
+      .toBe('[Sender: build-host-2 thread origin_thread-7]\nRun the report.');
+    const hostOnly = parseProgrammaticTaskBody({ ...body, sender: { computer: 'build-host-2' } });
+    expect(withSenderHeader(hostOnly.sender, 'line one\nline two'))
+      .toBe('[Sender: build-host-2]\nline one\nline two');
+  });
+  test('rejects malformed or unattached senders before admission', () => {
+    const base = { message: 'task', threadId: '00000000-0000-4000-8000-000000000001',
+      clientUserMessageId: 'handoff_2' };
+    for (const sender of [null, 'host', [], {}, { computer: 'A-host' }, { computer: '1host' },
+      { computer: 'h' }, { computer: `h${'a'.repeat(63)}` }, { computer: 'host_name' },
+      { computer: 'host', thread: '' }, { computer: 'host', thread: 'a b' },
+      { computer: 'host', thread: 'x'.repeat(161) }, { computer: 'host', thread: 7 },
+      { computer: 'host', extra: true }]) {
+      expect(getProgrammaticSenderError({ ...base, sender })).toBe('Invalid sender.');
+      expect(parseProgrammaticTaskBody({ ...base, sender }).sender).toBeUndefined();
+    }
+    const sender = { computer: 'host' };
+    expect(getProgrammaticSenderError({ message: 'task', clientUserMessageId: 'c1', sender }))
+      .toBe('sender requires threadId.');
+    expect(getProgrammaticSenderError({ message: 'task', threadId: '  ', clientUserMessageId: 'c1', sender }))
+      .toBe('sender requires threadId.');
+    // The sender check covers only the sender; the task routes require a
+    // client ID for any input to an existing thread.
+    expect(getProgrammaticSenderError({ message: 'task', threadId: base.threadId, sender })).toBeNull();
+  });
+  test('a request without sender is unchanged', () => {
+    const body = { message: 'Plain task.', threadId: '00000000-0000-4000-8000-000000000001' };
+    expect(getProgrammaticSenderError(body)).toBeNull();
+    const parsed = parseProgrammaticTaskBody(body);
+    expect(parsed.sender).toBeUndefined();
+    expect(withSenderHeader(parsed.sender, parsed.message)).toBe('Plain task.');
   });
   test('keeps whole-task and turn-idle timeouts separate', () => {
     const parsed = parseProgrammaticTaskBody({
