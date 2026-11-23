@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import express from 'express';
 import request from 'supertest';
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -75,7 +76,8 @@ describe('unmounted workspace administration registry', () => {
     expect((await directory.listWorkspaces(other.identity)).length).toBe(0);
     const events = await directory.listAudit(admin.identity);
     expect(events.some((event) => event.targetWorkspaceId === 'research' && event.action === 'organization.workspace.create' && event.outcome === 'allowed')).toBe(true);
-    expect(events.some((event) => event.targetOrganizationId === 'org-b' && event.action === 'organization.workspace.read.cross-tenant')).toBe(true);
+    expect(events.some((event) => event.targetDigest === `organization:${createHash('sha256').update('org-b').digest('hex').slice(0, 16)}` &&
+      event.targetOrganizationId === undefined && event.action === 'organization.workspace.read.cross-tenant')).toBe(true);
     await directory.revokeSession(admin.identity);
     expect((await get(path)).status).toBe(403);
     expect((await post(path, { id: 'after', name: 'After' })).status).toBe(403);

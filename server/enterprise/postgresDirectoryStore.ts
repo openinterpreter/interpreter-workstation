@@ -180,7 +180,8 @@ function scopedTenantState(state: DirectoryState, organizationId: string): Direc
   if (Object.keys(state.organizations).some((id) => id !== organizationId) ||
       Object.values(state.attempts).some((attempt) => attempt.organizationId !== organizationId) ||
       Object.values(state.sessions).some((session) => session.organizationId !== organizationId) ||
-      state.audit.some((event) => event.organizationId !== organizationId)) {
+      state.audit.some((event) => event.organizationId !== organizationId) ||
+      (state.pendingAudit ?? []).some(({ event }) => event.organizationId !== organizationId)) {
     throw new Error('Cross-tenant directory state');
   }
   return state;
@@ -305,8 +306,8 @@ export class TenantPostgresDirectoryStore implements EnterpriseStateStore {
       const originalAudit = this.table === 'public.interpreter_enterprise_rls_directory'
         ? JSON.stringify(state.audit) : '';
       const originalAuditCount = state.audit.length;
-      const priorProofs = new Map(Object.entries(state.organizations[this.organizationId]?.domainProofs ?? {})
-        .map(([domain, proof]) => [domain, `${proof.challengeHash}:${proof.verifiedUntil ?? 0}`]));
+      const priorLeases = new Map(Object.entries(state.organizations[this.organizationId]?.domainProofs ?? {})
+        .map(([domain, proof]) => [domain, proof.verifiedUntil ?? 0]));
       const result = fn(state);
       scopedTenantState(state, this.organizationId);
       if (!state.organizations[this.organizationId]) throw new Error('Tenant is not bootstrapped');
@@ -317,11 +318,16 @@ export class TenantPostgresDirectoryStore implements EnterpriseStateStore {
       const content = JSON.stringify(state);
       if (Buffer.byteLength(content, 'utf8') > MAX_DIRECTORY_BYTES) throw new Error('Tenant directory capacity reached');
       if (this.table === 'public.interpreter_enterprise_rls_directory') {
-        // Reserve a name in the same row-locked transaction as its challenge,
-        // confirmation and audit append. A foreign claim is invisible under
-        // RLS but the unique index prevents concurrent cross-tenant overlap.
+        // A claim row exists only for a verified domain. Take it when this
+        // transaction sets or extends a live lease (successful DNS
+        // verification), never for a mere challenge, in the same row-locked
+        // transaction as the proof and audit append. A foreign claim is
+        // invisible under RLS but the unique index denies the overlap and
+        // rolls back the tentative verification.
+        const now = Date.now();
         for (const [domain, proof] of Object.entries(state.organizations[this.organizationId]?.domainProofs ?? {})) {
-          if (priorProofs.get(domain) === `${proof.challengeHash}:${proof.verifiedUntil ?? 0}`) continue;
+          const lease = proof.verifiedUntil ?? 0;
+          if (lease <= now || priorLeases.get(domain) === lease) continue;
           const owned = await client.query(`SELECT domain FROM public.interpreter_enterprise_rls_domain_claim
             WHERE domain = $1 AND organization_id = $2 AND issuer = $3 AND database_role = current_user`,
           [domain, this.organizationId, proof.issuer]);
