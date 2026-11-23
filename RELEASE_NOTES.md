@@ -1,9 +1,8 @@
-<!-- release-notes-for: 0.2.254 -->
+<!-- release-notes-for: 0.2.255 -->
 ## What's new
 
-- Aligns the bundled Simple project runtime and generated projects on Next.js 16.4.5.
-- Allows voice input while an agent response is in progress without replacing the stop control.
-- Refreshes application dependencies and their lockfile.
+- Attributes each remote input's outcome to its own saved turn item instead of returning another input's reply.
+- Fails closed when an older input has no separately attributable answer.
 
 ## Distribution
 
