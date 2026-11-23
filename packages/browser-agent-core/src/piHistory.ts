@@ -11,7 +11,7 @@ function protocolJson(value: unknown): JsonValue {
 /** Restore a Pi transcript as the *existing* app-server thread history contract. */
 export function projectPiHistory(projectId: string, threadId: string, modelProvider: string,
   modelId: string, messages: readonly AgentMessage[], interruptedTurnIds: readonly string[] = [],
-  failedTurns: Readonly<Record<string, 'failed' | 'truncated' | 'storage'>> = {}): v2.Thread {
+  failedTurns: Readonly<Record<string, 'failed' | 'truncated' | 'storage' | 'rejected'>> = {}): v2.Thread {
   const interrupted = new Set(interruptedTurnIds);
   const turns: v2.Turn[] = [];
   const pending = new Map<string, Extract<v2.ThreadItem, { type: 'mcpToolCall' }>>();

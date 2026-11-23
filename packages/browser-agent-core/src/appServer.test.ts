@@ -119,7 +119,13 @@ test('gated JSON-RPC errors expose a fixed typed code without provider details',
   const response = await server.handle({ jsonrpc: '2.0', id: 8,
     method: CLIENT_METHOD.threadRead, params: { threadId: 'thread_one', includeTurns: true } });
   expect(response.error?.data?.code).toBe('storage-unavailable');
+  expect(response.error?.message).toBe('Browser presentation storage-unavailable');
   expect(JSON.stringify(response)).not.toContain('provider');
+  server.session.historyThread = () => { throw new Error('sensitive-provider-internals'); };
+  const unknown = await server.handle({ jsonrpc: '2.0', id: 10,
+    method: CLIENT_METHOD.threadRead, params: { threadId: 'thread_one', includeTurns: true } });
+  expect(unknown.error).toEqual({ code: -32000, message: 'Browser presentation rejected',
+    data: { code: 'rejected' } });
   expect((await server.handle({ jsonrpc: 'broken', id: 9 })).error?.data?.code)
     .toBe('rejected');
 });

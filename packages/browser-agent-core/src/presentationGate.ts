@@ -52,7 +52,8 @@ export function presentationCandidate(transcript: BrowserPiTranscript, start: nu
   for (const message of messages.slice(1)) {
     if (final) throw new BrowserPresentationError('incomplete');
     if (message.role === 'assistant') {
-      const texts = message.content.filter(part => part.type === 'text').map(part => part.text);
+      const texts = message.content.filter(part => part.type === 'text').map(part => part.text)
+        .filter(text => text.length > 0);
       answerParts.push(...texts);
       for (const part of message.content) {
         if (part.type === 'toolCall') {

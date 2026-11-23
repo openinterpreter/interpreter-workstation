@@ -88,6 +88,21 @@ test('validation retains exact text boundaries rather than manufacturing a numbe
   expect(candidate.answer).toBe('');
 });
 
+test('candidate omits empty assistant text parts that the history projection cannot present', () => {
+  const timestamp = Date.now();
+  const messages: BrowserPiTranscript['messages'] = [
+    { role: 'user', content: 'Measure', timestamp },
+    { role: 'assistant', content: [{ type: 'text', text: '' },
+      { type: 'text', text: 'Answer' }], api: model.api, provider: model.provider,
+      model: model.id, stopReason: 'stop', timestamp,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } },
+  ];
+  const candidate = presentationCandidate({ version: 1, projectId: options.projectId,
+    threadId: options.threadId, revision: 1, messages }, 0, messages.length, 'run-1');
+  expect(candidate.answerParts).toEqual(['Answer']);
+});
+
 test('reload validation sees earlier assistant text before exposing any turn item', async () => {
   const timestamp = Date.now();
   const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
@@ -263,6 +278,107 @@ test('normal Stop before any tool result leaves the gated session usable', async
   expect(calls).toBe(2);
   expect(session.historyThread().turns.at(-1)?.status).toBe('completed');
   session.dispose();
+});
+
+test('Stop during the initial journal transaction leaves the gated session usable', async () => {
+  class StoppedInitialJournal extends DurableTestStore {
+    first = true;
+    entered!: () => void;
+    writing = new Promise<void>(resolve => { this.entered = resolve; });
+    override async compareAndSwapTerminal(value: BrowserPiTranscript, revision: number,
+      signal?: AbortSignal) {
+      if (this.first) {
+        this.first = false;
+        this.entered();
+        return new Promise<void>((_, reject) => {
+          if (signal?.aborted) { reject(new DOMException('Aborted', 'AbortError')); return; }
+          signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')),
+            { once: true });
+        });
+      }
+      return super.compareAndSwapTerminal(value, revision, signal);
+    }
+  }
+  const store = new StoppedInitialJournal();
+  const session = await BrowserPiAppServerSession.open({ ...options,
+    presentationValidator: () => ({ accept: true }) }, store);
+  const first = session.send(request);
+  await store.writing;
+  session.stop({ threadId: options.threadId });
+  await first;
+  await session.send(request);
+  expect(session.historyThread().turns.at(-1)?.status).toBe('completed');
+  session.dispose();
+});
+
+test('Stop during a tool-result journal transaction retains committed context and permits another send', async () => {
+  class StoppedToolJournal extends DurableTestStore {
+    entered!: () => void;
+    writing = new Promise<void>(resolve => { this.entered = resolve; });
+    override async compareAndSwapTerminal(value: BrowserPiTranscript, revision: number,
+      signal?: AbortSignal) {
+      if (value.messages.some(message => message.role === 'toolResult')) {
+        this.entered();
+        return new Promise<void>((_, reject) => {
+          signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')),
+            { once: true });
+        });
+      }
+      return super.compareAndSwapTerminal(value, revision, signal);
+    }
+  }
+  const store = new StoppedToolJournal();
+  let calls = 0;
+  const toolStream: StreamFn = () => {
+    const stream = createAssistantMessageEventStream();
+    const first = ++calls === 1;
+    const message = { role: 'assistant' as const,
+      content: first ? [{ type: 'toolCall' as const, id: 'call_0', name: 'measure', arguments: {} }]
+        : [{ type: 'text' as const, text: 'Verified answer' }], api: model.api,
+      provider: model.provider, model: model.id, timestamp: Date.now(),
+      stopReason: first ? 'toolUse' as const : 'stop' as const,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+    queueMicrotask(() => { stream.push({ type: 'start', partial: message });
+      stream.push({ type: 'done', reason: message.stopReason, message }); });
+    return stream;
+  };
+  const session = await BrowserPiAppServerSession.open({ ...options, streamFn: toolStream,
+    tools: [{ name: 'measure', label: 'Measure', description: 'Measure',
+      parameters: { type: 'object', properties: {} },
+      execute: async () => ({ content: [{ type: 'text' as const, text: '7' }], details: null }) }],
+    presentationValidator: () => ({ accept: true }) }, store);
+  const first = session.send(request);
+  await store.writing;
+  session.stop({ threadId: options.threadId });
+  await first;
+  await session.send(request);
+  expect(session.historyThread().turns.at(-1)?.status).toBe('completed');
+  session.dispose();
+});
+
+test('validator rejection with a terminal rollback leaves a usable gated session', async () => {
+  const store = new DurableTestStore();
+  let decisions = 0;
+  const session = await BrowserPiAppServerSession.open({ ...options,
+    presentationValidator: () => ++decisions === 1
+      ? { accept: false, reason: 'not grounded' } : { accept: true } }, store);
+  await session.send(request);
+  const first = session.historyThread();
+  expect(first.turns).toHaveLength(1);
+  expect(first.turns[0]).toMatchObject({ status: 'failed',
+    error: { additionalDetails: 'browserPresentation:rejected' } });
+  expect(first.turns[0].items.every(item => item.type === 'userMessage')).toBe(true);
+  await session.send(request);
+  expect(session.historyThread().turns.at(-1)?.status).toBe('completed');
+  session.dispose();
+  const reloaded = await BrowserPiAppServerSession.open({ ...options,
+    presentationValidator: () => ({ accept: true }) }, store);
+  expect(reloaded.historyThread().turns[0]).toMatchObject({ status: 'failed',
+    error: { additionalDetails: 'browserPresentation:rejected' } });
+  await reloaded.send(request);
+  expect(reloaded.historyThread().turns.at(-1)?.status).toBe('completed');
+  reloaded.dispose();
 });
 
 test('a second send on the same gated session fails typed busy without starting a turn', async () => {
@@ -445,7 +561,7 @@ test('strict IndexedDB transaction reaches its terminal event before answer publ
   let strict = false;
   let terminal = false;
   let released = false;
-  let observed = false;
+  const observations: Array<{ strict: boolean; terminal: boolean; released: boolean }> = [];
   db.transaction = ((names: string | string[], mode?: IDBTransactionMode,
     options?: IDBTransactionOptions) => {
     const transaction = original(names, mode, options);
@@ -464,14 +580,11 @@ test('strict IndexedDB transaction reaches its terminal event before answer publ
     presentationValidator: () => ({ accept: true }),
     onEvent: event => {
       if (event.event === 'final') {
-        observed = true;
-        expect(strict).toBe(true);
-        expect(terminal).toBe(true);
-        expect(released).toBe(false);
+        observations.push({ strict, terminal, released });
       }
     } }, store);
   await session.send(request);
-  expect(observed).toBe(true);
+  expect(observations).toEqual([{ strict: true, terminal: true, released: false }]);
   expect(terminal).toBe(true);
   expect(released).toBe(true);
   session.dispose();

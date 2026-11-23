@@ -9,7 +9,7 @@ export type BrowserPiTranscript = {
   /** User turns whose model stopped before a final answer; their completed tools are context, not work to replay. */
   interruptedTurnIds?: string[];
   /** Terminal failures after durable tool results; distinct from explicit user interruption. */
-  failedTurns?: Record<string, 'failed' | 'truncated' | 'storage'>;
+  failedTurns?: Record<string, 'failed' | 'truncated' | 'storage' | 'rejected'>;
   /** Validated turn identity is retained for revalidation, never itself an authorization. */
   presentationRuns?: Record<string, string>;
   /** Exact revision of the pre-turn durable transcript supplied to the validator. */
@@ -90,7 +90,8 @@ export function validatePiTranscript(value: unknown, projectId: string, threadId
       (record.failedTurns !== undefined && (!plain(record.failedTurns) ||
         Object.keys(record.failedTurns).length > 64 ||
         Object.entries(record.failedTurns).some(([id, kind]) =>
-          !/^pi-turn-\d+$/.test(id) || kind !== 'failed' && kind !== 'truncated' && kind !== 'storage'))) ||
+          !/^pi-turn-\d+$/.test(id) || kind !== 'failed' && kind !== 'truncated' &&
+            kind !== 'storage' && kind !== 'rejected'))) ||
       (record.presentationRuns !== undefined && (!plain(record.presentationRuns) ||
         Object.keys(record.presentationRuns).length > 64 ||
         Object.entries(record.presentationRuns).some(([id, run]) =>
@@ -231,9 +232,10 @@ export class IndexedDbPiTranscriptStore implements BrowserPiTranscriptStore {
       // An error precedes the transaction abort event; do not release the
       // cross-tab lease while IndexedDB is still deciding the write outcome.
       transaction.onerror = () => { /* onabort is the terminal event */ };
-      transaction.onabort = () => finish(new Error(conflict
-        ? 'Browser Pi transcript changed in another tab; reload before sending'
-        : abortRequested ? 'Browser transcript write aborted' : 'Browser Pi transcript write failed'));
+      transaction.onabort = () => finish(abortRequested
+        ? new DOMException('Browser transcript write aborted', 'AbortError')
+        : new Error(conflict ? 'Browser Pi transcript changed in another tab; reload before sending'
+          : 'Browser Pi transcript write failed'));
     });
   }
 }

@@ -94,7 +94,7 @@ export class BrowserPiAppServerSession {
     return new BrowserPresentationError('incomplete');
   }
   private interruptedTurnIds: string[] = [];
-  private failedTurns: Record<string, 'failed' | 'truncated' | 'storage'> = {};
+  private failedTurns: Record<string, 'failed' | 'truncated' | 'storage' | 'rejected'> = {};
   private readonly agentOptions: BrowserPiSessionOptions;
   private readonly validatedTurns = new Set<string>();
   private unverifiedHistory = false;
@@ -238,6 +238,7 @@ export class BrowserPiAppServerSession {
         // over every complete turn before exposing any part of its answer.
         for (const [start, message] of transcript.messages.entries()) {
           if (message.role !== 'user') continue;
+          if (transcript.failedTurns?.[`pi-turn-${start}`] === 'rejected') continue;
           const end = transcript.messages.findIndex((next, index) => index > start && next.role === 'user');
           const stop = end < 0 ? transcript.messages.length : end;
           try {
@@ -322,8 +323,10 @@ export class BrowserPiAppServerSession {
     if (!this.agentOptions.presentationValidator) return thread;
     return { ...thread, turns: thread.turns.map(turn => this.validatedTurns.has(turn.id) ? turn : {
       ...turn, status: 'failed' as const, items: turn.items.filter(item => item.type === 'userMessage'),
-      error: { message: 'Browser presentation incomplete', codexErrorInfo: null,
-        additionalDetails: 'browserPresentation:incomplete', misalignment: null },
+      error: { message: this.failedTurns[turn.id] === 'rejected'
+        ? 'Browser presentation rejected' : 'Browser presentation incomplete', codexErrorInfo: null,
+        additionalDetails: this.failedTurns[turn.id] === 'rejected'
+          ? 'browserPresentation:rejected' : 'browserPresentation:incomplete', misalignment: null },
     }) };
   }
 
@@ -582,7 +585,11 @@ export class BrowserPiAppServerSession {
         await this.writeTranscript(next, writeAbort.signal);
         this.revision = next.revision;
         journalMessages = messages;
-      }).catch(() => {
+      }).catch(error => {
+        // An aborted IndexedDB transaction is terminal and has not written.
+        // Stop can cancel a journal without making the entire session ambiguous.
+        if (this.presentationGated && this.stoppedTurn === turnId &&
+            error instanceof Error && error.name === 'AbortError') throw error;
         saving = true;
         this.unavailableReason = 'Browser conversation storage unavailable; reload before sending';
         agent.abort();
@@ -744,12 +751,42 @@ export class BrowserPiAppServerSession {
     } catch (failure) {
       this.pendingItems = [];
       this.pendingBytes = 0;
+      let cleanStoppedJournal = false;
+      if (this.presentationGated && this.stoppedTurn === turnId && !expired && !saving) {
+        try {
+          await journalWrites.catch(error => {
+            if (!(error instanceof Error) || error.name !== 'AbortError') throw error;
+          });
+          // The transaction's terminal abort guarantees no half-write. Still
+          // compare the exact durable revision before making this tab usable.
+          let readTimer: ReturnType<typeof setTimeout> | undefined;
+          let persisted: BrowserPiTranscript | null;
+          try {
+            persisted = await Promise.race([this.storage!.read(this.projectId, this.threadId),
+              new Promise<never>((_, reject) => {
+                readTimer = setTimeout(() => reject(new BrowserPresentationError('storage-unavailable')),
+                  TERMINAL_EVENT_GRACE_MS);
+              })]);
+          } finally { if (readTimer) clearTimeout(readTimer); }
+          if ((persisted?.revision ?? 0) !== this.revision ||
+              (persisted ? transcriptDigest(persisted) : null) !== this.knownDurableDigest)
+            throw new BrowserPresentationError('storage-unavailable');
+          const replacement = this.newAgent();
+          replacement.state.messages = persisted?.messages ?? priorMessages;
+          this.internalAgent = replacement;
+          this.interruptedTurnIds = persisted?.interruptedTurnIds ?? [];
+          this.failedTurns = persisted?.failedTurns ?? {};
+          cleanStoppedJournal = true;
+        } catch {
+          this.unavailableReason = 'Browser conversation storage unavailable; reload before sending';
+        }
+      }
       const modelFailure = [...agent.state.messages.slice(priorMessages.length)].reverse().find(message =>
         message.role === 'assistant' && message.stopReason === 'error');
       const truncated = modelFailure?.role === 'assistant' &&
         modelFailure.errorMessage === 'Browser local model output truncated' ||
         failure instanceof Error && failure.message === 'Browser local model output truncated';
-      if (expired || this.stoppedTurn === turnId || completedTools.length) {
+      if (!cleanStoppedJournal && (expired || this.stoppedTurn === turnId || completedTools.length)) {
         // A provider can ignore abort, a later output can fail validation, or
         // the final save can fail. None may erase earlier committed tool results.
         try {
@@ -792,19 +829,28 @@ export class BrowserPiAppServerSession {
         } catch {
           this.unavailableReason = 'Browser conversation storage unavailable; reload before sending';
         }
-      } else if (this.storage && this.revision !== priorRevision && !saving) {
+      } else if (!cleanStoppedJournal && this.storage && this.revision !== priorRevision && !saving) {
         // Failed model/projection turns must not leave a provisional user or
         // partial tool trace that a later reload mistakes for an interruption.
         try {
           await journalWrites;
+          const rejected = this.presentationGated && failure instanceof BrowserPresentationError &&
+            failure.code === 'rejected';
           const previous: BrowserPiTranscript = { version: 1, projectId: this.projectId,
             threadId: this.threadId, revision: this.revision + 1,
-            messages: priorMessages, interruptedTurnIds: this.interruptedTurnIds,
-            failedTurns: this.failedTurns,
+            messages: rejected ? journalMessages : priorMessages,
+            interruptedTurnIds: this.interruptedTurnIds,
+            failedTurns: rejected ? { ...this.failedTurns, [turnId]: 'rejected' } : this.failedTurns,
             ...(this.agentOptions.presentationValidator ? { presentationRuns: this.presentationRuns,
               presentationPriorRevisions: this.presentationPriorRevisions } : {}) };
           await this.writeTranscript(previous, writeAbort.signal);
           this.revision = previous.revision;
+          if (this.presentationGated) {
+            this.failedTurns = previous.failedTurns ?? {};
+            const replacement = this.newAgent();
+            replacement.state.messages = previous.messages;
+            this.internalAgent = replacement;
+          }
         } catch { this.unavailableReason = 'Browser conversation storage unavailable; reload before sending'; }
       }
       if (this.presentationGated && saving)
