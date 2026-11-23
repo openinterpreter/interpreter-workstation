@@ -63,7 +63,7 @@ export class BrowserProjectAppServer {
     const threadId = this.session.threadId;
     if (method === CLIENT_METHOD.interpreterProviderList ||
         method === CLIENT_METHOD.interpreterModelList || method === CLIENT_METHOD.modelList) {
-      const model = this.session.agent.state.model;
+      const model = this.session.model;
       if (this.session.catalog)
         return new BrowserModelCatalogAppServer(this.session.catalog, model.provider, model.id)
           .request(method, params);
@@ -108,7 +108,7 @@ export class BrowserProjectAppServer {
       if (input.threadId !== threadId || !Array.isArray(input.input) || input.input.length !== 1 ||
           input.input[0]?.type !== 'text' || input.input[0].text_elements.length ||
           input.cwd != null && input.cwd !== `browser-project:${this.session.projectId}` ||
-          input.model != null && input.model !== this.session.agent.state.model.id ||
+          input.model != null && input.model !== this.session.model.id ||
           input.toolOutput != null || input.disabledPluginIds?.length || input.outputSchema != null ||
           input.approvalPolicy != null || input.sandboxPolicy != null || input.approvalsReviewer != null ||
           input.serviceTier != null || input.serviceTierForTurn != null || input.effort != null ||

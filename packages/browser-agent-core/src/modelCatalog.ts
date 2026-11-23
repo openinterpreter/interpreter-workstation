@@ -1,6 +1,7 @@
 import type { Model } from '@earendil-works/pi-ai';
 import type { AgentTool, StreamFn } from '@earendil-works/pi-agent-core';
 import { BrowserPiAppServerSession } from './piSession';
+import type { PresentationValidator } from './presentationGate';
 import type { BrowserPiTranscriptStore } from './piTranscript';
 import type { InputModality } from '../../../server/handlers/codex-generated-types/InputModality';
 import { acquireGgufAsset } from './ggufStore';
@@ -195,6 +196,7 @@ export class BrowserLocalModelCatalog {
   async openSession(options: { projectId: string; modelId?: string; threadId: string;
     providerId?: string; signal?: AbortSignal; tools: AgentTool<any>[];
     systemPrompt: string; storage?: BrowserPiTranscriptStore; timeoutMs?: number; maxTurns?: number;
+    presentationValidator?: PresentationValidator;
     /** Internal/test seam. The normal browser runtime uses the package's lazy GGUF engine. */
     load?: (model: BrowserModelDescriptor, asset: (path: string) => Promise<Uint8Array>) => Promise<BrowserModelRuntime>;
   }): Promise<BrowserPiAppServerSession> {
@@ -227,7 +229,8 @@ export class BrowserLocalModelCatalog {
       threadId: options.threadId,
       model: runtime.model, streamFn: runtime.streamFn, tools: options.tools,
       systemPrompt: options.systemPrompt, timeoutMs: options.timeoutMs,
-      maxTurns: options.maxTurns, catalog: this, onDispose: runtime.dispose }, options.storage);
+      maxTurns: options.maxTurns, catalog: this, onDispose: runtime.dispose,
+      presentationValidator: options.presentationValidator }, options.storage);
     } catch (error) { runtime.dispose?.(); throw error; }
     try {
       this.select(options.projectId, descriptor.id);

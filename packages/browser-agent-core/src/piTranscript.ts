@@ -10,10 +10,20 @@ export type BrowserPiTranscript = {
   interruptedTurnIds?: string[];
   /** Terminal failures after durable tool results; distinct from explicit user interruption. */
   failedTurns?: Record<string, 'failed' | 'truncated' | 'storage'>;
+  /** Validated turn identity is retained for revalidation, never itself an authorization. */
+  presentationRuns?: Record<string, string>;
+  /** Exact revision of the pre-turn durable transcript supplied to the validator. */
+  presentationPriorRevisions?: Record<string, number>;
 };
 export type BrowserPiTranscriptStore = {
+  /** Reviewed persistent stores opt in to the presentation gate; volatile stores never do. */
+  readonly durability?: 'persistent';
+  readonly crossTabLockCapability?: boolean;
   read(projectId: string, threadId: string): Promise<BrowserPiTranscript | null>;
   compareAndSwap(value: BrowserPiTranscript, expectedRevision: number): Promise<void>;
+  /** Settles only after a transaction completes or aborts; abort cannot leave a pending write. */
+  compareAndSwapTerminal?(value: BrowserPiTranscript, expectedRevision: number,
+    signal?: AbortSignal): Promise<void>;
   /** Hold an exclusive per-thread lease through model and tool execution, not just the final write. */
   runExclusive<T>(projectId: string, threadId: string, action: () => Promise<T>): Promise<T>;
 };
@@ -60,7 +70,8 @@ export function validatePiTranscript(value: unknown, projectId: string, threadId
     throw new Error('Browser conversation exceeds finite capacity; start a new thread');
   const keys = Object.keys(record);
   if (keys.some(key => !['messages', 'projectId', 'revision', 'threadId', 'version',
-    'interruptedTurnIds', 'failedTurns'].includes(key)) || keys.length < 5 ||
+    'interruptedTurnIds', 'failedTurns', 'presentationRuns', 'presentationPriorRevisions']
+      .includes(key)) || keys.length < 5 ||
       record.version !== 1 || record.projectId !== projectId || record.threadId !== threadId ||
       !Number.isSafeInteger(record.revision) || (record.revision as number) < 0 ||
       !Array.isArray(record.messages) ||
@@ -71,7 +82,19 @@ export function validatePiTranscript(value: unknown, projectId: string, threadId
       (record.failedTurns !== undefined && (!plain(record.failedTurns) ||
         Object.keys(record.failedTurns).length > 64 ||
         Object.entries(record.failedTurns).some(([id, kind]) =>
-          !/^pi-turn-\d+$/.test(id) || kind !== 'failed' && kind !== 'truncated' && kind !== 'storage'))))
+          !/^pi-turn-\d+$/.test(id) || kind !== 'failed' && kind !== 'truncated' && kind !== 'storage'))) ||
+      (record.presentationRuns !== undefined && (!plain(record.presentationRuns) ||
+        Object.keys(record.presentationRuns).length > 64 ||
+        Object.entries(record.presentationRuns).some(([id, run]) =>
+          !/^pi-turn-\d+$/.test(id) || typeof run !== 'string' || run.length < 1 || run.length > 160))) ||
+      (record.presentationPriorRevisions !== undefined &&
+        (!plain(record.presentationPriorRevisions) ||
+          Object.keys(record.presentationPriorRevisions).length > 64 ||
+          Object.entries(record.presentationPriorRevisions).some(([id, revision]) =>
+            !/^pi-turn-\d+$/.test(id) || !Number.isSafeInteger(revision) || Number(revision) < 0))) ||
+      Object.keys(record.presentationRuns ?? {}).some(id =>
+        !plain(record.presentationPriorRevisions) ||
+        !Object.prototype.hasOwnProperty.call(record.presentationPriorRevisions, id)))
     throw new Error('Invalid browser Pi transcript');
   if (record.interruptedTurnIds !== undefined) {
     const userTurnIds = new Set((record.messages as AgentMessage[]).flatMap((message, index) =>
@@ -87,11 +110,22 @@ export function validatePiTranscript(value: unknown, projectId: string, threadId
       (record.interruptedTurnIds as string[] | undefined)?.includes(id)))
       throw new Error('Invalid browser Pi failed turn journal');
   }
+  if (record.presentationRuns !== undefined) {
+    const userTurnIds = new Set((record.messages as AgentMessage[]).flatMap((message, index) =>
+      message.role === 'user' ? [`pi-turn-${index}`] : []));
+    if (Object.keys(record.presentationRuns).some(id => !userTurnIds.has(id)) ||
+      Object.keys(record.presentationPriorRevisions ?? {}).some(id => !userTurnIds.has(id)))
+      throw new Error('Invalid browser presentation turn identity');
+  }
   return structuredClone(record) as BrowserPiTranscript;
 }
 
 /** Atomic IndexedDB CAS prevents two tabs from silently overwriting a retained Pi conversation. */
 export class IndexedDbPiTranscriptStore implements BrowserPiTranscriptStore {
+  readonly durability = 'persistent' as const;
+  get crossTabLockCapability(): boolean {
+    return typeof navigator !== 'undefined' && !!navigator.locks?.request;
+  }
   private readonly db: Promise<IDBDatabase>;
   constructor(name = 'interpreter-browser-pi-v1') {
     if (typeof indexedDB === 'undefined') throw new Error('Browser Pi persistent storage unavailable');
@@ -144,6 +178,51 @@ export class IndexedDbPiTranscriptStore implements BrowserPiTranscriptStore {
       transaction.onabort = () => reject(new Error(conflict
         ? 'Browser Pi transcript changed in another tab; reload before sending'
         : 'Browser Pi transcript write failed'));
+    });
+  }
+
+  async compareAndSwapTerminal(value: BrowserPiTranscript, expectedRevision: number,
+    signal?: AbortSignal): Promise<void> {
+    const next = validatePiTranscript(value, value.projectId, value.threadId);
+    if (next.revision !== expectedRevision + 1) throw new Error('Invalid Pi transcript revision');
+    if (signal?.aborted) throw new DOMException('Browser transcript write aborted', 'AbortError');
+    let abortOpening: (() => void) | undefined;
+    const openingAborted = new Promise<never>((_, reject) => {
+      abortOpening = () => reject(new DOMException('Browser transcript write aborted', 'AbortError'));
+      signal?.addEventListener('abort', abortOpening, { once: true });
+    });
+    let db: IDBDatabase;
+    try { db = await Promise.race([this.db, openingAborted]); }
+    finally { if (abortOpening) signal?.removeEventListener('abort', abortOpening); }
+    if (signal?.aborted) throw new DOMException('Browser transcript write aborted', 'AbortError');
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction('threads', 'readwrite');
+      let conflict = false;
+      let abortRequested = false;
+      const abort = () => {
+        abortRequested = true;
+        try { transaction.abort(); } catch { /* terminal event already queued */ }
+      };
+      signal?.addEventListener('abort', abort, { once: true });
+      const request = transaction.objectStore('threads').get(`${next.projectId}:${next.threadId}`);
+      if (signal?.aborted) abort();
+      request.onsuccess = () => {
+        if (abortRequested) return;
+        if ((request.result?.revision ?? 0) !== expectedRevision) {
+          conflict = true; transaction.abort();
+        } else transaction.objectStore('threads').put(next, `${next.projectId}:${next.threadId}`);
+      };
+      const finish = (error?: Error) => {
+        signal?.removeEventListener('abort', abort);
+        if (error) reject(error); else resolve();
+      };
+      transaction.oncomplete = () => finish();
+      // An error precedes the transaction abort event; do not release the
+      // cross-tab lease while IndexedDB is still deciding the write outcome.
+      transaction.onerror = () => { /* onabort is the terminal event */ };
+      transaction.onabort = () => finish(new Error(conflict
+        ? 'Browser Pi transcript changed in another tab; reload before sending'
+        : abortRequested ? 'Browser transcript write aborted' : 'Browser Pi transcript write failed'));
     });
   }
 }
