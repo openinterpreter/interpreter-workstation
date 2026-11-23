@@ -6,8 +6,10 @@ import { server as mockServer } from '../../tests/setup/msw-server';
 
 // These tests talk to real listeners on loopback; let those requests through
 // the suite-wide request mock, which otherwise rejects anything unhandled.
+// The mock names a request by its Host header or by a path that begins with
+// two slashes, so the public names these tests send to loopback pass too.
 beforeEach(() => {
-  mockServer.use(mockHttp.all(/^http:\/\/127\.0\.0\.1:\d+\//, () => passthrough()));
+  mockServer.use(mockHttp.all(/^http:\/\/(127\.0\.0\.1:\d+|preview\.example|evil\.example)\//, () => passthrough()));
 });
 import {
   SIMPLE_PREVIEW_COOKIE,
@@ -246,6 +248,7 @@ async function protectedProxy(activeSubjects: Set<string>) {
   upstream.on('upgrade', (_request, socket) => {
     socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n');
     socket.on('error', () => socket.destroy());
+    closers.push(() => { socket.destroy(); });
   });
   const upstreamPort = await listen(upstream);
   const proxy = await startSimplePreviewProxy({

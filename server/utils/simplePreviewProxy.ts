@@ -391,7 +391,9 @@ async function forwardUpgrade(
   if (access) {
     const authorization = await authorizePreviewRequest(request, access);
     if (!authorization.allowed) {
-      socket.end('HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
+      // Nothing reads this socket again, so close it once the refusal is
+      // written instead of waiting for the other side to finish.
+      socket.end('HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n', () => socket.destroy());
       return;
     }
     if (authorization.strippedUrl !== null) request.url = authorization.strippedUrl;
