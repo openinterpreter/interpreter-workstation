@@ -36,6 +36,23 @@ async function fixture() {
 }
 
 describe('unmounted operator domain-proof boundary', () => {
+  test('does not resolve unchallenged, foreign or expired domains', async () => {
+    const { first, second, file, admin, foreign, queries } = await fixture();
+    await expect(first.confirmDomainProof(admin.identity, 'unchallenged.test')).rejects.toThrow('Access denied');
+    await first.beginDomainProof(admin.identity, 'reserved.test');
+    await expect(second.confirmDomainProof(foreign.identity, 'reserved.test')).rejects.toThrow('Access denied');
+    const state = JSON.parse(await readFile(file, 'utf8'));
+    state.organizations['org-a'].domainProofs['reserved.test'].expiresAt = Date.now() - 1;
+    await writeFile(file, JSON.stringify(state));
+    await expect(second.confirmDomainProof(admin.identity, 'reserved.test')).rejects.toThrow('Access denied');
+    expect(queries).toEqual([]);
+    const ownDenials = (await first.listAudit(admin.identity)).filter((event) =>
+      event.action === 'organization.domain.verify' && event.outcome === 'denied');
+    const foreignDenials = (await first.listAudit(foreign.identity)).filter((event) =>
+      event.action === 'organization.domain.verify' && event.outcome === 'denied');
+    expect(ownDenials).toHaveLength(2);
+    expect(foreignDenials).toHaveLength(1);
+  });
   test('requires exact DNS ownership, current tenant admin and issuer; stores only a digest', async () => {
     const { first, second, file, admin, foreign, member, issuerA, issuerB, dns, queries } = await fixture();
     expect(verifiedDomainName('Acme.Example')).toBe('acme.example');

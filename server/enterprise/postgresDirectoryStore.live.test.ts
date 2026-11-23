@@ -348,24 +348,29 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
       // resolver. This never enables SSO or queries a customer domain.
       const fresh = await a.createSession('https://issuer.invalid/a', 'rls-a', 'alice', Date.now() + 60_000);
       let answer: string[][] = [];
+      let dnsQueries = 0;
       const verifyingHost = new ServerDirectory(new TenantPostgresDirectoryStore(otherA, 'rls-a', 'rls'),
-        async () => answer);
+        async () => { dnsQueries++; return answer; });
       const setupApp = express();
       expect(mountEnterpriseAdminRoutes(setupApp, { enabled: true, enableDomainSetup: true,
         applicationOrigin: origin, allowInsecureLoopbackForTests: true, organizationId: 'rls-a', issuer: 'https://issuer.invalid/a',
         directory: verifyingHost, verifySession: (token) => verifyingHost.verifySession(token) })).toBe(true);
-      const domainPost = (action: 'challenge' | 'verify', token: string, tenant = 'rls-a') => request(setupApp)
+      const domainPost = (action: 'challenge' | 'verify', token: string, tenant = 'rls-a', domain = 'fixture.test') => request(setupApp)
         .post(`/api/enterprise/organizations/${tenant}/domains/${action}`)
         .set('Host', '127.0.0.1:39394').set('Origin', origin).set('Sec-Fetch-Site', 'same-origin')
         .set('X-Interpreter-CSRF', '1').set('Content-Type', 'application/json')
-        .set('Cookie', `interpreter-enterprise-session=${token}`).send({ domain: 'fixture.test' });
+        .set('Cookie', `interpreter-enterprise-session=${token}`).send({ domain });
+      expect((await domainPost('verify', fresh.token, 'rls-a', 'unclaimed.test')).status).toBe(403);
+      expect(dnsQueries).toBe(0);
       expect((await domainPost('challenge', worker.token)).status).toBe(403);
       expect((await domainPost('challenge', fresh.token, 'rls-b')).status).toBe(403);
       const challenge = await domainPost('challenge', fresh.token);
       expect(challenge.status).toBe(200);
       answer = [[challenge.body.value]];
       expect((await domainPost('verify', worker.token)).status).toBe(403);
+      expect(dnsQueries).toBe(0);
       expect((await domainPost('verify', fresh.token)).status).toBe(204);
+      expect(dnsQueries).toBe(1);
       const statusUrl = '/api/enterprise/organizations/rls-a/domains/status?domain=fixture.test';
       const domainStatus = (token: string) => request(setupApp).get(statusUrl)
         .set('Host', '127.0.0.1:39394').set('Cookie', `interpreter-enterprise-session=${token}`);

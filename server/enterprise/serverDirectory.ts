@@ -338,8 +338,14 @@ export class ServerDirectory implements EnterpriseDirectory {
       const org = data.organizations[actor.organizationId];
       const member = org?.members[actor.subject];
       if (!org || org.issuer !== actor.issuer || !member?.active || !this.active(data, actor)) throw new EnterpriseAccessDenied();
-      const permitted = evaluateTenantPolicy({ identity: actor, organizationId: actor.organizationId,
-        issuer: org.issuer, member, sessionActive: true, action: 'member.manage' });
+      // A privileged caller must not be able to turn verification into an
+      // arbitrary DNS-query endpoint. Only a live, tenant-owned challenge may
+      // leave the server; the full proof is checked again after network IO.
+      const proof = org.domainProofs?.[domain];
+      const permitted = Boolean(evaluateTenantPolicy({ identity: actor, organizationId: actor.organizationId,
+        issuer: org.issuer, member, sessionActive: true, action: 'member.manage' }) &&
+        proof?.issuer === org.issuer && proof.expiresAt > Date.now() &&
+        !otherActiveDomainClaim(data, actor.organizationId, domain, Date.now()));
       if (!permitted) data.audit.push({ organizationId: actor.organizationId, subject: actor.subject,
         targetDomain: domain, action: 'organization.domain.verify', outcome: 'denied', at: new Date().toISOString() });
       return permitted;
