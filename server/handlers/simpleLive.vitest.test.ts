@@ -31,12 +31,46 @@ describe('Simple GPT Live', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     delete process.env.OPENAI_API_KEY;
+    delete process.env.INTERPRETER_LIVE_OPENAI_API_KEY;
     getDefaultProfile.mockReset().mockResolvedValue(null);
     getAllProviders.mockReset().mockResolvedValue([]);
   });
 
   afterEach(() => {
     delete process.env.OPENAI_API_KEY;
+    delete process.env.INTERPRETER_LIVE_OPENAI_API_KEY;
+  });
+
+  const mockLiveSession = () => vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+    session: { id: 'live-session' },
+    transport: { type: 'webrtc', sdp: 'answer-sdp' },
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+
+  const authorizationUsed = async (): Promise<unknown> => {
+    const fetchMock = mockLiveSession();
+    await createSimpleLiveSession({ offerSdp: 'v=0\r\na=offer-with-enough-content' }, { history: [] });
+    return (fetchMock.mock.calls[0][1]?.headers as Record<string, string>).Authorization;
+  };
+
+  test('uses the voice-only environment key before OPENAI_API_KEY', async () => {
+    process.env.OPENAI_API_KEY = 'provider-secret';
+    process.env.INTERPRETER_LIVE_OPENAI_API_KEY = 'voice-secret';
+    await expect(getSimpleLiveStatus()).resolves.toEqual({ configured: true, source: 'environment' });
+    await expect(authorizationUsed()).resolves.toBe('Bearer voice-secret');
+  });
+
+  test('the voice-only key alone enables GPT Live', async () => {
+    process.env.INTERPRETER_LIVE_OPENAI_API_KEY = 'voice-secret';
+    await expect(getSimpleLiveStatus()).resolves.toEqual({ configured: true, source: 'environment' });
+    await expect(authorizationUsed()).resolves.toBe('Bearer voice-secret');
+  });
+
+  test('an OpenAI profile key takes precedence over both environment keys', async () => {
+    process.env.OPENAI_API_KEY = 'provider-secret';
+    process.env.INTERPRETER_LIVE_OPENAI_API_KEY = 'voice-secret';
+    getDefaultProfile.mockResolvedValue({ provider: 'api', apiKey: 'profile-secret' });
+    await expect(getSimpleLiveStatus()).resolves.toEqual({ configured: true, source: 'profile' });
+    await expect(authorizationUsed()).resolves.toBe('Bearer profile-secret');
   });
 
   test('reports configuration without exposing the key', async () => {

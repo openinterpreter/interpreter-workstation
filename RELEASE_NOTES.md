@@ -3,6 +3,7 @@
 
 - Reads requested thread-history pages with bounded native requests and reconnects a second window without loading the full thread history.
 - Limits historical tool-output reads so large saved results do not block the current conversation.
+- Restricts Simple preview proxy requests to the selected running project and avoids forwarding front-end credentials to the preview server.
 - Updates the bundled app preset's Next.js dependency and CI cache action.
 
 ## Distribution
