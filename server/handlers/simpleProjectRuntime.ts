@@ -29,7 +29,7 @@ const CORE_DEPENDENCIES: Record<string, string> = {
   '@interpreter/motion': 'file:.interpreter/packages/motion',
   '@interpreter/workstation': 'file:.interpreter/packages/workstation',
   motion: '12.23.26',
-  next: '16.4.3',
+  next: '16.4.5',
   react: '19.3.0',
   'react-dom': '19.3.0',
   'react-markdown': '10.1.0',

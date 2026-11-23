@@ -105,5 +105,5 @@ describe('full-stack Simple project runtime', () => {
       (value) => (value.assetRevision ?? 0) > beforeAssetChange,
     );
     expect(changed.runtimeUrl).toBe(runtimeUrl);
-  }, 60_000);
+  }, 150_000); // Cold Next compilation has a bounded 120-second startup budget.
 });
