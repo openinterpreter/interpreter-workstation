@@ -4,6 +4,39 @@ import { BROWSER_PROJECT_CAPABILITIES, DESKTOP_HOST_CAPABILITIES } from '../../s
 import { CLIENT_METHOD } from '../lib/codex/protocol';
 import { shouldShowOnboarding } from '../lib/onboardingGate';
 
+test('browser project apiRequest denies every native path before fetch', async () => {
+  const { apiRequest, disableBrowserProjectNativeEvents, registerBrowserProjectIdentity,
+    restoreBrowserProjectNativeEvents } = await import('../ipc');
+  const fetchSpy = vi.spyOn(globalThis, 'fetch');
+  disableBrowserProjectNativeEvents();
+  registerBrowserProjectIdentity('native-api-denied');
+  try {
+    for (const path of ['/api/servers/whatsapp/thread-binding', '/api/ipc/providers/getStatus',
+      '/api/arbitrary-native-operation']) {
+      expect(await apiRequest({ method: 'GET', path })).toMatchObject({
+        ok: false, status: 501, data: { error: expect.stringContaining('unavailable') },
+      });
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+  } finally {
+    restoreBrowserProjectNativeEvents('native-api-denied');
+    fetchSpy.mockRestore();
+  }
+});
+
+test('ordinary browser desktop-host apiRequest still reaches its server', async () => {
+  const { apiRequest } = await import('../ipc');
+  const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    Response.json({ native: true }));
+  try {
+    expect(await apiRequest({ method: 'GET', path: '/api/desktop-status' }))
+      .toEqual({ ok: true, status: 200, data: { native: true } });
+    expect(fetchSpy).toHaveBeenCalledOnce();
+  } finally {
+    fetchSpy.mockRestore();
+  }
+});
+
 test('explicit browser host capability prevents native event subscription and reconnect', async () => {
   const events = vi.fn();
   vi.stubGlobal('EventSource', events);

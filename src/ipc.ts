@@ -1272,9 +1272,9 @@ export async function apiRequest(request: {
   body?: unknown;
 }): Promise<{ ok: boolean; status: number; data: unknown }> {
   if (!isElectron) {
-    if (browserProjectNativeEventsDisabled && request.path.startsWith('/api/simple-interface')) {
+    if (browserProjectNativeEventsDisabled) {
       return { ok: false, status: 501,
-        data: { error: 'Browser project native Simple interface capability unavailable' } };
+        data: { error: 'Browser project native API capability unavailable' } };
     }
     if (isMarketingDemoMode()) {
       return {
