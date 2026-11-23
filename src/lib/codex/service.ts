@@ -45,6 +45,7 @@ const ACTIVE_TURN_MISMATCH_PREFIX = "expected active turn id `";
 const ACTIVE_TURN_MISMATCH_SEPARATOR = "` but found `";
 const DEFAULT_RUN_TURN_IDLE_TIMEOUT_MS = 3 * 60 * 1000;
 const NATIVE_CUSTODY_PHASE_DEADLINE_MS = 12_000;
+export const THREAD_LIST_OPERATOR_DEADLINE_MS = 12_000;
 // Keep the exact-thread operator HTTP read bounded independently of the native
 // RPC's lifetime. Two sequential reads reserve response time for an operator
 // with an eight-second HTTP deadline; this cannot diagnose a request that
@@ -1424,8 +1425,16 @@ export class CodexService {
     }
   }
 
-  async listThreads(params?: v2.ThreadListParams): Promise<v2.ThreadListResponse> {
-    return this.client.threadList(params ?? {});
+  async listThreads(
+    params?: v2.ThreadListParams,
+    deadlineMs = THREAD_LIST_OPERATOR_DEADLINE_MS,
+  ): Promise<v2.ThreadListResponse> {
+    if (!Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > THREAD_LIST_OPERATOR_DEADLINE_MS) {
+      throw new NativeCustodyPhaseError('thread_list', 'native_unavailable');
+    }
+    // The native RPC can finish after the HTTP request expires. Its late result
+    // must never be substituted with a successful empty list.
+    return nativeCustodyPhase('thread_list', () => this.client.threadList(params ?? {}), deadlineMs);
   }
 
   /** Read-only, bounded inventory from the existing app-server client. No thread resumes. */
