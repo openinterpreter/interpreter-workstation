@@ -1,7 +1,8 @@
-<!-- release-notes-for: 0.2.257 -->
+<!-- release-notes-for: 0.2.258 -->
 ## What's new
 
-- Requires a live challenge before optional organization-domain verification performs a DNS lookup.
+- Improves the Windows command-line fallback by loading its HTTP assembly explicitly.
+- Strengthens safeguards for optional organization account administration and sign-in.
 
 ## Distribution
 
