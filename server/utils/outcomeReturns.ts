@@ -129,6 +129,8 @@ const RECONCILE_TIMEOUT_MS = 10_000;
 /** Re-check of watched turns whose end was not observed. */
 const RECHECK_MS = 60_000;
 const RECENTLY_ENDED_LIMIT = 64;
+/** Saved reads of a turn that may lag its live final text before one is accepted. */
+const EARLY_READ_LIMIT = 3;
 const STATUSES: OutcomeReturnStatus[] = ['watching', 'pending', 'delivered', 'failed'];
 const OUTCOMES: TurnOutcome[] = ['completed', 'failed', 'interrupted'];
 const ADMISSIONS: readonly InputAdmission[] = ['started', 'steered', 'unknown'];
@@ -267,18 +269,20 @@ export function turnInputReplies(items: unknown): TurnInputReply[] | null {
 /** The outcome of one input of an ended turn, or null while the turn's items
  * are needed and have not been read. An input is found by the client ID of
  * its user message item, never by its text. An entry recorded without that ID
- * gets the turn's final text only when the turn had a single input (counted
- * from the items, else from the watched inputs of the turn). */
+ * gets the turn's final text only when the turn's items hold a single input. */
 export function inputOutcome(inputClientId: string | undefined,
-  turn: { summary: string; inputs: TurnInputReply[] | null }, watchedInputs: number):
+  turn: { summary: string; inputs: TurnInputReply[] | null }):
   { summary: string; admission: InputAdmission; reply: OutcomeReply } | null {
   const none = (admission: InputAdmission) =>
     ({ summary: NO_SEPARATE_REPLY_SUMMARY, admission, reply: 'no_separate_reply' as const });
-  if (inputClientId === undefined) {
-    const inputs = turn.inputs?.length ? turn.inputs.length : watchedInputs;
-    return inputs === 1 ? { summary: turn.summary, admission: 'unknown', reply: 'turn_reply' } : none('unknown');
-  }
+  // Never decided from the watched inputs alone: a turn can also hold an input
+  // nobody watches, whose answer would then be returned as this one's.
   if (!turn.inputs) return null;
+  if (inputClientId === undefined) {
+    if (turn.inputs.length === 1) return { summary: turn.summary, admission: 'unknown', reply: 'turn_reply' };
+    return turn.inputs.length ? none('unknown')
+      : { summary: UNKNOWN_REPLY_SUMMARY, admission: 'unknown', reply: 'unknown' };
+  }
   const index = turn.inputs.findIndex(input => input.clientId === inputClientId);
   // Not found, or found twice: never another input's reply.
   if (index < 0 || turn.inputs.some((input, at) => at !== index && input.clientId === inputClientId)) {
@@ -364,6 +368,8 @@ export class OutcomeReturns {
   /** Turns that ended before their watch was recorded (in-memory, bounded). */
   private readonly recentlyEnded = new Map<string,
     { outcome: TurnOutcome; summary: string; inputs: TurnInputReply[] | null }>();
+  /** Saved reads refused as earlier than a turn's live final text, per turn (in-memory). */
+  private readonly earlyReads = new Map<string, number>();
   private readonly file: string;
   /** The state file of releases before Goal assigners were bound. */
   private readonly earlierFile: string;
@@ -470,8 +476,7 @@ export class OutcomeReturns {
         status: 'watching', attempts: 0, createdAt: at, updatedAt: at };
       // Kept, not taken: another input of the same turn may be watched next.
       const ended = this.recentlyEnded.get(turnKey(threadId, turnId));
-      const resolved = ended && inputOutcome(inputClientId, ended, 1 + this.entries.filter(item =>
-        item.kind === undefined && item.threadId === threadId && item.turnId === turnId).length);
+      const resolved = ended && inputOutcome(inputClientId, ended);
       if (ended && resolved) {
         Object.assign(entry, { status: 'pending', outcome: ended.outcome, ...resolved, nextAttemptAt: at });
       }
@@ -498,6 +503,19 @@ export class OutcomeReturns {
     const awaitingItems = await this.exclusive(async () => {
       const key = turnKey(threadId, turnId);
       const previous = this.recentlyEnded.get(key);
+      // A saved turn read before its final assistant item was written would
+      // report an input as unanswered. The live notification carried the
+      // turn's final text: while the saved items do not end with it yet, keep
+      // watching and let the re-check read again, a bounded number of times.
+      if (items !== undefined && previous && previous.inputs === null && previous.summary &&
+          previous.summary !== truncateOutcomeSummary(summary)) {
+        const early = (this.earlyReads.get(key) ?? 0) + 1;
+        if (early <= EARLY_READ_LIMIT) {
+          this.earlyReads.set(key, early);
+          return false;
+        }
+      }
+      this.earlyReads.delete(key);
       this.recentlyEnded.delete(key);
       const ended = { outcome, summary: truncateOutcomeSummary(summary),
         inputs: turnInputReplies(items) ?? previous?.inputs ?? null };
@@ -513,7 +531,7 @@ export class OutcomeReturns {
       let waiting = false;
       let changed = false;
       for (const entry of watching) {
-        const resolved = inputOutcome(entry.inputClientId, ended, ofTurn.length);
+        const resolved = inputOutcome(entry.inputClientId, ended);
         if (!resolved) { waiting = true; continue; }
         Object.assign(entry, { status: 'pending', outcome, ...resolved, nextAttemptAt: at, updatedAt: at });
         changed = true;
