@@ -1208,7 +1208,7 @@ describe('interpreterCliRuntime', () => {
         powershellScript.indexOf('[System.Net.Http.HttpClientHandler]::new()'),
       );
       if (process.platform === 'win32') {
-        // CI's Windows package-smoke runs this suite with Windows PowerShell 5.1.
+        // The Windows package-smoke job runs this suite with Windows PowerShell 5.1.
         // The help path executes Add-Type before any transport or credential use.
         const help = await spawnProcess(
           'powershell.exe',
