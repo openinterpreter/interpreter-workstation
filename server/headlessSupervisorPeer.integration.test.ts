@@ -31,6 +31,9 @@ async function start(home: string, config: 'complete' | 'missing' | 'wrong-targe
         config === 'wrong-target' ? 'other-target' : 'fixture-target',
       ...(config === 'invalid-signer'
         ? { INTERPRETER_SUPERVISOR_SIGNER_COMMAND: '["relative-signer"]' } : {}),
+      // An empty renderer directory: a built dist/ in the checkout must not
+      // answer the fixture's own GET route with the page.
+      INTERPRETER_WORKSTATION_RENDERER_DIR: home,
       INTERPRETER_DISABLE_FILE_WATCHER: '1' },
   });
   children.push(child);
