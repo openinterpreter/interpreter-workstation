@@ -13,10 +13,11 @@ export type TurnOutcome = 'completed' | 'failed' | 'interrupted';
 export type InputAdmission = 'started' | 'steered' | 'unknown';
 /** What an outcome's summary is: the last assistant text that followed this
  * input before the next input of the turn (`own_reply`); the turn's final
- * assistant text, for an entry recorded without its item ID in a turn with a
- * single input (`turn_reply`); a fixed sentence saying the agent did not reply
- * to this input separately (`no_separate_reply`); or a fixed sentence saying
- * the reply could not be determined (`unknown`). */
+ * assistant text, only on an outcome that was already stored as pending
+ * before inputs had their own outcome (`turn_reply`); a fixed sentence saying
+ * the agent did not reply to this input separately (`no_separate_reply`); or a
+ * fixed sentence saying the reply could not be determined, which is all an
+ * entry recorded without its item ID can report (`unknown`). */
 export type OutcomeReply = 'own_reply' | 'turn_reply' | 'no_separate_reply' | 'unknown';
 export const NO_SEPARATE_REPLY_SUMMARY = 'The agent gave no separate reply to this input before the next input ' +
   'reached the same turn or the turn ended.';
@@ -269,20 +270,19 @@ export function turnInputReplies(items: unknown): TurnInputReply[] | null {
 /** The outcome of one input of an ended turn, or null while the turn's items
  * are needed and have not been read. An input is found by the client ID of
  * its user message item, never by its text. An entry recorded without that ID
- * gets the turn's final text only when the turn's items hold a single input. */
+ * cannot be matched to an item at all: a turn holding a single input may hold
+ * another one than this entry's, so it reports that its reply is unknown and
+ * never receives any text of the turn. */
 export function inputOutcome(inputClientId: string | undefined,
   turn: { summary: string; inputs: TurnInputReply[] | null }):
   { summary: string; admission: InputAdmission; reply: OutcomeReply } | null {
   const none = (admission: InputAdmission) =>
     ({ summary: NO_SEPARATE_REPLY_SUMMARY, admission, reply: 'no_separate_reply' as const });
-  // Never decided from the watched inputs alone: a turn can also hold an input
-  // nobody watches, whose answer would then be returned as this one's.
-  if (!turn.inputs) return null;
   if (inputClientId === undefined) {
-    if (turn.inputs.length === 1) return { summary: turn.summary, admission: 'unknown', reply: 'turn_reply' };
-    return turn.inputs.length ? none('unknown')
-      : { summary: UNKNOWN_REPLY_SUMMARY, admission: 'unknown', reply: 'unknown' };
+    return { summary: UNKNOWN_REPLY_SUMMARY, admission: 'unknown', reply: 'unknown' };
   }
+  // Never decided without the turn's saved items.
+  if (!turn.inputs) return null;
   const index = turn.inputs.findIndex(input => input.clientId === inputClientId);
   // Not found, or found twice: never another input's reply.
   if (index < 0 || turn.inputs.some((input, at) => at !== index && input.clientId === inputClientId)) {
