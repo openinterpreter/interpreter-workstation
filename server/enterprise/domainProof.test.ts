@@ -84,7 +84,7 @@ describe('unmounted operator domain-proof boundary', () => {
       .rejects.toThrow('Access denied');
   });
 
-  test('rotated, expired, missing and ambiguous proofs deny; explicit DNS outage clears prior verification', async () => {
+  test('rotated, expired, missing and ambiguous proofs deny; DNS outage or a lapsed challenge keeps prior verification', async () => {
     const { first, second, file, admin, issuerA, dns, outage } = await fixture();
     const old = await first.beginDomainProof(admin.identity, 'example.test');
     const rotated = await second.beginDomainProof(admin.identity, 'example.test');
@@ -99,15 +99,18 @@ describe('unmounted operator domain-proof boundary', () => {
     expect(await second.domainVerified('org-a', issuerA, 'example.test')).toBe(true);
     outage(true);
     await expect(second.confirmDomainProof(admin.identity, 'example.test')).rejects.toThrow('DNS verification unavailable');
-    expect(await first.domainVerified('org-a', issuerA, 'example.test')).toBe(false);
+    // A lookup failure is not a negative DNS answer; it must not end the lease.
+    expect(await first.domainVerified('org-a', issuerA, 'example.test')).toBe(true);
     outage(false);
     const fresh = await first.beginDomainProof(admin.identity, 'example.test');
+    expect(await first.domainVerified('org-a', issuerA, 'example.test')).toBe(true);
     const state = JSON.parse(await readFile(file, 'utf8'));
     state.organizations['org-a'].domainProofs['example.test'].expiresAt = Date.now() - 1;
     await writeFile(file, JSON.stringify(state)); // Only this disposable fixture simulates expiry.
     dns([[fresh.value]]);
     await expect(second.confirmDomainProof(admin.identity, 'example.test')).rejects.toThrow('Access denied');
-    expect(await first.domainVerified('org-a', issuerA, 'example.test')).toBe(false);
+    // No live challenge: the request is denied but the existing lease is kept.
+    expect(await first.domainVerified('org-a', issuerA, 'example.test')).toBe(true);
   });
 
   test('a concurrent challenge rotation denies an earlier DNS response across two hosts', async () => {
@@ -154,33 +157,41 @@ describe('unmounted operator domain-proof boundary', () => {
   test('one shared directory never grants overlapping organization domain leases', async () => {
     const { first, second, file, admin, foreign, issuerA, issuerB, dns } = await fixture();
     const original = await first.beginDomainProof(admin.identity, 'shared.test');
-    await expect(second.beginDomainProof(foreign.identity, 'shared.test')).rejects.toThrow('Access denied');
+    const contender = await second.beginDomainProof(foreign.identity, 'shared.test'); // A challenge reserves nothing.
     dns([[original.value]]);
     await second.confirmDomainProof(admin.identity, 'shared.test');
     expect(await first.domainVerified('org-a', issuerA, 'shared.test')).toBe(true);
-    await expect(first.beginDomainProof(foreign.identity, 'shared.test')).rejects.toThrow('Access denied');
-    // A compromised duplicate lease is not accepted even when the target
-    // tenant's TXT token is present; this test alters only a throwaway file.
+    dns([[contender.value]]);
+    await expect(first.confirmDomainProof(foreign.identity, 'shared.test')).rejects.toThrow('Access denied');
+    expect(await second.domainVerified('org-b', issuerB, 'shared.test')).toBe(false);
+    expect(await second.domainVerified('org-a', issuerA, 'shared.test')).toBe(true);
+    // A compromised duplicate verified lease is not accepted for either
+    // tenant; this test alters only a throwaway file.
     const duplicate = JSON.parse(await readFile(file, 'utf8'));
     duplicate.organizations['org-b'].domainProofs = { 'shared.test': {
-      issuer: issuerB, challengeHash: 'a'.repeat(64), expiresAt: Date.now() + 60_000,
+      issuer: issuerB, challengeHash: 'a'.repeat(64), expiresAt: Date.now() + 60_000, verifiedUntil: Date.now() + 60_000,
     } };
     await writeFile(file, JSON.stringify(duplicate));
     expect(await second.domainVerified('org-a', issuerA, 'shared.test')).toBe(false);
+    expect(await second.domainVerified('org-b', issuerB, 'shared.test')).toBe(false);
     const state = JSON.parse(await readFile(file, 'utf8'));
     state.organizations['org-a'].domainProofs['shared.test'].expiresAt = Date.now() - 1;
     state.organizations['org-a'].domainProofs['shared.test'].verifiedUntil = Date.now() - 1;
     delete state.organizations['org-b'].domainProofs;
     await writeFile(file, JSON.stringify(state));
     const transferred = await second.beginDomainProof(foreign.identity, 'shared.test');
-    await expect(first.beginDomainProof(admin.identity, 'shared.test')).rejects.toThrow('Access denied');
     dns([[transferred.value]]);
     await first.confirmDomainProof(foreign.identity, 'shared.test');
     expect(await second.domainVerified('org-a', issuerA, 'shared.test')).toBe(false);
     expect(await second.domainVerified('org-b', issuerB, 'shared.test')).toBe(true);
+    const reclaim = await first.beginDomainProof(admin.identity, 'shared.test');
+    dns([[reclaim.value]]);
+    await expect(second.confirmDomainProof(admin.identity, 'shared.test')).rejects.toThrow('Access denied');
+    expect(await second.domainVerified('org-a', issuerA, 'shared.test')).toBe(false);
+    expect(await second.domainVerified('org-b', issuerB, 'shared.test')).toBe(true);
     const foreignEvents = await second.listAudit(foreign.identity);
     expect(foreignEvents.filter((event) => event.action === 'organization.domain.challenge')
-      .map((event) => event.outcome)).toEqual(['denied', 'denied', 'allowed']);
+      .map((event) => event.outcome)).toEqual(['allowed', 'allowed']);
   });
   test('status is a persisted, audited admin read without the challenge or another tenant proof', async () => {
     const { first, second, admin, foreign, member, issuerA, dns } = await fixture();
@@ -203,5 +214,75 @@ describe('unmounted operator domain-proof boundary', () => {
       ]);
     await first.revokeSession(admin.identity);
     await expect(second.domainProofStatus(admin.identity, 'status.test')).rejects.toThrow('Access denied');
+  });
+});
+
+describe('a domain claim is taken only when DNS verification succeeds', () => {
+  test('a pending challenge from one tenant does not stop another tenant from proving the domain', async () => {
+    const { first, second, admin, foreign, issuerA, issuerB, dns } = await fixture();
+    await first.beginDomainProof(admin.identity, 'contested.test');
+    const challenge = await second.beginDomainProof(foreign.identity, 'contested.test');
+    dns([[challenge.value]]);
+    await first.confirmDomainProof(foreign.identity, 'contested.test');
+    expect(await second.domainVerified('org-b', issuerB, 'contested.test')).toBe(true);
+    expect(await second.domainVerified('org-a', issuerA, 'contested.test')).toBe(false);
+  });
+
+  test('after another tenant verifies, a correct answer for the first tenant challenge is denied and audited', async () => {
+    const { first, second, file, admin, foreign, issuerA, issuerB, dns } = await fixture();
+    const pending = await first.beginDomainProof(admin.identity, 'contested.test');
+    const winning = await second.beginDomainProof(foreign.identity, 'contested.test');
+    dns([[winning.value]]);
+    await first.confirmDomainProof(foreign.identity, 'contested.test');
+    dns([[pending.value]]);
+    await expect(second.confirmDomainProof(admin.identity, 'contested.test')).rejects.toThrow('Access denied');
+    expect(await first.domainVerified('org-a', issuerA, 'contested.test')).toBe(false);
+    expect(JSON.parse(await readFile(file, 'utf8')).organizations['org-a'].domainProofs['contested.test'].verifiedUntil)
+      .toBeUndefined();
+    expect(await first.domainVerified('org-b', issuerB, 'contested.test')).toBe(true);
+    expect((await first.listAudit(admin.identity)).filter((event) => event.action === 'organization.domain.verify')
+      .map((event) => [event.targetDomain, event.outcome])).toEqual([['contested.test', 'denied']]);
+  });
+
+  test('a verification whose DNS lookup completes after another tenant verified is denied', async () => {
+    const { first, second, file, admin, foreign, issuerA, issuerB, dns } = await fixture();
+    const pending = await first.beginDomainProof(admin.identity, 'contested.test');
+    const winning = await second.beginDomainProof(foreign.identity, 'contested.test');
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const waiting = new ServerDirectory(file, async () => { entered(); await gate; return [[pending.value]]; });
+    const verification = waiting.confirmDomainProof(admin.identity, 'contested.test');
+    try {
+      await started;
+      dns([[winning.value]]);
+      await second.confirmDomainProof(foreign.identity, 'contested.test');
+    } finally { release(); }
+    await expect(verification).rejects.toThrow('Access denied');
+    expect(await first.domainVerified('org-a', issuerA, 'contested.test')).toBe(false);
+    expect(await first.domainVerified('org-b', issuerB, 'contested.test')).toBe(true);
+  });
+
+  test('the challenge response is the same whether or not another tenant holds the domain', async () => {
+    const shape = (challenge: { name: string; value: string; expiresAt: number }) => ({ name: challenge.name,
+      value: /^interpreter-workstation-verification=[A-Za-z0-9_-]{43}$/.test(challenge.value),
+      expiresAt: Number.isSafeInteger(challenge.expiresAt) && challenge.expiresAt > Date.now() });
+    const unheld = await fixture();
+    const baseline = await unheld.first.beginDomainProof(unheld.admin.identity, 'contested.test');
+    const held = await fixture();
+    const winning = await held.second.beginDomainProof(held.foreign.identity, 'contested.test');
+    held.dns([[winning.value]]);
+    await held.first.confirmDomainProof(held.foreign.identity, 'contested.test');
+    const observed = await held.first.beginDomainProof(held.admin.identity, 'contested.test');
+    expect(shape(observed)).toEqual(shape(baseline));
+    expect(await held.second.domainProofStatus(held.admin.identity, 'contested.test')).toEqual({
+      domain: 'contested.test', challengeExpiresAt: observed.expiresAt, verifiedUntil: null });
+    expect(await unheld.second.domainProofStatus(unheld.admin.identity, 'contested.test')).toEqual({
+      domain: 'contested.test', challengeExpiresAt: baseline.expiresAt, verifiedUntil: null });
+    for (const { first, admin } of [unheld, held]) {
+      expect((await first.listAudit(admin.identity)).filter((event) => event.action === 'organization.domain.challenge')
+        .map((event) => event.outcome)).toEqual(['allowed']);
+    }
   });
 });

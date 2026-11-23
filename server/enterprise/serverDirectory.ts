@@ -69,11 +69,13 @@ const dictionary = <T>(value: Record<string, T>): Record<string, T> => Object.as
 const record = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value));
 /** Only a directory containing every organization can enforce this globally.
  * A tenant-pinned RLS row exposes only its own organization, so this check is
- * a defense for shared-state pilots, never a production domain registry. */
+ * a defense for shared-state pilots, never a production domain registry.
+ * A claim means a verified lease: a pending challenge reserves nothing, so
+ * challenge creation cannot block or probe another tenant's domain. */
 function otherActiveDomainClaim(data: Data, organizationId: string, domain: string, now: number): boolean {
   return Object.entries(data.organizations).some(([id, org]) => {
     const proof = id === organizationId ? undefined : org.domainProofs?.[domain];
-    return Boolean(proof && (proof.expiresAt > now || (proof.verifiedUntil ?? 0) > now));
+    return Boolean(proof && (proof.verifiedUntil ?? 0) > now);
   });
 }
 
@@ -176,7 +178,7 @@ export class ServerDirectory implements EnterpriseDirectory {
   private readonly store: EnterpriseStateStore | null;
 
   private async domainClaimChange<T>(actor: VerifiedIdentity, domain: string,
-    action: 'organization.domain.challenge' | 'organization.domain.verify', fn: (data: Data) => T): Promise<T> {
+    action: 'organization.domain.verify', fn: (data: Data) => T): Promise<T> {
     try { return await this.changeForIdentity(actor, fn); }
     catch (error) {
       if (!(error instanceof EnterpriseDomainClaimConflict)) throw error;
@@ -185,7 +187,7 @@ export class ServerDirectory implements EnterpriseDirectory {
       await this.changeForIdentity(actor, (data) => {
         const org = data.organizations[actor.organizationId];
         const member = org?.members[actor.subject];
-        if (!org || org.issuer !== actor.issuer || !member?.active || !this.active(data, actor)) throw new EnterpriseAccessDenied();
+        if (!org || org.issuer !== actor.issuer || !member?.active || !this.active(data, actor, domain)) throw new EnterpriseAccessDenied();
         data.audit.push({ organizationId: actor.organizationId, subject: actor.subject,
           targetDomain: domain, action, outcome: 'denied', at: new Date().toISOString() });
       });
@@ -301,25 +303,30 @@ export class ServerDirectory implements EnterpriseDirectory {
   }
 
   /** Issue an expiring DNS challenge. This stores only its digest and cannot
-   * be reached from the unmounted desktop server or an unauthenticated route. */
+   * be reached from the unmounted desktop server or an unauthenticated route.
+   * A challenge reserves nothing globally and never consults another tenant's
+   * claim, so its response cannot reveal who holds a name. An existing lease
+   * is kept: re-proving must not end the sessions that depend on it. */
   async beginDomainProof(actor: VerifiedIdentity, inputDomain: string): Promise<{ name: string; value: string; expiresAt: number }> {
     const domain = verifiedDomainName(inputDomain);
     if (!domain || `_interpreter-workstation.${domain}`.length > 253) throw new EnterpriseAccessDenied();
     const token = randomBytes(32).toString('base64url');
     const expiresAt = Date.now() + 10 * 60_000;
-    const allowed = await this.domainClaimChange(actor, domain, 'organization.domain.challenge', (data) => {
+    const allowed = await this.changeForIdentity(actor, (data) => {
       const org = data.organizations[actor.organizationId];
       const member = org?.members[actor.subject];
-      if (!org || org.issuer !== actor.issuer || !member?.active || !this.active(data, actor)) throw new EnterpriseAccessDenied();
+      if (!org || org.issuer !== actor.issuer || !member?.active || !this.active(data, actor, domain)) throw new EnterpriseAccessDenied();
       const permitted = evaluateTenantPolicy({ identity: actor, organizationId: actor.organizationId,
         issuer: org.issuer, member, sessionActive: true, action: 'member.manage' }) &&
-        (Boolean(org.domainProofs?.[domain]) || Object.keys(org.domainProofs ?? {}).length < 32) &&
-        !otherActiveDomainClaim(data, actor.organizationId, domain, Date.now());
+        (Boolean(org.domainProofs?.[domain]) || Object.keys(org.domainProofs ?? {}).length < 32);
       data.audit.push({ organizationId: actor.organizationId, subject: actor.subject, targetDomain: domain,
         action: 'organization.domain.challenge', outcome: permitted ? 'allowed' : 'denied', at: new Date().toISOString() });
       if (!permitted) return false;
       org.domainProofs ??= dictionary({});
-      org.domainProofs[domain] = { issuer: org.issuer, challengeHash: digest(token), expiresAt };
+      const prior = org.domainProofs[domain];
+      const verifiedUntil = prior?.issuer === org.issuer ? prior.verifiedUntil : undefined;
+      org.domainProofs[domain] = { issuer: org.issuer, challengeHash: digest(token), expiresAt,
+        ...(verifiedUntil !== undefined ? { verifiedUntil } : {}) };
       return true;
     });
     if (!allowed) throw new EnterpriseAccessDenied();
@@ -337,7 +344,7 @@ export class ServerDirectory implements EnterpriseDirectory {
     const preflight = await this.changeForIdentity(actor, (data) => {
       const org = data.organizations[actor.organizationId];
       const member = org?.members[actor.subject];
-      if (!org || org.issuer !== actor.issuer || !member?.active || !this.active(data, actor)) throw new EnterpriseAccessDenied();
+      if (!org || org.issuer !== actor.issuer || !member?.active || !this.active(data, actor, domain)) throw new EnterpriseAccessDenied();
       // A privileged caller must not be able to turn verification into an
       // arbitrary DNS-query endpoint. Only a live, tenant-owned challenge may
       // leave the server; the full proof is checked again after network IO.
@@ -364,7 +371,7 @@ export class ServerDirectory implements EnterpriseDirectory {
     const allowed = await this.domainClaimChange(actor, domain, 'organization.domain.verify', (data) => {
       const org = data.organizations[actor.organizationId];
       const member = org?.members[actor.subject];
-      if (!org || org.issuer !== actor.issuer || !member?.active || !this.active(data, actor)) throw new EnterpriseAccessDenied();
+      if (!org || org.issuer !== actor.issuer || !member?.active || !this.active(data, actor, domain)) throw new EnterpriseAccessDenied();
       const proof = org.domainProofs?.[domain];
       const permitted = evaluateTenantPolicy({ identity: actor, organizationId: actor.organizationId,
         issuer: org.issuer, member, sessionActive: true, action: 'member.manage' });
@@ -373,13 +380,19 @@ export class ServerDirectory implements EnterpriseDirectory {
         const token = /^interpreter-workstation-verification=([A-Za-z0-9_-]{43})$/.exec(value)?.[1];
         return Boolean(token && eq(proof.challengeHash, digest(token)));
       }).length;
-      const verified = Boolean(permitted && !lookupFailed && proof?.issuer === org.issuer &&
-        proof.expiresAt > Date.now() && !otherActiveDomainClaim(data, actor.organizationId, domain, Date.now()) &&
+      const liveChallenge = Boolean(permitted && proof?.issuer === org.issuer && proof.expiresAt > Date.now());
+      const verified = Boolean(liveChallenge && !lookupFailed &&
+        !otherActiveDomainClaim(data, actor.organizationId, domain, Date.now()) &&
         verificationRecords.length === 1 && matches === 1);
       data.audit.push({ organizationId: actor.organizationId, subject: actor.subject, targetDomain: domain,
         action: 'organization.domain.verify', outcome: verified ? 'allowed' : 'denied', at: new Date().toISOString() });
+      // Success sets or extends the lease. In the RLS store, the global claim
+      // is inserted in this same transaction; a foreign claim rolls it back.
       if (verified) proof!.verifiedUntil = Date.now() + 24 * 60 * 60_000;
-      else if (permitted && proof) delete proof.verifiedUntil; // Explicit recheck failure cannot keep a stale verified badge.
+      // Only a completed lookup for this tenant's own live challenge that did
+      // not contain the expected value is a definitive negative. A missing or
+      // expired challenge, lookup error, denial or claim conflict keeps it.
+      else if (liveChallenge && !lookupFailed && matches === 0) delete proof!.verifiedUntil;
       return verified;
     });
     if (!allowed) throw lookupFailed ? new Error('DNS verification unavailable') : new EnterpriseAccessDenied();
@@ -416,7 +429,7 @@ export class ServerDirectory implements EnterpriseDirectory {
     const status = await this.changeForIdentity(actor, (data) => {
       const org = data.organizations[actor.organizationId];
       const member = org?.members[actor.subject];
-      if (!org || org.issuer !== actor.issuer || !member?.active || !this.active(data, actor)) throw new EnterpriseAccessDenied();
+      if (!org || org.issuer !== actor.issuer || !member?.active || !this.active(data, actor, domain)) throw new EnterpriseAccessDenied();
       const permitted = evaluateTenantPolicy({ identity: actor, organizationId: actor.organizationId,
         issuer: org.issuer, member, sessionActive: true, action: 'member.manage' });
       data.audit.push({ organizationId: actor.organizationId, subject: actor.subject, targetDomain: domain,
@@ -425,8 +438,10 @@ export class ServerDirectory implements EnterpriseDirectory {
       const proof = org.domainProofs?.[domain];
       const now = Date.now();
       const unambiguous = !otherActiveDomainClaim(data, actor.organizationId, domain, now);
+      // The tenant's own pending challenge is reported regardless of another
+      // tenant's claim; hiding it would reveal that claim, as a challenge must not.
       return { domain,
-        challengeExpiresAt: proof && unambiguous && proof.expiresAt > now ? proof.expiresAt : null,
+        challengeExpiresAt: proof && proof.expiresAt > now ? proof.expiresAt : null,
         verifiedUntil: proof && unambiguous && proof.verifiedUntil && proof.verifiedUntil > now ? proof.verifiedUntil : null };
     });
     if (!status) throw new EnterpriseAccessDenied();
@@ -862,7 +877,28 @@ export class ServerDirectory implements EnterpriseDirectory {
       identity.organizationId, identity.issuer, accountDomain) ? identity : null;
   }
 
-  private active(data: Data, identity: VerifiedIdentity): boolean {
+  /** Domain-proof routes only. Renewing a lease must not depend on that lease
+   * still being current, or a lapse during DNS propagation locks every
+   * administrator out. The session itself must still be live and unrevoked,
+   * its member active, and the tenant must still hold the global claim; the
+   * directory admits only challenge, verify and status for this exact bound
+   * domain on that basis and rechecks role and claim under its lock. */
+  async verifyBoundSessionForDomainRenewal(token: string, accountDomain: string): Promise<VerifiedIdentity | null> {
+    if (verifiedDomainName(accountDomain) !== accountDomain || !/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
+    if (!this.store?.domainClaimStatus || !this.store.changeWithDomainClaim) return null;
+    const sessionId = digest(token);
+    const data = await this.read();
+    const session = data.sessions[sessionId];
+    if (!session || session.accountDomain !== accountDomain) return null;
+    const identity = { issuer: session.issuer, organizationId: session.organizationId, subject: session.subject, sessionId };
+    return this.active(data, identity, accountDomain) && await this.store.domainClaimStatus(
+      identity.organizationId, identity.issuer, accountDomain) ? identity : null;
+  }
+
+  /** `renewalDomain` is passed only by the domain-proof operations. It waives
+   * the lease-freshness requirement for a session bound to that same domain,
+   * never for any other action or domain. */
+  private active(data: Data, identity: VerifiedIdentity, renewalDomain?: string): boolean {
     const session = data.sessions[identity.sessionId];
     const org = data.organizations[identity.organizationId];
     const member = org?.members[identity.subject];
@@ -871,7 +907,8 @@ export class ServerDirectory implements EnterpriseDirectory {
       session.subject === identity.subject && session.organizationId === identity.organizationId &&
       org?.issuer === identity.issuer && member?.active && member.organizationId === identity.organizationId &&
       member.subject === identity.subject &&
-      (!session.accountDomain || (proof?.issuer === identity.issuer && proof.verifiedUntil && proof.verifiedUntil > Date.now())));
+      (!session.accountDomain || (proof?.issuer === identity.issuer && (session.accountDomain === renewalDomain ||
+        (proof.verifiedUntil && proof.verifiedUntil > Date.now())))));
   }
 
   async sessionIsActive(identity: VerifiedIdentity): Promise<boolean> {
