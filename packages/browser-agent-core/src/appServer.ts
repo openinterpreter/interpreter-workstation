@@ -68,7 +68,7 @@ export class BrowserProjectAppServer {
         return new BrowserModelCatalogAppServer(this.session.catalog, model.provider, model.id)
           .request(method, params);
       // Sessions without a catalogue still expose their active model.
-      const entry = { id: model.id, name: model.name, inputModalities: model.input };
+      const entry = { id: model.id, name: model.name, inputModalities: [...model.input] };
       const provider: v2.InterpreterProvider = { id: model.provider, name: 'Browser-local models',
         description: 'Models registered for this browser', isCurrent: true,
         configured: true, isDefault: true };

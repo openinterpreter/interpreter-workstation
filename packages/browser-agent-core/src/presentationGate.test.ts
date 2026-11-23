@@ -1,10 +1,13 @@
-import { expect, test } from 'bun:test';
+import { afterAll, expect, test } from 'bun:test';
+import { indexedDB as fakeIndexedDB } from 'fake-indexeddb';
 import { createAssistantMessageEventStream, type Model } from '@earendil-works/pi-ai';
 import type { StreamFn } from '@earendil-works/pi-agent-core';
+import type { AppServerNotification } from '../../../src/lib/codex/protocol';
 import { BrowserPiAppServerSession } from './piSession';
-import { MemoryPiTranscriptStore, type BrowserPiTranscript,
+import { IndexedDbPiTranscriptStore, MemoryPiTranscriptStore, type BrowserPiTranscript,
   type BrowserPiTranscriptStore } from './piTranscript';
-import { BrowserPresentationError, type PresentationCandidate } from './presentationGate';
+import { BrowserPresentationError, presentationCandidate, validatePresentation,
+  type PresentationCandidate } from './presentationGate';
 
 const model = { id: 'local', name: 'Local', api: 'browser-local', provider: 'browser',
   baseUrl: '', input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -21,18 +24,81 @@ const streamFn: StreamFn = () => {
     stream.push({ type: 'done', reason: 'stop', message }); });
   return stream;
 };
-class DurableTestStore extends MemoryPiTranscriptStore implements BrowserPiTranscriptStore {
-  readonly durability = 'persistent' as const;
-  readonly crossTabLockCapability = true;
-  async compareAndSwapTerminal(value: BrowserPiTranscript, revision: number,
-    signal?: AbortSignal): Promise<void> {
-    if (signal?.aborted) throw new Error('aborted');
-    await this.compareAndSwap(value, revision);
-  }
+const previousIndexedDB = Object.getOwnPropertyDescriptor(globalThis, 'indexedDB');
+const previousNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+const locks = new Set<string>();
+Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: fakeIndexedDB });
+Object.defineProperty(globalThis, 'navigator', { configurable: true, value: {
+  locks: { request: async <T>(name: string, _options: unknown,
+    callback: (lock: object | null) => Promise<T>): Promise<T> => {
+    if (locks.has(name)) return callback(null);
+    locks.add(name);
+    try { return await callback({ name }); }
+    finally { locks.delete(name); }
+  } },
+} });
+afterAll(() => {
+  if (previousIndexedDB) Object.defineProperty(globalThis, 'indexedDB', previousIndexedDB);
+  else Reflect.deleteProperty(globalThis, 'indexedDB');
+  if (previousNavigator) Object.defineProperty(globalThis, 'navigator', previousNavigator);
+  else Reflect.deleteProperty(globalThis, 'navigator');
+});
+class DurableTestStore extends IndexedDbPiTranscriptStore {
+  constructor() { super(`browser-presentation-test-${crypto.randomUUID()}`); }
 }
 const options = { projectId: 'gate_project', threadId: 'gate_thread',
   model, systemPrompt: '', tools: [], streamFn };
 const request = { workspacePath: 'browser-project:gate_project', message: 'Explain' };
+
+test('candidate includes ordered assistant text before and after tool use', () => {
+  const timestamp = Date.now();
+  const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+  const transcript: BrowserPiTranscript = { version: 1, projectId: options.projectId,
+    threadId: options.threadId, revision: 2, presentationRuns: { 'pi-turn-0': 'run-1' },
+    presentationPriorRevisions: { 'pi-turn-0': 0 }, messages: [
+      { role: 'user', content: 'Measure', timestamp },
+      { role: 'assistant', content: [{ type: 'text', text: 'Earlier claim: 17. ' },
+        { type: 'toolCall', id: 'c1', name: 'measure', arguments: { value: 17 } }],
+      api: model.api, provider: model.provider, model: model.id, stopReason: 'toolUse', timestamp, usage },
+      { role: 'toolResult', toolCallId: 'c1', toolName: 'measure',
+        content: [{ type: 'text', text: '17' }], isError: false, timestamp },
+      { role: 'assistant', content: [{ type: 'text', text: 'Final claim: 17.' }],
+        api: model.api, provider: model.provider, model: model.id, stopReason: 'stop', timestamp, usage },
+    ] };
+  const candidate = presentationCandidate(transcript, 0, transcript.messages.length, 'run-1', 0);
+  expect(candidate.answer).toBe('Earlier claim: 17. Final claim: 17.');
+  expect(candidate.tools).toHaveLength(1);
+});
+
+test('reload validation sees earlier assistant text before exposing any turn item', async () => {
+  const timestamp = Date.now();
+  const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+  const store = new DurableTestStore();
+  await store.compareAndSwap({ version: 1, projectId: options.projectId, threadId: options.threadId,
+    revision: 1, presentationRuns: { 'pi-turn-0': 'run-1' },
+    presentationPriorRevisions: { 'pi-turn-0': 0 }, messages: [
+      { role: 'user', content: 'Measure', timestamp },
+      { role: 'assistant', content: [{ type: 'text', text: 'Unverified claim: 99. ' },
+        { type: 'toolCall', id: 'c1', name: 'measure', arguments: { value: 17 } }],
+        api: model.api, provider: model.provider, model: model.id, stopReason: 'toolUse', timestamp, usage },
+      { role: 'toolResult', toolCallId: 'c1', toolName: 'measure',
+        content: [{ type: 'text', text: '17' }], isError: false, timestamp },
+      { role: 'assistant', content: [{ type: 'text', text: 'Final claim: 17.' }],
+        api: model.api, provider: model.provider, model: model.id, stopReason: 'stop', timestamp, usage },
+    ] }, 0);
+  const seen: string[] = [];
+  const session = await BrowserPiAppServerSession.open({ ...options,
+    presentationValidator: candidate => {
+      seen.push(candidate.answer);
+      return candidate.answer.includes('Unverified claim: 99.')
+        ? { accept: false, reason: 'Earlier false claim' } : { accept: true };
+    } }, store);
+  expect(seen).toEqual(['Unverified claim: 99. Final claim: 17.']);
+  expect(session.historyThread().turns[0].items.every(item => item.type === 'userMessage')).toBe(true);
+  session.dispose();
+});
 
 test('default gated storage reports a typed capability failure when IndexedDB is absent', async () => {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'indexedDB');
@@ -57,6 +123,16 @@ test('volatile memory store cannot provide gated replies on first run or reload'
   const open = () => BrowserPiAppServerSession.open({ ...options,
     presentationValidator: () => ({ accept: true }) }, store);
   await expect(open()).rejects.toMatchObject({ code: 'capability' });
+  class SpoofedMemoryStore extends MemoryPiTranscriptStore {
+    readonly durability = 'persistent' as const;
+    readonly crossTabLockCapability = true;
+    async compareAndSwapTerminal(value: BrowserPiTranscript, revision: number): Promise<void> {
+      await this.compareAndSwap(value, revision);
+    }
+  }
+  await expect(BrowserPiAppServerSession.open({ ...options,
+    presentationValidator: () => ({ accept: true }) }, new SpoofedMemoryStore()))
+    .rejects.toMatchObject({ code: 'capability' });
   await store.compareAndSwap({ version: 1, projectId: options.projectId,
     threadId: options.threadId, revision: 1, messages: [] }, 0);
   await expect(open()).rejects.toMatchObject({ code: 'capability' });
@@ -130,6 +206,57 @@ test('busy cross-tab lock fails typed before model inference', async () => {
   await expect(session.send(request)).rejects.toMatchObject({ code: 'busy' });
   expect(calls).toBe(0);
   session.dispose();
+});
+
+test('a second send on the same gated session fails typed busy without starting a turn', async () => {
+  const store = new DurableTestStore();
+  let release!: (value: { accept: true }) => void;
+  let entered!: () => void;
+  const validating = new Promise<void>(resolve => { entered = resolve; });
+  const decision = new Promise<{ accept: true }>(resolve => { release = resolve; });
+  let modelCalls = 0;
+  const session = await BrowserPiAppServerSession.open({ ...options,
+    streamFn: (...args) => { modelCalls++; return streamFn(...args); },
+    presentationValidator: () => { entered(); return decision; } }, store);
+  const first = session.send(request);
+  await validating;
+  await expect(session.send(request)).rejects.toMatchObject({ code: 'busy' });
+  expect(modelCalls).toBe(1);
+  release({ accept: true });
+  await first;
+  session.dispose();
+});
+
+test('a same-revision cross-tab byte change requires reload and revalidation before another turn', async () => {
+  const store = new DurableTestStore();
+  let modelCalls = 0;
+  const validator = (candidate: PresentationCandidate) => candidate.answer === 'Verified answer'
+    ? { accept: true as const } : { accept: false as const, reason: 'Changed answer' };
+  const session = await BrowserPiAppServerSession.open({ ...options,
+    streamFn: (...args) => { modelCalls++; return streamFn(...args); },
+    presentationValidator: validator }, store);
+  await session.send(request);
+  const recorded = await store.read(options.projectId, options.threadId);
+  expect(recorded).not.toBeNull();
+  const changed = structuredClone(recorded!);
+  const final = changed.messages.findLast(message => message.role === 'assistant');
+  if (final?.role !== 'assistant' || final.content[0]?.type !== 'text')
+    throw new Error('Expected a completed assistant turn');
+  final.content[0].text = 'Unverified answer';
+  const db = await (store as unknown as { db: Promise<IDBDatabase> }).db;
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction('threads', 'readwrite');
+    transaction.objectStore('threads').put(changed, `${options.projectId}:${options.threadId}`);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+  await expect(session.send(request)).rejects.toMatchObject({ code: 'incomplete' });
+  expect(modelCalls).toBe(1);
+  session.dispose();
+  const reopened = await BrowserPiAppServerSession.open({ ...options,
+    presentationValidator: validator }, store);
+  expect(reopened.historyThread().turns[0].items.every(item => item.type === 'userMessage')).toBe(true);
+  reopened.dispose();
 });
 
 test('failed final readback does not publish buffered assistant items or cache success', async () => {
@@ -240,6 +367,59 @@ test('the exclusive lock covers model tools, validator, durable write and public
   session.dispose(); second.dispose();
 });
 
+test('strict IndexedDB transaction reaches its terminal event before answer publication and lock release', async () => {
+  const store = new DurableTestStore();
+  const db = await (store as unknown as { db: Promise<IDBDatabase> }).db;
+  const original = db.transaction.bind(db);
+  let strict = false;
+  let terminal = false;
+  let released = false;
+  db.transaction = ((names: string | string[], mode?: IDBTransactionMode,
+    options?: IDBTransactionOptions) => {
+    const transaction = original(names, mode, options);
+    if (mode === 'readwrite' && options?.durability === 'strict') {
+      strict = true;
+      transaction.addEventListener('complete', () => { terminal = true; });
+    }
+    return transaction;
+  }) as typeof db.transaction;
+  const exclusive = store.runExclusive.bind(store);
+  store.runExclusive = async (project, thread, action) => exclusive(project, thread, async () => {
+    try { return await action(); }
+    finally { released = true; }
+  });
+  const session = await BrowserPiAppServerSession.open({ ...options,
+    presentationValidator: () => ({ accept: true }),
+    onEvent: event => {
+      if (event.event === 'final') {
+        expect(strict).toBe(true);
+        expect(terminal).toBe(true);
+        expect(released).toBe(false);
+      }
+    } }, store);
+  await session.send(request);
+  expect(terminal).toBe(true);
+  expect(released).toBe(true);
+  session.dispose();
+});
+
+test('terminal CAS compares revision and puts inside one atomic IndexedDB transaction', async () => {
+  const name = `browser-presentation-atomic-${crypto.randomUUID()}`;
+  const first = new IndexedDbPiTranscriptStore(name);
+  const second = new IndexedDbPiTranscriptStore(name);
+  const messages: BrowserPiTranscript['messages'] = [
+    { role: 'user', content: 'One', timestamp: Date.now() }];
+  const base = { version: 1 as const, projectId: options.projectId,
+    threadId: options.threadId, revision: 1 };
+  const outcomes = await Promise.allSettled([
+    first.compareAndSwapTerminal({ ...base, messages }, 0),
+    second.compareAndSwapTerminal({ ...base, messages: [
+      { role: 'user', content: 'Two', timestamp: Date.now() }] }, 0),
+  ]);
+  expect(outcomes.map(outcome => outcome.status).sort()).toEqual(['fulfilled', 'rejected']);
+  expect((await first.read(options.projectId, options.threadId))?.revision).toBe(1);
+});
+
 test('a throwing presentation observer cannot turn an already durable answer into a failure', async () => {
   const store = new DurableTestStore();
   const session = await BrowserPiAppServerSession.open({ ...options,
@@ -292,6 +472,86 @@ test('the ordinary event stream does not bypass a rejecting validator', async ()
   session.dispose();
 });
 
+test('caller options mutation cannot disable the gate after the session opens', async () => {
+  const store = new DurableTestStore();
+  const supplied = { ...options,
+    presentationValidator: () => ({ accept: false as const, reason: 'Rejected' }) };
+  const events: string[] = [];
+  const session = await BrowserPiAppServerSession.open({ ...supplied,
+    onEvent: event => events.push(JSON.stringify(event)) }, store);
+  supplied.presentationValidator = undefined as unknown as typeof supplied.presentationValidator;
+  await session.send(request);
+  expect(events.join('')).not.toContain('Verified answer');
+  expect(events.join('')).toContain('browserPresentation:rejected');
+  expect(() => session.agent).toThrow(BrowserPresentationError);
+  session.dispose();
+});
+
+test('caller mutation during asynchronous open cannot turn a gated session into an ungated one', async () => {
+  let release!: () => void;
+  let entered!: () => void;
+  const reading = new Promise<void>(resolve => { entered = resolve; });
+  const pendingRead = new Promise<void>(resolve => { release = resolve; });
+  class SlowReadStore extends DurableTestStore {
+    override async read(projectId: string, threadId: string) {
+      entered(); await pendingRead;
+      return super.read(projectId, threadId);
+    }
+  }
+  const store = new SlowReadStore();
+  const supplied = { ...options,
+    presentationValidator: () => ({ accept: false as const, reason: 'Rejected' }) };
+  const opening = BrowserPiAppServerSession.open(supplied, store);
+  await reading;
+  supplied.presentationValidator = undefined as unknown as typeof supplied.presentationValidator;
+  release();
+  const session = await opening;
+  expect(() => session.agent).toThrow(BrowserPresentationError);
+  session.dispose();
+});
+
+test('gated model exposes only read-only metadata even if the model is not cloneable', async () => {
+  const store = new DurableTestStore();
+  const custom = { ...model, internalSecret: 'hidden-provider-detail',
+    localFactory: () => 'non-cloneable' };
+  const session = await BrowserPiAppServerSession.open({ ...options, model: custom,
+    presentationValidator: () => ({ accept: true }) }, store);
+  expect(session.model.id).toBe(model.id);
+  expect(JSON.stringify(session.model)).not.toContain('hidden-provider-detail');
+  expect(Object.isFrozen(session.model)).toBe(true);
+  expect(Object.isFrozen(session.model.input)).toBe(true);
+  session.dispose();
+});
+
+test('assistant and tool start/completion items stay withheld before a rejection', async () => {
+  const store = new DurableTestStore();
+  let release!: (value: { accept: false; reason: string }) => void;
+  let entered!: () => void;
+  const validating = new Promise<void>(resolve => { entered = resolve; });
+  const decision = new Promise<{ accept: false; reason: string }>(resolve => { release = resolve; });
+  const notifications: string[] = [];
+  const session = await BrowserPiAppServerSession.open({ ...options,
+    presentationValidator: () => { entered(); return decision; } }, store);
+  session.subscribeNotifications(notification => notifications.push(JSON.stringify(notification)));
+  const pending = session.send(request);
+  await validating;
+  const notify = (session as unknown as { notification: (event: AppServerNotification) => void }).notification
+    .bind(session);
+  const item: Extract<AppServerNotification, { method: 'item/completed' }>['params']['item'] = {
+    type: 'agentMessage', id: 'secret', text: 'Hidden provisional item', phase: 'final_answer',
+    memoryCitation: null, delivery: null, questions: null };
+  notify({ method: 'item/started', params: { threadId: options.threadId,
+    turnId: 'pi-turn-0', startedAtMs: Date.now(), item } });
+  notify({ method: 'item/completed', params: { threadId: options.threadId,
+    turnId: 'pi-turn-0', completedAtMs: Date.now(), item } });
+  expect(notifications.join('')).not.toContain('Hidden provisional item');
+  expect(notifications.join('')).not.toContain('"id":"secret"');
+  release({ accept: false, reason: 'Rejected' });
+  await pending;
+  expect(notifications.join('')).not.toContain('Hidden provisional item');
+  session.dispose();
+});
+
 test('assistant output beyond the finite pending budget is never published', async () => {
   const store = new DurableTestStore();
   const events: string[] = [];
@@ -313,6 +573,38 @@ test('assistant output beyond the finite pending budget is never published', asy
     onEvent: event => events.push(JSON.stringify(event)) }, store);
   await session.send(request);
   expect(events.join('')).not.toContain('XXXXXXXXXX');
+  expect(events.join('')).not.toContain('"status":"completed"');
+  session.dispose();
+});
+
+test('pending item buffer overflow fails typed even when model delta budget is untouched', async () => {
+  const store = new DurableTestStore();
+  let release!: (value: { accept: true }) => void;
+  let entered!: () => void;
+  const validating = new Promise<void>(resolve => { entered = resolve; });
+  const decision = new Promise<{ accept: true }>(resolve => { release = resolve; });
+  const events: string[] = [];
+  const session = await BrowserPiAppServerSession.open({ ...options,
+    presentationValidator: () => { entered(); return decision; },
+    onEvent: event => events.push(JSON.stringify(event)) }, store);
+  const pending = session.send(request);
+  await validating;
+  const notify = (session as unknown as { notification: (event: AppServerNotification) => void }).notification
+    .bind(session);
+  let overflow: unknown;
+  for (let i = 0; i < 22; i++) {
+    try {
+      notify({ method: 'item/completed', params: { threadId: options.threadId,
+        turnId: 'pi-turn-0', completedAtMs: Date.now(), item: { type: 'agentMessage',
+          id: `large-${i}`, text: 'X'.repeat(8_000), phase: 'final_answer',
+          memoryCitation: null, delivery: null, questions: null } } });
+    } catch (error) { overflow = error; break; }
+  }
+  expect(overflow).toMatchObject({ code: 'buffer' });
+  release({ accept: true });
+  await pending;
+  expect(events.join('')).not.toContain('XXXXXXXXXX');
+  expect(events.join('')).toContain('browserPresentation:buffer');
   expect(events.join('')).not.toContain('"status":"completed"');
   session.dispose();
 });
@@ -345,6 +637,60 @@ test('an aborted terminal transaction leaves only an incomplete journal, never a
   reopened.dispose();
 });
 
+test('missing terminal event has a bounded abort grace and never publishes or caches an answer', async () => {
+  class NoTerminalStore extends DurableTestStore {
+    override async compareAndSwapTerminal(value: BrowserPiTranscript, revision: number,
+      signal?: AbortSignal): Promise<void> {
+      if (Object.keys(value.presentationRuns ?? {}).length) return new Promise(() => {});
+      return super.compareAndSwapTerminal(value, revision, signal);
+    }
+  }
+  const store = new NoTerminalStore();
+  const events: string[] = [];
+  const session = await BrowserPiAppServerSession.open({ ...options, timeoutMs: 100,
+    presentationValidator: () => ({ accept: true }),
+    onEvent: event => events.push(JSON.stringify(event)) }, store);
+  const result = await Promise.race([session.send(request), new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error('terminal grace did not settle')), 3_500))]);
+  expect(result).toMatch(/^pi-turn-/);
+  expect(events.join('')).toContain('browserPresentation:storage-unavailable');
+  expect(events.join('')).not.toContain('Verified answer');
+  expect(locks.size).toBe(0);
+  expect(() => session.historyThread()).toThrow();
+  session.dispose();
+});
+
+test('a late ambiguous commit is detected by a stale tab before it can infer another turn', async () => {
+  class LateTerminalStore extends DurableTestStore {
+    override async compareAndSwapTerminal(value: BrowserPiTranscript, revision: number,
+      signal?: AbortSignal): Promise<void> {
+      if (!Object.keys(value.presentationRuns ?? {}).length)
+        return super.compareAndSwapTerminal(value, revision, signal);
+      await new Promise(resolve => setTimeout(resolve, 2_500));
+      // A broken adapter commits after our bounded terminal grace. Atomic CAS
+      // and the next tab's digest preflight must still fail closed.
+      await this.compareAndSwap(value, revision);
+    }
+  }
+  const store = new LateTerminalStore();
+  let calls = 0;
+  const gated = { ...options, streamFn: ((...args: Parameters<StreamFn>) => {
+    calls++; return streamFn(...args);
+  }) as StreamFn, presentationValidator: () => ({ accept: true as const }) };
+  const stale = await BrowserPiAppServerSession.open(gated, store);
+  const events: string[] = [];
+  const first = await BrowserPiAppServerSession.open({ ...gated, timeoutMs: 100,
+    onEvent: event => events.push(JSON.stringify(event)) }, store);
+  await first.send(request);
+  expect(events.join('')).not.toContain('Verified answer');
+  await new Promise(resolve => setTimeout(resolve, 500));
+  const durable = await store.read(options.projectId, options.threadId);
+  expect(durable?.presentationRuns?.['pi-turn-0']).toBeTruthy();
+  await expect(stale.send(request)).rejects.toMatchObject({ code: 'incomplete' });
+  expect(calls).toBe(1);
+  first.dispose(); stale.dispose();
+});
+
 test('validator exceptions and finite validation timeout reject without leaking output', async () => {
   const thrown = new DurableTestStore();
   const events: string[] = [];
@@ -364,3 +710,14 @@ test('validator exceptions and finite validation timeout reject without leaking 
   expect((await timed.read(options.projectId, options.threadId))?.presentationRuns ?? {}).toEqual({});
   pending.dispose();
 });
+
+test('validator has its own ten-second bound independent of the model turn deadline', async () => {
+  const candidate: PresentationCandidate = { projectId: options.projectId,
+    threadId: options.threadId, turnId: 'pi-turn-0', runId: 'run-1', tools: [],
+    answer: 'Answer', priorTranscript: { version: 1, projectId: options.projectId,
+      threadId: options.threadId, revision: 0, messages: [] } };
+  const started = Date.now();
+  await expect(validatePresentation(() => new Promise(() => {}), candidate))
+    .rejects.toMatchObject({ code: 'timeout' });
+  expect(Date.now() - started).toBeGreaterThanOrEqual(9_900);
+}, 15_000);

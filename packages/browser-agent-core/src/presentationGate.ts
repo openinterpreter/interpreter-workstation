@@ -49,6 +49,8 @@ export function presentationCandidate(transcript: BrowserPiTranscript, start: nu
   for (const message of messages.slice(1)) {
     if (final) throw new BrowserPresentationError('incomplete');
     if (message.role === 'assistant') {
+      const text = message.content.filter(part => part.type === 'text').map(part => part.text).join('');
+      answer += text;
       for (const part of message.content) {
         if (part.type === 'toolCall') {
           if (pending.has(part.id)) throw new BrowserPresentationError('incomplete');
@@ -57,8 +59,7 @@ export function presentationCandidate(transcript: BrowserPiTranscript, start: nu
       }
       if (message.stopReason === 'stop') {
         if (pending.size) throw new BrowserPresentationError('incomplete');
-        answer = message.content.filter(part => part.type === 'text').map(part => part.text).join('');
-        final = !!answer.trim();
+        final = !!text.trim();
       } else if (message.stopReason !== 'toolUse') throw new BrowserPresentationError('incomplete');
     } else if (message.role === 'toolResult') {
       const call = pending.get(message.toolCallId);

@@ -28,6 +28,14 @@ export type BrowserPiTranscriptStore = {
   runExclusive<T>(projectId: string, threadId: string, action: () => Promise<T>): Promise<T>;
 };
 
+// A public string field on a volatile store is not evidence of persistence.
+// Only instances constructed by this reviewed IndexedDB implementation carry
+// the module-private capability; callers cannot opt a memory subclass in.
+const reviewedPersistentStores = new WeakSet<BrowserPiTranscriptStore>();
+export function isReviewedPersistentStore(store: BrowserPiTranscriptStore): boolean {
+  return reviewedPersistentStores.has(store);
+}
+
 const encoder = new TextEncoder();
 const idPattern = /^[a-zA-Z0-9_-]{1,64}$/;
 // A bounded session permits 64 user turns with up to 16 tool calls each;
@@ -129,6 +137,7 @@ export class IndexedDbPiTranscriptStore implements BrowserPiTranscriptStore {
   private readonly db: Promise<IDBDatabase>;
   constructor(name = 'interpreter-browser-pi-v1') {
     if (typeof indexedDB === 'undefined') throw new Error('Browser Pi persistent storage unavailable');
+    reviewedPersistentStores.add(this);
     this.db = new Promise((resolve, reject) => {
       const request = indexedDB.open(name, 1);
       request.onupgradeneeded = () => request.result.createObjectStore('threads');
@@ -196,7 +205,9 @@ export class IndexedDbPiTranscriptStore implements BrowserPiTranscriptStore {
     finally { if (abortOpening) signal?.removeEventListener('abort', abortOpening); }
     if (signal?.aborted) throw new DOMException('Browser transcript write aborted', 'AbortError');
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction('threads', 'readwrite');
+      // Gated final answers require an explicit strict durability request;
+      // the default relaxed transaction is insufficient evidence of a seal.
+      const transaction = db.transaction('threads', 'readwrite', { durability: 'strict' });
       let conflict = false;
       let abortRequested = false;
       const abort = () => {

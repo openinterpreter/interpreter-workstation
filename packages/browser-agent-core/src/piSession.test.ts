@@ -102,6 +102,16 @@ test('assistant pre-tool commentary cannot be mistaken for the final answer', as
   } finally { session.dispose(); }
 });
 
+test('ungated agent property remains assignable for existing session integrations', () => {
+  const session = new BrowserPiAppServerSession({ projectId: 'ungated_assignment',
+    threadId: 'ungated_assignment', model, systemPrompt: '', tools: [],
+    streamFn: () => createAssistantMessageEventStream() });
+  const agent = session.agent;
+  session.agent = agent;
+  expect(session.agent).toBe(agent);
+  session.dispose();
+});
+
 test('valid retained tool histories beyond old 256-message and 256-KB limits remain usable', async () => {
   const storage = new MemoryPiTranscriptStore();
   const timestamp = Date.now();

@@ -6,7 +6,7 @@ import type { AppServerNotification } from '../../../src/lib/codex/protocol';
 import { mapBrowserNotificationToUiEvents, SERVER_METHOD } from './protocolWire';
 import type { v2 } from '../../../server/handlers/codex-generated-types/index';
 import { BrowserProjectAppServer } from './appServer';
-import { IndexedDbPiTranscriptStore, validatePiTranscript,
+import { IndexedDbPiTranscriptStore, isReviewedPersistentStore, validatePiTranscript,
   type BrowserPiTranscript, type BrowserPiTranscriptStore } from './piTranscript';
 import { projectPiHistory } from './piHistory';
 import type { BrowserLocalModelCatalog } from './modelCatalog';
@@ -39,6 +39,7 @@ const MAX_TEXT_BYTES = 8192;
 const MAX_ASSISTANT_TEXT_BYTES = 32 * 1024;
 const MAX_BROWSER_TOOL_CALLS = 16;
 const JOURNAL_SETTLE_AFTER_DEADLINE_MS = 2_000;
+const TERMINAL_EVENT_GRACE_MS = 2_000;
 const verifiedGateOpen = Symbol('verified browser presentation store and lock');
 /** Local WASM inference may require more than one model pass before a tool result is grounded. */
 export const DEFAULT_BROWSER_TURN_TIMEOUT_MS = 10 * 60_000;
@@ -54,11 +55,17 @@ export class BrowserPiAppServerSession {
     if (this.agentOptions.presentationValidator) throw new BrowserPresentationError('capability');
     return this.internalAgent;
   }
+  set agent(agent: Agent) {
+    if (this.agentOptions.presentationValidator) throw new BrowserPresentationError('capability');
+    this.internalAgent = agent;
+  }
   readonly projectId: string;
   readonly threadId: string;
   get model() {
     const model = this.internalAgent.state.model;
-    return this.agentOptions.presentationValidator ? Object.freeze(structuredClone(model)) : model;
+    if (!this.agentOptions.presentationValidator) return model;
+    return Object.freeze({ id: model.id, name: model.name, provider: model.provider,
+      input: Object.freeze([...model.input]) });
   }
   readonly appServer: BrowserProjectAppServer;
   private readonly listeners = new Set<BrowserAppServerEventSink>();
@@ -74,6 +81,7 @@ export class BrowserPiAppServerSession {
   private toolCalls = 0;
   private readonly storage?: BrowserPiTranscriptStore;
   private revision = 0;
+  private knownDurableDigest: string | null = null;
   private unavailableReason: string | null = null;
   private interruptedTurnIds: string[] = [];
   private failedTurns: Record<string, 'failed' | 'truncated' | 'storage'> = {};
@@ -84,13 +92,31 @@ export class BrowserPiAppServerSession {
   private presentationPriorRevisions: Record<string, number> = {};
   private pendingItems: AppServerNotification[] = [];
   private pendingBytes = 0;
+  private pendingOverflow = false;
   private publishing = false;
   private activeWriteAbort: AbortController | null = null;
 
   private async writeTranscript(next: BrowserPiTranscript, signal?: AbortSignal): Promise<void> {
     if (this.agentOptions.presentationValidator) {
       if (!this.storage?.compareAndSwapTerminal) throw new BrowserPresentationError('capability');
-      await this.storage.compareAndSwapTerminal(next, this.revision, signal);
+      let graceTimer: ReturnType<typeof setTimeout> | undefined;
+      let onAbort: (() => void) | undefined;
+      const terminal = this.storage.compareAndSwapTerminal(next, this.revision, signal);
+      const grace = new Promise<never>((_, reject) => {
+        onAbort = () => { graceTimer = setTimeout(() =>
+          reject(new BrowserPresentationError('storage-unavailable')), TERMINAL_EVENT_GRACE_MS); };
+        if (signal?.aborted) onAbort();
+        else signal?.addEventListener('abort', onAbort, { once: true });
+      });
+      try {
+        // An IndexedDB transaction is atomic even if its terminal event is lost:
+        // no later tab may treat a mismatched revision/digest as validated.
+        await Promise.race([terminal, grace]);
+      } finally {
+        if (graceTimer) clearTimeout(graceTimer);
+        if (onAbort) signal?.removeEventListener('abort', onAbort);
+      }
+      this.knownDurableDigest = transcriptDigest(next);
     } else await this.storage!.compareAndSwap(next, this.revision);
   }
 
@@ -107,7 +133,8 @@ export class BrowserPiAppServerSession {
       throw new Error('Invalid browser project or thread ID');
     this.projectId = options.projectId;
     this.threadId = options.threadId;
-    this.agentOptions = options;
+    // A caller may reuse or mutate its options object after opening a session.
+    this.agentOptions = { ...options };
     this.storage = options.storage;
     if (options.onEvent) this.listeners.add(options.onEvent);
     this.maxTurns = options.maxTurns ?? 32;
@@ -161,28 +188,29 @@ export class BrowserPiAppServerSession {
 
   static async open(options: Omit<BrowserPiSessionOptions, 'storage'>,
     storage?: BrowserPiTranscriptStore): Promise<BrowserPiAppServerSession> {
+    const openedOptions = { ...options };
     if (!storage) {
-      if (options.presentationValidator) {
+      if (openedOptions.presentationValidator) {
         try { storage = new IndexedDbPiTranscriptStore(); }
         catch { throw new BrowserPresentationError('capability'); }
       } else storage = new IndexedDbPiTranscriptStore();
     }
-    if (options.presentationValidator && (storage.durability !== 'persistent' ||
+    if (openedOptions.presentationValidator && (!isReviewedPersistentStore(storage) ||
       storage.crossTabLockCapability !== true || !storage.compareAndSwapTerminal))
       throw new BrowserPresentationError('capability');
     let restored: BrowserPiTranscript | null;
     try {
-      restored = await storage.read(options.projectId, options.threadId);
+      restored = await storage.read(openedOptions.projectId, openedOptions.threadId);
     } catch {
-      if (options.presentationValidator) throw new BrowserPresentationError('storage-unavailable');
+      if (openedOptions.presentationValidator) throw new BrowserPresentationError('storage-unavailable');
       throw new Error('Browser conversation storage unavailable; reload before sending');
     }
-    const session = new BrowserPiAppServerSession({ ...options, storage }, verifiedGateOpen);
+    const session = new BrowserPiAppServerSession({ ...openedOptions, storage }, verifiedGateOpen);
     if (restored) {
       let transcript: BrowserPiTranscript;
-      try { transcript = validatePiTranscript(restored, options.projectId, options.threadId); }
+      try { transcript = validatePiTranscript(restored, openedOptions.projectId, openedOptions.threadId); }
       catch (error) {
-        if (options.presentationValidator) throw new BrowserPresentationError('incomplete');
+        if (openedOptions.presentationValidator) throw new BrowserPresentationError('incomplete');
         throw error;
       }
       session.internalAgent.state.messages = transcript.messages;
@@ -191,10 +219,11 @@ export class BrowserPiAppServerSession {
       session.failedTurns = transcript.failedTurns ?? {};
       session.presentationRuns = transcript.presentationRuns ?? {};
       session.presentationPriorRevisions = transcript.presentationPriorRevisions ?? {};
+      if (openedOptions.presentationValidator) session.knownDurableDigest = transcriptDigest(transcript);
       // Reopening a tab must not reset the per-thread turn budget while the
       // model context and its durable revision are retained.
       session.sentTurns = transcript.messages.filter(message => message.role === 'user').length;
-      if (options.presentationValidator) {
+      if (openedOptions.presentationValidator) {
         // Never trust a persisted completed status: replay the same validator
         // over every complete turn before exposing any part of its answer.
         for (const [start, message] of transcript.messages.entries()) {
@@ -211,7 +240,7 @@ export class BrowserPiAppServerSession {
             }
             const candidate = presentationCandidate(transcript, start, stop, runId,
               transcript.presentationPriorRevisions![`pi-turn-${start}`]);
-            await validatePresentation(options.presentationValidator, candidate);
+            await validatePresentation(openedOptions.presentationValidator, candidate);
             session.validatedTurns.add(candidate.turnId);
           } catch (error) {
             if (!(error instanceof BrowserPresentationError)) throw error;
@@ -233,6 +262,7 @@ export class BrowserPiAppServerSession {
           notification.params.item.type !== 'userMessage') {
         this.pendingBytes += textEncoder.encode(JSON.stringify(notification)).byteLength;
         if (this.pendingBytes > MAX_ASSISTANT_TEXT_BYTES + MAX_BROWSER_TOOL_CALLS * MAX_TEXT_BYTES) {
+          this.pendingOverflow = true;
           this.unavailableReason = 'Browser presentation pending buffer exceeded its finite limit';
           this.internalAgent.abort();
           throw new BrowserPresentationError('buffer');
@@ -397,7 +427,8 @@ export class BrowserPiAppServerSession {
     if (this.agentOptions.presentationValidator && this.unverifiedHistory)
       throw new BrowserPresentationError('incomplete');
     if (signal?.aborted) throw new DOMException('Browser turn aborted', 'AbortError');
-    if (this.activeTurn) throw new Error('Browser thread already has an active turn');
+    if (this.activeTurn) throw this.agentOptions.presentationValidator
+      ? new BrowserPresentationError('busy') : new Error('Browser thread already has an active turn');
     if (request.threadId && request.threadId !== this.threadId)
       throw new Error('Browser thread ID does not match project session');
     if (request.workspacePath !== `browser-project:${this.projectId}`)
@@ -422,6 +453,10 @@ export class BrowserPiAppServerSession {
           // The HTTP stream may be stopped while IndexedDB is opening or reading.
           // Never start model inference or invoke tools after that cancellation.
           if (signal?.aborted) throw new DOMException('Browser turn aborted', 'AbortError');
+          if (this.agentOptions.presentationValidator &&
+              ((persisted?.revision ?? 0) !== this.revision ||
+                (persisted ? transcriptDigest(persisted) : null) !== this.knownDurableDigest))
+            throw new BrowserPresentationError('incomplete');
           if ((persisted?.revision ?? 0) !== this.revision)
             throw new Error('Browser Pi transcript changed in another tab; reload before sending');
           return this.performTurn(validatedRequest);
@@ -457,6 +492,9 @@ export class BrowserPiAppServerSession {
     const turnId = `pi-turn-${this.internalAgent.state.messages.length}`;
     const assistantId = crypto.randomUUID();
     this.activeTurn = turnId;
+    this.pendingOverflow = false;
+    this.pendingBytes = 0;
+    this.pendingItems = [];
     this.stoppedTurn = null;
     const interrupted = new Promise<never>((_, reject) => {
       this.cancelActiveTurn = () => reject(new DOMException('Browser turn aborted', 'AbortError'));
@@ -569,11 +607,22 @@ export class BrowserPiAppServerSession {
       await Promise.race([journalWrites, deadline, interrupted]);
       if (output.exceeded) throw this.agentOptions.presentationValidator
         ? new BrowserPresentationError('buffer') : new Error('Browser assistant output exceeds limit');
+      if (this.pendingOverflow) throw new BrowserPresentationError('buffer');
       if (this.storage) {
+        if (completedTools.length && !this.agentOptions.presentationValidator) {
+          // Keep the ungated seal and final projection order from the original session.
+          const failedTurns = { ...this.failedTurns, [turnId]: 'storage' as const };
+          const sealed: BrowserPiTranscript = { version: 1, projectId: this.projectId,
+            threadId: this.threadId, revision: this.revision + 1,
+            messages: journalMessages, interruptedTurnIds: this.interruptedTurnIds, failedTurns };
+          await Promise.race([this.storage.compareAndSwap(sealed, this.revision), deadline, interrupted]);
+          this.revision = sealed.revision;
+          this.failedTurns = failedTurns;
+        }
         const finalFailures = { ...this.failedTurns };
         delete finalFailures[turnId];
         const next: BrowserPiTranscript = { version: 1, projectId: this.projectId,
-          threadId: this.threadId, revision: this.revision + (completedTools.length ? 2 : 1),
+          threadId: this.threadId, revision: this.revision + 1,
           messages: this.internalAgent.state.messages.map(message =>
             message.role === 'assistant' && message.stopReason === 'error'
               ? { ...message, errorMessage: message.errorMessage === 'Browser local model output truncated'
@@ -590,8 +639,9 @@ export class BrowserPiAppServerSession {
             assistantId, priorRevision);
           await Promise.race([validatePresentation(this.agentOptions.presentationValidator,
             candidate, writeAbort.signal), deadline, interrupted]);
+          if (this.pendingOverflow) throw new BrowserPresentationError('buffer');
         }
-        if (completedTools.length) {
+        if (completedTools.length && this.agentOptions.presentationValidator) {
           // The final CAS can fail or settle after its deadline. Seal the
           // completed-tool journal as failed *before* attempting that write;
           // a successful final CAS removes this provisional failure marker.
@@ -599,11 +649,9 @@ export class BrowserPiAppServerSession {
           const sealed: BrowserPiTranscript = { version: 1, projectId: this.projectId,
             threadId: this.threadId, revision: this.revision + 1,
             messages: journalMessages, interruptedTurnIds: this.interruptedTurnIds, failedTurns,
-            ...(this.agentOptions.presentationValidator ? { presentationRuns: this.presentationRuns,
-              presentationPriorRevisions: this.presentationPriorRevisions } : {}) };
-          if (this.agentOptions.presentationValidator)
-            await this.writeTranscript(sealed, writeAbort.signal);
-          else await Promise.race([this.storage.compareAndSwap(sealed, this.revision), deadline, interrupted]);
+            presentationRuns: this.presentationRuns,
+            presentationPriorRevisions: this.presentationPriorRevisions };
+          await this.writeTranscript(sealed, writeAbort.signal);
           this.revision = sealed.revision;
           this.failedTurns = failedTurns;
         }
