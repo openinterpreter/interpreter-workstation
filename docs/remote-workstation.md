@@ -141,6 +141,83 @@ https://app.example/?surface=workstation&endpoint=https%3A%2F%2Fhost.example&acc
 Use it for development or controlled deployments; prefer a same-origin proxy
 in production.
 
+## Simple mode from another device
+
+Simple mode's generated interface is served by the project's own Next.js dev
+server on a dynamic loopback port. It has no base path, so it cannot share the
+shell's origin; a browser on another device needs a second origin for it.
+
+Two origins are therefore required, each mapped by an authenticating HTTPS
+front to a loopback port on the host:
+
+| Public origin | Loopback target | Serves |
+| --- | --- | --- |
+| Shell, for example `https://workstation.example` | The sidecar port, for example `127.0.0.1:5177` | Renderer, `/api`, `/api/events` |
+| Preview, for example `https://preview.workstation.example` | The preview proxy port, for example `127.0.0.1:5178` | The running Simple project, including its WebSocket |
+
+Configure the sidecar:
+
+```bash
+export INTERPRETER_SIMPLE_PREVIEW_PROXY_PORT=5178
+export INTERPRETER_SIMPLE_PREVIEW_PUBLIC_ORIGIN='https://preview.workstation.example'
+```
+
+- `INTERPRETER_SIMPLE_PREVIEW_PROXY_PORT` makes the sidecar listen on
+  `127.0.0.1:<port>` and forward every request and WebSocket upgrade to the
+  currently running Simple project server. It rewrites `Host` and `Origin` to
+  the project's loopback address so the dev server accepts them, streams
+  bodies in both directions, and answers `503` while no project is running.
+  It always binds loopback.
+- `INTERPRETER_SIMPLE_PREVIEW_PUBLIC_ORIGIN` is the absolute `https://` origin
+  the front maps to that port. When a request reaches the sidecar on a
+  non-loopback `Host` (or `X-Forwarded-Host`), the interface URL returned to
+  the renderer uses this origin. Requests on a loopback host, including the
+  desktop app, keep the loopback URL. It requires the port variable.
+
+The front must preserve the browser's `Host` header or send
+`X-Forwarded-Host`, and must pass WebSocket upgrades to the preview origin.
+The project server always reaches the sidecar over loopback, whichever
+address the browser used.
+
+Neither the sidecar nor the preview proxy authenticates requests on loopback.
+The front must authenticate both origins, and both ports must stay private to
+the host.
+
+A project server never receives the front's credentials. The preview proxy
+forwards an allowlist of request headers (content negotiation, conditional and
+range requests, fetch metadata, client hints, Next.js and WebSocket headers)
+and drops everything else, including `Authorization`, forwarded-identity
+headers and any custom header, for requests and WebSocket upgrades alike.
+Cookies a project sets are stored in the browser under an
+`interpreter_preview_app_<project scope>_` prefix, without a `Domain`
+attribute, and only cookies with that project's prefix are returned to it
+under their original names. All projects share the one preview origin, so the
+scope is derived from the project: a project *server* is never sent a cookie
+it did not set, and selecting a different project never sends its server the
+previous project's cookies.
+
+That is a boundary for what the proxy forwards, not isolation between
+projects in the browser. Every project's pages run on the same preview origin,
+so page script in one project can read and write the origin's script-visible
+cookies (any cookie without `HttpOnly`, whatever its prefix or `Path`), local
+storage and other origin-scoped state, including another project's. Projects
+on one Workstation belong to the same person and are not treated as mutually
+untrusted; isolating them from each other would need a separate origin per
+project. Two consequences for a deployment: the front's own session cookie on
+the preview origin must be `HttpOnly`, because project page script shares that
+origin, and a project should mark any cookie it does not want other projects'
+pages to read as `HttpOnly`. A cookie written by page script rather than by the project
+server is not sent to it, and a project that depends on a custom request
+header does not receive that header through the preview origin.
+
+GPT Live voice normally uses the default OpenAI profile's key or
+`OPENAI_API_KEY`. A host that signs in with a subscription can set
+`INTERPRETER_LIVE_OPENAI_API_KEY` instead; it is used only for GPT Live
+sessions and does not affect model-provider detection.
+
+Focused agent runs started by a generated interface and composer draft sync
+are currently available only in the desktop app.
+
 ## Authentication and access enforcement
 
 `GET /api/workstation-connection` returns only the connection descriptor. With

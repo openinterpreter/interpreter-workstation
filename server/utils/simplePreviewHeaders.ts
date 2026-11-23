@@ -1,0 +1,161 @@
+/**
+ * Request headers the Simple preview proxy forwards to a project server.
+ *
+ * The preview origin sits behind an authenticating front. That front's own
+ * credentials and identity headers (Authorization, session cookies, forwarded
+ * identity headers) must never reach a generated project's routes, so the
+ * proxy forwards an allowlist rather than removing known-bad names: anything
+ * not listed here is dropped, for requests and for WebSocket upgrades alike.
+ */
+
+/** Headers a browser or the Next.js client sends that a project server needs. */
+const FORWARDED_HEADERS = new Set([
+  'accept',
+  'accept-encoding',
+  'accept-language',
+  'cache-control',
+  'content-encoding',
+  'content-language',
+  'content-length',
+  'content-type',
+  'dnt',
+  'if-match',
+  'if-modified-since',
+  'if-none-match',
+  'if-range',
+  'if-unmodified-since',
+  'origin',
+  'pragma',
+  'priority',
+  'purpose',
+  'range',
+  'rsc',
+  'transfer-encoding',
+  'upgrade',
+  'user-agent',
+  'x-requested-with',
+]);
+
+/** Header families a project server needs: fetch metadata, client hints, Next.js and WebSocket. */
+const FORWARDED_PREFIXES = ['sec-fetch-', 'sec-ch-', 'sec-websocket-', 'next-', 'x-nextjs-'];
+
+function forwardable(lowerName: string): boolean {
+  return FORWARDED_HEADERS.has(lowerName) || FORWARDED_PREFIXES.some((prefix) => lowerName.startsWith(prefix));
+}
+
+/**
+ * Project cookies live in their own namespace on the preview origin.
+ *
+ * A project server is untrusted with respect to the front: if the proxy sent
+ * back cookies by the names the project chose, a project could name a cookie
+ * after the front's session cookie and be handed the browser's credential, or
+ * overwrite it. So every cookie a project sets is stored in the browser under
+ * this prefix, and only cookies carrying the prefix are returned to it, with
+ * the prefix removed. No other cookie on the origin is sent to a project
+ * server, and a project server cannot set one outside its namespace. A cookie
+ * written by page script rather than by the project server has no prefix and
+ * is not sent to it.
+ *
+ * The namespace is per project. All projects share the one preview origin,
+ * so the prefix carries a scope derived from the project: when another
+ * project is selected, the previous project's cookies stay in the browser but
+ * are never sent to the new project's server.
+ *
+ * This bounds what the proxy forwards. It does not isolate projects from each
+ * other in the browser: their pages share the preview origin, so page script
+ * can read and write any script-visible cookie there. The front's own cookie
+ * on this origin must therefore be HttpOnly.
+ */
+export const SIMPLE_PREVIEW_COOKIE_PREFIX = 'interpreter_preview_app_';
+
+const COOKIE_SCOPE = /^[a-z0-9]{8,64}$/;
+
+/** The cookie name prefix for one project scope (lowercase letters and digits). */
+export function simplePreviewCookiePrefix(scope: string): string {
+  if (!COOKIE_SCOPE.test(scope)) throw new Error('Invalid Simple preview cookie scope.');
+  return `${SIMPLE_PREVIEW_COOKIE_PREFIX}${scope}_`;
+}
+
+/**
+ * A project's Set-Cookie header moved into that project's namespace and
+ * confined to the preview host. Returns null for a header that is not a usable cookie.
+ */
+export function namespacedSimplePreviewSetCookie(setCookie: string, scope: string): string | null {
+  const [pair, ...attributes] = setCookie.split(';');
+  const separator = pair.indexOf('=');
+  const name = separator > 0 ? pair.slice(0, separator).trim() : '';
+  if (!name || /[\s,;="]/.test(name)) return null;
+  // A Domain attribute could widen the cookie to sibling hosts; keep it host-only.
+  const kept = attributes.filter((attribute) => !/^\s*domain\s*=/i.test(attribute));
+  return [`${simplePreviewCookiePrefix(scope)}${name}=${pair.slice(separator + 1)}`, ...kept].join(';');
+}
+
+/** A response's Set-Cookie headers rewritten for the browser; unusable ones are dropped. */
+export function namespacedSimplePreviewSetCookies(setCookie: string | string[] | undefined, scope: string): string[] {
+  const values = setCookie === undefined ? [] : Array.isArray(setCookie) ? setCookie : [setCookie];
+  return values.flatMap((value) => namespacedSimplePreviewSetCookie(value, scope) ?? []);
+}
+
+/** The Cookie header reduced to this project's own cookies under their original names, or null when none remain. */
+export function projectSimplePreviewCookies(cookieHeader: string, scope: string): string | null {
+  const prefix = simplePreviewCookiePrefix(scope);
+  const kept = cookieHeader
+    .split(';')
+    .map((pair) => pair.trim())
+    .filter((pair) => pair.startsWith(prefix) && pair.indexOf('=') > prefix.length)
+    .map((pair) => pair.slice(prefix.length));
+  return kept.length > 0 ? kept.join('; ') : null;
+}
+
+/**
+ * A project server's raw response head to a WebSocket upgrade (status line and
+ * header lines, without the terminating blank line), rewritten for the
+ * browser: every Set-Cookie is moved into the project's namespace or dropped,
+ * exactly as for an ordinary response, whatever the status. Returns null for a
+ * head that cannot be rewritten safely (not an HTTP response, a folded header
+ * line, or a line without a header name); the caller must then refuse it.
+ */
+export function simplePreviewUpgradeResponseHead(head: string, scope: string): string | null {
+  const [statusLine, ...headerLines] = head.split('\r\n');
+  if (!/^HTTP\/1\.[01] \d{3}(?: .*)?$/.test(statusLine)) return null;
+  const rewritten = [statusLine];
+  for (const line of headerLines) {
+    // A folded continuation line could carry on a Set-Cookie value unseen.
+    if (line === '' || /^[ \t]/.test(line) || /[\r\n\0]/.test(line)) return null;
+    const separator = line.indexOf(':');
+    if (separator <= 0 || /[\s]/.test(line.slice(0, separator))) return null;
+    if (line.slice(0, separator).toLowerCase() !== 'set-cookie') {
+      rewritten.push(line);
+      continue;
+    }
+    const cookie = namespacedSimplePreviewSetCookie(line.slice(separator + 1).trim(), scope);
+    if (cookie !== null) rewritten.push(`Set-Cookie: ${cookie}`);
+  }
+  return rewritten.join('\r\n');
+}
+
+/**
+ * The header list to send upstream, in order, with Host and Origin naming the
+ * project server. `rawHeaders` is Node's alternating name/value list; `scope`
+ * selects which project's cookies may be returned.
+ */
+export function forwardedSimplePreviewHeaders(
+  rawHeaders: readonly string[],
+  upstreamHost: string,
+  scope: string,
+): Array<[name: string, value: string]> {
+  const forwarded: Array<[string, string]> = [['Host', upstreamHost]];
+  for (let index = 0; index + 1 < rawHeaders.length; index += 2) {
+    const name = rawHeaders[index];
+    const value = rawHeaders[index + 1];
+    const lower = name.toLowerCase();
+    if (lower === 'cookie') {
+      const own = projectSimplePreviewCookies(value, scope);
+      if (own !== null) forwarded.push(['Cookie', own]);
+      continue;
+    }
+    if (!forwardable(lower)) continue;
+    forwarded.push([name, lower === 'origin' ? `http://${upstreamHost}` : value]);
+  }
+  return forwarded;
+}
