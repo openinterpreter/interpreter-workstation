@@ -160,7 +160,7 @@ describe('unmounted same-origin member deactivation', () => {
     expect((await request(app).get('/api/enterprise/organizations/org-a/overview')
       .set('Host', '127.0.0.1:39394').set('Cookie', `interpreter-enterprise-session=${admin}`)).status).toBe(403);
     await expect(directory.revokeOrganizationSessions(identity)).rejects.toThrow('Access denied');
-    const fresh = await directory.createSession(issuer, 'org-a', 'alice', Date.now() + 60_000);
+    const fresh = await directory.createSession(issuer, 'org-a', 'alice', Date.now() + 60_000, 1);
     const events = await directory.listAudit(fresh.identity);
     expect(events.filter((event) => event.action.includes('revoke-all')).map((event) => [event.action, event.outcome])).toEqual([
       ['organization.sessions.revoke-all', 'denied'],

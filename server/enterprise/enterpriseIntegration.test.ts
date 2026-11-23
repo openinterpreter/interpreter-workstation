@@ -31,7 +31,7 @@ const config: OidcConfiguration = {
   allowInsecureLoopbackForTests: true,
 };
 
-async function mockIdP(directory: ServerDirectory, overrides: Record<string, unknown> = {}) {
+async function mockIdP(directory: ServerDirectory, overrides: Record<string, unknown> = {}, beforeToken?: () => Promise<void>) {
   const { publicKey, privateKey } = await generateKeyPair('RS256');
   const jwk = { ...await exportJWK(publicKey), kid: 'local-fixture-key', alg: 'RS256', use: 'sig' };
   let authorizeNonce = '';
@@ -46,6 +46,7 @@ async function mockIdP(directory: ServerDirectory, overrides: Record<string, unk
     if (String(input) === config.jwksUri) return Response.json({ keys: [jwk] });
     if (String(input) !== config.tokenEndpoint || init?.method !== 'POST') throw new Error('Unexpected endpoint');
     tokenRequests++;
+    await beforeToken?.();
     const body = new URLSearchParams(init.body as string);
     expect(body.get('grant_type')).toBe('authorization_code');
     expect(body.get('redirect_uri')).toBe(config.redirectUri);
@@ -146,6 +147,36 @@ describe('server-owned directory and local OIDC fixture', () => {
     expect((await stat(file)).mode & 0o077).toBe(0);
   });
 
+  test('organization kill fences an OIDC code exchange already in flight, not a new login', async () => {
+    const { directory: store, file } = await directory();
+    const admin = await store.createSession(config.issuer, 'org-a', 'alice', Date.now() + 60_000);
+    const foreign = await store.createSession('http://127.0.0.1:39393/other-tenant', 'org-b', 'bob', Date.now() + 60_000);
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const entered = new Promise<void>((resolve) => { started = resolve; });
+    const idp = await mockIdP(store, {}, async () => { started(); await gate; });
+    const pending = await idp.begin();
+    const inFlight = await idp.begin();
+    const completion = idp.integration.complete({ code: 'one-time-code', state: inFlight.state,
+      browserBinding: inFlight.browserBinding });
+    try {
+      await entered; // The code exchange has consumed its browser attempt on this host.
+      expect(await store.revokeOrganizationSessions(admin.identity)).toBe(1);
+    } finally { release(); }
+    await expect(completion).rejects.toThrow('login epoch mismatch');
+    await expect(idp.integration.complete({ code: 'one-time-code', state: pending.state,
+      browserBinding: pending.browserBinding })).rejects.toThrow('state invalid');
+    expect(await store.verifySession(admin.token)).toBeNull();
+    expect(await store.verifySession(foreign.token)).not.toBeNull();
+    expect(Object.keys(JSON.parse(await readFile(file, 'utf8')).attempts)).toHaveLength(0);
+    const fresh = await idp.begin();
+    const issued = await idp.integration.complete({ code: 'new-code', state: fresh.state,
+      browserBinding: fresh.browserBinding });
+    expect(await store.verifySession(issued.token)).not.toBeNull();
+    expect(idp.requests()).toBe(2); // Only the consumed and new attempts reach token exchange.
+  });
+
   test('state and browser binding are one-time; no token exchange on mismatch or replay', async () => {
     const { directory: store } = await directory();
     const idp = await mockIdP(store);
@@ -234,7 +265,9 @@ describe('server-owned directory and local OIDC fixture', () => {
 
   test('cross-tenant persisted membership and audit tampering fail closed without rewriting evidence', async () => {
     for (const tamper of [(state: any) => { state.organizations['org-a'].members.alice.organizationId = 'org-b'; },
-      (state: any) => { state.audit[0].organizationId = 'unknown-org'; }]) {
+      (state: any) => { state.audit[0].organizationId = 'unknown-org'; },
+      (state: any) => { state.organizations['org-a'].authEpoch = -1; },
+      (state: any) => { state.organizations['org-a'].authEpoch = '1'; }]) {
       const { directory: store, file } = await directory();
       const state = JSON.parse(await readFile(file, 'utf8'));
       tamper(state);

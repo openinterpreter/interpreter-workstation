@@ -1,6 +1,7 @@
 /** Loopback-only visual acceptance fixture. Not imported by any product server. */
 import express from 'express';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { createHash, randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,7 +27,17 @@ const app = express();
 app.get('/fixture/login', async (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   try {
-    const { token } = await directory.createSession(issuer, 'org-a', 'alice', Date.now() + 60 * 60_000);
+    // Synthetic sign-in mirrors the real OIDC attempt's durable tenant epoch;
+    // a direct unbound session call must not bypass a prior organization kill.
+    const state = randomBytes(32).toString('base64url');
+    const binding = randomBytes(32).toString('base64url');
+    await directory.putAttempt(state, { organizationId: 'org-a', issuer, nonce: 'fixture-nonce',
+      verifier: 'fixture-verifier', bindingHash: createHash('sha256').update(binding).digest('hex'),
+      expiresAt: Date.now() + 60_000 });
+    const attempt = await directory.takeAttempt(state, binding);
+    if (!attempt) throw new Error('Synthetic login expired');
+    const { token } = await directory.createSession(issuer, 'org-a', 'alice', Date.now() + 60 * 60_000,
+      attempt.authEpoch ?? 0);
     res.cookie('interpreter-enterprise-session', token, { httpOnly: true, sameSite: 'lax', path: '/' });
     res.redirect('/');
   } catch { res.status(503).end(); }
