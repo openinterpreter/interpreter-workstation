@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
   DeviceRegistry,
-  MAX_FAILED_CLAIMS,
   PAIRING_CODE_TTL_MS,
   parseDeviceCredential,
   type PairedDevice,
@@ -53,15 +52,15 @@ describe('device pairing codes', () => {
     expect(await registry.claim(code)).toBeNull();
   });
 
-  test('discard every outstanding code after repeated wrong attempts', async () => {
-    const { registry, advance } = memoryRegistry();
-    const { code } = registry.createPairingCode();
-    for (let attempt = 0; attempt < MAX_FAILED_CLAIMS; attempt += 1) {
+  test('stay valid however many wrong codes are tried', async () => {
+    const { registry } = memoryRegistry();
+    const { id, code } = registry.createPairingCode();
+    for (let attempt = 0; attempt < 1000; attempt += 1) {
       expect(await registry.claim(`wrong-${attempt}`)).toBeNull();
     }
-    expect(await registry.claim(code)).toBeNull();
-
-    advance(PAIRING_CODE_TTL_MS);
+    expect(registry.isPairingCodePending(id)).toBe(true);
+    expect(await registry.claim(code)).not.toBeNull();
+    expect(registry.isPairingCodePending(id)).toBe(false);
     const fresh = registry.createPairingCode();
     expect(await registry.claim(fresh.code)).not.toBeNull();
   });
@@ -97,6 +96,17 @@ describe('paired devices', () => {
     expect(await registry.authenticate(claimed.credential)).toBeNull();
     expect(stored()).toEqual([]);
     expect(await registry.revoke(claimed.device.id)).toBe(false);
+  });
+
+  test('notify revoke listeners only when a device was removed', async () => {
+    const { registry } = memoryRegistry();
+    const claimed = (await registry.claim(registry.createPairingCode().code))!;
+    const revoked: string[] = [];
+    const stop = registry.onRevoke((id) => revoked.push(id));
+    expect(await registry.revoke('dev_unknownunknown')).toBe(false);
+    expect(await registry.revoke(claimed.device.id)).toBe(true);
+    expect(revoked).toEqual([claimed.device.id]);
+    stop();
   });
 
   test('record last activity at most every few minutes', async () => {

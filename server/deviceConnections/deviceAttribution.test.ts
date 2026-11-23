@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import express from 'express';
 import request from 'supertest';
-import { attributeDeviceInput, createDeviceInputAttributionMiddleware } from './deviceAttribution';
+import {
+  attributeDeviceInput,
+  createDeviceInputAttributionMiddleware,
+  DEVICE_ATTRIBUTED_INPUT_PATHS,
+} from './deviceAttribution';
 import { CLIENT_DEVICE_HEADER, DEVICE_GATEWAY_TOKEN_HEADER, getDeviceGatewayToken } from './gatewayTrust';
 
 const DEVICE_ID = 'dev_abcdefghijklmnop';
@@ -44,5 +48,27 @@ describe('paired-device input attribution', () => {
       .set(DEVICE_GATEWAY_TOKEN_HEADER, getDeviceGatewayToken())
       .send({ message: 'Hello' });
     expect(device.body.message).toBe('[From Phone]\nHello');
+  });
+
+  test('labels every route that submits user text, and no other', async () => {
+    const app = express();
+    app.use(express.json());
+    app.use(DEVICE_ATTRIBUTED_INPUT_PATHS, createDeviceInputAttributionMiddleware(async (id) => (
+      { id, label: 'Phone', kind: 'web', createdAt: '2026-11-01T00:00:00.000Z', lastSeenAt: null }
+    )));
+    app.post('/api/agent/*', (req, res) => res.json({ message: req.body.message }));
+    const fromDevice = (path: string) => request(app).post(path)
+      .set(CLIENT_DEVICE_HEADER, DEVICE_ID)
+      .set(DEVICE_GATEWAY_TOKEN_HEADER, getDeviceGatewayToken())
+      .send({ message: 'Hello' });
+
+    expect(DEVICE_ATTRIBUTED_INPUT_PATHS).toEqual(expect.arrayContaining([
+      '/api/agent/chat/stream', '/api/agent/chat/steer', '/api/agent/tasks', '/api/agent/tasks/stream', '/api/agent/queue',
+    ]));
+    for (const path of DEVICE_ATTRIBUTED_INPUT_PATHS) {
+      expect((await fromDevice(path)).body.message).toBe('[From Phone]\nHello');
+    }
+    expect((await fromDevice('/api/agent/tasks/stream?x=1')).body.message).toBe('[From Phone]\nHello');
+    expect((await fromDevice('/api/agent/chat/stream/other')).body.message).toBe('Hello');
   });
 });

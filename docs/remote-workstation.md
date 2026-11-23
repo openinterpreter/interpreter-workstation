@@ -181,12 +181,19 @@ address the browser used.
 
 The shell's session cookie is not sent to the preview origin inside a frame,
 so the preview protects itself. When the public origin is set, the interface
-URL given to an authenticated shell carries a signed ticket that is valid for
-two minutes. The preview proxy exchanges it for its own cookie
-(`HttpOnly; Secure; SameSite=None; Partitioned`, twelve hours) and redirects to
-the same URL without the ticket. Every later request and WebSocket upgrade
-needs that cookie; anything else receives `401`. A ticket issued to a paired
-device stops working when the device is revoked. Tickets are signed with
+URL carries a signed ticket that is valid once, for thirty seconds. Tickets are
+issued only to a paired device (through the device gateway below) or to a
+browser signed in with password authentication; any other request receives no
+preview URL, so a host whose front authenticates the shell without password
+mode shows no interface preview on other devices. The preview proxy exchanges
+the ticket for its own cookie (`HttpOnly; Secure; SameSite=None; Partitioned`,
+twelve hours) and redirects to the same URL without the ticket. Every later
+request and WebSocket upgrade needs that cookie; anything else receives `401`.
+A ticket or cookie issued to a paired device stops working when the device is
+revoked, and one issued to a password session stops working when that session
+expires. When the device gateway is configured, preview responses carry
+`Content-Security-Policy: frame-ancestors <gateway public origin>`, so only that
+origin can frame the preview. Tickets are signed with
 `INTERPRETER_WORKSTATION_SESSION_SECRET` when it is set, otherwise with a
 random key the sidecar keeps in its data directory. Without the public origin
 the preview proxy adds no authentication and is reachable only on loopback.
@@ -214,14 +221,33 @@ separate app, conversation or agent. The person holding the device does not
 sign in or set up a network.
 
 Pairing produces one link, `https://<gateway origin>/pair#code=<code>`, and a
-QR code of that link. The agent creates them with
-`interpreter-app tools builtin-interpreter interpreter_device_connection_create`;
+QR code of that link. Anyone holding the link before it is used gets full
+access to this Workstation, so by default it is shown only on the Workstation
+itself:
+
+- The bridge methods `deviceConnections.create` (returns `link`, `expiresAt`
+  and `qrSvg`) and `deviceConnections.pending` (unclaimed, unexpired links)
+  serve this Workstation's own interface
+  (`POST /api/ipc/deviceConnections/<method>`). They are refused for a request
+  from a paired device.
+- The agent tool
+  `interpreter-app tools builtin-interpreter interpreter_device_connection_create`
+  creates a connection but returns only `{created: true, expiresAt, note}`; the
+  link waits in `deviceConnections.pending` for the person at the Workstation.
+  Content the agent reads (a web page, an email, a file) therefore cannot make
+  it hand a working link to someone else.
+- An unattended host whose agent is the one that sends the link to its owner
+  can set `INTERPRETER_DEVICE_GATEWAY_AGENT_LINKS=1`. The tool then also returns
+  `link`, `qrSvg` and `qrSvgPath` (an SVG file of the QR code). This trades that
+  protection for convenience: anything that can steer the agent can ask it to
+  create and disclose a link, so enable it only when the agent's inputs are
+  trusted or its outbound channels go only to the owner.
+
 `interpreter_device_connections_list` and `interpreter_device_connection_revoke`
-list and disconnect devices. The same operations are available on the bridge
-as `deviceConnections.create`, `deviceConnections.list` and
-`deviceConnections.revoke` (`POST /api/ipc/deviceConnections/<method>`) for a
-future Settings panel. The tools refuse with an explanation when the gateway
-is not configured.
+(and `deviceConnections.list` and `deviceConnections.revoke` on the bridge)
+list device metadata and disconnect devices. A paired device can disconnect
+only itself. The tools refuse with an explanation when the gateway is not
+configured.
 
 ### Configure the device gateway
 
@@ -255,8 +281,9 @@ reliably. This change does not create or manage tunnels.
 
 Opening the link loads a small pairing page. Its script reads the code from
 the URL fragment, which the browser never sends to a server, removes it from
-the address bar, and exchanges it for a device cookie (`HttpOnly; Secure;
-SameSite=Lax`, about 400 days). The page then opens the normal shell at
+the address bar, and exchanges it for a device cookie
+(`__Host-interpreter_device_session`, `HttpOnly; Secure; SameSite=Lax; Path=/`,
+about 400 days). The page then opens the normal shell at
 `/?surface=workstation&access=<host access>&auth=password`. The gateway
 answers the shell's connection check as an authenticated session, so no
 password form appears. An expired or used link shows a short message asking
@@ -265,24 +292,43 @@ for a new one.
 The gateway streams every other request, server-sent events and WebSocket
 upgrades to the sidecar over loopback. It removes client copies of its
 identity headers and adds the device id, so messages typed or spoken on the
-device use the same start and steer routes as the desktop composer and are
-labelled with the device name (`[From Phone]`, or `[From GPT Live on Phone]`
-for voice), the label Simple mode already uses for other input sources.
+device use the same routes as the desktop composer. Every route that submits
+user text (start, steer, programmatic tasks and the message queue) labels it
+with the device name (`[From Phone]`, or `[From GPT Live on Phone]` for
+voice), the label Simple mode already uses for other input sources. Routes
+reserved for this computer (wake events, custody inspection, channel binding)
+refuse requests that arrive through the gateway or any proxy that sets
+`X-Forwarded-Host`.
 
 ### Security model
 
 - A paired device has the same access as the person at the desk: read-write
   unless the host runs read-only. Pair only devices you control.
 - Codes are random (144 bits), single use and expire after 10 minutes. They
-  are compared by hash in constant time; ten wrong attempts discard every
-  outstanding code for the rest of the window.
+  are compared by hash in constant time. Wrong codes never lock out or discard
+  valid ones: guessing is not feasible at that length, and the gateway sits
+  behind a tunnel whose socket address does not identify the sender, so a
+  lockout would only let anyone block pairing.
 - The host stores each device's id, label, kind, creation and last-activity
   times and a SHA-256 hash of its secret in the app config, never the secret.
+  Settings and device lists return the metadata only.
 - Without a valid, unrevoked device cookie the gateway answers `401` with no
   detail. State-changing requests and WebSocket upgrades must also come from
-  the gateway's public `Origin`.
+  the gateway's public `Origin`. Requests a browser marks `Sec-Fetch-Site:
+  cross-site` or `same-site`, or that come from the preview origin, are
+  refused, except a top-level navigation to `/pair`.
+- HTML the gateway serves or forwards carries `frame-ancestors 'none'` and
+  `X-Frame-Options: DENY`, and `Access-Control-Allow-*` headers are removed.
 - Revoking a device (`interpreter_device_connection_revoke`) refuses its next
-  request, including its preview. Signing out on the device revokes it too.
+  request, including its preview, and closes its open event streams and
+  WebSockets. Signing out on the device revokes it too.
+
+Limits: a device credential does not expire on its own; revoke the device to
+end its access. The preview proxy rewrites `Host` and `Origin` to the
+project's loopback address, so a project server cannot tell which public
+origin a request came from. An agent with unrestricted shell access on the
+host can read local secrets, including the app config and, when agent links
+are enabled, the QR files it wrote.
 
 Not yet available: a Settings panel for devices, native device apps, and
 built-in tunnel management.

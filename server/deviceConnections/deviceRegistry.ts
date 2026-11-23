@@ -6,9 +6,10 @@
  * possession and is checked against the stored hash on every request, so
  * revoking a device takes effect immediately.
  *
- * Pairing codes live only in memory: random, single use, short-lived, and
- * compared by hash in constant time. Repeated wrong codes discard every
- * outstanding code until the window passes.
+ * Pairing codes live only in memory: random (144 bits), single use,
+ * short-lived, and compared by hash in constant time. Wrong codes never lock
+ * out or discard valid ones: guessing 144 bits is not feasible, while a
+ * lockout would let anyone who can reach the claim endpoint block pairing.
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { isDeviceId } from './gatewayTrust';
@@ -32,12 +33,11 @@ export type DevicePersistence = {
   write: (devices: PairedDevice[]) => Promise<void>;
 };
 
-export type PairingCode = { code: string; expiresAt: string };
+export type PairingCode = { id: string; code: string; expiresAt: string };
 
-type PendingCode = { hash: Buffer; label: string; kind: DeviceKind; expiresAt: number };
+type PendingCode = { id: string; hash: Buffer; label: string; kind: DeviceKind; expiresAt: number };
 
 export const PAIRING_CODE_TTL_MS = 10 * 60 * 1000;
-export const MAX_FAILED_CLAIMS = 10;
 const MAX_PENDING_CODES = 20;
 const LAST_SEEN_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_LABEL_LENGTH = 80;
@@ -84,11 +84,10 @@ export class DeviceRegistry {
   private readonly persistence: DevicePersistence;
   private readonly now: () => number;
   private readonly pending: PendingCode[] = [];
-  private failedClaims = 0;
-  private failureWindowStartedAt = 0;
   private devices: PairedDevice[] | null = null;
   private writes: Promise<void> = Promise.resolve();
   private readonly lastSeenWrittenAt = new Map<string, number>();
+  private readonly revokeListeners = new Set<(id: string) => void>();
 
   constructor(persistence: DevicePersistence, options: { now?: () => number } = {}) {
     this.persistence = persistence;
@@ -100,21 +99,34 @@ export class DeviceRegistry {
     this.prune(now);
     const code = randomBytes(18).toString('base64url');
     const expiresAt = now + PAIRING_CODE_TTL_MS;
+    const id = randomBytes(9).toString('base64url');
     this.pending.push({
+      id,
       hash: sha256(code),
       label: normalizeDeviceLabel(input.label),
       kind: normalizeDeviceKind(input.kind),
       expiresAt,
     });
     while (this.pending.length > MAX_PENDING_CODES) this.pending.shift();
-    return { code, expiresAt: new Date(expiresAt).toISOString() };
+    return { id, code, expiresAt: new Date(expiresAt).toISOString() };
+  }
+
+  /** Whether the pairing code with this id is still unclaimed and unexpired. */
+  isPairingCodePending(id: string): boolean {
+    this.prune(this.now());
+    return this.pending.some((entry) => entry.id === id);
+  }
+
+  /** Calls `listener` with a device id whenever that device is revoked. */
+  onRevoke(listener: (id: string) => void): () => void {
+    this.revokeListeners.add(listener);
+    return () => { this.revokeListeners.delete(listener); };
   }
 
   /** Consumes a pairing code and creates its device; null for any invalid code. */
   async claim(code: unknown): Promise<{ device: DeviceSummary; credential: string } | null> {
     const now = this.now();
     this.prune(now);
-    if (this.failedClaims >= MAX_FAILED_CLAIMS) return null;
     const supplied = typeof code === 'string' && code.length > 0 && code.length <= MAX_CODE_LENGTH
       ? sha256(code)
       : null;
@@ -125,12 +137,7 @@ export class DeviceRegistry {
         matchIndex = index;
       }
     }
-    if (matchIndex < 0) {
-      if (this.failedClaims === 0) this.failureWindowStartedAt = now;
-      this.failedClaims += 1;
-      if (this.failedClaims >= MAX_FAILED_CLAIMS) this.pending.length = 0;
-      return null;
-    }
+    if (matchIndex < 0) return null;
     const [pending] = this.pending.splice(matchIndex, 1);
     const secret = randomBytes(32).toString('base64url');
     const device: PairedDevice = {
@@ -176,15 +183,21 @@ export class DeviceRegistry {
       return false;
     }));
     this.lastSeenWrittenAt.delete(id);
+    if (removed) {
+      for (const listener of this.revokeListeners) {
+        try {
+          listener(id);
+        } catch {
+          // A listener failure must not undo or hide the revocation.
+        }
+      }
+    }
     return removed;
   }
 
   private prune(now: number): void {
     for (let index = this.pending.length - 1; index >= 0; index -= 1) {
       if (this.pending[index].expiresAt <= now) this.pending.splice(index, 1);
-    }
-    if (this.failedClaims > 0 && now - this.failureWindowStartedAt >= PAIRING_CODE_TTL_MS) {
-      this.failedClaims = 0;
     }
   }
 

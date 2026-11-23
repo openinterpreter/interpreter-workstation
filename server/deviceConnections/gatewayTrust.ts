@@ -44,7 +44,17 @@ export function trustedClientDeviceId(request: HeaderSource): string | null {
   return isDeviceId(deviceId) ? deviceId : null;
 }
 
-export type ActiveDeviceGateway = { publicOrigin: string; port: number };
+/**
+ * True when a request was relayed by the device gateway or another proxy. The
+ * gateway connects over loopback and sets a loopback Host, so helpers that
+ * treat a loopback socket, a loopback Host or a missing Origin as "this
+ * computer" must refuse such requests.
+ */
+export function isRelayedRequest(request: HeaderSource): boolean {
+  return trustedClientDeviceId(request) !== null || request.headers['x-forwarded-host'] !== undefined;
+}
+
+export type ActiveDeviceGateway ={ publicOrigin: string; port: number };
 
 let activeGateway: ActiveDeviceGateway | null = null;
 

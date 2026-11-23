@@ -18,10 +18,14 @@ import {
 import type { CloseReason } from '../tools/builtin-tools/whatsapp/types';
 import { bindWhatsAppThread, getHeldWhatsAppReplyCount, getWhatsAppThreadBinding, unbindWhatsAppThread } from '../handlers/whatsappThreadBinding';
 import { closeWhatsAppBridgeSession } from '../services/whatsappBridge';
+import { isRelayedRequest } from '../deviceConnections/gatewayTrust';
 
 const router = Router();
 
-function localSameOrigin(req: Request): boolean {
+export function localSameOrigin(req: Request): boolean {
+  // The device gateway and other proxies reach this server over loopback
+  // with a loopback Host; they are not this computer's own interface.
+  if (isRelayedRequest(req)) return false;
   if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress ?? '')) return false;
   // A loopback socket alone does not authenticate the Host header: DNS
   // rebinding can direct a browser to loopback under an attacker's hostname.

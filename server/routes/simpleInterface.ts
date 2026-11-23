@@ -6,9 +6,8 @@ import {
   resolveSimplePreviewRuntimeUrl,
   withSimplePreviewTicket,
 } from "../utils/simplePreviewProxy";
-import { trustedClientDeviceId } from "../deviceConnections/gatewayTrust";
 import { getPreviewSigningKey } from "../deviceConnections/previewSigningKey";
-import { previewSubjectFor } from "../deviceConnections/previewSubjects";
+import { previewSubjectForRequest } from "../deviceConnections/previewSubjects";
 import type { SimpleAppStatus } from "../handlers/simpleApp";
 import { getCurrentWindowSessionKey, getWindowSessionByKey } from "../utils/windowSessions";
 import { answerBrowserTabCapture, listBrowserTabCaptures, stopBrowserTabCapture } from "../utils/browserExtensionRelay";
@@ -105,8 +104,9 @@ function errorResponse(error: unknown): { status: number; message: string } {
 
 /**
  * A browser on another device loads the preview through its public origin.
- * That URL carries a short-lived ticket for the preview origin, issued to the
- * paired device when the request came through the device gateway.
+ * That URL carries a short-lived, single-use ticket for the preview origin,
+ * issued only to a paired device (through the device gateway) or to an
+ * authenticated password session. Any other request gets no preview URL.
  */
 async function forRenderer(req: Request, status: SimpleAppStatus): Promise<SimpleAppStatus> {
   const runtimeUrl = resolveSimplePreviewRuntimeUrl(status.runtimeUrl, {
@@ -114,11 +114,9 @@ async function forRenderer(req: Request, status: SimpleAppStatus): Promise<Simpl
     forwardedHost: req.header("x-forwarded-host"),
   });
   if (!runtimeUrl || runtimeUrl === status.runtimeUrl) return { ...status, runtimeUrl };
-  const deviceId = trustedClientDeviceId(req);
-  const ticket = createSimplePreviewTicket(
-    previewSubjectFor(deviceId),
-    await getPreviewSigningKey(),
-  );
+  const subject = previewSubjectForRequest(req);
+  if (!subject) return { ...status, runtimeUrl: null };
+  const ticket = createSimplePreviewTicket(subject, await getPreviewSigningKey());
   return { ...status, runtimeUrl: withSimplePreviewTicket(runtimeUrl, ticket) };
 }
 

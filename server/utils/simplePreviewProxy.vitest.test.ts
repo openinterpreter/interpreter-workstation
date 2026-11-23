@@ -1,8 +1,17 @@
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import http from 'node:http';
 import net from 'node:net';
+import { http as mockHttp, passthrough } from 'msw';
+import { server as mockServer } from '../../tests/setup/msw-server';
+
+// These tests talk to real listeners on loopback; let those requests through
+// the suite-wide request mock, which otherwise rejects anything unhandled.
+beforeEach(() => {
+  mockServer.use(mockHttp.all(/^http:\/\/127\.0\.0\.1:\d+\//, () => passthrough()));
+});
 import {
   SIMPLE_PREVIEW_COOKIE,
+  SIMPLE_PREVIEW_TICKET_SECONDS,
   createSimplePreviewTicket,
   startSimplePreviewProxy,
   startSimplePreviewProxyFromEnvironment,
@@ -207,6 +216,54 @@ describe('Simple preview proxy access for a public origin', () => {
     });
     expect(ws).toBe('HTTP/1.1 401 Unauthorized');
     expect(seen).toHaveLength(0);
+  });
+
+  test('accepts a ticket once and only for thirty seconds', async () => {
+    expect(SIMPLE_PREVIEW_TICKET_SECONDS).toBe(30);
+    const { proxy } = await protectedProxy(new Set(['device:dev_abcdefghijklmnop']));
+    const ticket = createSimplePreviewTicket('device:dev_abcdefghijklmnop', SIGNING_KEY);
+    const first = await get(proxy.port, `/?${SIMPLE_PREVIEW_TICKET_PARAM}=${ticket}`);
+    expect(first.status).toBe(302);
+    expect(first.headers['set-cookie']).toBeDefined();
+    const replay = await get(proxy.port, `/?${SIMPLE_PREVIEW_TICKET_PARAM}=${ticket}`);
+    expect(replay.status).toBe(401);
+    expect(replay.headers['set-cookie']).toBeUndefined();
+
+    const stale = createSimplePreviewTicket('device:dev_abcdefghijklmnop', SIGNING_KEY, Date.now() - 31_000);
+    expect((await get(proxy.port, `/?${SIMPLE_PREVIEW_TICKET_PARAM}=${stale}`)).status).toBe(401);
+  });
+
+  test('never redirects to a scheme-relative location after removing the ticket', async () => {
+    const { proxy } = await protectedProxy(new Set(['device:dev_abcdefghijklmnop']));
+    for (const path of ['/.//evil.example/x', '//evil.example/x', '/a/..//evil.example']) {
+      const ticket = createSimplePreviewTicket('device:dev_abcdefghijklmnop', SIGNING_KEY);
+      const response = await get(proxy.port, `${path}?${SIMPLE_PREVIEW_TICKET_PARAM}=${ticket}`);
+      expect(response.status).toBe(302);
+      const location = String(response.headers.location);
+      expect(location.startsWith('/')).toBe(true);
+      expect(location.startsWith('//')).toBe(false);
+    }
+  });
+
+  test('lets only the device gateway origin frame the preview', async () => {
+    const upstream = http.createServer((_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'text/html' });
+      response.end('<p>project</p>');
+    });
+    const upstreamPort = await listen(upstream);
+    const proxy = await startSimplePreviewProxy({
+      port: 0,
+      upstream: () => upstreamPort,
+      access: { signingKey: SIGNING_KEY, isSubjectActive: () => true },
+      frameAncestorOrigin: 'https://workstation.example',
+    });
+    closers.push(() => proxy.close());
+    const exchange = await get(proxy.port, `/?${SIMPLE_PREVIEW_TICKET_PARAM}=${createSimplePreviewTicket('device:dev_abcdefghijklmnop', SIGNING_KEY)}`);
+    const cookie = (exchange.headers['set-cookie']?.[0] ?? '').split(';')[0];
+    const page = await get(proxy.port, '/', { Cookie: cookie });
+    expect(page.status).toBe(200);
+    expect(page.headers['content-security-policy']).toBe('frame-ancestors https://workstation.example');
+    expect(page.headers['x-frame-options']).toBeUndefined();
   });
 
   test('refuses to start for a public origin without access control', async () => {

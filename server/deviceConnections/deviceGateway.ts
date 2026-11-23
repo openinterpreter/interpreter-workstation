@@ -11,10 +11,14 @@
  *   endpoint for an HttpOnly device cookie, and opens the normal shell.
  * - Every other request needs a valid, unrevoked device cookie, else 401.
  *   State-changing requests and WebSocket upgrades also need the public
- *   Origin.
+ *   Origin. Cross-site and same-site (for example the preview origin)
+ *   requests are refused, except a top-level navigation to `/pair`.
  * - Authenticated requests, SSE, and upgrades are streamed to the app server
  *   over loopback with the device id and a per-process trust token. Client
- *   copies of those headers are removed.
+ *   copies of those headers are removed. Revoking a device closes its open
+ *   streams and sockets.
+ * - HTML it serves or forwards cannot be framed, and CORS grants from the app
+ *   server are not passed on.
  */
 import http from 'node:http';
 import net from 'node:net';
@@ -28,7 +32,8 @@ import type { DeviceSummary } from './deviceRegistry';
 
 export const DEVICE_GATEWAY_PORT_ENV = 'INTERPRETER_DEVICE_GATEWAY_PORT';
 export const DEVICE_GATEWAY_PUBLIC_ORIGIN_ENV = 'INTERPRETER_DEVICE_GATEWAY_PUBLIC_ORIGIN';
-export const DEVICE_SESSION_COOKIE = 'interpreter_device_session';
+/** `__Host-` binds the cookie to this exact origin: Secure, Path=/, no Domain. */
+export const DEVICE_SESSION_COOKIE = '__Host-interpreter_device_session';
 export const DEVICE_CLAIM_PATH = '/api/device-connections/claim';
 /** Browsers cap cookie lifetime at 400 days. */
 export const DEVICE_SESSION_SECONDS = 400 * 24 * 60 * 60;
@@ -49,6 +54,8 @@ export type DeviceGatewayDevices = {
   claim: (code: unknown) => Promise<{ device: DeviceSummary; credential: string } | null>;
   authenticate: (credential: string | null) => Promise<DeviceSummary | null>;
   revoke: (id: string) => Promise<boolean>;
+  /** Subscribes to revocations from anywhere (tool, bridge, sign-out); returns an unsubscribe. */
+  onRevoke?: (listener: (id: string) => void) => () => void;
 };
 
 export type DeviceGatewayOptions = {
@@ -57,10 +64,38 @@ export type DeviceGatewayOptions = {
   /** The app server's loopback origin, for example `http://127.0.0.1:5177`. */
   upstreamOrigin: string | (() => string);
   publicOrigin: string;
+  /** The Simple preview's public origin, when configured; its requests are refused. */
+  previewPublicOrigin?: string | null;
   access: () => WorkstationAccess;
   devices: DeviceGatewayDevices;
   gatewayToken: string;
 };
+
+/** Open responses and sockets per device, closed when that device is revoked. */
+class DeviceStreams {
+  private readonly byDevice = new Map<string, Set<{ destroy: () => void }>>();
+
+  track(deviceId: string, stream: { destroy: () => void; once: (event: 'close', listener: () => void) => unknown }): void {
+    let streams = this.byDevice.get(deviceId);
+    if (!streams) {
+      streams = new Set();
+      this.byDevice.set(deviceId, streams);
+    }
+    const entry = { destroy: () => stream.destroy() };
+    streams.add(entry);
+    stream.once('close', () => {
+      streams!.delete(entry);
+      if (streams!.size === 0 && this.byDevice.get(deviceId) === streams) this.byDevice.delete(deviceId);
+    });
+  }
+
+  closeDevice(deviceId: string): void {
+    const streams = this.byDevice.get(deviceId);
+    if (!streams) return;
+    this.byDevice.delete(deviceId);
+    for (const stream of streams) stream.destroy();
+  }
+}
 
 export type DeviceGatewayHandle = {
   host: string;
@@ -227,6 +262,67 @@ function sessionCookie(credential: string): string {
   return `${DEVICE_SESSION_COOKIE}=${encodeURIComponent(credential)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${DEVICE_SESSION_SECONDS}`;
 }
 
+function headerValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function originOfReferer(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch metadata check. Cross-site requests are refused, and so are
+ * same-site ones: the shell is always same-origin, while a same-site sender
+ * is another subdomain such as the preview, which runs project code and can
+ * omit Origin and Referer. Only a top-level navigation to `/pair` (a pairing
+ * link opened from a message or a QR code) may come from elsewhere. Browsers
+ * that send no Sec-Fetch-Site are left to the cookie and Origin checks.
+ */
+function allowedFetchSite(request: http.IncomingMessage, path: string, options: DeviceGatewayOptions): boolean {
+  const site = headerValue(request.headers['sec-fetch-site'])?.trim().toLowerCase();
+  const fromPreview = Boolean(options.previewPublicOrigin) && (
+    headerValue(request.headers.origin) === options.previewPublicOrigin
+    || originOfReferer(headerValue(request.headers.referer)) === options.previewPublicOrigin
+  );
+  if (site !== 'cross-site' && site !== 'same-site' && !fromPreview) return true;
+  return path === '/pair'
+    && !fromPreview
+    && isSafeMethod(request.method)
+    && headerValue(request.headers['sec-fetch-mode']) === 'navigate'
+    && (headerValue(request.headers['sec-fetch-dest']) ?? 'document') === 'document';
+}
+
+const FRAME_DENIAL = "frame-ancestors 'none'";
+
+function isHtml(headers: http.IncomingHttpHeaders | http.OutgoingHttpHeaders): boolean {
+  const type = headers['content-type'];
+  return String(Array.isArray(type) ? type[0] : type ?? '').toLowerCase().includes('text/html');
+}
+
+/** Response headers for a device: no CORS grants, and HTML cannot be framed. */
+function deviceResponseHeaders(source: http.IncomingHttpHeaders): http.OutgoingHttpHeaders {
+  const headers: http.OutgoingHttpHeaders = {};
+  for (const [name, value] of Object.entries(source)) {
+    if (value === undefined || HOP_BY_HOP_HEADERS.has(name) || name.startsWith('access-control-allow-')) continue;
+    headers[name] = value;
+  }
+  if (isHtml(headers)) {
+    const existing = headers['content-security-policy'];
+    // Several policies in one header value are all enforced, like separate headers.
+    const policies = existing === undefined
+      ? []
+      : Array.isArray(existing) ? existing.map(String) : [String(existing)];
+    headers['content-security-policy'] = [...policies, FRAME_DENIAL].join(', ');
+    headers['x-frame-options'] = 'DENY';
+  }
+  return headers;
+}
+
 const CLEARED_SESSION_COOKIE = `${DEVICE_SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 
 type Upstream = { hostname: string; port: number; host: string };
@@ -294,7 +390,9 @@ function forwardRequest(
   response: http.ServerResponse,
   options: DeviceGatewayOptions,
   device: DeviceSummary,
+  streams: DeviceStreams,
 ): void {
+  streams.track(device.id, response);
   const upstream = upstreamOf(options);
   const proxied = http.request({
     host: upstream.hostname,
@@ -309,9 +407,7 @@ function forwardRequest(
       keepHopByHop: false,
     })),
   }, (upstreamResponse) => {
-    const headers = { ...upstreamResponse.headers };
-    for (const name of HOP_BY_HOP_HEADERS) delete headers[name];
-    response.writeHead(upstreamResponse.statusCode ?? 502, headers);
+    response.writeHead(upstreamResponse.statusCode ?? 502, deviceResponseHeaders(upstreamResponse.headers));
     response.flushHeaders();
     upstreamResponse.pipe(response);
   });
@@ -375,14 +471,21 @@ async function handleRequest(
   request: http.IncomingMessage,
   response: http.ServerResponse,
   options: DeviceGatewayOptions,
+  streams: DeviceStreams,
 ): Promise<void> {
   const path = pathOf(request);
+  if (!allowedFetchSite(request, path, options)) {
+    request.resume();
+    send(response, 403);
+    return;
+  }
   if (path === '/pair' && isSafeMethod(request.method)) {
     request.resume();
     send(response, 200, PAIR_PAGE, {
       'Content-Type': 'text/html; charset=utf-8',
       'Referrer-Policy': 'no-referrer',
       'Content-Security-Policy': "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      'X-Frame-Options': 'DENY',
     });
     return;
   }
@@ -429,7 +532,7 @@ async function handleRequest(
     return;
   }
 
-  forwardRequest(request, response, options, device);
+  forwardRequest(request, response, options, device, streams);
 }
 
 function rejectUpgrade(socket: Duplex, status: '401 Unauthorized' | '403 Forbidden'): void {
@@ -441,8 +544,13 @@ async function handleUpgrade(
   socket: Duplex,
   head: Buffer,
   options: DeviceGatewayOptions,
+  streams: DeviceStreams,
 ): Promise<void> {
   socket.on('error', () => socket.destroy());
+  if (!allowedFetchSite(request, pathOf(request), options)) {
+    rejectUpgrade(socket, '403 Forbidden');
+    return;
+  }
   const device = await options.devices.authenticate(cookieValue(request.headers.cookie, DEVICE_SESSION_COOKIE));
   if (!device) {
     rejectUpgrade(socket, '401 Unauthorized');
@@ -461,6 +569,7 @@ async function handleUpgrade(
     keepHopByHop: true,
   });
   const lines = [`${request.method ?? 'GET'} ${request.url ?? '/'} HTTP/1.1`, ...pairs.map(([name, value]) => `${name}: ${value}`)];
+  streams.track(device.id, socket);
   const target = net.connect(upstream.port, upstream.hostname);
   target.on('connect', () => {
     target.write(`${lines.join('\r\n')}\r\n\r\n`);
@@ -474,14 +583,27 @@ async function handleUpgrade(
 }
 
 export async function startDeviceGateway(options: DeviceGatewayOptions): Promise<DeviceGatewayHandle> {
+  const streams = new DeviceStreams();
+  const revokeSubscription = options.devices.onRevoke?.((id) => streams.closeDevice(id));
+  // Revocation through this gateway (sign-out) also closes the device's streams.
+  const devices: DeviceGatewayDevices = {
+    claim: (code) => options.devices.claim(code),
+    authenticate: (credential) => options.devices.authenticate(credential),
+    revoke: async (id) => {
+      const revoked = await options.devices.revoke(id);
+      streams.closeDevice(id);
+      return revoked;
+    },
+  };
+  const gatewayOptions: DeviceGatewayOptions = { ...options, devices };
   const server = http.createServer((request, response) => {
-    handleRequest(request, response, options).catch(() => {
+    handleRequest(request, response, gatewayOptions, streams).catch(() => {
       if (response.headersSent) response.destroy();
       else send(response, 500);
     });
   });
   server.on('upgrade', (request, socket, head) => {
-    handleUpgrade(request, socket, head, options).catch(() => socket.destroy());
+    handleUpgrade(request, socket, head, gatewayOptions, streams).catch(() => socket.destroy());
   });
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
@@ -495,6 +617,7 @@ export async function startDeviceGateway(options: DeviceGatewayOptions): Promise
     host: typeof address === 'object' && address ? address.address : LOOPBACK_HOST,
     port: typeof address === 'object' && address ? address.port : options.port,
     close: () => new Promise<void>((resolve) => {
+      revokeSubscription?.();
       server.close(() => resolve());
       server.closeAllConnections?.();
     }),

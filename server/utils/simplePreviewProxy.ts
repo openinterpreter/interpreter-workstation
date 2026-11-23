@@ -9,22 +9,28 @@
  * give the preview its own public origin (INTERPRETER_SIMPLE_PREVIEW_PUBLIC_ORIGIN).
  *
  * The proxy always binds 127.0.0.1. With a public origin it requires access:
- * the shell's runtime URL carries a short-lived signed ticket, which the proxy
- * exchanges for its own partitioned cookie (the shell's cookie is not sent to
- * another origin inside a frame). Without a public origin it adds no
- * authentication, so loopback use is unchanged.
+ * the shell's runtime URL carries a short-lived, single-use signed ticket,
+ * which the proxy exchanges for its own partitioned cookie (the shell's cookie
+ * is not sent to another origin inside a frame). Without a public origin it
+ * adds no authentication, so loopback use is unchanged.
  */
-import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import http from 'node:http';
 import net from 'node:net';
 import type { Duplex } from 'node:stream';
 import { SIMPLE_PREVIEW_TICKET_PARAM } from '../../shared/simplePreview';
+import {
+  DEVICE_GATEWAY_PUBLIC_ORIGIN_ENV,
+  parseDeviceGatewayPublicOrigin,
+} from '../deviceConnections/deviceGateway';
 
 export const SIMPLE_PREVIEW_PROXY_PORT_ENV = 'INTERPRETER_SIMPLE_PREVIEW_PROXY_PORT';
 export const SIMPLE_PREVIEW_PUBLIC_ORIGIN_ENV = 'INTERPRETER_SIMPLE_PREVIEW_PUBLIC_ORIGIN';
 export const SIMPLE_PREVIEW_COOKIE = 'interpreter_preview_session';
-export const SIMPLE_PREVIEW_TICKET_SECONDS = 120;
+export const SIMPLE_PREVIEW_TICKET_SECONDS = 30;
 export const SIMPLE_PREVIEW_COOKIE_SECONDS = 12 * 60 * 60;
+/** Used tickets remembered until they expire; past this, new tickets are refused. */
+export const MAX_REMEMBERED_PREVIEW_TICKETS = 10_000;
 
 const LOOPBACK_HOST = '127.0.0.1';
 const UNAVAILABLE_MESSAGE = 'The interface project is not running.\n';
@@ -49,9 +55,28 @@ function tokenSignature(payload: string, signingKey: string): string {
 
 function createToken(kind: TokenKind, subject: string, seconds: number, signingKey: string, now: number): string {
   const expiresAt = Math.floor(now / 1000) + seconds;
-  const payload = `${kind}.${Buffer.from(subject, 'utf8').toString('base64url')}.${expiresAt}`;
+  const nonce = randomBytes(12).toString('base64url');
+  const payload = `${kind}.${Buffer.from(subject, 'utf8').toString('base64url')}.${expiresAt}.${nonce}`;
   return `${payload}.${tokenSignature(payload, signingKey)}`;
 }
+
+/** Nonces of tickets already exchanged, with their expiry (seconds). */
+const usedTickets = new Map<string, number>();
+
+/** Marks a ticket used; false when it was used before or no more can be remembered. */
+function consumeTicket(nonce: string, expiresAt: number, nowSeconds: number): boolean {
+  if (usedTickets.has(nonce)) return false;
+  if (usedTickets.size >= MAX_REMEMBERED_PREVIEW_TICKETS) {
+    for (const [used, expiry] of usedTickets) {
+      if (expiry <= nowSeconds) usedTickets.delete(used);
+    }
+    if (usedTickets.size >= MAX_REMEMBERED_PREVIEW_TICKETS) return false;
+  }
+  usedTickets.set(nonce, expiresAt);
+  return true;
+}
+
+type VerifiedToken = { subject: string; nonce: string; expiresAt: number; nowSeconds: number };
 
 function safeEqual(actual: string, expected: string): boolean {
   const actualHash = createHash('sha256').update(actual).digest();
@@ -63,20 +88,22 @@ async function verifyToken(
   kind: TokenKind,
   value: string | null,
   access: SimplePreviewAccess,
-): Promise<string | null> {
+): Promise<VerifiedToken | null> {
   if (!value) return null;
-  const match = /^(t1|p1)\.([A-Za-z0-9_-]{1,256})\.(\d{1,12})\.([A-Za-z0-9_-]{43})$/.exec(value);
+  const match = /^(t1|p1)\.([A-Za-z0-9_-]{1,256})\.(\d{1,12})\.([A-Za-z0-9_-]{16})\.([A-Za-z0-9_-]{43})$/.exec(value);
   if (!match || match[1] !== kind) return null;
-  const payload = `${match[1]}.${match[2]}.${match[3]}`;
-  if (!safeEqual(match[4], tokenSignature(payload, access.signingKey))) return null;
+  const payload = `${match[1]}.${match[2]}.${match[3]}.${match[4]}`;
+  if (!safeEqual(match[5], tokenSignature(payload, access.signingKey))) return null;
   const now = access.now?.() ?? Date.now();
-  if (Number(match[3]) <= Math.floor(now / 1000)) return null;
+  const nowSeconds = Math.floor(now / 1000);
+  const expiresAt = Number(match[3]);
+  if (expiresAt <= nowSeconds) return null;
   const subject = Buffer.from(match[2], 'base64url').toString('utf8');
   if (access.isSubjectActive && !(await access.isSubjectActive(subject))) return null;
-  return subject;
+  return { subject, nonce: match[4], expiresAt, nowSeconds };
 }
 
-/** A short-lived ticket the preview origin exchanges for its own cookie. */
+/** A short-lived, single-use ticket the preview origin exchanges for its own cookie. */
 export function createSimplePreviewTicket(subject: string, signingKey: string, now = Date.now()): string {
   return createToken('t1', subject, SIMPLE_PREVIEW_TICKET_SECONDS, signingKey, now);
 }
@@ -120,19 +147,20 @@ async function authorizePreviewRequest(
   let strippedUrl: string | null = null;
   if (ticket !== null) {
     url.searchParams.delete(SIMPLE_PREVIEW_TICKET_PARAM);
-    strippedUrl = `${url.pathname}${url.search}`;
-    const subject = await verifyToken('t1', ticket, access);
-    if (subject) {
+    // Collapse leading slashes so the redirect can never be scheme-relative.
+    strippedUrl = `/${url.pathname.replace(/^[/\\]+/, '')}${url.search}`;
+    const verified = await verifyToken('t1', ticket, access);
+    if (verified && consumeTicket(verified.nonce, verified.expiresAt, verified.nowSeconds)) {
       const now = access.now?.() ?? Date.now();
       return {
         allowed: true,
         strippedUrl,
-        cookie: createToken('p1', subject, SIMPLE_PREVIEW_COOKIE_SECONDS, access.signingKey, now),
+        cookie: createToken('p1', verified.subject, SIMPLE_PREVIEW_COOKIE_SECONDS, access.signingKey, now),
       };
     }
   }
-  const subject = await verifyToken('p1', cookieValue(request, SIMPLE_PREVIEW_COOKIE), access);
-  return subject ? { allowed: true, strippedUrl, cookie: null } : { allowed: false };
+  const verified = await verifyToken('p1', cookieValue(request, SIMPLE_PREVIEW_COOKIE), access);
+  return verified ? { allowed: true, strippedUrl, cookie: null } : { allowed: false };
 }
 
 function previewCookieHeader(value: string): string {
@@ -273,11 +301,27 @@ function respondUnavailable(response: http.ServerResponse): void {
   response.end(UNAVAILABLE_MESSAGE);
 }
 
+/** Adds `frame-ancestors <origin>` so only the shell origin can frame the preview. */
+function withFrameAncestors(headers: http.IncomingHttpHeaders, frameAncestor: string | null): http.OutgoingHttpHeaders {
+  if (!frameAncestor) return headers;
+  const policy = `frame-ancestors ${frameAncestor}`;
+  const existing = headers['content-security-policy'];
+  return {
+    ...headers,
+    // Several policies in one header value are all enforced, like separate headers.
+    'content-security-policy': [
+      ...(existing === undefined ? [] : Array.isArray(existing) ? existing : [existing]),
+      policy,
+    ].join(', '),
+  };
+}
+
 async function forwardRequest(
   request: http.IncomingMessage,
   response: http.ServerResponse,
   upstream: SimplePreviewUpstream,
   access: SimplePreviewAccess | null,
+  frameAncestor: string | null,
 ): Promise<void> {
   if (access) {
     const authorization = await authorizePreviewRequest(request, access);
@@ -314,7 +358,7 @@ async function forwardRequest(
   }, (upstreamResponse) => {
     const headers = { ...upstreamResponse.headers };
     for (const name of HOP_BY_HOP_HEADERS) delete headers[name];
-    response.writeHead(upstreamResponse.statusCode ?? 502, headers);
+    response.writeHead(upstreamResponse.statusCode ?? 502, withFrameAncestors(headers, frameAncestor));
     upstreamResponse.pipe(response);
   });
   proxied.on('error', () => respondUnavailable(response));
@@ -370,10 +414,13 @@ export async function startSimplePreviewProxy(options: {
   upstream: SimplePreviewUpstream;
   /** Required for a publicly reachable preview; omitted for loopback-only use. */
   access?: SimplePreviewAccess | null;
+  /** The only origin allowed to frame the preview (the device gateway's public origin). */
+  frameAncestorOrigin?: string | null;
 }): Promise<SimplePreviewProxyHandle> {
   const access = options.access ?? null;
+  const frameAncestor = options.frameAncestorOrigin ?? null;
   const server = http.createServer((request, response) => {
-    void forwardRequest(request, response, options.upstream, access);
+    void forwardRequest(request, response, options.upstream, access, frameAncestor);
   });
   server.on('upgrade', (request, socket, head) => {
     void forwardUpgrade(request, socket, head, options.upstream, access);
@@ -420,5 +467,8 @@ export async function startSimplePreviewProxyFromEnvironment(
     port,
     upstream,
     access: publicOrigin && access ? await access() : null,
+    frameAncestorOrigin: publicOrigin
+      ? parseDeviceGatewayPublicOrigin(environment[DEVICE_GATEWAY_PUBLIC_ORIGIN_ENV])
+      : null,
   });
 }

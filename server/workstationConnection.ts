@@ -83,16 +83,41 @@ function createSessionValue(policy: WorkstationHostPolicy, now = Date.now()): st
   return `${payload}.${signature(payload, policy.sessionSecret)}`;
 }
 
-function cookieValue(request: Request, name: string): string | null {
+function cookieValue(request: Pick<Request, 'header'>, name: string): string | null {
   const cookieHeader = request.header('cookie');
   if (!cookieHeader) return null;
   for (const item of cookieHeader.split(';')) {
     const separator = item.indexOf('=');
     if (separator < 0) continue;
     if (item.slice(0, separator).trim() !== name) continue;
-    return decodeURIComponent(item.slice(separator + 1).trim());
+    try {
+      return decodeURIComponent(item.slice(separator + 1).trim());
+    } catch {
+      return null;
+    }
   }
   return null;
+}
+
+/**
+ * Expiry (seconds since the epoch) of the request's valid password session,
+ * or null when it carries none. Only a remote host with password
+ * authentication issues sessions.
+ */
+export function workstationPasswordSessionExpiry(
+  request: Pick<Request, 'header'>,
+  policy: WorkstationHostPolicy,
+  now = Date.now(),
+): number | null {
+  if (!policy.remote || policy.authentication !== 'password' || !policy.sessionSecret) return null;
+  const session = cookieValue(request, SESSION_COOKIE);
+  if (!session) return null;
+  const match = /^v1\.(\d+)\.([A-Za-z0-9_-]+)$/.exec(session);
+  if (!match) return null;
+  const expiresAt = Number(match[1]);
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= Math.floor(now / 1000)) return null;
+  const payload = `v1.${expiresAt}`;
+  return safeEqual(match[2], signature(payload, policy.sessionSecret)) ? expiresAt : null;
 }
 
 export function isWorkstationSessionAuthenticated(
@@ -101,15 +126,7 @@ export function isWorkstationSessionAuthenticated(
   now = Date.now(),
 ): boolean {
   if (!policy.remote || policy.authentication === 'none') return true;
-  if (!policy.sessionSecret) return false;
-  const session = cookieValue(request, SESSION_COOKIE);
-  if (!session) return false;
-  const match = /^v1\.(\d+)\.([A-Za-z0-9_-]+)$/.exec(session);
-  if (!match) return false;
-  const expiresAt = Number(match[1]);
-  if (!Number.isSafeInteger(expiresAt) || expiresAt <= Math.floor(now / 1000)) return false;
-  const payload = `v1.${expiresAt}`;
-  return safeEqual(match[2], signature(payload, policy.sessionSecret));
+  return workstationPasswordSessionExpiry(request, policy, now) !== null;
 }
 
 function requestOrigin(request: Request): string | null {

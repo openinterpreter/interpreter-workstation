@@ -64,6 +64,8 @@ import { stopGoalAutoResume } from "./utils/goalAutoResumeRuntime";
 import { stopGoalNotices } from "./utils/goalNoticesRuntime";
 import { getServerLocalOrigin, setServerHost } from "./utils/serverPort";
 import {
+  parseSimplePreviewPublicOrigin,
+  SIMPLE_PREVIEW_PUBLIC_ORIGIN_ENV,
   startSimplePreviewProxyFromEnvironment,
   type SimplePreviewProxyHandle,
 } from "./utils/simplePreviewProxy";
@@ -306,6 +308,9 @@ export async function runStandaloneCli(argv: string[] = process.argv.slice(2)) {
   }
   const deviceGateway = await startDeviceGatewayFromEnvironment({
     upstreamOrigin: getServerLocalOrigin,
+    previewPublicOrigin: simplePreviewProxy
+      ? parseSimplePreviewPublicOrigin(process.env[SIMPLE_PREVIEW_PUBLIC_ORIGIN_ENV])
+      : null,
     access: () => getWorkstationHostPolicy().access,
     devices: getDeviceRegistry(),
     gatewayToken: getDeviceGatewayToken(),

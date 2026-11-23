@@ -4,8 +4,8 @@
  * Simple mode already labels input from other sources by prefixing the user
  * message with `[From <source>]` (for example GPT Live or a generated
  * interface). Input submitted through the device gateway gets the same label
- * with the device's name, on the same start and steer routes the desktop
- * composer uses. Desktop requests are never changed.
+ * with the device's name on every route that submits user text (see
+ * DEVICE_ATTRIBUTED_INPUT_PATHS). Desktop requests are never changed.
  */
 import type { NextFunction, Request, Response } from 'express';
 import { trustedClientDeviceId } from './gatewayTrust';
@@ -29,7 +29,8 @@ export function createDeviceInputAttributionMiddleware(
   return (request: Request, _response: Response, next: NextFunction): void => {
     const deviceId = trustedClientDeviceId(request);
     const body = request.body as Record<string, unknown> | undefined;
-    if (!deviceId || request.method !== 'POST' || !body || typeof body !== 'object') {
+    if (!deviceId || request.method !== 'POST' || !body || typeof body !== 'object'
+      || !DEVICE_ATTRIBUTED_INPUT_PATHS.includes(pathOf(request))) {
       next();
       return;
     }
@@ -40,5 +41,22 @@ export function createDeviceInputAttributionMiddleware(
   };
 }
 
-/** The conversation start and steer routes that paired-device input uses. */
-export const DEVICE_ATTRIBUTED_INPUT_PATHS = ['/api/agent/chat/stream', '/api/agent/chat/steer'];
+function pathOf(request: Request): string {
+  const url = request.originalUrl || request.url || '';
+  const query = url.indexOf('?');
+  return (query < 0 ? url : url.slice(0, query)).replace(/\/+$/, '');
+}
+
+/**
+ * Every route that submits user text (`message`) to a conversation: start,
+ * steer, programmatic tasks (to a new or existing thread) and the composer's
+ * message queue. Wake events need the local wake token and are refused for
+ * relayed requests, so a device cannot reach them.
+ */
+export const DEVICE_ATTRIBUTED_INPUT_PATHS = [
+  '/api/agent/chat/stream',
+  '/api/agent/chat/steer',
+  '/api/agent/tasks',
+  '/api/agent/tasks/stream',
+  '/api/agent/queue',
+];

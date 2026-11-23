@@ -19,6 +19,12 @@ describe('public thread snapshots', () => {
     expect(sanitizePublicThreadText('api_key=sk_examplelongsecret')).toBe('[redacted]');
   });
 
+  test('redacts the code of a device pairing link', () => {
+    const sanitized = sanitizePublicThreadText('Open https://devices.example/pair#code=AbCdEfGhIjKlMnOpQrStUvWx on your phone.');
+    expect(sanitized).not.toContain('AbCdEfGhIjKlMnOpQrStUvWx');
+    expect(sanitized).toBe('Open https://devices.example/[redacted] on your phone.');
+  });
+
   test('removes private filesystem paths while preserving public links', () => {
     const sanitized = sanitizePublicThreadText([
       '[Translation](/workspace/projects/science/translation.md)',

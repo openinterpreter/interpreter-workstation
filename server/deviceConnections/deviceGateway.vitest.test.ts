@@ -1,6 +1,8 @@
-import { afterEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import http from 'node:http';
 import net from 'node:net';
+import { http as mockHttp, passthrough } from 'msw';
+import { server as mockServer } from '../../tests/setup/msw-server';
 import {
   DEVICE_SESSION_COOKIE,
   DEVICE_SESSION_SECONDS,
@@ -13,7 +15,14 @@ import { DeviceRegistry, type PairedDevice } from './deviceRegistry';
 import { CLIENT_DEVICE_HEADER, DEVICE_GATEWAY_TOKEN_HEADER, getDeviceGatewayToken } from './gatewayTrust';
 
 const PUBLIC_ORIGIN = 'https://devices.example';
+const PREVIEW_ORIGIN = 'https://preview.devices.example';
 const closers: Array<() => Promise<void> | void> = [];
+
+// These tests talk to real listeners on loopback; let those requests through
+// the suite-wide request mock, which otherwise rejects anything unhandled.
+beforeEach(() => {
+  mockServer.use(mockHttp.all(/^http:\/\/127\.0\.0\.1:\d+\//, () => passthrough()));
+});
 
 afterEach(async () => {
   while (closers.length) await closers.pop()!();
@@ -48,7 +57,16 @@ async function startUpstream() {
         releaseEvents = () => response.end('event: done\ndata: two\n\n');
         return;
       }
-      response.writeHead(200, { 'Content-Type': 'application/json' });
+      if (request.url === '/') {
+        response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        response.end('<!doctype html><title>Interpreter</title>');
+        return;
+      }
+      response.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Credentials': 'true',
+      });
       response.end(JSON.stringify({ ok: true }));
     });
   });
@@ -70,6 +88,7 @@ async function startTestGateway(access: 'read-write' | 'read-only' = 'read-write
     port: 0,
     upstreamOrigin: `http://127.0.0.1:${upstream.port}`,
     publicOrigin: PUBLIC_ORIGIN,
+    previewPublicOrigin: PREVIEW_ORIGIN,
     access: () => access,
     devices: registry,
     gatewayToken: getDeviceGatewayToken(),
@@ -336,6 +355,112 @@ describe('device gateway access', () => {
     expect(direct.status).toBe(200);
     expect(upstream.seen.at(-1)?.headers[CLIENT_DEVICE_HEADER]).toBeUndefined();
     expect(gateway.host).toBe('127.0.0.1');
+  });
+});
+
+function openEvents(port: number, cookie: string) {
+  return new Promise<http.IncomingMessage>((resolve, reject) => {
+    const request = http.request({
+      host: '127.0.0.1', port, path: '/api/events', headers: { Cookie: cookie }, agent: false,
+    }, (response) => response.once('data', () => resolve(response)));
+    request.on('error', reject);
+    request.end();
+  });
+}
+
+function closed(stream: { once: (event: 'close', listener: () => void) => unknown }) {
+  return new Promise<void>((resolve) => { stream.once('close', () => resolve()); });
+}
+
+describe('device gateway revocation', () => {
+  test('closes the device event stream and WebSocket when it is revoked elsewhere', async () => {
+    const { gateway, registry } = await startTestGateway();
+    const { cookie } = await pair(gateway.port, registry);
+    const other = await pair(gateway.port, registry, 'Tablet');
+    const [phoneId, tabletId] = (await registry.list()).map((device) => device.id);
+
+    const events = await openEvents(gateway.port, cookie);
+    const otherEvents = await openEvents(gateway.port, other.cookie);
+    closers.push(() => { otherEvents.destroy(); });
+    const socket = (await rawUpgrade(gateway.port, [`Origin: ${PUBLIC_ORIGIN}`, `Cookie: ${cookie}`])).socket;
+    closers.push(() => { socket.destroy(); });
+
+    const eventsClosed = closed(events);
+    const socketClosed = closed(socket);
+    await registry.revoke(phoneId);
+    await Promise.all([eventsClosed, socketClosed]);
+    expect(otherEvents.destroyed).toBe(false);
+    expect(tabletId).toBeDefined();
+  });
+
+  test('closes the device event stream when it signs out', async () => {
+    const { gateway, registry } = await startTestGateway();
+    const { cookie } = await pair(gateway.port, registry);
+    const events = await openEvents(gateway.port, cookie);
+    const eventsClosed = closed(events);
+    const signOut = await send(gateway.port, {
+      method: 'DELETE', path: '/api/workstation-connection/session', headers: { Cookie: cookie, Origin: PUBLIC_ORIGIN },
+    });
+    expect(signOut.status).toBe(200);
+    await eventsClosed;
+  });
+});
+
+describe('device gateway browser protections', () => {
+  test('names its cookie with the __Host- prefix', async () => {
+    const { gateway, registry } = await startTestGateway();
+    const { setCookie } = await pair(gateway.port, registry);
+    expect(DEVICE_SESSION_COOKIE).toBe('__Host-interpreter_device_session');
+    expect(setCookie).toContain('Secure');
+    expect(setCookie).toContain('Path=/');
+    expect(setCookie).not.toContain('Domain');
+  });
+
+  test('refuses cross-site and same-site requests except a top-level navigation to the pairing page', async () => {
+    const { gateway, upstream, registry } = await startTestGateway();
+    const { cookie } = await pair(gateway.port, registry);
+    for (const site of ['cross-site', 'same-site']) {
+      const response = await send(gateway.port, { path: '/api/read', headers: { Cookie: cookie, 'Sec-Fetch-Site': site } });
+      expect(response.status).toBe(403);
+    }
+    const fromPreview = await send(gateway.port, { path: '/api/read', headers: { Cookie: cookie, Referer: `${PREVIEW_ORIGIN}/app` } });
+    expect(fromPreview.status).toBe(403);
+    const previewOrigin = await send(gateway.port, { path: '/api/read', headers: { Cookie: cookie, Origin: PREVIEW_ORIGIN } });
+    expect(previewOrigin.status).toBe(403);
+    const upgrade = await rawUpgrade(gateway.port, [`Origin: ${PUBLIC_ORIGIN}`, `Cookie: ${cookie}`, 'Sec-Fetch-Site: same-site']);
+    closers.push(() => { upgrade.socket.destroy(); });
+    expect(upgrade.head.split('\r\n')[0]).toBe('HTTP/1.1 403 Forbidden');
+    expect(upstream.seen).toHaveLength(0);
+    expect(upstream.upgrades).toHaveLength(0);
+
+    const navigation = await send(gateway.port, { path: '/pair', headers: {
+      'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document',
+    } });
+    expect(navigation.status).toBe(200);
+    const framed = await send(gateway.port, { path: '/pair', headers: {
+      'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'iframe',
+    } });
+    expect(framed.status).toBe(403);
+    const sameOrigin = await send(gateway.port, { path: '/api/read', headers: { Cookie: cookie, 'Sec-Fetch-Site': 'same-origin' } });
+    expect(sameOrigin.status).toBe(200);
+  });
+
+  test('forbids framing HTML and drops CORS grants from forwarded responses', async () => {
+    const { gateway, registry } = await startTestGateway();
+    const { cookie } = await pair(gateway.port, registry);
+    const shell = await send(gateway.port, { path: '/', headers: { Cookie: cookie } });
+    expect(shell.status).toBe(200);
+    expect(shell.headers['content-security-policy']).toBe("frame-ancestors 'none'");
+    expect(shell.headers['x-frame-options']).toBe('DENY');
+    const pairPage = await send(gateway.port, { path: '/pair' });
+    expect(pairPage.headers['x-frame-options']).toBe('DENY');
+    expect(pairPage.headers['content-security-policy']).toContain("frame-ancestors 'none'");
+
+    const api = await send(gateway.port, { path: '/api/read', headers: { Cookie: cookie } });
+    expect(api.status).toBe(200);
+    expect(api.headers['access-control-allow-origin']).toBeUndefined();
+    expect(api.headers['access-control-allow-credentials']).toBeUndefined();
+    expect(api.headers['x-frame-options']).toBeUndefined();
   });
 });
 

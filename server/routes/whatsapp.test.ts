@@ -262,3 +262,27 @@ test('opaque and unrelated browser origins cannot mutate binding; native loopbac
     expect(native.status).toBe(400);
   } finally { await closeTestServer(server); }
 });
+
+test('requests relayed by the device gateway or a proxy are not local, despite a loopback socket and Host', async () => {
+  const { CLIENT_DEVICE_HEADER, DEVICE_GATEWAY_TOKEN_HEADER, getDeviceGatewayToken } = await import('../deviceConnections/gatewayTrust');
+  const server: Server = await new Promise(resolve => {
+    const s = createTestApp().listen(0, '127.0.0.1', () => resolve(s));
+  });
+  const addr = server.address();
+  const port = typeof addr === 'object' && addr ? addr.port : 0;
+  try {
+    const url = `http://127.0.0.1:${port}/api/servers/whatsapp/thread-binding`;
+    const body = JSON.stringify({ threadId: '../invalid' });
+    const fromDevice = await fetch(url, { method: 'PUT', headers: {
+      'Content-Type': 'application/json',
+      [DEVICE_GATEWAY_TOKEN_HEADER]: getDeviceGatewayToken(),
+      [CLIENT_DEVICE_HEADER]: 'dev_abcdefghijklmnop',
+    }, body });
+    expect(fromDevice.status).toBe(403);
+    const proxied = await fetch(url, { method: 'PUT', headers: {
+      'Content-Type': 'application/json', 'X-Forwarded-Host': 'workstation.example',
+    }, body });
+    expect(proxied.status).toBe(403);
+    expect((await fetch(url, { headers: { 'X-Forwarded-Host': 'workstation.example' } })).status).toBe(403);
+  } finally { await closeTestServer(server); }
+});

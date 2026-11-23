@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -7,6 +7,12 @@ import {
   deviceConnectionRevokeTool,
   deviceConnectionsListTool,
 } from './deviceConnectionTools';
+import {
+  clearPendingDeviceLinksForTests,
+  createDeviceConnection,
+  listPendingDeviceLinks,
+  revokeDeviceConnection,
+} from '../../../handlers/deviceConnections';
 import { setActiveDeviceGateway } from '../../../deviceConnections/gatewayTrust';
 import {
   DeviceRegistry,
@@ -16,6 +22,7 @@ import {
 
 let dataDir = '';
 const originalDataDir = process.env.INTERPRETER_USER_DATA_DIR;
+const originalAgentLinks = process.env.INTERPRETER_DEVICE_GATEWAY_AGENT_LINKS;
 let registry: DeviceRegistry;
 
 function text(result: Awaited<ReturnType<typeof deviceConnectionCreateTool.handler>>): string {
@@ -33,6 +40,9 @@ beforeEach(() => {
 afterEach(() => {
   setActiveDeviceGateway(null);
   setDeviceRegistryForTests(null);
+  clearPendingDeviceLinksForTests();
+  if (originalAgentLinks === undefined) delete process.env.INTERPRETER_DEVICE_GATEWAY_AGENT_LINKS;
+  else process.env.INTERPRETER_DEVICE_GATEWAY_AGENT_LINKS = originalAgentLinks;
   if (originalDataDir === undefined) delete process.env.INTERPRETER_USER_DATA_DIR;
   else process.env.INTERPRETER_USER_DATA_DIR = originalDataDir;
   rmSync(dataDir, { recursive: true, force: true });
@@ -49,7 +59,46 @@ describe('Connect a device tools', () => {
     expect(listed).toEqual({ available: false, devices: [] });
   });
 
-  test('return a one-time link with its QR code as a file and SVG text', async () => {
+  test('by default create a connection without giving the link or QR code to the agent', async () => {
+    delete process.env.INTERPRETER_DEVICE_GATEWAY_AGENT_LINKS;
+    setActiveDeviceGateway({ publicOrigin: 'https://devices.example', port: 5179 });
+    const result = await deviceConnectionCreateTool.handler({ label: 'Phone', kind: 'web' });
+    expect(result.isError).toBe(false);
+    const payload = JSON.parse(text(result));
+    expect(Object.keys(payload).sort()).toEqual(['created', 'expiresAt', 'note']);
+    expect(payload.created).toBe(true);
+    expect(payload.note).toContain('shown on this Workstation');
+    expect(text(result)).not.toContain('devices.example');
+    expect(text(result)).not.toContain('<svg');
+    expect(existsSync(path.join(dataDir, 'device-pairing'))).toBe(false);
+
+    // The local interface reads it from the bridge; a paired device cannot.
+    const { links } = await listPendingDeviceLinks();
+    expect(links).toHaveLength(1);
+    expect(links[0].expiresAt).toBe(payload.expiresAt);
+    expect(links[0].qrSvg).toContain('<svg');
+    await expect(listPendingDeviceLinks({ deviceId: 'dev_abcdefghijklmnop' })).rejects.toThrow(/connected device/);
+
+    const code = new URL(links[0].link).hash.slice('#code='.length);
+    expect(await registry.claim(code)).not.toBeNull();
+    expect((await listPendingDeviceLinks()).links).toEqual([]);
+  });
+
+  test('bridge refuses link creation from a paired device and lets a device revoke only itself', async () => {
+    setActiveDeviceGateway({ publicOrigin: 'https://devices.example', port: 5179 });
+    const local = await createDeviceConnection({ label: 'Phone' });
+    expect(local.link).toMatch(/^https:\/\/devices\.example\/pair#code=/);
+    const first = (await registry.claim(new URL(local.link).hash.slice('#code='.length)))!;
+    const second = (await registry.claim(registry.createPairingCode().code))!;
+
+    await expect(createDeviceConnection({}, { deviceId: first.device.id })).rejects.toThrow(/connected device/);
+    await expect(revokeDeviceConnection(second.device.id, { deviceId: first.device.id })).rejects.toThrow(/connected device/);
+    expect(await revokeDeviceConnection(first.device.id, { deviceId: first.device.id })).toEqual({ revoked: true });
+    expect(await revokeDeviceConnection(second.device.id)).toEqual({ revoked: true });
+  });
+
+  test('return the link with its QR code as a file and SVG text when the operator opts in', async () => {
+    process.env.INTERPRETER_DEVICE_GATEWAY_AGENT_LINKS = '1';
     setActiveDeviceGateway({ publicOrigin: 'https://devices.example', port: 5179 });
     const result = await deviceConnectionCreateTool.handler({ label: 'Phone', kind: 'web' });
     expect(result.isError).toBe(false);
