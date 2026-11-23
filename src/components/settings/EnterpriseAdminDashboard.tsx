@@ -1,22 +1,34 @@
 import { useEffect, useRef, useState } from 'react';
+import { EnterpriseDomainSetup } from './EnterpriseDomainSetup';
+import { EnterpriseWorkspaceAdmin } from './EnterpriseWorkspaceAdmin';
 
 type Overview = {
   organization: { id: string; name: string };
   users: { total: number; active: number; admins: number };
   audit: { eventCount: number; latestAt: string | null };
-  identity: { issuer: string; status: string };
+  identity: { issuer: string; subject: string; status: string };
   controls: { policy: string; provisioning: string; modelRegistry: string };
 };
 type Member = { subject: string; displayName: string; role: 'admin' | 'member'; active: boolean };
-type Activity = { organizationId: string; subject: string; targetSubject?: string; targetOrganizationId?: string;
+type Activity = { organizationId: string; subject: string; targetSubject?: string; targetOrganizationId?: string; targetDomain?: string;
   action: string; outcome: 'allowed' | 'denied'; at: string };
 
+/** Tenant changes remount the entire view before paint. An old request or
+ * mutation may still finish, but cannot write its notice or directory into
+ * a newly selected organization's UI. The session stays in HttpOnly cookies. */
+export function EnterpriseAdminDashboard({ organizationId, domainSetupEnabled = false, workspaceAdministrationEnabled = false }:
+  { organizationId: string; domainSetupEnabled?: boolean; workspaceAdministrationEnabled?: boolean }) {
+  return <EnterpriseAdminDashboardTenant key={organizationId} organizationId={organizationId}
+    domainSetupEnabled={domainSetupEnabled} workspaceAdministrationEnabled={workspaceAdministrationEnabled} />;
+}
+
 /** Same-origin browser admin UI; the HttpOnly session is never a prop. Unmounted. */
-export function EnterpriseAdminDashboard({ organizationId }: { organizationId: string }) {
+function EnterpriseAdminDashboardTenant({ organizationId, domainSetupEnabled, workspaceAdministrationEnabled }:
+  { organizationId: string; domainSetupEnabled: boolean; workspaceAdministrationEnabled: boolean }) {
   const [view, setView] = useState<{ overview: Overview; members: Member[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [pendingAction, setPendingAction] = useState<{ subject: string; kind: 'deactivate' | 'revoke-sessions' } | null>(null);
+  const [pendingAction, setPendingAction] = useState<{ subject: string; kind: 'deactivate' | 'demote' | 'revoke-sessions' } | null>(null);
   const [pendingOrganizationKill, setPendingOrganizationKill] = useState(false);
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
@@ -51,7 +63,9 @@ export function EnterpriseAdminDashboard({ organizationId }: { organizationId: s
     Promise.all([get('overview'), get('members')])
       .then(([overview, directory]) => {
         if (controller.signal.aborted) return;
-        if (overview?.organization?.id !== organizationId || directory?.organizationId !== organizationId || !Array.isArray(directory.members)) {
+        if (overview?.organization?.id !== organizationId || directory?.organizationId !== organizationId ||
+            typeof overview.identity?.subject !== 'string' || !overview.identity.subject ||
+            !Array.isArray(directory.members)) {
           throw new Error('Tenant mismatch');
         }
         setView({ overview, members: directory.members });
@@ -130,9 +144,13 @@ export function EnterpriseAdminDashboard({ organizationId }: { organizationId: s
     }
   }
 
-  async function changeAccess(subject: string, kind: 'deactivate' | 'revoke-sessions') {
-    if (!view || busy || exporting || pendingAction?.subject !== subject || pendingAction.kind !== kind ||
-        !view.members.some((member) => member.subject === subject && member.active && member.role === 'member')) return;
+  async function changeAccess(subject: string, kind: 'deactivate' | 'demote' | 'revoke-sessions') {
+    if (!view || busy || exporting || pendingAction?.subject !== subject || pendingAction.kind !== kind) return;
+    const target = view.members.find((member) => member.subject === subject && member.active);
+    if (!target || (target.role === 'admin'
+      ? target.subject === view.overview.identity.subject ||
+        (kind !== 'revoke-sessions' && view.overview.users.admins <= 1)
+      : kind === 'demote')) return;
     setBusy(true);
     activityRequest.current?.abort();
     setActivity(null);
@@ -144,7 +162,9 @@ export function EnterpriseAdminDashboard({ organizationId }: { organizationId: s
         headers: { 'Content-Type': 'application/json', 'X-Interpreter-CSRF': '1' }, body: '{}',
       });
       if (response.status !== 204) throw new Error('Access denied');
-      setNotice(kind === 'deactivate' ? 'Member access deactivated.' : 'Sessions ended. This member can sign in again until access is deactivated.');
+      setNotice(kind === 'deactivate' ? 'Member access deactivated.' : kind === 'demote'
+        ? 'Administrator role removed and existing sessions ended. The person can sign in as a member.'
+        : 'Sessions ended. This person can sign in again until access is deactivated.');
       setRevision((value) => value + 1); // Refetch authoritative tenant and session state.
     } catch {
       setView(null); // Do not retain a stale directory after revocation or outage.
@@ -235,6 +255,11 @@ export function EnterpriseAdminDashboard({ organizationId }: { organizationId: s
               <p className="mt-2 text-sm font-medium text-foreground">{value}</p>
             </div>)}
           </div>
+          {domainSetupEnabled && <EnterpriseDomainSetup organizationId={organizationId} />}
+          {workspaceAdministrationEnabled && <EnterpriseWorkspaceAdmin organizationId={organizationId} members={view.members}
+            onConfirmed={(message) => { setNotice(message ?? 'Workspace registry updated. Organization activity refreshed.'); setRevision((value) => value + 1); }}
+            onUnavailable={() => { setView(null); setActivity(null); setNotice(null);
+              setError('Workspace administration is unavailable. Organization data is hidden.'); }} />}
           <div className="overflow-hidden rounded-xl border border-border">
             <div className="border-b border-border bg-muted/20 px-4 py-3"><h3 className="text-sm font-semibold">Directory</h3></div>
             {view.members.length === 0 ? <p className="p-4 text-sm text-muted-foreground">No members in this organization.</p> :
@@ -244,14 +269,30 @@ export function EnterpriseAdminDashboard({ organizationId }: { organizationId: s
                   <td className="block py-1 font-medium text-foreground sm:table-cell sm:px-4 sm:py-3">{member.displayName}</td>
                   <td className="block py-1 capitalize text-muted-foreground sm:table-cell sm:px-4 sm:py-3"><span className="mr-2 text-xs font-semibold uppercase sm:hidden">Role</span>{member.role}</td>
                   <td className="block py-1 text-muted-foreground sm:table-cell sm:px-4 sm:py-3"><span className="mr-2 text-xs font-semibold uppercase sm:hidden">Status</span>{member.active ? 'Active' : 'Inactive'}</td>
-                  <td className="block py-1 text-muted-foreground sm:table-cell sm:px-4 sm:py-3">{member.active && member.role === 'member' ?
+                  <td className="block py-1 text-muted-foreground sm:table-cell sm:px-4 sm:py-3">{member.active &&
+                    (member.role === 'member' || (member.role === 'admin' && member.subject !== view.overview.identity.subject)) ?
                     pendingAction?.subject === member.subject ? <span className="flex flex-wrap items-center gap-2">
-                      <span>{pendingAction.kind === 'deactivate' ? `Remove ${member.displayName}'s access?` : `End ${member.displayName}'s current sessions? They can sign in again.`}</span>
-                      <button type="button" disabled={busy || exporting} className="rounded-md border border-destructive/50 px-2 py-1 text-destructive disabled:opacity-50"
-                        onClick={() => void changeAccess(member.subject, pendingAction.kind)}>{pendingAction.kind === 'deactivate' ? 'Confirm deactivation' : 'Confirm end sessions'}</button>
+                      <span>{pendingAction.kind === 'deactivate' ? member.role === 'admin'
+                        ? `Deactivate administrator ${member.displayName} and end their sessions? They cannot sign in again.`
+                        : `Remove ${member.displayName}'s access?` :
+                        pendingAction.kind === 'demote' ? `Remove ${member.displayName}'s administrator role and end their sessions?` :
+                          `End ${member.displayName}'s current sessions? They can sign in again.`}</span>
+                      <button type="button" disabled={busy || exporting} className="rounded-md border border-destructive/50 px-2 py-1 text-red-700 dark:text-red-300 disabled:opacity-50"
+                        onClick={() => void changeAccess(member.subject, pendingAction.kind)}>{pendingAction.kind === 'deactivate'
+                          ? 'Confirm deactivation' : pendingAction.kind === 'demote' ? 'Confirm demotion' : 'Confirm end sessions'}</button>
                       <button type="button" disabled={busy || exporting} className="rounded-md border border-border px-2 py-1 disabled:opacity-50"
                         onClick={() => setPendingAction(null)}>Cancel</button>
-                    </span> : <span className="inline-flex flex-wrap gap-2">
+                    </span> : member.role === 'admin' ? <span className="inline-flex flex-wrap gap-2">
+                      <button type="button" disabled={busy || exporting} className="rounded-md border border-border px-2 py-1 hover:bg-muted disabled:opacity-50"
+                        onClick={() => setPendingAction({ subject: member.subject, kind: 'revoke-sessions' })}>End sessions</button>
+                      {view.overview.users.admins > 1 && <button type="button" disabled={busy || exporting}
+                        className="rounded-md border border-border px-2 py-1 hover:bg-muted disabled:opacity-50"
+                        onClick={() => setPendingAction({ subject: member.subject, kind: 'demote' })}>Demote admin</button>}
+                      {view.overview.users.admins > 1 && <button type="button" disabled={busy || exporting}
+                        className="rounded-md border border-destructive/50 px-2 py-1 text-red-700 dark:text-red-300 disabled:opacity-50"
+                        onClick={() => setPendingAction({ subject: member.subject, kind: 'deactivate' })}>Deactivate admin</button>}
+                    </span> :
+                    <span className="inline-flex flex-wrap gap-2">
                       <button type="button" disabled={busy || exporting} className="rounded-md border border-border px-2 py-1 hover:bg-muted disabled:opacity-50"
                         onClick={() => setPendingAction({ subject: member.subject, kind: 'revoke-sessions' })}>End sessions</button>
                       <button type="button" disabled={busy || exporting} className="rounded-md border border-border px-2 py-1 hover:bg-muted disabled:opacity-50"
@@ -262,15 +303,15 @@ export function EnterpriseAdminDashboard({ organizationId }: { organizationId: s
           </div>
           <section className="rounded-xl border border-destructive/30 bg-destructive/5 p-4" aria-label="Organization session controls">
             <h3 className="text-sm font-semibold text-foreground">Organization sessions</h3>
-            <p className="mt-1 text-xs text-muted-foreground">End all current sessions for this organization, including yours. This does not deactivate members or prevent a new sign-in.</p>
+            <p className="mt-1 text-xs text-foreground">End all current sessions for this organization, including yours. This does not deactivate members or prevent a new sign-in.</p>
             {pendingOrganizationKill ? <div className="mt-3 flex flex-wrap items-center gap-2">
               <span className="text-sm text-foreground">End every current organization session?</span>
               <button type="button" disabled={busy || exporting} onClick={() => void endOrganizationSessions()}
-                className="rounded-md border border-destructive/50 px-3 py-2 text-xs font-medium text-destructive disabled:opacity-50">Confirm end all sessions</button>
+                className="rounded-md border border-destructive/50 px-3 py-2 text-xs font-medium text-red-700 dark:text-red-300 disabled:opacity-50">Confirm end all sessions</button>
               <button type="button" disabled={busy || exporting} onClick={() => setPendingOrganizationKill(false)}
                 className="rounded-md border border-border px-3 py-2 text-xs font-medium disabled:opacity-50">Cancel organization action</button>
             </div> : <button type="button" disabled={busy || exporting} onClick={() => { setPendingAction(null); setPendingOrganizationKill(true); }}
-              className="mt-3 rounded-md border border-destructive/50 px-3 py-2 text-xs font-medium text-destructive hover:bg-destructive/10 disabled:opacity-50">End all organization sessions</button>}
+              className="mt-3 rounded-md border border-destructive/50 px-3 py-2 text-xs font-medium text-red-700 dark:text-red-300 hover:bg-destructive/10 disabled:opacity-50">End all organization sessions</button>}
           </section>
           <section className="rounded-xl border border-border p-4" aria-label="Recent organization activity">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -285,6 +326,7 @@ export function EnterpriseAdminDashboard({ organizationId }: { organizationId: s
               {activity.map((event, index) => <li key={`${event.at}-${index}`} className="flex flex-wrap justify-between gap-2 py-2">
                 <span className="text-foreground">{event.subject} · {event.action}{event.targetSubject ? ` · ${event.targetSubject}` : ''}
                   {event.targetOrganizationId ? ` · attempted ${event.targetOrganizationId}` : ''}</span>
+                {event.targetDomain && <span className="text-muted-foreground">Domain: {event.targetDomain}</span>}
                 <span className="text-muted-foreground">{event.outcome} · {event.at}</span>
               </li>)}
             </ol> : <p className="mt-3 text-sm text-muted-foreground">No activity yet.</p>)}

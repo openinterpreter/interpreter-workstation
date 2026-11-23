@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createLocalJWKSet, jwtVerify, type JSONWebKeySet } from 'jose';
-import type { ServerDirectory } from './serverDirectory';
+import { verifiedDomainName, type ServerDirectory } from './serverDirectory';
 
 export type OidcConfiguration = Readonly<{
   organizationId: string;
@@ -10,6 +10,13 @@ export type OidcConfiguration = Readonly<{
   tokenEndpoint: string;
   jwksUri: string;
   redirectUri: string;
+  /** Optional strict account-domain binding. DNS/registry proof and verified
+   * signed email are required; neither alone establishes legal entitlement. */
+  accountDomain?: string;
+  /** Optional server-only credential, supplied by the deployment secret store.
+   * Never place this configuration in browser, Electron renderer or source. */
+  tokenEndpointAuthMethod?: 'none' | 'client_secret_basic';
+  clientSecret?: string;
   /** Only in injected localhost tests; never set from user-supplied HTTP input. */
   allowInsecureLoopbackForTests?: boolean;
 }>;
@@ -24,6 +31,11 @@ function validatedURL(url: string, loopback: boolean): URL {
     throw new Error('OIDC endpoint must be HTTPS');
   }
   return parsed;
+}
+
+/** RFC 6749 §2.3.1 encodes both Basic components as form fields first. */
+function basicComponent(value: string): string {
+  return new URLSearchParams({ x: value }).toString().slice(2);
 }
 
 async function boundedJSON(response: Response, maximum: number): Promise<Record<string, unknown>> {
@@ -61,7 +73,21 @@ export class OidcIntegration {
     for (const value of [config.issuer, config.authorizationEndpoint, config.tokenEndpoint, config.jwksUri, config.redirectUri]) validatedURL(value, loopback);
     if (!config.organizationId || !config.clientId || new URL(config.issuer).search ||
         new URL(config.redirectUri).search) throw new Error('Invalid pinned OIDC configuration');
-    this.config = config;
+    if (config.accountDomain !== undefined &&
+        verifiedDomainName(config.accountDomain) !== config.accountDomain) throw new Error('Invalid pinned account domain');
+    if (!loopback && !config.accountDomain) {
+      throw new Error('Production OIDC requires a pinned account domain');
+    }
+    const authMethod = config.tokenEndpointAuthMethod ?? 'none';
+    if (!['none', 'client_secret_basic'].includes(authMethod) ||
+        (authMethod === 'none' && config.clientSecret !== undefined) ||
+        (authMethod === 'client_secret_basic' && (typeof config.clientSecret !== 'string' ||
+          !config.clientSecret || Buffer.byteLength(config.clientSecret, 'utf8') > 4096))) {
+      throw new Error('Invalid OIDC client authentication configuration');
+    }
+    // A caller's mutable object must not silently retarget the issuer, token
+    // endpoint or server-only credential between begin() and complete().
+    this.config = Object.freeze({ ...config });
   }
 
   private async verifyProvider(): Promise<void> {
@@ -78,8 +104,10 @@ export class OidcIntegration {
         !Array.isArray(metadata.response_types_supported) || !metadata.response_types_supported.includes('code') ||
         !Array.isArray(metadata.id_token_signing_alg_values_supported) ||
         !metadata.id_token_signing_alg_values_supported.some((alg) => alg === 'RS256' || alg === 'ES256') ||
-        !Array.isArray(metadata.token_endpoint_auth_methods_supported) ||
-        !metadata.token_endpoint_auth_methods_supported.includes('none') ||
+        (metadata.token_endpoint_auth_methods_supported === undefined
+          ? (this.config.tokenEndpointAuthMethod ?? 'none') !== 'client_secret_basic'
+          : !Array.isArray(metadata.token_endpoint_auth_methods_supported) ||
+            !metadata.token_endpoint_auth_methods_supported.includes(this.config.tokenEndpointAuthMethod ?? 'none')) ||
         !Array.isArray(metadata.code_challenge_methods_supported) ||
         !metadata.code_challenge_methods_supported.includes('S256')) {
       throw new Error('OIDC provider metadata does not match pinned public client');
@@ -87,6 +115,8 @@ export class OidcIntegration {
   }
 
   async begin(): Promise<{ authorizationUrl: string; state: string; browserBinding: string }> {
+    if (this.config.accountDomain && !await this.directory.domainClaimVerifiedForLogin(
+      this.config.organizationId, this.config.issuer, this.config.accountDomain)) throw new Error('Account domain unavailable');
     await this.verifyProvider();
     const state = randomBytes(32).toString('base64url');
     const nonce = randomBytes(32).toString('base64url');
@@ -100,7 +130,7 @@ export class OidcIntegration {
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('client_id', this.config.clientId);
     url.searchParams.set('redirect_uri', this.config.redirectUri);
-    url.searchParams.set('scope', 'openid');
+    url.searchParams.set('scope', this.config.accountDomain ? 'openid email' : 'openid');
     url.searchParams.set('state', state);
     url.searchParams.set('nonce', nonce);
     url.searchParams.set('code_challenge_method', 'S256');
@@ -113,11 +143,15 @@ export class OidcIntegration {
     const attempt = await this.directory.takeAttempt(input.state, input.browserBinding);
     if (!attempt || attempt.organizationId !== this.config.organizationId || attempt.issuer !== this.config.issuer) throw new Error('OIDC state invalid or expired');
     await this.verifyProvider(); // Recheck before exchanging the one-time code; an outage consumes the attempt.
+    const confidential = this.config.tokenEndpointAuthMethod === 'client_secret_basic';
+    const headers: Record<string, string> = { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' };
+    if (confidential) headers.Authorization = 'Basic ' + Buffer.from(
+      `${basicComponent(this.config.clientId)}:${basicComponent(this.config.clientSecret!)}`, 'utf8').toString('base64');
     const response = await this.request(this.config.tokenEndpoint, {
       method: 'POST', redirect: 'error', signal: AbortSignal.timeout(5000),
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+      headers,
       body: new URLSearchParams({ grant_type: 'authorization_code', code: input.code, redirect_uri: this.config.redirectUri,
-        client_id: this.config.clientId, code_verifier: attempt.verifier }),
+        ...(confidential ? {} : { client_id: this.config.clientId }), code_verifier: attempt.verifier }),
     });
     const tokens = await boundedJSON(response, 32_768);
     if (typeof tokens.id_token !== 'string' || tokens.id_token.length > 16_384) throw new Error('Missing ID token');
@@ -133,11 +167,24 @@ export class OidcIntegration {
         payload.nonce !== attempt.nonce ||
         (Array.isArray(payload.aud) && payload.aud.length > 1 && payload.azp !== this.config.clientId) ||
         (payload.azp !== undefined && payload.azp !== this.config.clientId)) throw new Error('Invalid ID token claims');
+    if (this.config.accountDomain) {
+      const email = payload.email;
+      // Only a signed affirmative OP claim and an exact pinned domain qualify.
+      // This does not provision membership, trust unverified groups or establish
+      // real-world ownership of the account/domain relationship.
+      if (payload.email_verified !== true || typeof email !== 'string' ||
+          !/^[^@\s]+@[^@\s]+$/.test(email) ||
+          email.slice(email.lastIndexOf('@') + 1).toLowerCase() !== this.config.accountDomain ||
+          !await this.directory.domainClaimVerifiedForLogin(
+            this.config.organizationId, this.config.issuer, this.config.accountDomain)) {
+        throw new Error('Verified account domain required');
+      }
+    }
     // The token's organization/group claims are intentionally not authority.
     // Membership is provisioned independently in the server-owned directory.
     const expiresAt = Math.min(payload.exp * 1000, Date.now() + 8 * 60 * 60_000);
     const session = await this.directory.createSession(this.config.issuer, this.config.organizationId, payload.sub, expiresAt,
-      attempt.authEpoch ?? 0);
+      attempt.authEpoch ?? 0, this.config.accountDomain);
     return { token: session.token, expiresAt };
   }
 }

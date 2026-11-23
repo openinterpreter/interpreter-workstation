@@ -14,6 +14,14 @@ describe('server-owned tenant-policy seam, not an enabled execution policy', () 
     for (const action of ['agent.execute', 'tool.invoke', 'scim.provision'] as const) {
       expect(evaluateTenantPolicy({ ...base, action })).toBe(false);
     }
+    for (const action of ['agent.execute', 'tool.invoke', 'simple.execute'] as const) {
+      expect(evaluateTenantPolicy({ ...base, action, workspaceActive: true, runtimeGrant: true })).toBe(true);
+      expect(evaluateTenantPolicy({ ...base, action, workspaceActive: false, runtimeGrant: true })).toBe(false);
+      expect(evaluateTenantPolicy({ ...base, action, workspaceActive: true, runtimeGrant: false })).toBe(false);
+      expect(evaluateTenantPolicy({ ...base, member: { ...member, role: 'member' }, action,
+        workspaceActive: true, runtimeGrant: true })).toBe(true);
+    }
+    expect(evaluateTenantPolicy({ ...base, action: 'scim.provision', workspaceActive: true, runtimeGrant: true })).toBe(false);
   });
 
   test('never grants from client group claims or cross-tenant/issuer/session substitution', () => {
