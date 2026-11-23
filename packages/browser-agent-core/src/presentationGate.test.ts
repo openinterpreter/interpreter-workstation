@@ -34,6 +34,22 @@ const options = { projectId: 'gate_project', threadId: 'gate_thread',
   model, systemPrompt: '', tools: [], streamFn };
 const request = { workspacePath: 'browser-project:gate_project', message: 'Explain' };
 
+test('default gated storage reports a typed capability failure when IndexedDB is absent', async () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'indexedDB');
+  Object.defineProperty(globalThis, 'indexedDB', { configurable: true, value: undefined });
+  try {
+    await expect(BrowserPiAppServerSession.open({ ...options,
+      presentationValidator: () => ({ accept: true }) }))
+      .rejects.toMatchObject({ name: 'BrowserPresentationError', code: 'capability' });
+    // The default-off path retains its existing storage failure behavior.
+    await expect(BrowserPiAppServerSession.open(options))
+      .rejects.toThrow('Browser Pi persistent storage unavailable');
+  } finally {
+    if (previous) Object.defineProperty(globalThis, 'indexedDB', previous);
+    else Reflect.deleteProperty(globalThis, 'indexedDB');
+  }
+});
+
 test('volatile memory store cannot provide gated replies on first run or reload', async () => {
   expect(() => new BrowserPiAppServerSession({ ...options,
     presentationValidator: () => ({ accept: true }) })).toThrow(BrowserPresentationError);

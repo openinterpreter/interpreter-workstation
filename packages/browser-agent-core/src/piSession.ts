@@ -160,7 +160,13 @@ export class BrowserPiAppServerSession {
   }
 
   static async open(options: Omit<BrowserPiSessionOptions, 'storage'>,
-    storage: BrowserPiTranscriptStore = new IndexedDbPiTranscriptStore()): Promise<BrowserPiAppServerSession> {
+    storage?: BrowserPiTranscriptStore): Promise<BrowserPiAppServerSession> {
+    if (!storage) {
+      if (options.presentationValidator) {
+        try { storage = new IndexedDbPiTranscriptStore(); }
+        catch { throw new BrowserPresentationError('capability'); }
+      } else storage = new IndexedDbPiTranscriptStore();
+    }
     if (options.presentationValidator && (storage.durability !== 'persistent' ||
       storage.crossTabLockCapability !== true || !storage.compareAndSwapTerminal))
       throw new BrowserPresentationError('capability');
