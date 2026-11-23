@@ -67,8 +67,25 @@ test('candidate includes ordered assistant text before and after tool use', () =
         api: model.api, provider: model.provider, model: model.id, stopReason: 'stop', timestamp, usage },
     ] };
   const candidate = presentationCandidate(transcript, 0, transcript.messages.length, 'run-1', 0);
-  expect(candidate.answer).toBe('Earlier claim: 17. Final claim: 17.');
+  expect(candidate.answer).toBe('Final claim: 17.');
+  expect(candidate.answerParts).toEqual(['Earlier claim: 17. ', 'Final claim: 17.']);
   expect(candidate.tools).toHaveLength(1);
+});
+
+test('validation retains exact text boundaries rather than manufacturing a number', () => {
+  const timestamp = Date.now();
+  const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+  const messages: BrowserPiTranscript['messages'] = [
+    { role: 'user', content: 'Measure', timestamp },
+    { role: 'assistant', content: [{ type: 'text', text: 'Measured 1' },
+      { type: 'text', text: '7' }], api: model.api, provider: model.provider,
+      model: model.id, stopReason: 'stop', timestamp, usage },
+  ];
+  const candidate = presentationCandidate({ version: 1, projectId: options.projectId,
+    threadId: options.threadId, revision: 1, messages }, 0, messages.length, 'run-1');
+  expect(candidate.answerParts).toEqual(['Measured 1', '7']);
+  expect(candidate.answer).toBe('');
 });
 
 test('reload validation sees earlier assistant text before exposing any turn item', async () => {
@@ -91,11 +108,11 @@ test('reload validation sees earlier assistant text before exposing any turn ite
   const seen: string[] = [];
   const session = await BrowserPiAppServerSession.open({ ...options,
     presentationValidator: candidate => {
-      seen.push(candidate.answer);
-      return candidate.answer.includes('Unverified claim: 99.')
+      seen.push(candidate.answerParts.join(' | '));
+      return candidate.answerParts.some(part => part.includes('Unverified claim: 99.'))
         ? { accept: false, reason: 'Earlier false claim' } : { accept: true };
     } }, store);
-  expect(seen).toEqual(['Unverified claim: 99. Final claim: 17.']);
+  expect(seen).toEqual(['Unverified claim: 99.  | Final claim: 17.']);
   expect(session.historyThread().turns[0].items.every(item => item.type === 'userMessage')).toBe(true);
   session.dispose();
 });
@@ -208,6 +225,46 @@ test('busy cross-tab lock fails typed before model inference', async () => {
   session.dispose();
 });
 
+test('a stalled durable re-read under the lease fails typed before model inference', async () => {
+  class StalledReadStore extends DurableTestStore {
+    reads = 0;
+    override async read(projectId: string, threadId: string) {
+      if (++this.reads > 1) return new Promise<BrowserPiTranscript | null>(() => {});
+      return super.read(projectId, threadId);
+    }
+  }
+  const store = new StalledReadStore();
+  let calls = 0;
+  const session = await BrowserPiAppServerSession.open({ ...options, timeoutMs: 100,
+    streamFn: (...args) => { calls++; return streamFn(...args); },
+    presentationValidator: () => ({ accept: true }) }, store);
+  await expect(Promise.race([session.send(request), new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error('durable re-read did not settle')), 450))]))
+    .rejects.toMatchObject({ code: 'storage-unavailable' });
+  expect(calls).toBe(0);
+  session.dispose();
+});
+
+test('normal Stop before any tool result leaves the gated session usable', async () => {
+  const store = new DurableTestStore();
+  let calls = 0;
+  let started!: () => void;
+  const modelStarted = new Promise<void>(resolve => { started = resolve; });
+  const session = await BrowserPiAppServerSession.open({ ...options,
+    streamFn: (...args) => {
+      if (++calls === 1) { started(); return createAssistantMessageEventStream(); }
+      return streamFn(...args);
+    }, presentationValidator: () => ({ accept: true }) }, store);
+  const first = session.send(request);
+  await modelStarted;
+  session.stop({ threadId: options.threadId });
+  await first;
+  await session.send(request);
+  expect(calls).toBe(2);
+  expect(session.historyThread().turns.at(-1)?.status).toBe('completed');
+  session.dispose();
+});
+
 test('a second send on the same gated session fails typed busy without starting a turn', async () => {
   const store = new DurableTestStore();
   let release!: (value: { accept: true }) => void;
@@ -274,7 +331,11 @@ test('failed final readback does not publish buffered assistant items or cache s
   await session.send(request);
   expect(events.join('')).not.toContain('Verified answer');
   expect(events.join('')).toContain('browserPresentation:storage-unavailable');
-  expect(() => session.historyThread()).toThrow();
+  expect(() => session.historyThread()).toThrow(BrowserPresentationError);
+  try { session.historyThread(); } catch (error) {
+    expect(error).toMatchObject({ code: 'storage-unavailable' });
+  }
+  await expect(session.send(request)).rejects.toMatchObject({ code: 'storage-unavailable' });
   session.dispose();
 });
 
@@ -323,6 +384,7 @@ test('the exclusive lock covers model tools, validator, durable write and public
   }
   const store = new ObservedStore();
   const seen: string[] = [];
+  const published: Array<Extract<AppServerNotification, { method: 'item/completed' }>['params']['item']> = [];
   let release!: () => void;
   let enter!: () => void;
   const entered = new Promise<void>(resolve => { enter = resolve; });
@@ -356,6 +418,10 @@ test('the exclusive lock covers model tools, validator, durable write and public
     onEvent: event => { if (JSON.stringify(event).includes('Measured value')) {
       expect(store.held).toBe(true); seen.push('answer');
     } } }, store);
+  session.subscribeNotifications(notification => {
+    if (notification.method === 'item/completed' && notification.params.item.type !== 'userMessage')
+      published.push(notification.params.item);
+  });
   const second = await BrowserPiAppServerSession.open(gated, store);
   const pending = session.send(request);
   await entered;
@@ -364,6 +430,11 @@ test('the exclusive lock covers model tools, validator, durable write and public
   release(); await pending;
   expect(store.finalWriteHeld).toBe(true);
   expect(seen).toEqual(['answer']);
+  const reopened = await BrowserPiAppServerSession.open({ ...gated,
+    presentationValidator: () => ({ accept: true }) }, store);
+  expect(published).toEqual(reopened.historyThread().turns[0].items
+    .filter(item => item.type !== 'userMessage'));
+  reopened.dispose();
   session.dispose(); second.dispose();
 });
 
@@ -374,6 +445,7 @@ test('strict IndexedDB transaction reaches its terminal event before answer publ
   let strict = false;
   let terminal = false;
   let released = false;
+  let observed = false;
   db.transaction = ((names: string | string[], mode?: IDBTransactionMode,
     options?: IDBTransactionOptions) => {
     const transaction = original(names, mode, options);
@@ -392,12 +464,14 @@ test('strict IndexedDB transaction reaches its terminal event before answer publ
     presentationValidator: () => ({ accept: true }),
     onEvent: event => {
       if (event.event === 'final') {
+        observed = true;
         expect(strict).toBe(true);
         expect(terminal).toBe(true);
         expect(released).toBe(false);
       }
     } }, store);
   await session.send(request);
+  expect(observed).toBe(true);
   expect(terminal).toBe(true);
   expect(released).toBe(true);
   session.dispose();
@@ -552,6 +626,46 @@ test('assistant and tool start/completion items stay withheld before a rejection
   session.dispose();
 });
 
+test('actual Pi tool start and completion remain withheld across validator rejection', async () => {
+  const store = new DurableTestStore();
+  let release!: () => void;
+  let entered!: () => void;
+  const validating = new Promise<void>(resolve => { entered = resolve; });
+  const held = new Promise<void>(resolve => { release = resolve; });
+  const items: string[] = [];
+  const toolStream: StreamFn = (_model, context) => {
+    const stream = createAssistantMessageEventStream();
+    const second = context.messages.at(-1)?.role === 'toolResult';
+    const message = { role: 'assistant' as const,
+      content: second ? [{ type: 'text' as const, text: 'Claim 7' }] :
+        [{ type: 'toolCall' as const, id: 'call_0', name: 'measure', arguments: { value: 7 } }],
+      api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(),
+      stopReason: second ? 'stop' as const : 'toolUse' as const,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+    queueMicrotask(() => { stream.push({ type: 'start', partial: message });
+      stream.push({ type: 'done', reason: message.stopReason, message }); });
+    return stream;
+  };
+  const session = await BrowserPiAppServerSession.open({ ...options, streamFn: toolStream,
+    tools: [{ name: 'measure', label: 'Measure', description: 'Measure',
+      parameters: { type: 'object', properties: { value: { type: 'number' } } },
+      execute: async () => ({ content: [{ type: 'text' as const, text: '7' }], details: null }) }],
+    presentationValidator: async () => {
+      entered(); await held; return { accept: false, reason: 'Rejected' };
+    } }, store);
+  session.subscribeNotifications(notification => {
+    if ((notification.method === 'item/started' || notification.method === 'item/completed') &&
+        notification.params.item.type !== 'userMessage') items.push(notification.method);
+  });
+  const pending = session.send(request);
+  await validating;
+  expect(items).toEqual([]);
+  release(); await pending;
+  expect(items).toEqual([]);
+  session.dispose();
+});
+
 test('assistant output beyond the finite pending budget is never published', async () => {
   const store = new DurableTestStore();
   const events: string[] = [];
@@ -606,16 +720,65 @@ test('pending item buffer overflow fails typed even when model delta budget is u
   expect(events.join('')).not.toContain('XXXXXXXXXX');
   expect(events.join('')).toContain('browserPresentation:buffer');
   expect(events.join('')).not.toContain('"status":"completed"');
+  await expect(session.send(request)).rejects.toMatchObject({ code: 'buffer' });
+  session.dispose();
+});
+
+test('real Pi tool events overflowing the pending budget fail typed before final-answer checks', async () => {
+  const store = new DurableTestStore();
+  const events: string[] = [];
+  let validations = 0;
+  const toolStream: StreamFn = (_model, context) => {
+    const stream = createAssistantMessageEventStream();
+    const second = context.messages.at(-1)?.role === 'toolResult';
+    const message = { role: 'assistant' as const, content: second ?
+      [{ type: 'text' as const, text: 'Should not be published' }] :
+      Array.from({ length: 16 }, (_, index) => ({ type: 'toolCall' as const,
+        id: `call_${index}`, name: 'measure', arguments: { payload: 'A'.repeat(7_000) } })),
+      api: model.api, provider: model.provider, model: model.id, timestamp: Date.now(),
+      stopReason: second ? 'stop' as const : 'toolUse' as const,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } };
+    queueMicrotask(() => { stream.push({ type: 'start', partial: message });
+      stream.push({ type: 'done', reason: message.stopReason, message }); });
+    return stream;
+  };
+  const session = await BrowserPiAppServerSession.open({ ...options, streamFn: toolStream,
+    tools: [{ name: 'measure', label: 'Measure', description: 'Measure',
+      parameters: { type: 'object', properties: { payload: { type: 'string' } } },
+      execute: async () => ({ content: [{ type: 'text' as const, text: 'R'.repeat(7_000) }],
+        details: null }) }],
+    presentationValidator: () => { validations++; return { accept: true }; },
+    onEvent: event => events.push(JSON.stringify(event)) }, store);
+  await session.send(request);
+  expect(validations).toBe(0);
+  expect(events.join('')).toContain('browserPresentation:buffer');
+  expect(events.join('')).not.toContain('Should not be published');
   session.dispose();
 });
 
 test('an aborted terminal transaction leaves only an incomplete journal, never a completed answer', async () => {
   class AbortingStore extends DurableTestStore {
+    held = false;
+    released = false;
+    terminal = false;
+    override async runExclusive<T>(project: string, thread: string, action: () => Promise<T>) {
+      return super.runExclusive(project, thread, async () => {
+        this.held = true;
+        try { return await action(); }
+        finally { this.held = false; this.released = true; }
+      });
+    }
     override async compareAndSwapTerminal(value: BrowserPiTranscript, revision: number,
       signal?: AbortSignal) {
       if (Object.keys(value.presentationRuns ?? {}).length) {
         await new Promise<void>(resolve => setTimeout(resolve, 150));
-        if (signal?.aborted) throw new DOMException('Transaction aborted', 'AbortError');
+        if (signal?.aborted) {
+          expect(this.held).toBe(true);
+          expect(this.released).toBe(false);
+          this.terminal = true;
+          throw new DOMException('Transaction aborted', 'AbortError');
+        }
       }
       return super.compareAndSwapTerminal(value, revision, signal);
     }
@@ -626,6 +789,8 @@ test('an aborted terminal transaction leaves only an incomplete journal, never a
     presentationValidator: () => ({ accept: true }),
     onEvent: event => events.push(JSON.stringify(event)) }, store);
   await session.send(request);
+  expect(store.terminal).toBe(true);
+  expect(store.released).toBe(true);
   const durable = await store.read(options.projectId, options.threadId);
   expect(durable?.messages.some(message => message.role === 'assistant')).toBe(false);
   expect(events.join('')).not.toContain('Verified answer');
@@ -656,7 +821,10 @@ test('missing terminal event has a bounded abort grace and never publishes or ca
   expect(events.join('')).toContain('browserPresentation:storage-unavailable');
   expect(events.join('')).not.toContain('Verified answer');
   expect(locks.size).toBe(0);
-  expect(() => session.historyThread()).toThrow();
+  try { session.historyThread(); } catch (error) {
+    expect(error).toMatchObject({ code: 'storage-unavailable' });
+  }
+  await expect(session.send(request)).rejects.toMatchObject({ code: 'storage-unavailable' });
   session.dispose();
 });
 
@@ -714,7 +882,7 @@ test('validator exceptions and finite validation timeout reject without leaking 
 test('validator has its own ten-second bound independent of the model turn deadline', async () => {
   const candidate: PresentationCandidate = { projectId: options.projectId,
     threadId: options.threadId, turnId: 'pi-turn-0', runId: 'run-1', tools: [],
-    answer: 'Answer', priorTranscript: { version: 1, projectId: options.projectId,
+    answerParts: ['Answer'], answer: 'Answer', priorTranscript: { version: 1, projectId: options.projectId,
       threadId: options.threadId, revision: 0, messages: [] } };
   const started = Date.now();
   await expect(validatePresentation(() => new Promise(() => {}), candidate))

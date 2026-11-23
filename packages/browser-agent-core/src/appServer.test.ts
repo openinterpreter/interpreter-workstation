@@ -7,6 +7,7 @@ import { BrowserProjectAppServer, BrowserModelCatalogAppServer } from './appServ
 import { BrowserPiAppServerSession } from './piSession';
 import { MemoryPiTranscriptStore } from './piTranscript';
 import { BrowserLocalModelCatalog } from './modelCatalog';
+import { BrowserPresentationError } from './presentationGate';
 
 function clientFixture() {
   const turn = { id: 'turn_one', items: [], status: 'completed' };
@@ -109,6 +110,18 @@ test('unsupported native methods and forged project paths fail closed through JS
   })).rejects.toThrow('Browser turn capability unavailable');
   await expect(client.request(CLIENT_METHOD.threadRead,
     { threadId: 'other', includeTurns: true })).rejects.toThrow('Browser thread identity mismatch');
+});
+
+test('gated JSON-RPC errors expose a fixed typed code without provider details', async () => {
+  const { server } = clientFixture();
+  Object.defineProperty(server.session, 'presentationGated', { value: true });
+  server.session.historyThread = () => { throw new BrowserPresentationError('storage-unavailable'); };
+  const response = await server.handle({ jsonrpc: '2.0', id: 8,
+    method: CLIENT_METHOD.threadRead, params: { threadId: 'thread_one', includeTurns: true } });
+  expect(response.error?.data?.code).toBe('storage-unavailable');
+  expect(JSON.stringify(response)).not.toContain('provider');
+  expect((await server.handle({ jsonrpc: 'broken', id: 9 })).error?.data?.code)
+    .toBe('rejected');
 });
 
 test('canonical JSON-RPC turn executes the real Pi engine and projects the same thread history', async () => {

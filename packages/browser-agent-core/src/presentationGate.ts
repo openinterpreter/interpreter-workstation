@@ -15,7 +15,9 @@ export type PresentationTool = Readonly<{ id: string; name: string;
   arguments: Readonly<Record<string, unknown>>; result: readonly unknown[]; success: boolean }>;
 export type PresentationCandidate = Readonly<{
   projectId: string; threadId: string; turnId: string; runId: string;
-  tools: readonly PresentationTool[]; answer: string;
+  tools: readonly PresentationTool[]; answerParts: readonly string[];
+  /** Convenience only for a final answer with exactly one text part. */
+  answer: string;
   priorTranscript: Readonly<BrowserPiTranscript>;
 }>;
 export type PresentationValidator = (candidate: PresentationCandidate) =>
@@ -44,13 +46,14 @@ export function presentationCandidate(transcript: BrowserPiTranscript, start: nu
     throw new BrowserPresentationError('incomplete');
   const tools: PresentationTool[] = [];
   const pending = new Map<string, { id: string; name: string; arguments: Record<string, unknown> }>();
+  const answerParts: string[] = [];
   let answer = '';
   let final = false;
   for (const message of messages.slice(1)) {
     if (final) throw new BrowserPresentationError('incomplete');
     if (message.role === 'assistant') {
-      const text = message.content.filter(part => part.type === 'text').map(part => part.text).join('');
-      answer += text;
+      const texts = message.content.filter(part => part.type === 'text').map(part => part.text);
+      answerParts.push(...texts);
       for (const part of message.content) {
         if (part.type === 'toolCall') {
           if (pending.has(part.id)) throw new BrowserPresentationError('incomplete');
@@ -59,7 +62,8 @@ export function presentationCandidate(transcript: BrowserPiTranscript, start: nu
       }
       if (message.stopReason === 'stop') {
         if (pending.size) throw new BrowserPresentationError('incomplete');
-        final = !!text.trim();
+        final = texts.some(text => !!text.trim());
+        answer = texts.length === 1 ? texts[0] : '';
       } else if (message.stopReason !== 'toolUse') throw new BrowserPresentationError('incomplete');
     } else if (message.role === 'toolResult') {
       const call = pending.get(message.toolCallId);
@@ -83,7 +87,7 @@ export function presentationCandidate(transcript: BrowserPiTranscript, start: nu
     failedTurns: Object.fromEntries(Object.entries(transcript.failedTurns ?? {})
       .filter(([id]) => earlier(id))) };
   return deepFreeze(structuredClone({ projectId: transcript.projectId, threadId: transcript.threadId,
-    turnId, runId, tools, answer, priorTranscript }));
+    turnId, runId, tools, answerParts, answer, priorTranscript }));
 }
 
 export async function validatePresentation(validator: PresentationValidator,

@@ -61,6 +61,7 @@ export class BrowserPiAppServerSession {
   }
   readonly projectId: string;
   readonly threadId: string;
+  get presentationGated(): boolean { return !!this.agentOptions.presentationValidator; }
   get model() {
     const model = this.internalAgent.state.model;
     if (!this.agentOptions.presentationValidator) return model;
@@ -83,6 +84,15 @@ export class BrowserPiAppServerSession {
   private revision = 0;
   private knownDurableDigest: string | null = null;
   private unavailableReason: string | null = null;
+  private unavailablePresentationError(): BrowserPresentationError {
+    const reason = this.unavailableReason ?? '';
+    if (reason.includes('storage unavailable') || reason.includes('could not be saved'))
+      return new BrowserPresentationError('storage-unavailable');
+    if (reason.includes('output limit') || reason.includes('event limit') ||
+        reason.includes('pending buffer')) return new BrowserPresentationError('buffer');
+    if (reason.includes('expired')) return new BrowserPresentationError('timeout');
+    return new BrowserPresentationError('incomplete');
+  }
   private interruptedTurnIds: string[] = [];
   private failedTurns: Record<string, 'failed' | 'truncated' | 'storage'> = {};
   private readonly agentOptions: BrowserPiSessionOptions;
@@ -297,8 +307,10 @@ export class BrowserPiAppServerSession {
 
   /** Rehydrate visible chat through Workstation's ordinary thread-history mapper. */
   historyThread(): v2.Thread {
-    if (this.unavailableReason) throw new Error(this.unavailableReason);
-    if (this.activeTurn) throw new Error('Browser Pi history unavailable during an active turn');
+    if (this.unavailableReason) throw this.presentationGated
+      ? this.unavailablePresentationError() : new Error(this.unavailableReason);
+    if (this.activeTurn) throw this.presentationGated
+      ? new BrowserPresentationError('busy') : new Error('Browser Pi history unavailable during an active turn');
     let thread: v2.Thread;
     try {
       thread = projectPiHistory(this.projectId, this.threadId, this.model.provider,
@@ -423,7 +435,8 @@ export class BrowserPiAppServerSession {
   }
 
   async send(request: StreamRequestBody, signal?: AbortSignal): Promise<string> {
-    if (this.unavailableReason) throw new Error(this.unavailableReason);
+    if (this.unavailableReason) throw this.presentationGated
+      ? this.unavailablePresentationError() : new Error(this.unavailableReason);
     if (this.agentOptions.presentationValidator && this.unverifiedHistory)
       throw new BrowserPresentationError('incomplete');
     if (signal?.aborted) throw new DOMException('Browser turn aborted', 'AbortError');
@@ -449,7 +462,15 @@ export class BrowserPiAppServerSession {
       if (this.storage) {
       try {
         return await this.storage.runExclusive(this.projectId, this.threadId, async () => {
-          const persisted = await this.storage!.read(this.projectId, this.threadId);
+          let readTimer: ReturnType<typeof setTimeout> | undefined;
+          const persisted = this.presentationGated ? await Promise.race([
+            this.storage!.read(this.projectId, this.threadId),
+            new Promise<never>((_, reject) => {
+              readTimer = setTimeout(() => reject(new BrowserPresentationError('storage-unavailable')),
+                this.timeoutMs);
+            }),
+          ]).finally(() => { if (readTimer) clearTimeout(readTimer); }) :
+            await this.storage!.read(this.projectId, this.threadId);
           // The HTTP stream may be stopped while IndexedDB is opening or reading.
           // Never start model inference or invoke tools after that cancellation.
           if (signal?.aborted) throw new DOMException('Browser turn aborted', 'AbortError');
@@ -526,6 +547,7 @@ export class BrowserPiAppServerSession {
     const completedTools: Array<{ item: Extract<v2.ThreadItem, { type: 'mcpToolCall' }>;
       toolCallId: string }> = [];
     let journalMessages: AgentMessage[] = [];
+    let projectedTurn: v2.Turn | undefined;
     let journalWrites: Promise<void> = Promise.resolve();
     const snapshot = (): AgentMessage[] => {
       const timestamp = startedAt;
@@ -593,6 +615,9 @@ export class BrowserPiAppServerSession {
       if (expired) throw new Error('Browser model did not settle before the finite deadline');
       await Promise.race([agent.prompt(request.message), deadline, interrupted]);
       if (this.stoppedTurn === turnId) throw new DOMException('Browser turn aborted', 'AbortError');
+      if (this.pendingOverflow) throw new BrowserPresentationError('buffer');
+      if (this.agentOptions.presentationValidator && output.exceeded)
+        throw new BrowserPresentationError('buffer');
       if (this.modelPassLimitReached) throw new Error('Browser model pass budget reached');
       const finalAssistant = [...agent.state.messages].reverse()
         .find(message => message.role === 'assistant');
@@ -607,7 +632,6 @@ export class BrowserPiAppServerSession {
       await Promise.race([journalWrites, deadline, interrupted]);
       if (output.exceeded) throw this.agentOptions.presentationValidator
         ? new BrowserPresentationError('buffer') : new Error('Browser assistant output exceeds limit');
-      if (this.pendingOverflow) throw new BrowserPresentationError('buffer');
       if (this.storage) {
         if (completedTools.length && !this.agentOptions.presentationValidator) {
           // Keep the ungated seal and final projection order from the original session.
@@ -632,8 +656,10 @@ export class BrowserPiAppServerSession {
             ...this.presentationRuns, [turnId]: assistantId }, presentationPriorRevisions: {
             ...this.presentationPriorRevisions, [turnId]: priorRevision } } : {}),
         };
-        projectPiHistory(this.projectId, this.threadId, this.model.provider,
+        const projected = projectPiHistory(this.projectId, this.threadId, this.model.provider,
           this.model.id, next.messages, next.interruptedTurnIds, next.failedTurns);
+        if (this.agentOptions.presentationValidator)
+          projectedTurn = projected.turns.find(turn => turn.id === turnId);
         if (this.agentOptions.presentationValidator) {
           const candidate = presentationCandidate(next, priorMessages.length, next.messages.length,
             assistantId, priorRevision);
@@ -689,7 +715,18 @@ export class BrowserPiAppServerSession {
       if (timer) { clearTimeout(timer); timer = undefined; }
       if (this.agentOptions.presentationValidator) {
         this.publishing = true;
-        try { for (const item of this.pendingItems) this.notification(item); }
+        try {
+          // Publish precisely the durable projection that historyThread will
+          // restore, not the richer provisional Pi event objects.
+          for (const item of projectedTurn?.items ?? []) {
+            if (item.type === 'userMessage') continue;
+            if (item.type === 'mcpToolCall') {
+              this.item(SERVER_METHOD.itemStarted, turnId, { ...item, status: 'inProgress',
+                result: null, error: null, durationMs: null });
+            }
+            this.item(SERVER_METHOD.itemCompleted, turnId, item);
+          }
+        }
         finally { this.publishing = false; this.pendingItems = []; this.pendingBytes = 0; }
       }
       this.notification({ method: SERVER_METHOD.turnCompleted, params: { threadId: this.threadId,
@@ -770,6 +807,8 @@ export class BrowserPiAppServerSession {
           this.revision = previous.revision;
         } catch { this.unavailableReason = 'Browser conversation storage unavailable; reload before sending'; }
       }
+      if (this.presentationGated && saving)
+        this.unavailableReason = 'Browser conversation storage unavailable; reload before sending';
       if (!expired && this.internalAgent === agent) {
         // A failed CAS or corrupt/oversized transcript leaves Pi's in-memory
         // messages ahead of the durable revision. Never retry from that state.
