@@ -180,7 +180,8 @@ function scopedTenantState(state: DirectoryState, organizationId: string): Direc
   if (Object.keys(state.organizations).some((id) => id !== organizationId) ||
       Object.values(state.attempts).some((attempt) => attempt.organizationId !== organizationId) ||
       Object.values(state.sessions).some((session) => session.organizationId !== organizationId) ||
-      state.audit.some((event) => event.organizationId !== organizationId)) {
+      state.audit.some((event) => event.organizationId !== organizationId) ||
+      (state.pendingAudit ?? []).some(({ event }) => event.organizationId !== organizationId)) {
     throw new Error('Cross-tenant directory state');
   }
   return state;

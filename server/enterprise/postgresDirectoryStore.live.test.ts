@@ -8,7 +8,7 @@ import express from 'express';
 import request from 'supertest';
 import pg from 'pg';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
-import { MAX_ACTIVE_LOGIN_ATTEMPTS_PER_ORGANIZATION, ServerDirectory, type EnterpriseStateStore } from './serverDirectory';
+import { MAX_ACTIVE_LOGIN_ATTEMPTS_PER_CLIENT, ServerDirectory, type EnterpriseStateStore } from './serverDirectory';
 import { createEnterprisePostgresPool, PostgresDirectoryStore, TenantPostgresDirectoryStore } from './postgresDirectoryStore';
 import { mountEnterpriseAdminRoutes } from './adminMount';
 import { OidcIntegration, providerMetadataUri, type OidcConfiguration } from './oidc';
@@ -187,9 +187,14 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
       await a.setMember(sessionA.identity, { organizationId: 'rls-a', subject: 'admin-c', displayName: 'Admin C', role: 'admin', active: true });
       const worker = await a.createSession('https://issuer.invalid/a', 'rls-a', 'worker', Date.now() + 60_000);
       const demotedSession = await aOther.createSession('https://issuer.invalid/a', 'rls-a', 'admin-c', Date.now() + 60_000);
+      // Denied reads and cross-tenant probes are counted in the row's open
+      // window and reach the append-only ledger as one row when it closes.
+      const heldA = async () => ((JSON.parse((await poolA.query(`SELECT content FROM public.interpreter_enterprise_rls_directory
+        WHERE organization_id = 'rls-a'`)).rows[0]!.content as string).pendingAudit ?? []) as Array<{ event: Record<string, unknown> }>)
+        .map(({ event }) => event);
       await expect(aOther.listAudit(worker.identity)).rejects.toThrow('Access denied');
-      expect(auditEvent((await poolA.query('SELECT content FROM public.interpreter_enterprise_rls_audit WHERE organization_id = $1 ORDER BY id DESC LIMIT 1', ['rls-a'])).rows[0]))
-        .toMatchObject({ organizationId: 'rls-a', subject: 'worker', action: 'organization.audit.read', outcome: 'denied' });
+      expect((await heldA()).at(-1))
+        .toMatchObject({ organizationId: 'rls-a', subject: 'worker', action: 'organization.audit.read', outcome: 'denied', count: 1 });
       expect((await poolB.query('SELECT content FROM public.interpreter_enterprise_rls_audit WHERE organization_id = $1', ['rls-a'])).rowCount).toBe(0);
       const origin = 'http://127.0.0.1:39394';
       const appA = express(), appB = express();
@@ -244,16 +249,35 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
         finally { expect(roleCapability('NOBYPASSRLS').status).toBe(0); }
         expect((await read(httpA, 'rls-a', sessionA.token)).status).toBe(200);
         expect((await read(httpA, 'rls-b', sessionA.token)).status).toBe(403);
-        expect(auditEvent((await poolA.query('SELECT content FROM public.interpreter_enterprise_rls_audit WHERE organization_id = $1 ORDER BY id DESC LIMIT 1', ['rls-a']))
-          .rows[0])).toMatchObject({ organizationId: 'rls-a', targetOrganizationId: 'rls-b',
-          action: 'organization.overview.cross-tenant', outcome: 'denied' });
+        const foreignDigest = `organization:${createHash('sha256').update('rls-b').digest('hex').slice(0, 16)}`;
+        expect((await heldA()).at(-1)).toMatchObject({ organizationId: 'rls-a', targetDigest: foreignDigest,
+          action: 'organization.overview.cross-tenant', outcome: 'denied', count: 1 });
         expect((await request(httpA).post('/api/enterprise/organizations/rls-b/session/logout')
           .set('Host', '127.0.0.1:39394').set('Origin', origin).set('Sec-Fetch-Site', 'same-origin')
           .set('X-Interpreter-CSRF', '1').set('Cookie', `interpreter-enterprise-session=${sessionA.token}`)
           .set('Content-Type', 'application/json').send({})).status).toBe(403);
-        expect(auditEvent((await poolA.query('SELECT content FROM public.interpreter_enterprise_rls_audit WHERE organization_id = $1 ORDER BY id DESC LIMIT 1', ['rls-a']))
-          .rows[0])).toMatchObject({ organizationId: 'rls-a', targetOrganizationId: 'rls-b',
-          action: 'organization.logout.cross-tenant', outcome: 'denied' });
+        expect((await heldA()).at(-1)).toMatchObject({ organizationId: 'rls-a', targetDigest: foreignDigest,
+          action: 'organization.logout.cross-tenant', outcome: 'denied', count: 1 });
+        expect((await read(httpA, 'rls-b', sessionA.token)).status).toBe(403);
+        expect((await heldA()).find((event) => event.action === 'organization.overview.cross-tenant')).toMatchObject({ count: 2 });
+        // Simulate the window closing (the app role may update its own row's
+        // content). The next probe appends each closed window as ONE ledger
+        // row in the same transaction; the ordered ledger still equals the
+        // snapshot, so later locked reads and writes keep passing.
+        const held = JSON.parse((await poolA.query(`SELECT content FROM public.interpreter_enterprise_rls_directory
+          WHERE organization_id = 'rls-a'`)).rows[0]!.content as string);
+        const closing = held.pendingAudit.length as number;
+        for (const entry of held.pendingAudit) entry.event.firstAt = new Date(Date.now() - 11 * 60_000).toISOString();
+        expect((await poolA.query(`UPDATE public.interpreter_enterprise_rls_directory SET content = $1
+          WHERE organization_id = 'rls-a'`, [JSON.stringify(held)])).rowCount).toBe(1);
+        expect((await read(httpA, 'rls-b', sessionA.token)).status).toBe(403);
+        const summaries = (await poolA.query(`SELECT content FROM public.interpreter_enterprise_rls_audit
+          WHERE organization_id = 'rls-a' ORDER BY id DESC LIMIT ${closing}`)).rows.map(auditEvent);
+        expect(summaries.find((event) => event?.action === 'organization.overview.cross-tenant'))
+          .toMatchObject({ count: 2, outcome: 'denied', targetDigest: foreignDigest });
+        expect(summaries.every((event) => event?.targetOrganizationId === undefined)).toBe(true);
+        expect((await heldA()).map((event) => [event.action, event.count])).toEqual([['organization.overview.cross-tenant', 1]]);
+        expect((await a.verifySession(sessionA.token))?.subject).toBe('alice'); // Ledger comparison passes.
         expect((await read(httpA, 'rls-b', sessionB.token)).status).toBe(403);
         expect((await read(httpB, 'rls-b', sessionB.token)).status).toBe(200);
         expect((await read(httpB, 'rls-a', sessionA.token)).status).toBe(403);
@@ -610,10 +634,19 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
       expect(await aOther.verifySession(actionSession.token)).toBeNull();
       const pending = { organizationId: 'rls-a', issuer: 'https://issuer.invalid/a', nonce: 'synthetic',
         verifier: 'synthetic', bindingHash: 'a'.repeat(64), expiresAt: Date.now() + 60_000 };
-      for (let i = 0; i < MAX_ACTIVE_LOGIN_ATTEMPTS_PER_ORGANIZATION; i++) {
-        await (i % 2 ? aOther : a).putAttempt(`quota-${i}`, pending);
+      const attemptsA = async () => Object.values(JSON.parse((await poolA.query(
+        `SELECT content FROM public.interpreter_enterprise_rls_directory WHERE organization_id = 'rls-a'`)).rows[0]!.content).attempts) as
+        Array<{ expiresAt: number; clientHash: string }>;
+      for (let i = 0; i <= MAX_ACTIVE_LOGIN_ATTEMPTS_PER_CLIENT; i++) {
+        await (i % 2 ? aOther : a).putAttempt(`quota-${i}`, { ...pending, expiresAt: pending.expiresAt + i }, '198.51.100.7');
       }
-      await expect(aOther.putAttempt('quota-denied', pending)).rejects.toThrow('login capacity reached');
+      // A full client allowance evicts that client's own oldest attempt across hosts; nothing is refused.
+      const quotaClient = (await attemptsA()).find((attempt) => attempt.expiresAt === pending.expiresAt + 1)!.clientHash;
+      expect((await attemptsA()).filter((attempt) => attempt.clientHash === quotaClient)).toHaveLength(MAX_ACTIVE_LOGIN_ATTEMPTS_PER_CLIENT);
+      expect((await attemptsA()).some((attempt) => attempt.clientHash === quotaClient && attempt.expiresAt === pending.expiresAt)).toBe(false);
+      await aOther.putAttempt('other-client-not-starved', pending, '203.0.113.9');
+      expect((await attemptsA()).filter((attempt) => attempt.clientHash !== quotaClient &&
+        attempt.expiresAt === pending.expiresAt)).toHaveLength(1);
       await b.putAttempt('tenant-b-not-starved', { ...pending, organizationId: 'rls-b', issuer: 'https://issuer.invalid/b' });
       expect((await b.takeAttempt('tenant-b-not-starved', 'wrong'))).toBeNull();
       // The fixture operator can simulate loss of one audit record. The app
@@ -941,8 +974,8 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
         const callback = (state: string, binding: string) => request(http).get(`/enterprise/callback?code=fixture-code&state=${state}`)
           .set('Host', '127.0.0.1:39394').set('Cookie', binding);
         expect((await callback(rejected.state, `interpreter-oidc-binding=${'x'.repeat(43)}`)).status).toBe(401);
-        expect((await callback(rejected.state, rejected.cookie)).status).toBe(401); // Wrong binding consumes state across the store.
-        expect(tokenRequests).toBe(0);
+        expect((await callback(`${'d'.repeat(43)}`, rejected.cookie)).status).toBe(401); // Unknown state, genuine cookie.
+        expect(tokenRequests).toBe(0); // A wrong binding is rejected by a read and leaves the attempt unused.
         const valid = await begin();
         const completed = await callback(valid.state, valid.cookie);
         expect(completed.status).toBe(303);

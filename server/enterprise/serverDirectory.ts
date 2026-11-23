@@ -8,8 +8,13 @@ import type { EnterpriseDirectory, OrganizationMember, VerifiedIdentity } from '
 import { evaluateTenantPolicy, type RuntimeAction } from './tenantPolicy';
 
 type Audit = { organizationId: string; subject: string; targetSubject?: string; targetOrganizationId?: string; targetDomain?: string; targetWorkspaceId?: string;
-  action: string; outcome: 'allowed' | 'denied'; at: string };
-type Attempt = { organizationId: string; issuer: string; nonce: string; verifier: string; bindingHash: string; expiresAt: number; authEpoch?: number };
+  action: string; outcome: 'allowed' | 'denied'; at: string;
+  /** Collapsed repeats only: `firstAt`..`at` and `count` occurrences, with a
+   * caller-chosen target kept as a kind marker and short digest. */
+  firstAt?: string; count?: number; targetDigest?: string };
+type Attempt = { organizationId: string; issuer: string; nonce: string; verifier: string; bindingHash: string; expiresAt: number; authEpoch?: number;
+  /** Truncated digest of the starting client's network; quota bucket only. */
+  clientHash?: string };
 type Session = { organizationId: string; issuer: string; subject: string; expiresAt: number; revoked: boolean;
   accountDomain?: string };
 type DomainProof = { issuer: string; challengeHash: string; expiresAt: number; verifiedUntil?: number };
@@ -17,10 +22,27 @@ type WorkspaceRecord = { id: string; name: string; active: boolean; grants?: Rec
 export type DirectoryState = { version: 1; organizations: Record<string, { name: string; issuer: string;
   members: Record<string, OrganizationMember>; authEpoch?: number; domainProofs?: Record<string, DomainProof>;
   workspaces?: Record<string, WorkspaceRecord> }>;
-  attempts: Record<string, Attempt>; sessions: Record<string, Session>; audit: Audit[] };
+  attempts: Record<string, Attempt>; sessions: Record<string, Session>; audit: Audit[];
+  /** Open collapsed denials; `position` is the audit length when first seen.
+   * Kept outside the append-only `audit` array so that it can count. */
+  pendingAudit?: Array<{ position: number; event: Audit }> };
 type Data = DirectoryState;
 export const MAX_DIRECTORY_BYTES = 8_000_000;
-export const MAX_ACTIVE_LOGIN_ATTEMPTS_PER_ORGANIZATION = 64;
+/** Ordinary writes stop this far below MAX_DIRECTORY_BYTES. Only the writes
+ * needed to recover a full tenant may use the rest: an allowed member
+ * deactivation, member or organization session revocation, self sign-out,
+ * an administrator sign-in (attempt start and consume, administrator session)
+ * and expiry compaction. Attempts are bounded per tenant, so anonymous login
+ * starts cannot exhaust it. */
+export const RECOVERY_RESERVE_BYTES = 512_000;
+/** Denied reads and cross-tenant denials repeat into one event per actor,
+ * action, outcome and target kind in each fixed window. */
+export const AUDIT_COLLAPSE_WINDOW_MS = 10 * 60_000;
+type Recovery<T> = (data: DirectoryState, result: T) => boolean;
+/** Bounds durable login-start state. Reaching either bound evicts an attempt
+ * (see putAttempt); neither bound refuses a new login start. */
+export const MAX_ACTIVE_LOGIN_ATTEMPTS_PER_ORGANIZATION = 256;
+export const MAX_ACTIVE_LOGIN_ATTEMPTS_PER_CLIENT = 32;
 export interface EnterpriseStateStore {
   read(): Promise<DirectoryState>;
   change<T>(fn: (data: DirectoryState) => T, create?: boolean): Promise<T>;
@@ -79,6 +101,50 @@ function otherActiveDomainClaim(data: Data, organizationId: string, domain: stri
   });
 }
 
+/** A caller-chosen target is never stored verbatim in a collapsed event. */
+const auditTarget = (kind: 'organization' | 'domain' | 'workspace', value: string) => `${kind}:${digest(value).slice(0, 16)}`;
+const targetKind = (event: Audit) => event.targetDigest?.slice(0, event.targetDigest.indexOf(':')) ?? '';
+
+/** Record a denied read or cross-tenant probe without growing the snapshot
+ * per request. The open window's counter lives in `pendingAudit`; a closed
+ * window is appended to `audit` as one event (in the RLS store, one
+ * append-only ledger row) in the same transaction as the next such denial.
+ * Mutations and their denials are never passed here. */
+function appendRepeatableDenial(data: Data, organizationId: string, subject: string, action: string, targetDigest?: string): void {
+  const now = Date.now();
+  const window = Math.floor(now / AUDIT_COLLAPSE_WINDOW_MS);
+  const pending = data.pendingAudit ??= [];
+  for (let index = 0; index < pending.length;) {
+    if (Math.floor(Date.parse(pending[index]!.event.firstAt!) / AUDIT_COLLAPSE_WINDOW_MS) < window) {
+      data.audit.push(pending.splice(index, 1)[0]!.event);
+    } else index++;
+  }
+  const at = new Date(now).toISOString();
+  const kind = targetDigest?.slice(0, targetDigest.indexOf(':')) ?? '';
+  const open = pending.find(({ event }) => event.organizationId === organizationId && event.subject === subject &&
+    event.action === action && event.outcome === 'denied' && targetKind(event) === kind);
+  if (open) {
+    open.event.count = (open.event.count ?? 1) + 1;
+    if (at > open.event.at) open.event.at = at; // Another host's clock may be ahead.
+    return;
+  }
+  pending.push({ position: data.audit.length, event: { organizationId, subject, action, outcome: 'denied', at,
+    firstAt: at, count: 1, ...(targetDigest ? { targetDigest } : {}) } });
+}
+
+/** Committed events in order, each open collapsed denial where it was first seen. */
+function auditView(data: Data, organizationId: string): Audit[] {
+  const pending = data.pendingAudit ?? [];
+  const view: Audit[] = [];
+  let next = 0;
+  data.audit.forEach((event, index) => {
+    while (next < pending.length && pending[next]!.position <= index) view.push(pending[next++]!.event);
+    view.push(event);
+  });
+  while (next < pending.length) view.push(pending[next++]!.event);
+  return view.filter((event) => event.organizationId === organizationId);
+}
+
 export function validateDirectoryState(data: Data): void {
   if (data.version !== 1 || !record(data.organizations) || !record(data.sessions) ||
       !record(data.attempts) || !Array.isArray(data.audit)) throw new Error('Directory state is invalid');
@@ -131,6 +197,7 @@ export function validateDirectoryState(data: Data): void {
         typeof attempt.nonce !== 'string' || !attempt.nonce || typeof attempt.verifier !== 'string' || !attempt.verifier ||
         typeof attempt.bindingHash !== 'string' || !/^[a-f0-9]{64}$/.test(attempt.bindingHash) ||
         typeof attempt.expiresAt !== 'number' || !Number.isFinite(attempt.expiresAt) ||
+        (attempt.clientHash !== undefined && (typeof attempt.clientHash !== 'string' || !/^[a-f0-9]{32}$/.test(attempt.clientHash))) ||
         (attempt.authEpoch !== undefined && (!Number.isSafeInteger(attempt.authEpoch) || attempt.authEpoch < 0))) throw new Error('Directory attempt is invalid');
   }
   for (const [hash, session] of Object.entries(data.sessions)) {
@@ -143,15 +210,30 @@ export function validateDirectoryState(data: Data): void {
       throw new Error('Directory session is invalid');
     }
   }
-  for (const event of data.audit) {
-    if (!record(event) || !key(event.organizationId as string) || !data.organizations[event.organizationId as string] ||
+  const invalidAudit = (event: Audit) => !record(event) || !key(event.organizationId as string) || !data.organizations[event.organizationId as string] ||
         !subjectIdentifier(event.subject) || typeof event.action !== 'string' || !event.action ||
         (event.targetSubject !== undefined && !subjectIdentifier(event.targetSubject)) ||
         (event.targetOrganizationId !== undefined && !key(event.targetOrganizationId as string)) ||
         (event.targetDomain !== undefined && verifiedDomainName(event.targetDomain as string) !== event.targetDomain) ||
         (event.targetWorkspaceId !== undefined && !key(event.targetWorkspaceId as string)) ||
+        (event.targetDigest !== undefined && (typeof event.targetDigest !== 'string' ||
+          !/^(?:organization|domain|workspace):[a-f0-9]{16}$/.test(event.targetDigest))) ||
+        (event.count !== undefined && (!Number.isSafeInteger(event.count) || event.count < 1)) ||
+        (event.firstAt !== undefined && (typeof event.firstAt !== 'string' || !(Date.parse(event.firstAt) <= Date.parse(event.at)))) ||
         !['allowed', 'denied'].includes(event.outcome as string) ||
-        typeof event.at !== 'string' || !Number.isFinite(Date.parse(event.at))) throw new Error('Directory audit is invalid');
+        typeof event.at !== 'string' || !Number.isFinite(Date.parse(event.at));
+  for (const event of data.audit) {
+    if (invalidAudit(event)) throw new Error('Directory audit is invalid');
+  }
+  if (data.pendingAudit !== undefined) {
+    if (!Array.isArray(data.pendingAudit)) throw new Error('Directory audit is invalid');
+    let previous = 0;
+    for (const entry of data.pendingAudit) {
+      if (!record(entry) || !Number.isSafeInteger(entry.position) || entry.position < previous ||
+          entry.position > data.audit.length || invalidAudit(entry.event) || entry.event.outcome !== 'denied' ||
+          entry.event.count === undefined || entry.event.firstAt === undefined) throw new Error('Directory audit is invalid');
+      previous = entry.position;
+    }
   }
 }
 
@@ -227,7 +309,22 @@ export class ServerDirectory implements EnterpriseDirectory {
     } finally { await handle.close(); }
   }
 
-  private async change<T>(fn: (data: Data) => T, create = false): Promise<T> {
+  /** Every store still enforces MAX_DIRECTORY_BYTES. Ordinary writes must
+   * also leave RECOVERY_RESERVE_BYTES free; `recovery` admits a recovery
+   * write (judged on its own outcome) into that reserve. */
+  private bounded<T>(fn: (data: Data) => T, recovery?: Recovery<T>): (data: Data) => T {
+    return (data) => {
+      const result = fn(data);
+      if (!recovery?.(data, result) &&
+          Buffer.byteLength(JSON.stringify(data), 'utf8') > MAX_DIRECTORY_BYTES - RECOVERY_RESERVE_BYTES) {
+        throw new Error('Directory capacity reached');
+      }
+      return result;
+    };
+  }
+
+  private async change<T>(unbounded: (data: Data) => T, create = false, recovery?: Recovery<T>): Promise<T> {
+    const fn = this.bounded(unbounded, recovery);
     if (this.store) return this.store.change(fn, create);
     await this.init(create);
     // Wait briefly for another request's atomic commit. A leftover lock still
@@ -270,16 +367,16 @@ export class ServerDirectory implements EnterpriseDirectory {
    * after its domain claim is released between HTTP verification and use.
    * Read only enough to select the session's immutable claim; the locked
    * transaction rechecks the identity, proof, policy and claim before commit. */
-  private async changeForIdentity<T>(identity: VerifiedIdentity, fn: (data: Data) => T): Promise<T> {
+  private async changeForIdentity<T>(identity: VerifiedIdentity, fn: (data: Data) => T, recovery?: Recovery<T>): Promise<T> {
     const session = (await this.read()).sessions[identity.sessionId];
     const domain = session?.organizationId === identity.organizationId && session.issuer === identity.issuer &&
       session.subject === identity.subject ? session.accountDomain : undefined;
-    if (!domain) return this.change(fn);
+    if (!domain) return this.change(fn, false, recovery);
     if (!this.store?.changeWithDomainClaim) throw new EnterpriseAccessDenied();
-    return this.store.changeWithDomainClaim(identity.organizationId, identity.issuer, domain, (data) => {
+    return this.store.changeWithDomainClaim(identity.organizationId, identity.issuer, domain, this.bounded((data) => {
       if (data.sessions[identity.sessionId]?.accountDomain !== domain) throw new EnterpriseAccessDenied();
       return fn(data);
-    });
+    }, recovery));
   }
 
   /** Explicit operator-only bootstrap. Never called by an unauthenticated HTTP route. */
@@ -298,7 +395,7 @@ export class ServerDirectory implements EnterpriseDirectory {
   }
 
   async auditSummary(organizationId: string): Promise<{ eventCount: number; latestAt: string | null }> {
-    const events = (await this.read()).audit.filter((event) => event.organizationId === organizationId);
+    const events = auditView(await this.read(), organizationId);
     return { eventCount: events.length, latestAt: events[events.length - 1]?.at ?? null };
   }
 
@@ -432,9 +529,12 @@ export class ServerDirectory implements EnterpriseDirectory {
       if (!org || org.issuer !== actor.issuer || !member?.active || !this.active(data, actor, domain)) throw new EnterpriseAccessDenied();
       const permitted = evaluateTenantPolicy({ identity: actor, organizationId: actor.organizationId,
         issuer: org.issuer, member, sessionActive: true, action: 'member.manage' });
+      if (!permitted) {
+        appendRepeatableDenial(data, actor.organizationId, actor.subject, 'organization.domain.status', auditTarget('domain', domain));
+        return null;
+      }
       data.audit.push({ organizationId: actor.organizationId, subject: actor.subject, targetDomain: domain,
-        action: 'organization.domain.status', outcome: permitted ? 'allowed' : 'denied', at: new Date().toISOString() });
-      if (!permitted) return null;
+        action: 'organization.domain.status', outcome: 'allowed', at: new Date().toISOString() });
       const proof = org.domainProofs?.[domain];
       const now = Date.now();
       const unambiguous = !otherActiveDomainClaim(data, actor.organizationId, domain, now);
@@ -460,8 +560,9 @@ export class ServerDirectory implements EnterpriseDirectory {
       if (!org || org.issuer !== actor.issuer || !member?.active || !this.active(data, actor)) throw new EnterpriseAccessDenied();
       const allowed = evaluateTenantPolicy({ identity: actor, organizationId: actor.organizationId,
         issuer: org.issuer, member, sessionActive: true, action: 'organization.read' });
-      data.audit.push({ organizationId: actor.organizationId, subject: actor.subject,
-        action: 'organization.workspaces.read', outcome: allowed ? 'allowed' : 'denied', at: new Date().toISOString() });
+      if (allowed) data.audit.push({ organizationId: actor.organizationId, subject: actor.subject,
+        action: 'organization.workspaces.read', outcome: 'allowed', at: new Date().toISOString() });
+      else appendRepeatableDenial(data, actor.organizationId, actor.subject, 'organization.workspaces.read');
       return allowed ? Object.values(org.workspaces ?? {}).map(({ id, name, active }) => ({ id, name, active })) : null;
     });
     if (!result) throw new EnterpriseAccessDenied();
@@ -528,9 +629,13 @@ export class ServerDirectory implements EnterpriseDirectory {
       const permitted = evaluateTenantPolicy({ identity: actor, organizationId: actor.organizationId,
         issuer: org.issuer, member: org.members[actor.subject], sessionActive: true, action: 'organization.read' }) &&
         org.workspaces?.[workspaceId]?.active === true;
+      if (!permitted) {
+        appendRepeatableDenial(data, actor.organizationId, actor.subject, 'organization.runtime.grants.read',
+          auditTarget('workspace', workspaceId));
+        return null;
+      }
       data.audit.push({ organizationId: actor.organizationId, subject: actor.subject, targetWorkspaceId: workspaceId,
-        action: 'organization.runtime.grants.read', outcome: permitted ? 'allowed' : 'denied', at: new Date().toISOString() });
-      if (!permitted) return null;
+        action: 'organization.runtime.grants.read', outcome: 'allowed', at: new Date().toISOString() });
       return Object.entries(org.workspaces![workspaceId]!.grants ?? {}).map(([subject, actions]) =>
         ({ subject, actions: [...actions] }));
     });
@@ -572,7 +677,7 @@ export class ServerDirectory implements EnterpriseDirectory {
         if (view === 'members') {
           payload = { organizationId: identity.organizationId, members: members.map(({ subject, displayName, role, active }) => ({ subject, displayName, role, active })) };
         } else {
-          const events = data.audit.filter((event) => event.organizationId === identity.organizationId);
+          const events = auditView(data, identity.organizationId);
           payload = {
             organization: { id: identity.organizationId, name: org.name },
             users: { total: members.length, active: members.filter((m) => m.active).length, admins: members.filter((m) => m.active && m.role === 'admin').length },
@@ -582,8 +687,9 @@ export class ServerDirectory implements EnterpriseDirectory {
           };
         }
       }
-      data.audit.push({ organizationId: identity.organizationId, subject: identity.subject,
-        action: `organization.${view}.read`, outcome: allowed ? 'allowed' : 'denied', at: new Date().toISOString() });
+      if (allowed) data.audit.push({ organizationId: identity.organizationId, subject: identity.subject,
+        action: `organization.${view}.read`, outcome: 'allowed', at: new Date().toISOString() });
+      else appendRepeatableDenial(data, identity.organizationId, identity.subject, `organization.${view}.read`);
       return payload;
     });
   }
@@ -671,7 +777,7 @@ export class ServerDirectory implements EnterpriseDirectory {
       data.audit.push({ organizationId: actor.organizationId, subject: actor.subject, targetSubject: subject,
         action: 'organization.member.deactivate', outcome: 'allowed', at: new Date().toISOString() });
       return true;
-    });
+    }, (_data, permitted) => permitted); // Recovery: only an allowed deactivation may use the reserve.
     if (!allowed) throw new EnterpriseAccessDenied();
   }
 
@@ -731,7 +837,7 @@ export class ServerDirectory implements EnterpriseDirectory {
       data.audit.push({ organizationId: actor.organizationId, subject: actor.subject, targetSubject: subject,
         action: 'organization.member.sessions.revoke', outcome: 'allowed', at: new Date().toISOString() });
       return revoked;
-    });
+    }, (_data, count) => count !== null); // Recovery: allowed revocation only.
     if (revoked === null) throw new EnterpriseAccessDenied();
     return revoked;
   }
@@ -769,41 +875,69 @@ export class ServerDirectory implements EnterpriseDirectory {
       data.audit.push({ organizationId: actor.organizationId, subject: actor.subject,
         action: 'organization.sessions.revoke-all', outcome: 'allowed', at: new Date().toISOString() });
       return count;
-    });
+    }, (_data, count) => count !== null); // Recovery: allowed revocation only.
     if (revoked === null) throw new EnterpriseAccessDenied();
     return revoked;
   }
 
-  async putAttempt(state: string, attempt: Omit<Attempt, 'authEpoch'>): Promise<void> {
+  /** `clientNetwork` is the caller's transport-level network (never a
+   * forwarded header); only its truncated digest is stored, with the attempt. */
+  async putAttempt(state: string, attempt: Omit<Attempt, 'authEpoch' | 'clientHash'>, clientNetwork = ''): Promise<void> {
     if (!key(state) || !key(attempt.organizationId) || !attempt.nonce || !attempt.verifier || !attempt.bindingHash ||
-        !Number.isFinite(attempt.expiresAt) || attempt.expiresAt > Date.now() + 5 * 60_000) throw new Error('Invalid attempt');
+        !Number.isFinite(attempt.expiresAt) || attempt.expiresAt > Date.now() + 5 * 60_000 ||
+        typeof clientNetwork !== 'string' || clientNetwork.length > 64) throw new Error('Invalid attempt');
+    const clientHash = digest(`oidc-login-client:${clientNetwork}`).slice(0, 32);
+    const stateKey = digest(state); // The browser-visible state is never stored in clear.
     await this.change((data) => {
       const org = data.organizations[attempt.organizationId];
-      if (org?.issuer !== attempt.issuer || data.attempts[state]) throw new Error('Unknown organization, issuer, or duplicate state');
+      if (org?.issuer !== attempt.issuer || data.attempts[stateKey]) throw new Error('Unknown organization, issuer, or duplicate state');
       // A public login-start request cannot grow the durable state without
-      // bound. Tenant-scoped expiry cleanup and quota are one locked write;
-      // ingress rate limiting is still a separate deployment requirement.
-      let live = 0;
+      // bound, and must not let one client stop every other client from
+      // starting a login. Expired attempts are pruned and never count. A full
+      // client allowance evicts that client's own oldest attempt; a full
+      // tenant evicts the oldest attempt of the busiest client. Neither
+      // refuses. Ingress rate limiting is still a deployment requirement.
       const now = Date.now();
+      const live = new Map<string, Array<[string, Attempt]>>();
+      let total = 0;
       for (const [storedState, existing] of Object.entries(data.attempts)) {
         if (existing.organizationId !== attempt.organizationId) continue;
-        if (existing.expiresAt <= now) delete data.attempts[storedState];
-        else live++;
+        if (existing.expiresAt <= now) { delete data.attempts[storedState]; continue; }
+        const bucket = live.get(existing.clientHash ?? '') ?? [];
+        bucket.push([storedState, existing]);
+        live.set(existing.clientHash ?? '', bucket);
+        total++;
       }
-      if (live >= MAX_ACTIVE_LOGIN_ATTEMPTS_PER_ORGANIZATION) throw new Error('OIDC login capacity reached');
-      data.attempts[state] = { ...attempt, authEpoch: org.authEpoch ?? 0 };
-    });
+      const evictOldest = (entries: Array<[string, Attempt]>) => {
+        delete data.attempts[entries.reduce((oldest, entry) => entry[1].expiresAt < oldest[1].expiresAt ? entry : oldest)[0]];
+      };
+      const own = live.get(clientHash) ?? [];
+      if (own.length >= MAX_ACTIVE_LOGIN_ATTEMPTS_PER_CLIENT) evictOldest(own);
+      else if (total >= MAX_ACTIVE_LOGIN_ATTEMPTS_PER_ORGANIZATION) {
+        const busiest = Math.max(...[...live.values()].map((entries) => entries.length));
+        evictOldest([...live.values()].filter((entries) => entries.length === busiest).flat());
+      }
+      data.attempts[stateKey] = { ...attempt, clientHash, authEpoch: org.authEpoch ?? 0 };
+    }, false, () => true); // Recovery (administrator sign-in); bounded by the attempt quotas above.
   }
 
+  /** An unknown, expired or wrongly bound state is rejected by a plain read
+   * and never takes the write lock or rewrites the tenant row. A matching
+   * attempt is rechecked and consumed under the lock: exactly one of two
+   * concurrent callbacks for the same state can obtain it. */
   async takeAttempt(state: string, binding: string): Promise<Attempt | null> {
     if (!key(state) || !binding) return null;
+    const stateKey = digest(state);
+    const bindingHash = digest(binding);
+    const candidate = (await this.read()).attempts[stateKey];
+    if (!candidate || candidate.expiresAt <= Date.now() || !eq(candidate.bindingHash, bindingHash)) return null;
     return this.change((data) => {
-      const attempt = data.attempts[state];
-      delete data.attempts[state]; // consume even when binding is wrong
-      if (!attempt || attempt.expiresAt <= Date.now() || !eq(attempt.bindingHash, digest(binding)) ||
+      const attempt = data.attempts[stateKey];
+      delete data.attempts[stateKey];
+      if (!attempt || attempt.expiresAt <= Date.now() || !eq(attempt.bindingHash, bindingHash) ||
           (attempt.authEpoch ?? 0) !== (data.organizations[attempt.organizationId]?.authEpoch ?? 0)) return null;
       return attempt;
-    });
+    }, false, () => true); // Recovery: consuming an attempt only shrinks the state.
   }
 
   /** Only transient rows may be compacted; audit events never disappear here. */
@@ -819,7 +953,7 @@ export class ServerDirectory implements EnterpriseDirectory {
         if (session.expiresAt <= now) { delete data.sessions[hash]; sessions++; }
       }
       return { attempts, sessions };
-    });
+    }, false, () => true); // Recovery: compaction only shrinks the state.
   }
 
   async createSession(issuer: string, organizationId: string, subject: string, expiry: number,
@@ -845,8 +979,10 @@ export class ServerDirectory implements EnterpriseDirectory {
         ...(accountDomain ? { accountDomain } : {}) };
       data.audit.push({ organizationId, subject, action: 'session.create', outcome: 'allowed', at: new Date().toISOString() });
     };
-    if (accountDomain) await this.store!.changeWithDomainClaim!(organizationId, issuer, accountDomain, issue);
-    else await this.change(issue);
+    // Recovery: an administrator can always sign in to a full tenant; a member cannot.
+    const recovery = (data: Data) => data.organizations[organizationId]?.members[subject]?.role === 'admin';
+    if (accountDomain) await this.store!.changeWithDomainClaim!(organizationId, issuer, accountDomain, this.bounded(issue, recovery));
+    else await this.change(issue, false, recovery);
     return { token, identity: { issuer, organizationId, subject, sessionId } };
   }
 
@@ -923,7 +1059,7 @@ export class ServerDirectory implements EnterpriseDirectory {
       if (!this.active(data, identity)) throw new Error('Session inactive');
       data.sessions[identity.sessionId]!.revoked = true;
       data.audit.push({ organizationId: identity.organizationId, subject: identity.subject, action: 'session.revoke', outcome: 'allowed', at: new Date().toISOString() });
-    });
+    }, () => true); // Recovery: each self sign-out consumes a live session, so it cannot repeat without a sign-in.
   }
 
   async recordAudit(event: Omit<Audit, 'at'>): Promise<void> {
@@ -942,8 +1078,9 @@ export class ServerDirectory implements EnterpriseDirectory {
       const member = org?.members[actor.subject];
       if (!org || org.issuer !== actor.issuer || !member?.active || member.organizationId !== actor.organizationId ||
           !this.active(data, actor)) throw new EnterpriseAccessDenied();
-      data.audit.push({ organizationId: actor.organizationId, subject: actor.subject, targetOrganizationId,
-        action: `organization.${view}.cross-tenant`, outcome: 'denied', at: new Date().toISOString() });
+      // The probed identifier is caller-chosen: keep only a marked digest.
+      appendRepeatableDenial(data, actor.organizationId, actor.subject, `organization.${view}.cross-tenant`,
+        auditTarget('organization', targetOrganizationId));
     });
   }
 
@@ -959,10 +1096,11 @@ export class ServerDirectory implements EnterpriseDirectory {
       const allowed = evaluateTenantPolicy({ identity: actor, organizationId: actor.organizationId,
         issuer: org.issuer, member, sessionActive: true, action: 'audit.read' });
       // Authorization, scoped snapshot and audit commit share one exclusive transaction.
-      const events = allowed ? data.audit.filter((event) => event.organizationId === actor.organizationId) : null;
-      data.audit.push({ organizationId: actor.organizationId, subject: actor.subject,
-        action: purpose === 'export' ? 'organization.audit.export' : 'organization.audit.read',
-        outcome: allowed ? 'allowed' : 'denied', at: new Date().toISOString() });
+      const events = allowed ? auditView(data, actor.organizationId) : null;
+      const action = purpose === 'export' ? 'organization.audit.export' : 'organization.audit.read';
+      if (allowed) data.audit.push({ organizationId: actor.organizationId, subject: actor.subject,
+        action, outcome: 'allowed', at: new Date().toISOString() });
+      else appendRepeatableDenial(data, actor.organizationId, actor.subject, action);
       return events;
     });
     if (!events) throw new EnterpriseAccessDenied();

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { createEnterpriseControlPlane } from './controlPlane';
-import { blankDirectoryState, MAX_ACTIVE_LOGIN_ATTEMPTS_PER_ORGANIZATION, ServerDirectory, type EnterpriseStateStore } from './serverDirectory';
+import { blankDirectoryState, MAX_ACTIVE_LOGIN_ATTEMPTS_PER_CLIENT, ServerDirectory, type EnterpriseStateStore } from './serverDirectory';
 import { OidcIntegration, providerMetadataUri, type OidcConfiguration } from './oidc';
 import { createEnterpriseBrowserRouter } from './oidcHttp';
 
@@ -416,32 +416,37 @@ describe('server-owned directory and local OIDC fixture', () => {
     const { directory: store } = await directory();
     const idp = await mockIdP(store);
     const flow = await idp.begin();
-    await expect(idp.integration.complete({ code: 'code', state: flow.state, browserBinding: 'wrong' })).rejects.toThrow();
-    await expect(idp.integration.complete({ code: 'code', state: flow.state, browserBinding: flow.browserBinding })).rejects.toThrow();
+    // A wrong binding is rejected before token exchange and cannot burn the
+    // genuine browser's attempt; the genuine callback then succeeds once.
+    await expect(idp.integration.complete({ code: 'code', state: flow.state, browserBinding: 'wrong' })).rejects.toThrow('state invalid');
     expect(idp.requests()).toBe(0);
+    await idp.integration.complete({ code: 'code', state: flow.state, browserBinding: flow.browserBinding });
+    expect(idp.requests()).toBe(1);
+    await expect(idp.integration.complete({ code: 'code', state: flow.state, browserBinding: flow.browserBinding })).rejects.toThrow('state invalid');
+    expect(idp.requests()).toBe(1);
   });
-  test('public login-start state is quota-bounded per tenant across hosts and expires without harming another tenant', async () => {
+  test('public login-start state is bounded per client across hosts without refusing another client or tenant', async () => {
     const { directory: first, file } = await directory();
     const second = new ServerDirectory(file);
     const make = (organizationId: string, issuer: string, expiresAt: number) => ({ organizationId, issuer,
       nonce: 'synthetic-nonce', verifier: 'synthetic-verifier', bindingHash: 'a'.repeat(64), expiresAt });
     const a = make('org-a', config.issuer, Date.now() + 60_000);
-    for (let i = 0; i < MAX_ACTIVE_LOGIN_ATTEMPTS_PER_ORGANIZATION; i++) {
-      await (i % 2 ? second : first).putAttempt(`state-${i}`, a);
+    const attempts = async () => Object.values(JSON.parse(await readFile(file, 'utf8')).attempts) as
+      Array<{ organizationId: string; expiresAt: number; clientHash: string }>;
+    for (let i = 0; i <= MAX_ACTIVE_LOGIN_ATTEMPTS_PER_CLIENT; i++) {
+      await (i % 2 ? second : first).putAttempt(`state-${i}`, { ...a, expiresAt: a.expiresAt + i }, '198.51.100.7');
     }
-    await expect(second.putAttempt('over-quota', a)).rejects.toThrow('login capacity reached');
+    // The client's own oldest attempt was evicted; no start was refused.
+    expect((await attempts()).filter((attempt) => attempt.organizationId === 'org-a')).toHaveLength(MAX_ACTIVE_LOGIN_ATTEMPTS_PER_CLIENT);
+    expect((await attempts()).some((attempt) => attempt.expiresAt === a.expiresAt)).toBe(false);
+    await second.putAttempt('other-client', a, '203.0.113.9');
+    expect((await attempts()).filter((attempt) => attempt.organizationId === 'org-a')).toHaveLength(MAX_ACTIVE_LOGIN_ATTEMPTS_PER_CLIENT + 1);
     const b = make('org-b', 'http://127.0.0.1:39393/other-tenant', Date.now() + 60_000);
-    await second.putAttempt('other-tenant', b);
+    await second.putAttempt('other-tenant', b, '198.51.100.7');
     expect((await second.takeAttempt('other-tenant', 'wrong'))).toBeNull();
-    expect(Object.keys(JSON.parse(await readFile(file, 'utf8')).attempts)).toHaveLength(64);
-    const expired = JSON.parse(await readFile(file, 'utf8'));
-    expired.attempts['state-0'].expiresAt = Date.now() - 1;
-    await writeFile(file, JSON.stringify(expired)); // Disposable fixture simulates expiry, not a production write.
-    await second.putAttempt('replacement', a);
-    const persisted = JSON.parse(await readFile(file, 'utf8'));
-    expect(Object.keys(persisted.attempts)).toHaveLength(64);
-    expect(persisted.attempts['state-0']).toBeUndefined();
-    expect(persisted.attempts.replacement.organizationId).toBe('org-a');
+    const raw = await readFile(file, 'utf8');
+    expect(raw).not.toContain('state-1'); // Only state digests are stored.
+    expect(raw).not.toContain('198.51.100.7');
     await expect(first.putAttempt('too-long', { ...a, expiresAt: Date.now() + 60 * 60_000 })).rejects.toThrow('Invalid attempt');
   });
 
