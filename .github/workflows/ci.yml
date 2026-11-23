@@ -233,7 +233,7 @@ jobs:
       - run: node scripts/ci/retry-transient-download.mjs node_modules/electron/install.js
       - name: Verify Windows PowerShell CLI launcher
         if: runner.os == 'Windows'
-        run: pnpm exec bun test server/utils/interpreterCliRuntime.test.ts
+        run: pnpm exec bun test --test-name-pattern 'writes a Windows PowerShell fallback that safely interpolates toolName before query params' server/utils/interpreterCliRuntime.test.ts
       # Exercise the distribution wrapper on every supported runner. This is
       # especially important on Windows, where package-manager shims require
       # platform-shell resolution.
