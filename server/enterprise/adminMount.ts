@@ -16,7 +16,7 @@ type ScopedAdminMount = Readonly<{
   /** The same operator-pinned identity mapping used by the OIDC callback.
    * A production admin surface cannot be composed from independent pins. */
   oidc?: Pick<OidcConfiguration, 'organizationId' | 'issuer' | 'accountDomain' | 'redirectUri'>;
-  directory: EnterpriseDirectory & Pick<ServerDirectory, 'deactivateMember' | 'demoteAdministrator' | 'revokeMemberSessions' | 'revokeOrganizationSessions' | 'revokeSession' | 'verifyBoundSession' | 'listAudit' | 'recordTenantDenial' | 'beginDomainProof' | 'confirmDomainProof' | 'domainProofStatus' | 'listWorkspaces' | 'createWorkspace' | 'deactivateWorkspace' | 'listWorkspaceGrants' | 'setRuntimeGrant'>;
+  directory: EnterpriseDirectory & Pick<ServerDirectory, 'deactivateMember' | 'demoteAdministrator' | 'revokeMemberSessions' | 'revokeOrganizationSessions' | 'revokeSession' | 'verifyBoundSession' | 'verifyBoundSessionForDomainRenewal' | 'listAudit' | 'recordTenantDenial' | 'beginDomainProof' | 'confirmDomainProof' | 'domainProofStatus' | 'listWorkspaces' | 'createWorkspace' | 'deactivateWorkspace' | 'listWorkspaceGrants' | 'setRuntimeGrant'>;
   verifySession: (token: string) => Promise<VerifiedIdentity | null>;
   /** Separately opt in to setup; no login or SSO activation follows. */
   enableDomainSetup?: boolean;
@@ -69,6 +69,7 @@ export function mountEnterpriseAdminRoutes(app: Application, options?: ScopedAdm
       (!options.allowInsecureLoopbackForTests && (!options.accountDomain ||
         verifiedDomainName(options.accountDomain) !== options.accountDomain ||
         typeof options.directory.verifyBoundSession !== 'function' || !pinnedCallback ||
+        (options.enableDomainSetup === true && typeof options.directory.verifyBoundSessionForDomainRenewal !== 'function') ||
         options.oidc?.organizationId !== options.organizationId || options.oidc.issuer !== options.issuer ||
         options.oidc.accountDomain !== options.accountDomain)) ||
       (options.allowInsecureLoopbackForTests && process.env.NODE_ENV !== 'test')) {
@@ -84,13 +85,24 @@ export function mountEnterpriseAdminRoutes(app: Application, options?: ScopedAdm
       : await directory.verifyBoundSession(token, accountDomain!);
     return identity?.organizationId === organizationId && identity.issuer === issuer ? identity : null;
   };
+  // Domain-proof routes renew the lease that ordinary bound sessions require;
+  // their verifier must not itself require that lease to be current. The
+  // directory limits that waiver to challenge, verify and status for the
+  // session's own bound domain.
+  const verifyRenewalSession = async (token: string) => {
+    const identity = allowInsecureLoopbackForTests
+      ? await suppliedVerifier(token)
+      : await directory.verifyBoundSessionForDomainRenewal(token, accountDomain!);
+    return identity?.organizationId === organizationId && identity.issuer === issuer ? identity : null;
+  };
   const scoped = { applicationOrigin: options.applicationOrigin,
     allowInsecureLoopbackForTests, verifySession, directory };
   // Build every router before mounting; invalid origins cannot leave a partial API.
   const read = createEnterpriseBrowserRouter(scoped);
   const write = createEnterpriseAdminMutationRouter(scoped);
   const logout = createEnterpriseLogoutRouter(scoped);
-  const domains = options.enableDomainSetup === true ? createEnterpriseDomainProofRouter(scoped) : null;
+  const domains = options.enableDomainSetup === true
+    ? createEnterpriseDomainProofRouter({ ...scoped, verifySession: verifyRenewalSession }) : null;
   const workspaces = options.enableWorkspaceAdministration === true ? createEnterpriseWorkspaceRouter(scoped) : null;
   // The host access mode is currently read from the environment on every
   // request. A later switch to remote must not bypass the startup refusal.

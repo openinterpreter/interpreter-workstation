@@ -63,9 +63,16 @@ export function providerMetadataUri(issuer: string): string {
   return `${issuer.replace(/\/$/, '')}/.well-known/openid-configuration`;
 }
 
+/** Login start only. Endpoints are operator-pinned and complete() always
+ * rechecks discovery before code exchange, so a short-lived positive result
+ * cannot swap an endpoint; it stops anonymous starts each causing a fetch. */
+const LOGIN_DISCOVERY_CACHE_MS = 60_000;
+
 /** Authorization-code + S256 PKCE client; does not itself mount any HTTP route. */
 export class OidcIntegration {
   private readonly config: OidcConfiguration;
+  private loginDiscoveryUntil = 0;
+  private loginDiscovery: Promise<void> | null = null;
 
   constructor(config: OidcConfiguration, private readonly directory: ServerDirectory, private readonly request: Fetch = fetch) {
     const loopback = config.allowInsecureLoopbackForTests === true;
@@ -114,10 +121,21 @@ export class OidcIntegration {
     }
   }
 
-  async begin(): Promise<{ authorizationUrl: string; state: string; browserBinding: string }> {
+  /** Only a success is cached, and only for login start; failures are not. */
+  private verifyProviderForLogin(): Promise<void> {
+    if (this.loginDiscoveryUntil > Date.now()) return Promise.resolve();
+    this.loginDiscovery ??= this.verifyProvider()
+      .then(() => { this.loginDiscoveryUntil = Date.now() + LOGIN_DISCOVERY_CACHE_MS; })
+      .finally(() => { this.loginDiscovery = null; });
+    return this.loginDiscovery;
+  }
+
+  /** `clientNetwork` is the transport-level client network chosen by the
+   * HTTP boundary; it only selects a login-start quota bucket. */
+  async begin(clientNetwork = ''): Promise<{ authorizationUrl: string; state: string; browserBinding: string }> {
     if (this.config.accountDomain && !await this.directory.domainClaimVerifiedForLogin(
       this.config.organizationId, this.config.issuer, this.config.accountDomain)) throw new Error('Account domain unavailable');
-    await this.verifyProvider();
+    await this.verifyProviderForLogin();
     const state = randomBytes(32).toString('base64url');
     const nonce = randomBytes(32).toString('base64url');
     const verifier = randomBytes(32).toString('base64url');
@@ -125,7 +143,7 @@ export class OidcIntegration {
     await this.directory.putAttempt(state, {
       organizationId: this.config.organizationId, issuer: this.config.issuer, nonce, verifier,
       bindingHash: createHash('sha256').update(browserBinding).digest('hex'), expiresAt: Date.now() + 5 * 60_000,
-    });
+    }, clientNetwork);
     const url = new URL(this.config.authorizationEndpoint);
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('client_id', this.config.clientId);

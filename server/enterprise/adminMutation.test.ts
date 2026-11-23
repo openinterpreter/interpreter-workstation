@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import express from 'express';
 import request from 'supertest';
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -117,8 +118,10 @@ describe('unmounted same-origin member deactivation', () => {
     expect((await directory.auditSummary('org-a')).eventCount).toBe(before + 6);
     expect((await directory.auditSummary('org-b')).eventCount).toBe(foreignBefore);
     const scoped = await directory.listAudit(identity);
-    expect(scoped.slice(-6).map((event) => [event.organizationId, event.targetOrganizationId, event.outcome]))
-      .toEqual(Array.from({ length: 6 }, () => ['org-a', 'org-b', 'denied']));
+    // The caller-chosen foreign identifier is recorded only as a marked digest.
+    const foreignDigest = `organization:${createHash('sha256').update('org-b').digest('hex').slice(0, 16)}`;
+    expect(scoped.slice(-6).map((event) => [event.organizationId, event.targetOrganizationId, event.targetDigest, event.outcome]))
+      .toEqual(Array.from({ length: 6 }, () => ['org-a', undefined, foreignDigest, 'denied']));
     await expect(directory.recordTenantDenial({ ...identity, organizationId: 'org-b' }, 'org-a', 'overview'))
       .rejects.toThrow('Access denied');
     await directory.revokeSession(identity);

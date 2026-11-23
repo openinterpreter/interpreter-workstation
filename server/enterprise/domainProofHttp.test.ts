@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import express from 'express';
 import request from 'supertest';
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -76,7 +77,8 @@ describe('separately opted-in unmounted domain setup HTTP boundary', () => {
     expect(await directory.domainVerified('org-b', 'https://idp.example/b', 'example.test')).toBe(false);
     const events = await directory.listAudit(identity);
     expect(events.some((event) => event.action === 'organization.domain.challenge.cross-tenant' &&
-      event.targetOrganizationId === 'org-b' && event.outcome === 'denied')).toBe(true);
+      event.targetDigest === `organization:${createHash('sha256').update('org-b').digest('hex').slice(0, 16)}` &&
+      event.targetOrganizationId === undefined && event.outcome === 'denied')).toBe(true);
     expect(events.filter((event) => event.targetDomain === 'example.test')
       .map((event) => [event.outcome, event.targetDomain])).toEqual([
         ['denied', 'example.test'], ['denied', 'example.test'], ['allowed', 'example.test'], ['allowed', 'example.test'],

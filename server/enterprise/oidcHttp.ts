@@ -1,4 +1,5 @@
 import { Router, json, type Request, type Response } from 'express';
+import { isIPv4, isIPv6 } from 'node:net';
 import type { TLSSocket } from 'node:tls';
 import type { OidcConfiguration, OidcIntegration } from './oidc';
 import type { EnterpriseDirectory, VerifiedIdentity } from './controlPlane';
@@ -23,6 +24,25 @@ function exactOrigin(req: Request, origin: URL, loopback: boolean): boolean {
     return new URL(req.originalUrl, origin).origin === origin.origin &&
       req.get('host') === origin.host && (secure || (loopback && origin.protocol === 'http:'));
   } catch { return false; }
+}
+
+/** Login-start quota bucket from the accepted socket's peer address only;
+ * X-Forwarded-For and other headers are never trusted. An IPv6 peer is
+ * grouped by its /64, which one host normally controls in full. Behind a
+ * proxy that does not preserve the peer address, every client shares one
+ * bucket, which bounds them together but still never refuses a start. */
+export function loginClientNetwork(address: string | undefined): string | null {
+  if (!address) return null;
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(address)?.[1];
+  if (mapped && isIPv4(mapped)) return mapped;
+  if (isIPv4(address)) return address;
+  if (!isIPv6(address)) return null;
+  const halves = address.split('%')[0]!.split('::');
+  const left = halves[0] ? halves[0].split(':') : [];
+  const right = halves.length > 1 && halves[1] ? halves[1].split(':') : [];
+  const rightGroups = right.reduce((count, part) => count + (part.includes('.') ? 2 : 1), 0);
+  const groups = [...left, ...Array<string>(halves.length > 1 ? 8 - left.length - rightGroups : 0).fill('0'), ...right];
+  return `${groups.slice(0, 4).map((group) => parseInt(group, 16).toString(16)).join(':')}::/64`;
 }
 
 function cookie(req: Request, name: string): string | null {
@@ -63,8 +83,10 @@ export function createOidcHttpRouter({ config, integration, applicationOrigin, s
     if (!exactOrigin(req, origin, loopback) || req.params.organizationId !== config.organizationId) {
       return void res.status(403).end();
     }
+    const client = loginClientNetwork(req.socket.remoteAddress);
+    if (!client) return void res.status(503).end();
     try {
-      const flow = await integration.begin();
+      const flow = await integration.begin(client);
       res.cookie(bindingName, flow.browserBinding, { ...cookieOptions, maxAge: 5 * 60_000 });
       return void res.redirect(302, flow.authorizationUrl);
     } catch {
