@@ -3584,7 +3584,7 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
     }
 
     // Agent mode: full menu with queue/stop
-    return (
+    const sendMenu = (
       <SendButtonWithMenu
         isStreaming={isStreaming}
         hasInput={!disabled}
@@ -3606,6 +3606,20 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
         conciseStreamingActions={conciseStreamingActions}
       />
     );
+
+    // An agent that works continuously would otherwise never offer the
+    // replacement voice control: keep it beside the stop control while a turn
+    // runs and the composer is empty.
+    if (isStreaming && disabled && voiceButtonOverride) {
+      return (
+        <span className="inline-flex items-center gap-1.5" data-testid="composer-voice-while-working">
+          {voiceButtonOverride}
+          {sendMenu}
+        </span>
+      );
+    }
+
+    return sendMenu;
   }, [
     hasQueue,
     handleQueue,
