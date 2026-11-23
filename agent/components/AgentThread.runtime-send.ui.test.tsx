@@ -34,7 +34,8 @@ const useChatState = vi.hoisted(() => ({
       role: 'assistant' as const,
       serverMessageId: 'turn_active',
       parts: [],
-    } satisfies ChatMessage,
+    } as ChatMessage | null,
+    observedActiveTurnId: null as string | null,
     historyLoaded: true,
     isStreaming: true,
     error: null as string | null,
@@ -120,6 +121,7 @@ describe('AgentThread runtime sends', () => {
         serverMessageId: 'turn_active',
         parts: [],
       } satisfies ChatMessage,
+      observedActiveTurnId: null,
       historyLoaded: true,
       isStreaming: true,
       error: null,
@@ -194,6 +196,52 @@ describe('AgentThread runtime sends', () => {
       clientUserMessageId: expect.stringMatching(/^[0-9a-f-]{36}$/),
       message: 'follow up while the model is still working',
       skills: [],
+    });
+  });
+
+  test('steers an active turn that this client did not start', async () => {
+    useChatState.current = {
+      ...useChatState.current,
+      streamingMessage: null,
+      observedActiveTurnId: 'turn_observed',
+    };
+    vi.mocked(fetch).mockImplementation(async () => new Response(
+      JSON.stringify({ ok: true, turnId: 'turn_observed' }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ));
+
+    render(
+      <AgentThread
+        agentId="agent-1"
+        callerToken="caller-token"
+        workspacePath="/workspace"
+        isVisible={true}
+        modelConfig={modelConfig}
+        onModelConfigUpdate={vi.fn()}
+      />,
+    );
+
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('agent-runtime:send', {
+        detail: {
+          tabId: 'agent-1',
+          text: 'adjust the running task',
+          workspacePath: '/workspace',
+        },
+      }));
+    });
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith('/api/agent/chat/steer', expect.objectContaining({
+        method: 'POST',
+      }));
+    });
+    expect(rawSendMessage).not.toHaveBeenCalled();
+    const steerCall = vi.mocked(fetch).mock.calls.find(([url]) => url === '/api/agent/chat/steer');
+    expect(JSON.parse(String(steerCall?.[1]?.body))).toMatchObject({
+      threadId: 'thread_active',
+      turnId: 'turn_observed',
+      message: 'adjust the running task',
     });
   });
 

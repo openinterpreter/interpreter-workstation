@@ -1,8 +1,8 @@
-<!-- release-notes-for: 0.2.251 -->
+<!-- release-notes-for: 0.2.252 -->
 ## What's new
 
-- Restores the app CLI environment when an eligible saved agent thread is loaded after a restart, so later turns on that thread can access its existing tools.
-- Preserves saved caller tool and model scope during cold recovery; conflicting scopes are refused rather than widened, and callers from another workspace are not revoked.
+- Bounds native submission lookup by paging saved turns instead of loading an entire thread history.
+- Treats incomplete history and duplicate submission IDs as unknown rather than returning a potentially incorrect result.
 
 ## Distribution
 
