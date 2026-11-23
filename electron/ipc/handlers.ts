@@ -15,10 +15,11 @@ import { needsSignedFeedback, requireSignedFeedback, submitSignedFeedback, type 
 type WebContentsWithOwner = WebContents & { getOwnerBrowserWindow(): BrowserWindow | null };
 import http from 'node:http';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import fs from 'node:fs/promises';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { IPC_CHANNELS } from './registry';
-import { assertTrustedFileIpcFrame, isWhatsAppApiPath } from './trustedRenderer';
+import { assertTrustedAppIpcFrame, isWhatsAppApiPath } from './trustedRenderer';
 import type {
   ApiRequestParams,
   ApiRequestResponse,
@@ -503,11 +504,22 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
     createWorkstationWindow,
   } = deps;
 
-  function assertTrustedFileIpcSender(event: IpcMainInvokeEvent): void {
+  function assertTrustedFileIpcSender(event: Pick<IpcMainInvokeEvent, 'senderFrame'>): void {
     const senderFrame = event.senderFrame;
     const frameUrl = senderFrame?.url ?? '';
     const isMainFrame = senderFrame === senderFrame?.top;
-    assertTrustedFileIpcFrame(frameUrl, isMainFrame);
+    // The built-renderer path loads the local Express origin rather than a
+    // file, while ordinary development loads Vite's resolved port. Neither
+    // mode authorizes every loopback origin or an arbitrary local file.
+    const httpOrigin = process.env.INTERPRETER_USE_BUILT_RENDERER === 'true'
+      ? `http://127.0.0.1:${serverPort}`
+      : !app.isPackaged ? `http://localhost:${process.env.VITE_PORT?.trim() || '5173'}` : undefined;
+    assertTrustedAppIpcFrame(frameUrl, isMainFrame,
+      pathToFileURL(path.join(__dirname, '../../dist/index.html')).href, httpOrigin);
+  }
+
+  function isTrustedFileIpcSender(event: Pick<IpcMainInvokeEvent, 'senderFrame'>): boolean {
+    try { assertTrustedFileIpcSender(event); return true; } catch { return false; }
   }
 
   function getEventWindowId(event: IpcMainInvokeEvent): number | null {
@@ -534,6 +546,7 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
     handler: (event: IpcMainInvokeEvent, ...args: TArgs) => Promise<TResult> | TResult,
   ): void {
     ipcMain.handle(channel, async (event, ...args: TArgs): Promise<TResult> => {
+      assertTrustedFileIpcSender(event);
       return await runWithSenderWindowContext(event, async () => {
         return await handler(event, ...args);
       });
@@ -638,6 +651,7 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
   });
 
   ipcMain.on(IPC_CHANNELS.RENDERER_READY, (event) => {
+    if (!isTrustedFileIpcSender(event)) return;
     const senderWindow = BrowserWindow.fromWebContents(event.sender);
     if (senderWindow) {
       workstationService.markRendererReady(senderWindow.id);
@@ -1060,7 +1074,8 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
    * Renderer log handler
    * Forwards renderer console logs to main process
    */
-  ipcMain.on(IPC_CHANNELS.RENDERER_LOG, (_event, level: string, ...args: any[]) => {
+  ipcMain.on(IPC_CHANNELS.RENDERER_LOG, (event, level: string, ...args: any[]) => {
+    if (!isTrustedFileIpcSender(event)) return;
     // Format message with [RENDERER] prefix
     const message = args
       .map((arg) => formatRendererLogArg(arg))
@@ -1207,11 +1222,13 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
   /**
    * Open external URL
    */
-  registerHandle(IPC_CHANNELS.OPEN_EXTERNAL, async (_event, url: string): Promise<void> => {
+  registerHandle(IPC_CHANNELS.OPEN_EXTERNAL, async (event, url: string): Promise<void> => {
+    assertTrustedFileIpcSender(event);
     await shell.openExternal(url);
   });
 
-  ipcMain.handle(IPC_CHANNELS.OPEN_PATH, async (_event, filePath: string): Promise<OpenPathResponse> => {
+  ipcMain.handle(IPC_CHANNELS.OPEN_PATH, async (event, filePath: string): Promise<OpenPathResponse> => {
+    assertTrustedFileIpcSender(event);
     const error = await shell.openPath(filePath);
     return { error: error || null };
   });
@@ -1355,6 +1372,7 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
    * Respects system preference for double-click action (minimize or maximize)
    */
   ipcMain.on(IPC_CHANNELS.MAC_TITLEBAR_CLICKED, (event) => {
+    if (!isTrustedFileIpcSender(event)) return;
     if (process.platform !== 'darwin') {
       return;
     }
@@ -1902,6 +1920,9 @@ export function setupIpcHandlers(deps: HandlerDependencies): void {
     IPC_CHANNELS.FILES_START_DRAG,
     async (event, request: FilesStartDragRequest) => {
       try {
+        // An embedded browser frame must never select an arbitrary local path
+        // for the host OS drag operation via the main process.
+        assertTrustedFileIpcSender(event);
         const { filePath } = request;
         const icon = await app.getFileIcon(filePath, { size: 'normal' });
         event.sender.startDrag({

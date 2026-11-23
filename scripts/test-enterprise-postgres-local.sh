@@ -3,6 +3,7 @@
 set -euo pipefail
 umask 077
 root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$root"
 fixture="$(mktemp -d /workspace/private/enterprise-pg.XXXXXXXX)"
 pgbin=/usr/lib/postgresql/14/bin
 stop() {
@@ -41,52 +42,106 @@ psql_local=("$pgbin/psql" -X -q -v ON_ERROR_STOP=1 -h "$fixture" -p "$port" -d p
 password="$(openssl rand -hex 32)"
 tenant_a_password="$(openssl rand -hex 32)"
 tenant_b_password="$(openssl rand -hex 32)"
+recovery_password="$(openssl rand -hex 32)"
+network_password="$(openssl rand -hex 32)"
+https_password="$(openssl rand -hex 32)"
 printf "CREATE ROLE enterprise_fixture LOGIN PASSWORD '%s';\nCREATE DATABASE enterprise_fixture;\n" "$password" | "${psql_local[@]}" >/dev/null
 printf "CREATE ROLE enterprise_fixture_a LOGIN NOINHERIT NOBYPASSRLS PASSWORD '%s';\nCREATE ROLE enterprise_fixture_b LOGIN NOINHERIT NOBYPASSRLS PASSWORD '%s';\n" \
   "$tenant_a_password" "$tenant_b_password" | "${psql_local[@]}" >/dev/null
-"${psql_local[@]}" -d enterprise_fixture -c 'CREATE TABLE public.interpreter_enterprise_directory (id smallint PRIMARY KEY CHECK (id = 1), content text NOT NULL); GRANT CONNECT ON DATABASE enterprise_fixture TO enterprise_fixture; GRANT SELECT, INSERT, UPDATE ON public.interpreter_enterprise_directory TO enterprise_fixture;' >/dev/null
-"${psql_local[@]}" -d enterprise_fixture -c "CREATE TABLE public.interpreter_enterprise_tenant_directory (organization_id text PRIMARY KEY CHECK (char_length(organization_id) BETWEEN 1 AND 160 AND organization_id ~ '^[A-Za-z0-9._@:-]+$'), content text NOT NULL); GRANT SELECT, INSERT, UPDATE ON public.interpreter_enterprise_tenant_directory TO enterprise_fixture;" >/dev/null
+printf "CREATE ROLE enterprise_fixture_recovery LOGIN NOINHERIT NOBYPASSRLS PASSWORD '%s';\n" "$recovery_password" | "${psql_local[@]}" >/dev/null
+printf "CREATE ROLE enterprise_fixture_network LOGIN NOINHERIT NOBYPASSRLS PASSWORD '%s';\nCREATE ROLE enterprise_fixture_https LOGIN NOINHERIT NOBYPASSRLS PASSWORD '%s';\n" \
+  "$network_password" "$https_password" | "${psql_local[@]}" >/dev/null
+"${psql_local[@]}" -d enterprise_fixture -c 'REVOKE CREATE ON SCHEMA public FROM PUBLIC' >/dev/null
+# All three fixture backends execute the application-exported operator DDL,
+# never a second handwritten schema that can silently drift from source.
+bun -e 'import { ENTERPRISE_DIRECTORY_SCHEMA, ENTERPRISE_TENANT_DIRECTORY_SCHEMA, ENTERPRISE_RLS_TENANT_DIRECTORY_SCHEMA } from "./server/enterprise/postgresDirectoryStore.ts"; process.stdout.write([ENTERPRISE_DIRECTORY_SCHEMA, ENTERPRISE_TENANT_DIRECTORY_SCHEMA, ENTERPRISE_RLS_TENANT_DIRECTORY_SCHEMA].join(";\n") + ";\n")' |
+  "${psql_local[@]}" -d enterprise_fixture >/dev/null
 "${psql_local[@]}" -d enterprise_fixture >/dev/null <<'SQL'
-REVOKE CREATE ON SCHEMA public FROM PUBLIC;
-CREATE TABLE public.interpreter_enterprise_rls_directory (
-  organization_id text PRIMARY KEY CHECK (char_length(organization_id) BETWEEN 1 AND 160 AND organization_id ~ '^[A-Za-z0-9._@:-]+$'),
-  database_role name NOT NULL UNIQUE,
-  content text NOT NULL
-);
-ALTER TABLE public.interpreter_enterprise_rls_directory ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.interpreter_enterprise_rls_directory FORCE ROW LEVEL SECURITY;
-CREATE POLICY enterprise_tenant_role_scope ON public.interpreter_enterprise_rls_directory
-  USING (database_role = current_user) WITH CHECK (database_role = current_user);
-CREATE TABLE public.interpreter_enterprise_rls_audit (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  organization_id text NOT NULL,
-  content jsonb NOT NULL CHECK (jsonb_typeof(content) = 'object' AND
-    jsonb_typeof(content->'organizationId') IS NOT DISTINCT FROM 'string' AND content->>'organizationId' = organization_id AND
-    jsonb_typeof(content->'subject') IS NOT DISTINCT FROM 'string' AND btrim(content->>'subject') <> '' AND
-    jsonb_typeof(content->'action') IS NOT DISTINCT FROM 'string' AND btrim(content->>'action') <> '' AND
-    jsonb_typeof(content->'outcome') IS NOT DISTINCT FROM 'string' AND content->>'outcome' IN ('allowed', 'denied') AND
-    jsonb_typeof(content->'at') IS NOT DISTINCT FROM 'string' AND btrim(content->>'at') <> '')
-);
-CREATE INDEX enterprise_rls_audit_tenant_order ON public.interpreter_enterprise_rls_audit (organization_id, id);
-ALTER TABLE public.interpreter_enterprise_rls_audit ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.interpreter_enterprise_rls_audit FORCE ROW LEVEL SECURITY;
-CREATE POLICY enterprise_audit_role_scope ON public.interpreter_enterprise_rls_audit
-  USING (organization_id IN (SELECT d.organization_id FROM public.interpreter_enterprise_rls_directory d
-    WHERE d.database_role = current_user))
-  WITH CHECK (organization_id IN (SELECT d.organization_id FROM public.interpreter_enterprise_rls_directory d
-    WHERE d.database_role = current_user));
-GRANT CONNECT ON DATABASE enterprise_fixture TO enterprise_fixture_a, enterprise_fixture_b;
-GRANT SELECT, UPDATE(content) ON public.interpreter_enterprise_rls_directory TO enterprise_fixture_a, enterprise_fixture_b;
-GRANT SELECT ON public.interpreter_enterprise_rls_audit TO enterprise_fixture_a, enterprise_fixture_b;
-GRANT INSERT(organization_id, content) ON public.interpreter_enterprise_rls_audit TO enterprise_fixture_a, enterprise_fixture_b;
+GRANT CONNECT ON DATABASE enterprise_fixture TO enterprise_fixture;
+GRANT SELECT, INSERT, UPDATE ON public.interpreter_enterprise_directory TO enterprise_fixture;
+GRANT SELECT, INSERT, UPDATE ON public.interpreter_enterprise_tenant_directory TO enterprise_fixture;
+GRANT CONNECT ON DATABASE enterprise_fixture TO enterprise_fixture_a, enterprise_fixture_b, enterprise_fixture_recovery, enterprise_fixture_network, enterprise_fixture_https;
+GRANT SELECT, UPDATE(content) ON public.interpreter_enterprise_rls_directory TO enterprise_fixture_a, enterprise_fixture_b, enterprise_fixture_recovery, enterprise_fixture_network, enterprise_fixture_https;
+GRANT SELECT ON public.interpreter_enterprise_rls_audit TO enterprise_fixture_a, enterprise_fixture_b, enterprise_fixture_recovery, enterprise_fixture_network, enterprise_fixture_https;
+GRANT INSERT(organization_id, content) ON public.interpreter_enterprise_rls_audit TO enterprise_fixture_a, enterprise_fixture_b, enterprise_fixture_recovery, enterprise_fixture_network, enterprise_fixture_https;
+GRANT SELECT ON public.interpreter_enterprise_rls_domain_claim TO enterprise_fixture_a, enterprise_fixture_b, enterprise_fixture_recovery, enterprise_fixture_network, enterprise_fixture_https;
+GRANT INSERT(domain, organization_id, database_role, issuer) ON public.interpreter_enterprise_rls_domain_claim TO enterprise_fixture_a, enterprise_fixture_b, enterprise_fixture_recovery, enterprise_fixture_network, enterprise_fixture_https;
+-- PostgreSQL row-locking SELECT requires UPDATE privilege on at least one
+-- column. Only the RLS-constrained, self-equal role column can be updated;
+-- claim identity and ownership columns remain operator-owned.
+GRANT UPDATE(database_role) ON public.interpreter_enterprise_rls_domain_claim TO enterprise_fixture_a, enterprise_fixture_b, enterprise_fixture_recovery, enterprise_fixture_network, enterprise_fixture_https;
 INSERT INTO public.interpreter_enterprise_rls_directory (organization_id, database_role, content)
   VALUES ('rls-a', 'enterprise_fixture_a', '{"version":1,"organizations":{},"attempts":{},"sessions":{},"audit":[]}'),
-         ('rls-b', 'enterprise_fixture_b', '{"version":1,"organizations":{},"attempts":{},"sessions":{},"audit":[]}');
+         ('rls-b', 'enterprise_fixture_b', '{"version":1,"organizations":{},"attempts":{},"sessions":{},"audit":[]}'),
+         ('rls-recovery', 'enterprise_fixture_recovery', '{"version":1,"organizations":{},"attempts":{},"sessions":{},"audit":[]}'),
+         ('network-org', 'enterprise_fixture_network', '{"version":1,"organizations":{},"attempts":{},"sessions":{},"audit":[]}'),
+         ('https-org', 'enterprise_fixture_https', '{"version":1,"organizations":{},"attempts":{},"sessions":{},"audit":[]}');
 SQL
 "${psql_local[@]}" -d enterprise_fixture -c "INSERT INTO public.interpreter_enterprise_directory (id, content) VALUES (1, '{\"version\":1,\"organizations\":{},\"attempts\":{},\"sessions\":{},\"audit\":[]}');" >/dev/null
+# Exercise the operator migration on real, ordered legacy jsonb audit rows
+# before the normal TLS tests. A forged old ledger must abort and remain jsonb;
+# a valid old ledger must retain canonical event spelling and sequence IDs.
+"${psql_local[@]}" -d enterprise_fixture >/dev/null <<'SQL'
+INSERT INTO public.interpreter_enterprise_rls_directory (organization_id, database_role, content)
+VALUES ('rls-migration', 'enterprise_fixture_migration',
+  '{"version":1,"organizations":{},"attempts":{},"sessions":{},"audit":[{"organizationId":"rls-migration","subject":"legacy|one","action":"seed.one","outcome":"allowed","at":"2026-01-01T00:00:00.000Z"},{"organizationId":"rls-migration","subject":"legacy|two","targetSubject":"opaque|three","action":"seed.two","outcome":"denied","at":"2026-01-02T00:00:00.000Z"}]}');
+INSERT INTO public.interpreter_enterprise_rls_audit (organization_id, content)
+SELECT 'rls-migration', e.event::text FROM
+  public.interpreter_enterprise_rls_directory d,
+  LATERAL json_array_elements(d.content::json->'audit') WITH ORDINALITY AS e(event, ordinality)
+WHERE d.organization_id = 'rls-migration' ORDER BY e.ordinality;
+ALTER TABLE public.interpreter_enterprise_rls_audit DROP CONSTRAINT interpreter_enterprise_rls_audit_check;
+ALTER TABLE public.interpreter_enterprise_rls_audit ALTER COLUMN content TYPE jsonb USING content::jsonb;
+ALTER TABLE public.interpreter_enterprise_rls_audit ADD CONSTRAINT interpreter_enterprise_rls_audit_check
+  CHECK (jsonb_typeof(content) = 'object');
+UPDATE public.interpreter_enterprise_rls_audit SET content = jsonb_set(content, '{action}', '"forged"'::jsonb)
+WHERE organization_id = 'rls-migration' AND id =
+  (SELECT min(id) FROM public.interpreter_enterprise_rls_audit WHERE organization_id = 'rls-migration');
+SQL
+original_audit_ids="$("${psql_local[@]}" -d enterprise_fixture -tA -c "SELECT string_agg(id::text, ',' ORDER BY id) FROM public.interpreter_enterprise_rls_audit WHERE organization_id = 'rls-migration'")"
+ENTERPRISE_TEST_DB_PORT="$port" ENTERPRISE_TEST_DB_CA="$fixture/ca.pem" ENTERPRISE_TEST_DB_PASSWORD_A="$tenant_a_password" bun -e '
+import { readFileSync } from "node:fs";
+import { ServerDirectory } from "./server/enterprise/serverDirectory.ts";
+import { createEnterprisePostgresPool, TenantPostgresDirectoryStore } from "./server/enterprise/postgresDirectoryStore.ts";
+const pool = createEnterprisePostgresPool({ host: "127.0.0.1", port: Number(process.env.ENTERPRISE_TEST_DB_PORT),
+  database: "enterprise_fixture", user: "enterprise_fixture_a", password: process.env.ENTERPRISE_TEST_DB_PASSWORD_A!,
+  caCertificate: readFileSync(process.env.ENTERPRISE_TEST_DB_CA!, "utf8") });
+try {
+  await new ServerDirectory(new TenantPostgresDirectoryStore(pool, "rls-a", "rls")).getMember("rls-a", "alice");
+  throw new Error("Old jsonb audit schema was not refused");
+} catch (error) {
+  if (!String(error).includes("Enterprise tenant database boundary is unsafe")) throw error;
+} finally { await pool.end(); }
+'
+if "${psql_local[@]}" -d enterprise_fixture -f scripts/migrate-enterprise-rls-audit-jsonb-to-text.sql >/dev/null 2>&1; then
+  echo 'Corrupt legacy audit unexpectedly migrated' >&2; exit 1
+fi
+[[ "$("${psql_local[@]}" -d enterprise_fixture -tA -c "SELECT atttypid::regtype FROM pg_attribute WHERE attrelid = 'public.interpreter_enterprise_rls_audit'::regclass AND attname = 'content'")" == jsonb ]]
+"${psql_local[@]}" -d enterprise_fixture >/dev/null <<'SQL'
+WITH first_event AS (
+  SELECT (d.content::json->'audit'->0)::jsonb AS content
+  FROM public.interpreter_enterprise_rls_directory d WHERE d.organization_id = 'rls-migration'
+)
+UPDATE public.interpreter_enterprise_rls_audit a SET content = e.content FROM first_event e
+WHERE a.organization_id = 'rls-migration' AND a.id =
+  (SELECT min(id) FROM public.interpreter_enterprise_rls_audit WHERE organization_id = 'rls-migration');
+SQL
+"${psql_local[@]}" -d enterprise_fixture -f scripts/migrate-enterprise-rls-audit-jsonb-to-text.sql >/dev/null
+[[ "$("${psql_local[@]}" -d enterprise_fixture -tA -c "SELECT atttypid::regtype FROM pg_attribute WHERE attrelid = 'public.interpreter_enterprise_rls_audit'::regclass AND attname = 'content'")" == text ]]
+[[ "$("${psql_local[@]}" -d enterprise_fixture -tA -c "SELECT string_agg(id::text, ',' ORDER BY id) FROM public.interpreter_enterprise_rls_audit WHERE organization_id = 'rls-migration'")" == "$original_audit_ids" ]]
+if "${psql_local[@]}" -d enterprise_fixture -f scripts/migrate-enterprise-rls-audit-jsonb-to-text.sql >/dev/null 2>&1; then
+  echo 'A second migration unexpectedly rewrote an already migrated ledger' >&2; exit 1
+fi
+"${psql_local[@]}" -d enterprise_fixture >/dev/null <<'SQL'
+DELETE FROM public.interpreter_enterprise_rls_audit WHERE organization_id = 'rls-migration';
+DELETE FROM public.interpreter_enterprise_rls_directory WHERE organization_id = 'rls-migration';
+SQL
+printf 'Legacy jsonb migration: corrupt ledger refused; two ordered events preserved by validated text migration.\n'
 export ENTERPRISE_TEST_DB_PORT="$port" ENTERPRISE_TEST_DB_PASSWORD="$password" ENTERPRISE_TEST_DB_CA="$fixture/ca.pem" ENTERPRISE_TEST_DB_FIXTURE="$fixture"
 export ENTERPRISE_TEST_DB_PASSWORD_A="$tenant_a_password" ENTERPRISE_TEST_DB_PASSWORD_B="$tenant_b_password"
+export ENTERPRISE_TEST_DB_PASSWORD_RECOVERY="$recovery_password"
+export ENTERPRISE_TEST_DB_PASSWORD_NETWORK="$network_password" ENTERPRISE_TEST_DB_PASSWORD_HTTPS="$https_password"
 export NODE_ENV=test
 printf 'Live PostgreSQL fixture: version %s, loopback-only TLS with ephemeral CA, restricted application role.\n' "$("$pgbin/postgres" --version)"
 cd "$root"
-bun test server/enterprise/postgresDirectoryStore.live.test.ts
+bun test --timeout 60000 server/enterprise/postgresDirectoryStore.live.test.ts
