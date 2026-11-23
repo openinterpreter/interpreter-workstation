@@ -7,6 +7,21 @@ import { parseSubmissionSender, SUBMISSION_ID, type SubmissionSender } from './n
 
 export type OutcomeReturnStatus = 'watching' | 'pending' | 'delivered' | 'failed';
 export type TurnOutcome = 'completed' | 'failed' | 'interrupted';
+/** How an input entered its turn: it started the turn, it was steered into
+ * the running turn, or that is not known (its item was not found, or the
+ * entry was recorded without the ID of its item). */
+export type InputAdmission = 'started' | 'steered' | 'unknown';
+/** What an outcome's summary is: the last assistant text that followed this
+ * input before the next input of the turn (`own_reply`); the turn's final
+ * assistant text, only on an outcome that was already stored as pending
+ * before inputs had their own outcome (`turn_reply`); a fixed sentence saying
+ * the agent did not reply to this input separately (`no_separate_reply`); or a
+ * fixed sentence saying the reply could not be determined, which is all an
+ * entry recorded without its item ID can report (`unknown`). */
+export type OutcomeReply = 'own_reply' | 'turn_reply' | 'no_separate_reply' | 'unknown';
+export const NO_SEPARATE_REPLY_SUMMARY = 'The agent gave no separate reply to this input before the next input ' +
+  'reached the same turn or the turn ended.';
+export const UNKNOWN_REPLY_SUMMARY = 'The reply to this input could not be determined from its turn.';
 export type OutcomeReturn = {
   /** Always absent on turn outcomes, which keeps the stored format unchanged. */
   kind?: undefined;
@@ -15,8 +30,14 @@ export type OutcomeReturn = {
   turnId: string;
   sender: SubmissionSender;
   clientUserMessageId: string;
+  /** Client ID of the input's user message item in the turn; absent on
+   * entries recorded without it. */
+  inputClientId?: string;
   status: OutcomeReturnStatus;
   outcome?: TurnOutcome;
+  /** Set with the outcome; absent on entries resolved by earlier releases. */
+  admission?: InputAdmission;
+  reply?: OutcomeReply;
   summary?: string;
   attempts: number;
   nextAttemptAt?: string;
@@ -70,7 +91,7 @@ export type GoalNoticeReturn = GoalNoticeReturnBase & (
 type StoredEntry = OutcomeReturn | GoalNoticeReturn;
 /** What the visibility route exposes: never the summary text. */
 export type OutcomeReturnView = Pick<OutcomeReturn, 'id' | 'threadId' | 'turnId' | 'sender' | 'status' |
-  'outcome' | 'attempts' | 'nextAttemptAt' | 'updatedAt'> |
+  'outcome' | 'admission' | 'reply' | 'attempts' | 'nextAttemptAt' | 'updatedAt'> |
   (Pick<GoalNoticeReturnBase, 'kind' | 'id' | 'threadId' | 'goal' | 'attempts' | 'nextAttemptAt' | 'updatedAt'> &
     ({ sender: SubmissionSender; status: Exclude<OutcomeReturnStatus, 'watching'> } |
       { unrouted: GoalUnroutedReason; status: 'unrouted' }));
@@ -83,6 +104,8 @@ export type OutcomeReturnPayload = {
   from: { threadId: string; turnId: string };
   clientUserMessageId: string;
   outcome: TurnOutcome;
+  admission: InputAdmission;
+  reply: OutcomeReply;
   summary: string;
 } | {
   version: 1;
@@ -107,8 +130,12 @@ const RECONCILE_TIMEOUT_MS = 10_000;
 /** Re-check of watched turns whose end was not observed. */
 const RECHECK_MS = 60_000;
 const RECENTLY_ENDED_LIMIT = 64;
+/** Saved reads of a turn that may lag its live final text before one is accepted. */
+const EARLY_READ_LIMIT = 3;
 const STATUSES: OutcomeReturnStatus[] = ['watching', 'pending', 'delivered', 'failed'];
 const OUTCOMES: TurnOutcome[] = ['completed', 'failed', 'interrupted'];
+const ADMISSIONS: readonly InputAdmission[] = ['started', 'steered', 'unknown'];
+const REPLIES: readonly OutcomeReply[] = ['own_reply', 'turn_reply', 'no_separate_reply', 'unknown'];
 export const GOAL_NOTICE_STATUSES: readonly GoalNoticeStatus[] =
   ['active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'];
 const GOAL_NOTICE_REASONS: readonly GoalNoticeReason[] = ['turn_error', 'model_capacity_exhausted',
@@ -219,6 +246,53 @@ export function truncateOutcomeSummary(text: string): string {
   return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
 }
 
+/** One user input of a turn and the last non-empty assistant text that
+ * followed it before the next user input ('' when none did). */
+export type TurnInputReply = { clientId: string | null; reply: string };
+
+/** The user inputs of a turn in order, each with its own reply, from the
+ * turn's ordered items. Null when the items are not a list. */
+export function turnInputReplies(items: unknown): TurnInputReply[] | null {
+  if (!Array.isArray(items)) return null;
+  const inputs: TurnInputReply[] = [];
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue;
+    const { type, clientId, text } = item as { type?: unknown; clientId?: unknown; text?: unknown };
+    if (type === 'userMessage') {
+      inputs.push({ clientId: typeof clientId === 'string' ? clientId : null, reply: '' });
+    } else if (type === 'agentMessage' && typeof text === 'string' && text && inputs.length) {
+      inputs[inputs.length - 1]!.reply = truncateOutcomeSummary(text);
+    }
+  }
+  return inputs;
+}
+
+/** The outcome of one input of an ended turn, or null while the turn's items
+ * are needed and have not been read. An input is found by the client ID of
+ * its user message item, never by its text. An entry recorded without that ID
+ * cannot be matched to an item at all: a turn holding a single input may hold
+ * another one than this entry's, so it reports that its reply is unknown and
+ * never receives any text of the turn. */
+export function inputOutcome(inputClientId: string | undefined,
+  turn: { summary: string; inputs: TurnInputReply[] | null }):
+  { summary: string; admission: InputAdmission; reply: OutcomeReply } | null {
+  const none = (admission: InputAdmission) =>
+    ({ summary: NO_SEPARATE_REPLY_SUMMARY, admission, reply: 'no_separate_reply' as const });
+  if (inputClientId === undefined) {
+    return { summary: UNKNOWN_REPLY_SUMMARY, admission: 'unknown', reply: 'unknown' };
+  }
+  // Never decided without the turn's saved items.
+  if (!turn.inputs) return null;
+  const index = turn.inputs.findIndex(input => input.clientId === inputClientId);
+  // Not found, or found twice: never another input's reply.
+  if (index < 0 || turn.inputs.some((input, at) => at !== index && input.clientId === inputClientId)) {
+    return { summary: UNKNOWN_REPLY_SUMMARY, admission: 'unknown', reply: 'unknown' };
+  }
+  const admission = index === 0 ? 'started' : 'steered';
+  const text = turn.inputs[index]!.reply;
+  return text ? { summary: text, admission, reply: 'own_reply' } : none(admission);
+}
+
 export type OutcomeReturnsOptions = {
   /** Directory holding `outcome-returns-2.json`; defaults to the app data dir. */
   root?: string;
@@ -229,7 +303,7 @@ export type OutcomeReturnsOptions = {
    * every watched turn, when a watch is recorded for a turn not seen ending,
    * and then periodically for every turn still watched. */
   readTurn?: (threadId: string, turnId: string) =>
-    Promise<{ outcome: TurnOutcome; summary: string } | null>;
+    Promise<{ outcome: TurnOutcome; summary: string; items?: unknown[] } | null>;
   commandTimeoutMs?: number;
   /** Interval of the periodic re-check of watched turns; 0 disables it. */
   recheckMs?: number;
@@ -256,6 +330,10 @@ function validEntry(value: unknown): value is StoredEntry {
     typeof entry.threadId === 'string' && typeof entry.turnId === 'string' &&
     !!parseSubmissionSender(entry.sender) && typeof entry.clientUserMessageId === 'string' &&
     SUBMISSION_ID.test(entry.clientUserMessageId) &&
+    (entry.inputClientId === undefined ||
+      (typeof entry.inputClientId === 'string' && SUBMISSION_ID.test(entry.inputClientId))) &&
+    (entry.admission === undefined || ADMISSIONS.includes(entry.admission)) &&
+    (entry.reply === undefined || REPLIES.includes(entry.reply)) &&
     (entry.id === outcomeReturnId(entry.threadId, entry.turnId, entry.clientUserMessageId) ||
       entry.id === earlierOutcomeReturnId(entry.threadId, entry.turnId)) &&
     STATUSES.includes(entry.status) &&
@@ -288,7 +366,10 @@ export class OutcomeReturns {
   private stopping = false;
   private refusalLogged = false;
   /** Turns that ended before their watch was recorded (in-memory, bounded). */
-  private readonly recentlyEnded = new Map<string, { outcome: TurnOutcome; summary: string }>();
+  private readonly recentlyEnded = new Map<string,
+    { outcome: TurnOutcome; summary: string; inputs: TurnInputReply[] | null }>();
+  /** Saved reads refused as earlier than a turn's live final text, per turn (in-memory). */
+  private readonly earlyReads = new Map<string, number>();
   private readonly file: string;
   /** The state file of releases before Goal assigners were bound. */
   private readonly earlierFile: string;
@@ -374,11 +455,14 @@ export class OutcomeReturns {
   /** Record that one sender's input started or steered a turn. Each input of a
    * turn is watched separately and gets its own return. Idempotent per input;
    * false when the store is full. A turn not seen ending is read once, so a
-   * watch recorded after its turn ended still resolves. */
+   * watch recorded after its turn ended still resolves. `inputClientId` is
+   * the client ID of the input's user message item in the turn, which finds
+   * the part of the turn that answered this input. */
   async watch(threadId: string, turnId: string, sender: SubmissionSender,
-    clientUserMessageId: string): Promise<boolean> {
+    clientUserMessageId: string, inputClientId?: string): Promise<boolean> {
     const checked = parseSubmissionSender(sender);
-    if (!checked || !SUBMISSION_ID.test(clientUserMessageId)) throw new Error('Invalid outcome return');
+    if (!checked || !SUBMISSION_ID.test(clientUserMessageId) ||
+        (inputClientId !== undefined && !SUBMISSION_ID.test(inputClientId))) throw new Error('Invalid outcome return');
     if (isOutcomeDelivery(clientUserMessageId)) return true;
     const id = outcomeReturnId(threadId, turnId, clientUserMessageId);
     const result = await this.exclusive(async () => {
@@ -388,45 +472,76 @@ export class OutcomeReturns {
       if (!this.makeRoom()) return 'full' as const;
       const at = new Date(this.now()).toISOString();
       const entry: OutcomeReturn = { id, threadId, turnId, sender: checked, clientUserMessageId,
+        ...(inputClientId !== undefined && { inputClientId }),
         status: 'watching', attempts: 0, createdAt: at, updatedAt: at };
       // Kept, not taken: another input of the same turn may be watched next.
       const ended = this.recentlyEnded.get(turnKey(threadId, turnId));
-      if (ended) {
-        Object.assign(entry, { status: 'pending', outcome: ended.outcome,
-          summary: truncateOutcomeSummary(ended.summary), nextAttemptAt: at });
+      const resolved = ended && inputOutcome(inputClientId, ended);
+      if (ended && resolved) {
+        Object.assign(entry, { status: 'pending', outcome: ended.outcome, ...resolved, nextAttemptAt: at });
       }
       this.entries.push(entry);
       // A watch that is not on disk is not kept: a retry records it again
       // rather than finding it known and reporting it recorded.
       try { await this.save(); }
       catch (error) { this.entries.splice(this.entries.indexOf(entry), 1); throw error; }
-      return ended ? 'known' as const : 'watching' as const;
+      return resolved ? 'known' as const : 'watching' as const;
     });
     if (result === 'full') return false;
     if (result === 'watching') await this.checkEnded(threadId, turnId);
     return true;
   }
 
-  /** Mark every watch of a turn as ended; an unknown turn is only remembered
-   * briefly in memory in case a watch is recorded just after it ends. */
-  async turnEnded(threadId: string, turnId: string, outcome: TurnOutcome, summary: string): Promise<void> {
-    await this.exclusive(async () => {
+  /** Mark every watch of a turn as ended, each with the outcome of its own
+   * input (see `inputOutcome`); an unknown turn is only remembered briefly in
+   * memory in case a watch is recorded just after it ends. `items` are the
+   * turn's ordered items from a full history read; without them (`undefined`,
+   * a live notification) a watch that needs them stays watching and the turn
+   * is read. */
+  async turnEnded(threadId: string, turnId: string, outcome: TurnOutcome, summary: string,
+    items?: unknown): Promise<void> {
+    const awaitingItems = await this.exclusive(async () => {
       const key = turnKey(threadId, turnId);
+      const previous = this.recentlyEnded.get(key);
+      // A saved turn read before its final assistant item was written would
+      // report an input as unanswered. The live notification carried the
+      // turn's final text: while the saved items do not end with it yet, keep
+      // watching and let the re-check read again, a bounded number of times.
+      if (items !== undefined && previous && previous.inputs === null && previous.summary &&
+          previous.summary !== truncateOutcomeSummary(summary)) {
+        const early = (this.earlyReads.get(key) ?? 0) + 1;
+        if (early <= EARLY_READ_LIMIT) {
+          this.earlyReads.set(key, early);
+          return false;
+        }
+      }
+      this.earlyReads.delete(key);
       this.recentlyEnded.delete(key);
-      this.recentlyEnded.set(key, { outcome, summary: truncateOutcomeSummary(summary) });
+      const ended = { outcome, summary: truncateOutcomeSummary(summary),
+        inputs: turnInputReplies(items) ?? previous?.inputs ?? null };
+      this.recentlyEnded.set(key, ended);
       if (this.recentlyEnded.size > RECENTLY_ENDED_LIMIT) {
         this.recentlyEnded.delete(this.recentlyEnded.keys().next().value!);
       }
-      const watching = this.entries.filter((item): item is OutcomeReturn => item.kind === undefined &&
-        item.threadId === threadId && item.turnId === turnId && item.status === 'watching');
-      if (!watching.length) return;
+      const ofTurn = this.entries.filter((item): item is OutcomeReturn => item.kind === undefined &&
+        item.threadId === threadId && item.turnId === turnId);
+      const watching = ofTurn.filter(item => item.status === 'watching');
+      if (!watching.length) return false;
       const at = new Date(this.now()).toISOString();
+      let waiting = false;
+      let changed = false;
       for (const entry of watching) {
-        Object.assign(entry, { status: 'pending', outcome, summary: truncateOutcomeSummary(summary),
-          nextAttemptAt: at, updatedAt: at });
+        const resolved = inputOutcome(entry.inputClientId, ended);
+        if (!resolved) { waiting = true; continue; }
+        Object.assign(entry, { status: 'pending', outcome, ...resolved, nextAttemptAt: at, updatedAt: at });
+        changed = true;
       }
-      await this.save();
+      if (changed) await this.save();
+      return waiting;
     });
+    // The read reports the turn again with its items; a failed or empty read
+    // is retried on the re-check interval.
+    if (awaitingItems && items === undefined) await this.checkEnded(threadId, turnId);
   }
 
   /**
@@ -517,7 +632,7 @@ export class OutcomeReturns {
       const { id, threadId, attempts, nextAttemptAt, updatedAt } = entry;
       if (entry.kind === undefined) {
         return { id, threadId, turnId: entry.turnId, sender: { ...entry.sender }, status: entry.status,
-          outcome: entry.outcome, attempts, nextAttemptAt, updatedAt };
+          outcome: entry.outcome, admission: entry.admission, reply: entry.reply, attempts, nextAttemptAt, updatedAt };
       }
       const base = { kind: 'goal' as const, id, threadId, goal: { ...entry.goal }, attempts, nextAttemptAt, updatedAt };
       return entry.status === 'unrouted'
@@ -564,6 +679,8 @@ export class OutcomeReturns {
         : { version: 1, kind: 'turn', id: entry.id, to: { ...entry.sender },
           from: { threadId: entry.threadId, turnId: entry.turnId },
           clientUserMessageId: entry.clientUserMessageId, outcome: entry.outcome ?? 'failed',
+          // An entry resolved by an earlier release carries the turn's final text.
+          admission: entry.admission ?? 'unknown', reply: entry.reply ?? 'turn_reply',
           summary: entry.summary ?? '' };
       const delivered = await this.run(argv, payload);
       if (this.stopping && !delivered) return;
@@ -645,7 +762,10 @@ export class OutcomeReturns {
     if (!readTurn || this.stopping) return;
     try {
       const ended = await readTurn(threadId, turnId);
-      if (ended && !this.stopping) await this.turnEnded(threadId, turnId, ended.outcome, ended.summary);
+      // `null` when the read carried no items: this call never reads again itself.
+      if (ended && !this.stopping) {
+        await this.turnEnded(threadId, turnId, ended.outcome, ended.summary, ended.items ?? null);
+      }
     } catch {
       // Read again on the re-check interval; a live notification still counts.
     }

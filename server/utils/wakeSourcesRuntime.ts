@@ -1,7 +1,7 @@
 import { getCodexService } from '../../src/lib/codex/service';
 import type { v2 } from '../handlers/codex-generated-types/index';
 import { isSubagentDirectInputRefusal, SubagentDirectInputError } from '../../src/lib/codex/subagent-input';
-import { WakeSources, WakeAdmissionFailure, type WakeNative } from './wakeSources';
+import { WakeSources, WakeAdmissionFailure, wakeClientId, type WakeNative } from './wakeSources';
 import { recordOutcomeReturn } from './outcomeReturnsRuntime';
 
 export async function startWakeThreadTurn(
@@ -123,9 +123,10 @@ export const wakeNative: WakeNative = {
   },
   // The outcome of the turn that admitted a sender-attributed input goes back
   // to its sender. The event ID is the sender's client message ID, so an
-  // `outcome-` delivery is never itself watched.
-  onAdmitted({ threadId, eventId, turnId, sender }) {
-    return recordOutcomeReturn(threadId, turnId, sender, eventId);
+  // `outcome-` delivery is never itself watched. The input's user message item
+  // in the turn carries its wake client ID, which finds that input's reply.
+  onAdmitted({ threadId, sourceId, eventId, turnId, sender }) {
+    return recordOutcomeReturn(threadId, turnId, sender, eventId, wakeClientId({ threadId, sourceId, eventId }));
   },
 };
 

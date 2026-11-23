@@ -3,10 +3,10 @@ import type { v2 } from '../handlers/codex-generated-types/index';
 import type { SubmissionSender } from './nativeSubmissionJournal';
 import { OutcomeReturns, type TurnOutcome } from './outcomeReturns';
 
-/** The outcome of one turn if it ended, paging back newest first only as far
- * as that turn; never the whole history in one read. */
+/** The outcome of one turn if it ended, with its ordered items, paging back
+ * newest first only as far as that turn; never the whole history in one read. */
 export async function readEndedTurn(threadId: string, turnId: string, service = getCodexService()):
-  Promise<{ outcome: TurnOutcome; summary: string } | null> {
+  Promise<{ outcome: TurnOutcome; summary: string; items: unknown[] } | null> {
   let found: v2.Turn | undefined;
   await service.scanTurnsNewestFirst(threadId, turn => {
     if (turn.id !== turnId) return false;
@@ -15,7 +15,7 @@ export async function readEndedTurn(threadId: string, turnId: string, service = 
   });
   const turn = found as v2.Turn | undefined;
   const outcome = turn ? turnEndedOutcome(turn.status) : null;
-  return turn && outcome ? { outcome, summary: lastAgentMessageText(turn.items) } : null;
+  return turn && outcome ? { outcome, summary: lastAgentMessageText(turn.items), items: turn.items } : null;
 }
 
 export const outcomeReturns = new OutcomeReturns({
@@ -59,10 +59,11 @@ export async function stopOutcomeReturns(): Promise<void> {
 /** Record the admitting turn of a sender-attributed input. True once the watch
  * is durable (or the input is itself an outcome delivery, which is never
  * watched); false when outcome returns are not running here or the store is
- * full. Rejects when the store cannot be written. */
+ * full. Rejects when the store cannot be written. `inputClientId` is the
+ * client ID of the input's user message item in that turn. */
 export async function recordOutcomeReturn(threadId: string, turnId: string, sender: SubmissionSender,
-  clientUserMessageId: string): Promise<boolean> {
+  clientUserMessageId: string, inputClientId?: string): Promise<boolean> {
   if (!unsubscribe) return false;
   await readyOutcomeReturns();
-  return outcomeReturns.watch(threadId, turnId, sender, clientUserMessageId);
+  return outcomeReturns.watch(threadId, turnId, sender, clientUserMessageId, inputClientId);
 }
