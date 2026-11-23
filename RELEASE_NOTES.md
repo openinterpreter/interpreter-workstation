@@ -1,7 +1,7 @@
-<!-- release-notes-for: 0.2.256 -->
+<!-- release-notes-for: 0.2.257 -->
 ## What's new
 
-- Prevents an in-flight organization sign-in from restoring a session after its administrative revocation.
+- Requires a live challenge before optional organization-domain verification performs a DNS lookup.
 
 ## Distribution
 
