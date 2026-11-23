@@ -1335,13 +1335,13 @@ router.get('/threads', async (req: Request, res: Response) => {
     });
     res.json(result);
   } catch (error) {
-    console.warn(
-      '[Agent API] Failed to list threads; returning empty thread list.',
-      error instanceof Error ? error.message : error,
-    );
-    res.json({
-      data: [],
-      nextCursor: null,
+    const category = error instanceof NativeCustodyPhaseError ? error.category : 'native_unavailable';
+    console.warn('[Agent API] Native thread list unavailable.', category);
+    return res.status(503).json({
+      error: 'Native thread list unavailable.',
+      phase: 'thread_list',
+      category,
+      available: false,
     });
   }
 });
