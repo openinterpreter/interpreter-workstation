@@ -92,6 +92,21 @@ describe('outcome returns', () => {
     } finally { await f.cleanup(); }
   }, 30_000);
 
+  test('a created watch receives the classified terminal outcome from its saved read', async () => {
+    const f = await fixture();
+    try {
+      const store = await f.make(0, { readTurn: async () => ({ outcome: 'failed',
+        terminalOutcome: 'usageLimited', summary: 'PRIVATE_MARKER',
+        items: [userItem('create_saved'), agentItem('PRIVATE_MARKER')] }) });
+      expect(await store.watchCreated(thread, 'created_saved', sender, 'create_saved')).toBe(true);
+      await store.deliverDue();
+      expect(await f.received()).toEqual([{ version: 1, kind: 'created_turn', origin: 'create',
+        id: createdTurnReturnId(thread, 'created_saved', 'create_saved'), to: sender,
+        from: { threadId: thread, turnId: 'created_saved' },
+        clientUserMessageId: 'create_saved', outcome: 'usageLimited' }]);
+    } finally { await f.cleanup(); }
+  }, 30_000);
+
   test('created watch waits for saved turn items; reopens and delivers once without outcome loop', async () => {
     const f = await fixture();
     try {

@@ -1,11 +1,11 @@
 import { getCodexService, lastAgentMessageText, onTurnEnded, turnEndedOutcome } from '../../src/lib/codex/service';
 import type { v2 } from '../handlers/codex-generated-types/index';
 import type { SubmissionSender } from './nativeSubmissionJournal';
-import { OutcomeReturns, type CreatedTurnOutcome, type TurnOutcome } from './outcomeReturns';
+import { OutcomeReturns, type TerminalOutcome, type TurnOutcome } from './outcomeReturns';
 
 /** Native terminal usage limits are failed turns with a structured category,
  * not a fourth native TurnStatus. Never classify from free-form error text. */
-export function createdTurnOutcome(outcome: TurnOutcome, error: unknown): CreatedTurnOutcome {
+export function createdTurnOutcome(outcome: TurnOutcome, error: unknown): TerminalOutcome {
   if (outcome !== 'failed' || !error || typeof error !== 'object') return outcome;
   const info = (error as { codexErrorInfo?: unknown }).codexErrorInfo;
   return info === 'usageLimitExceeded' || info === 'usageLimitReached' ||
@@ -16,7 +16,7 @@ export function createdTurnOutcome(outcome: TurnOutcome, error: unknown): Create
 /** The outcome of one turn if it ended, with its ordered items, paging back
  * newest first only as far as that turn; never the whole history in one read. */
 export async function readEndedTurn(threadId: string, turnId: string, service = getCodexService()):
-  Promise<{ outcome: TurnOutcome; createdOutcome: CreatedTurnOutcome; summary: string; items: unknown[] } | null> {
+  Promise<{ outcome: TurnOutcome; terminalOutcome: TerminalOutcome; summary: string; items: unknown[] } | null> {
   let found: v2.Turn | undefined;
   await service.scanTurnsNewestFirst(threadId, turn => {
     if (turn.id !== turnId) return false;
@@ -25,7 +25,7 @@ export async function readEndedTurn(threadId: string, turnId: string, service = 
   });
   const turn = found as v2.Turn | undefined;
   const outcome = turn ? turnEndedOutcome(turn.status) : null;
-  return turn && outcome ? { outcome, createdOutcome: createdTurnOutcome(outcome, turn.error),
+  return turn && outcome ? { outcome, terminalOutcome: createdTurnOutcome(outcome, turn.error),
     summary: lastAgentMessageText(turn.items), items: turn.items } : null;
 }
 

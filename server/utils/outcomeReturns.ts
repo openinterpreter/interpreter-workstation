@@ -7,7 +7,8 @@ import { parseSubmissionSender, SUBMISSION_ID, type SubmissionSender } from './n
 
 export type OutcomeReturnStatus = 'watching' | 'pending' | 'delivered' | 'failed';
 export type TurnOutcome = 'completed' | 'failed' | 'interrupted';
-export type CreatedTurnOutcome = TurnOutcome | 'usageLimited' | 'unknown';
+export type TerminalOutcome = TurnOutcome | 'usageLimited';
+export type CreatedTurnOutcome = TerminalOutcome | 'unknown';
 /** How an input entered its turn: it started the turn, it was steered into
  * the running turn, or that is not known (its item was not found, or the
  * entry was recorded without the ID of its item). */
@@ -333,7 +334,7 @@ export type OutcomeReturnsOptions = {
    * every watched turn, when a watch is recorded for a turn not seen ending,
    * and then periodically for every turn still watched. */
   readTurn?: (threadId: string, turnId: string) =>
-    Promise<{ outcome: TurnOutcome; createdOutcome?: CreatedTurnOutcome; summary: string; items?: unknown[] } | null>;
+    Promise<{ outcome: TurnOutcome; terminalOutcome?: TerminalOutcome; summary: string; items?: unknown[] } | null>;
   commandTimeoutMs?: number;
   /** Interval of the periodic re-check of watched turns; 0 disables it. */
   recheckMs?: number;
@@ -419,7 +420,7 @@ export class OutcomeReturns {
   private refusalLogged = false;
   /** Turns that ended before their watch was recorded (in-memory, bounded). */
   private readonly recentlyEnded = new Map<string,
-    { outcome: TurnOutcome; createdOutcome: CreatedTurnOutcome; summary: string;
+    { outcome: TurnOutcome; terminalOutcome: TerminalOutcome; summary: string;
       inputs: TurnInputReply[] | null; lastAgentMessageItemId: string | null }>();
   /** Saved reads refused as earlier than a turn's live final text, per turn (in-memory). */
   private readonly earlyReads = new Map<string, number>();
@@ -562,7 +563,7 @@ export class OutcomeReturns {
       if (ended?.inputs) {
         const matches = ended.inputs[0]?.clientId === clientUserMessageId &&
           ended.inputs.filter(input => input.clientId === clientUserMessageId).length === 1;
-        Object.assign(entry, { status: 'pending', outcome: matches ? ended.createdOutcome : 'unknown',
+        Object.assign(entry, { status: 'pending', outcome: matches ? ended.terminalOutcome : 'unknown',
           lastAgentMessageItemId: matches ? ended.lastAgentMessageItemId : null, nextAttemptAt: at });
       }
       this.entries.push(entry);
@@ -604,7 +605,7 @@ export class OutcomeReturns {
    * a live notification) a watch that needs them stays watching and the turn
    * is read. */
   async turnEnded(threadId: string, turnId: string, outcome: TurnOutcome, summary: string,
-    items?: unknown, createdOutcome: CreatedTurnOutcome = outcome): Promise<void> {
+    items?: unknown, terminalOutcome: TerminalOutcome = outcome): Promise<void> {
     const awaitingItems = await this.exclusive(async () => {
       const key = turnKey(threadId, turnId);
       const previous = this.recentlyEnded.get(key);
@@ -622,7 +623,7 @@ export class OutcomeReturns {
       }
       this.earlyReads.delete(key);
       this.recentlyEnded.delete(key);
-      const ended = { outcome, createdOutcome, summary: truncateOutcomeSummary(summary),
+      const ended = { outcome, terminalOutcome, summary: truncateOutcomeSummary(summary),
         inputs: turnInputReplies(items) ?? previous?.inputs ?? null,
         lastAgentMessageItemId: items === undefined ? previous?.lastAgentMessageItemId ?? null
           : lastAgentMessageItemId(items) };
@@ -643,7 +644,7 @@ export class OutcomeReturns {
           if (ended.inputs === null) { waiting = true; continue; }
           const matches = ended.inputs[0]?.clientId === entry.clientUserMessageId &&
             ended.inputs.filter(input => input.clientId === entry.clientUserMessageId).length === 1;
-          Object.assign(entry, { status: 'pending', outcome: matches ? ended.createdOutcome : 'unknown',
+          Object.assign(entry, { status: 'pending', outcome: matches ? ended.terminalOutcome : 'unknown',
             lastAgentMessageItemId: matches ? ended.lastAgentMessageItemId : null,
             nextAttemptAt: at, updatedAt: at });
           changed = true;
@@ -912,7 +913,7 @@ export class OutcomeReturns {
       // `null` when the read carried no items: this call never reads again itself.
       if (ended && !this.stopping) {
         await this.turnEnded(threadId, turnId, ended.outcome, ended.summary, ended.items ?? null,
-          ended.createdOutcome ?? ended.outcome);
+          ended.terminalOutcome ?? ended.outcome);
       }
     } catch {
       // Read again on the re-check interval; a live notification still counts.

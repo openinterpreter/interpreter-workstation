@@ -223,11 +223,21 @@ describe('bounded native history reads', () => {
   test('an outcome read pages back only as far as its turn', async () => {
     const history = pagedHistory(100);
     expect(await readEndedTurn('thread-1', 'turn-90', history.service))
-      .toEqual({ outcome: 'completed', createdOutcome: 'completed', summary: 'answer 90',
+      .toEqual({ outcome: 'completed', terminalOutcome: 'completed', summary: 'answer 90',
         items: history.turns[90]!.items });
     expect(history.pages).toEqual([null]);
     expect(await readEndedTurn('thread-1', 'turn-99', history.service)).toBeNull(); // still running
     expect(history.reads).toEqual([]);
+  });
+
+  test('an ordinary saved turn read exposes its structured terminal classification without a create watch', async () => {
+    const history = pagedHistory(3);
+    Object.assign(history.turns[1]!, { status: 'failed',
+      error: { codexErrorInfo: 'usageLimitExceeded' } });
+    expect(await readEndedTurn('thread-1', 'turn-1', history.service))
+      .toEqual({ outcome: 'failed', terminalOutcome: 'usageLimited', summary: 'answer 1',
+        items: history.turns[1]!.items });
+    expect(history.pages).toEqual([null]);
   });
 
   test('a turn without a recorded end is always read: one interrupted long after it started may hold a receipt', async () => {
