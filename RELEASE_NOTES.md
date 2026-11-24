@@ -1,8 +1,8 @@
-<!-- release-notes-for: 0.2.260 -->
+<!-- release-notes-for: 0.2.261 -->
 ## What's new
 
-- Adds an opt-in validation gate that keeps browser-agent turns hidden until their transcript is durably committed and verified.
-- Updates server-side localization for the newer translation library.
+- Fixes bundled resource paths when running the standalone server.
+- Allows time for updated download manifests to become visible before verifying a published release.
 
 ## Distribution
 
