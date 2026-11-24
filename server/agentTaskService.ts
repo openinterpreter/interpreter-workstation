@@ -112,7 +112,7 @@ function buildMessagePreview(message: string | undefined): string {
   return `${normalized.slice(0, 137)}...`;
 }
 
-function notifyProgrammaticTaskStarted(options: StartAgentTaskOptions, mode: AgentTaskMode): void {
+export function notifyProgrammaticTaskStarted(options: StartAgentTaskOptions, mode: AgentTaskMode): void {
   const timestamp = new Date().toISOString();
   broadcastEvent(IPC_CHANNELS.PROGRAMMATIC_TASK_STARTED, {
     mode,

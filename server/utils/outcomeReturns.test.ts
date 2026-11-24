@@ -3,12 +3,14 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  CREATED_WATCH_MAX_AGE_MS,
   GOAL_ASSIGNER_LIMIT,
   NO_SEPARATE_REPLY_SUMMARY,
   OUTCOME_RETURN_LIMIT,
   UNKNOWN_REPLY_SUMMARY,
   OUTCOME_SUMMARY_LIMIT,
   OutcomeReturns,
+  createdTurnReturnId,
   earlierOutcomeReturnId,
   goalNoticeId,
   goalNoticeSummary,
@@ -58,6 +60,126 @@ process.stdin.on('end', () => {
 }
 
 describe('outcome returns', () => {
+  test('created first turn sends only IDs and status for all native terminal outcomes', async () => {
+    const f = await fixture();
+    try {
+      const store = await f.make(0);
+      for (const outcome of ['completed', 'failed', 'interrupted', 'usageLimited'] as const) {
+        const turnId = `created_${outcome}`;
+        expect(await store.watchCreated(thread, turnId, sender, `create_${outcome}`)).toBe(true);
+        await store.turnEnded(thread, turnId, outcome === 'usageLimited' ? 'failed' : outcome,
+          'PRIVATE_MARKER never delivered', [userItem(`create_${outcome}`),
+            { type: 'agentMessage', id: `native_${outcome}`, text: 'PRIVATE_MARKER never delivered' }], outcome);
+      }
+      expect(await store.createdWithoutTurn(thread, sender, 'create_unknown')).toBe(true);
+      await store.deliverDue();
+      const received = await f.received();
+      expect(received).toHaveLength(5);
+      for (const outcome of ['completed', 'failed', 'interrupted', 'usageLimited'] as const) {
+        expect(received).toContainEqual({ version: 1, kind: 'created_turn', origin: 'create',
+          id: createdTurnReturnId(thread, `created_${outcome}`, `create_${outcome}`), to: sender,
+          from: { threadId: thread, turnId: `created_${outcome}` },
+          clientUserMessageId: `create_${outcome}`, outcome });
+      }
+      expect(received).toContainEqual({ version: 1, kind: 'created_turn', origin: 'create',
+        id: createdTurnReturnId(thread, null, 'create_unknown'), to: sender,
+        from: { threadId: thread }, clientUserMessageId: 'create_unknown',
+        outcome: 'unknown' });
+      expect(new Set(received.map(value => (value as { outcome: string }).outcome))).toEqual(
+        new Set(['completed', 'failed', 'interrupted', 'usageLimited', 'unknown']));
+      expect(JSON.stringify(received)).not.toContain('lastAgentMessageItemId');
+      expect(JSON.stringify(received)).not.toContain('PRIVATE_MARKER');
+    } finally { await f.cleanup(); }
+  }, 30_000);
+
+  test('a created watch receives the classified terminal outcome from its saved read', async () => {
+    const f = await fixture();
+    try {
+      const store = await f.make(0, { readTurn: async () => ({ outcome: 'failed',
+        terminalOutcome: 'usageLimited', summary: 'PRIVATE_MARKER',
+        items: [userItem('create_saved'), agentItem('PRIVATE_MARKER')] }) });
+      expect(await store.watchCreated(thread, 'created_saved', sender, 'create_saved')).toBe(true);
+      await store.deliverDue();
+      expect(await f.received()).toEqual([{ version: 1, kind: 'created_turn', origin: 'create',
+        id: createdTurnReturnId(thread, 'created_saved', 'create_saved'), to: sender,
+        from: { threadId: thread, turnId: 'created_saved' },
+        clientUserMessageId: 'create_saved', outcome: 'usageLimited' }]);
+    } finally { await f.cleanup(); }
+  }, 30_000);
+
+  test('created watch waits for saved turn items; reopens and delivers once without outcome loop', async () => {
+    const f = await fixture();
+    try {
+      const first = await f.make(null);
+      expect(await first.watchCreated(thread, 'created_restart', sender, 'create_restart')).toBe(true);
+      await first.turnEnded(thread, 'created_restart', 'completed', 'PRIVATE_MARKER');
+      expect(first.list()[0]?.status).toBe('watching');
+      await first.stop();
+      const second = await f.make(0, { readTurn: async () => ({ outcome: 'completed', summary: 'PRIVATE_MARKER',
+        items: [userItem('create_restart'), { type: 'agentMessage', id: 'native_1', text: 'PRIVATE_MARKER' }] }) });
+      await second.deliverDue();
+      await second.deliverDue();
+      expect(await f.received()).toHaveLength(1);
+      expect(await second.watchCreated(thread, 'loop', sender, 'outcome-abc')).toBe(true);
+      expect(second.list()).toHaveLength(1);
+      expect(JSON.stringify(await f.received())).not.toContain('PRIVATE_MARKER');
+    } finally { await f.cleanup(); }
+  }, 30_000);
+
+  test('created turn resolves a mismatched saved input as unknown without a pointer', async () => {
+    const f = await fixture();
+    try {
+      const store = await f.make(0);
+      expect(await store.watchCreated(thread, 'turn_mismatch', sender, 'create_owner')).toBe(true);
+      await store.turnEnded(thread, 'turn_mismatch', 'completed', 'Other answer',
+        [userItem('someone_else'), agentItem('Other answer')]);
+      expect(store.list()[0]).toMatchObject({ status: 'pending', outcome: 'unknown',
+        lastAgentMessageItemId: null });
+      await store.deliverDue();
+      expect(await f.received()).toEqual([{ version: 1, kind: 'created_turn', origin: 'create',
+        id: createdTurnReturnId(thread, 'turn_mismatch', 'create_owner'), to: sender,
+        from: { threadId: thread, turnId: 'turn_mismatch' }, clientUserMessageId: 'create_owner',
+        outcome: 'unknown' }]);
+    } finally { await f.cleanup(); }
+  }, 30_000);
+
+  test('a create without a native turn ID persists one honest unknown notice', async () => {
+    const f = await fixture();
+    try {
+      const first = await f.make(null);
+      expect(await first.createdWithoutTurn(thread, sender, 'create_missing')).toBe(true);
+      expect(await first.createdWithoutTurn(thread, sender, 'create_missing')).toBe(true);
+      await first.stop();
+      const second = await f.make(0);
+      await second.deliverDue();
+      await second.deliverDue();
+      expect(await f.received()).toEqual([{ version: 1, kind: 'created_turn', origin: 'create',
+        id: createdTurnReturnId(thread, null, 'create_missing'), to: sender,
+        from: { threadId: thread }, clientUserMessageId: 'create_missing',
+        outcome: 'unknown' }]);
+      expect(JSON.stringify(await f.received())).not.toContain('"turnId"');
+    } finally { await f.cleanup(); }
+  }, 30_000);
+
+  test('an unanswered created watch expires to unknown once after 24 hours including restart', async () => {
+    const f = await fixture();
+    try {
+      const first = await f.make(null);
+      expect(await first.watchCreated(thread, 'created_expiry', sender, 'create_expiry')).toBe(true);
+      await first.stop();
+      f.advance(CREATED_WATCH_MAX_AGE_MS + 1);
+      const second = await f.make(0, { readTurn: async () => null });
+      await second.deliverDue();
+      expect(await f.received()).toEqual([{ version: 1, kind: 'created_turn', origin: 'create',
+        id: createdTurnReturnId(thread, 'created_expiry', 'create_expiry'), to: sender,
+        from: { threadId: thread, turnId: 'created_expiry' }, clientUserMessageId: 'create_expiry',
+        outcome: 'unknown' }]);
+      await second.stop();
+      const third = await f.make(0);
+      await third.deliverDue();
+      expect(await f.received()).toHaveLength(1);
+    } finally { await f.cleanup(); }
+  }, 30_000);
   test('watch, turn end and delivery write the exact JSON to the command', async () => {
     const f = await fixture();
     try {
