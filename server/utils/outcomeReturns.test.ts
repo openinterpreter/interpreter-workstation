@@ -79,15 +79,15 @@ describe('outcome returns', () => {
         expect(received).toContainEqual({ version: 1, kind: 'created_turn', origin: 'create',
           id: createdTurnReturnId(thread, `created_${outcome}`, `create_${outcome}`), to: sender,
           from: { threadId: thread, turnId: `created_${outcome}` },
-          clientUserMessageId: `create_${outcome}`, outcome,
-          lastAgentMessageItemId: `native_${outcome}` });
+          clientUserMessageId: `create_${outcome}`, outcome });
       }
       expect(received).toContainEqual({ version: 1, kind: 'created_turn', origin: 'create',
         id: createdTurnReturnId(thread, null, 'create_unknown'), to: sender,
-        from: { threadId: thread, turnId: null }, clientUserMessageId: 'create_unknown',
-        outcome: 'unknown', lastAgentMessageItemId: null });
+        from: { threadId: thread }, clientUserMessageId: 'create_unknown',
+        outcome: 'unknown' });
       expect(new Set(received.map(value => (value as { outcome: string }).outcome))).toEqual(
         new Set(['completed', 'failed', 'interrupted', 'usageLimited', 'unknown']));
+      expect(JSON.stringify(received)).not.toContain('lastAgentMessageItemId');
       expect(JSON.stringify(received)).not.toContain('PRIVATE_MARKER');
     } finally { await f.cleanup(); }
   }, 30_000);
@@ -124,7 +124,7 @@ describe('outcome returns', () => {
       expect(await f.received()).toEqual([{ version: 1, kind: 'created_turn', origin: 'create',
         id: createdTurnReturnId(thread, 'turn_mismatch', 'create_owner'), to: sender,
         from: { threadId: thread, turnId: 'turn_mismatch' }, clientUserMessageId: 'create_owner',
-        outcome: 'unknown', lastAgentMessageItemId: null }]);
+        outcome: 'unknown' }]);
     } finally { await f.cleanup(); }
   }, 30_000);
 
@@ -132,16 +132,17 @@ describe('outcome returns', () => {
     const f = await fixture();
     try {
       const first = await f.make(null);
-      expect(await first.createdWithoutTurn(null, sender, 'create_missing')).toBe(true);
-      expect(await first.createdWithoutTurn(null, sender, 'create_missing')).toBe(true);
+      expect(await first.createdWithoutTurn(thread, sender, 'create_missing')).toBe(true);
+      expect(await first.createdWithoutTurn(thread, sender, 'create_missing')).toBe(true);
       await first.stop();
       const second = await f.make(0);
       await second.deliverDue();
       await second.deliverDue();
       expect(await f.received()).toEqual([{ version: 1, kind: 'created_turn', origin: 'create',
-        id: createdTurnReturnId(null, null, 'create_missing'), to: sender,
-        from: { threadId: null, turnId: null }, clientUserMessageId: 'create_missing',
-        outcome: 'unknown', lastAgentMessageItemId: null }]);
+        id: createdTurnReturnId(thread, null, 'create_missing'), to: sender,
+        from: { threadId: thread }, clientUserMessageId: 'create_missing',
+        outcome: 'unknown' }]);
+      expect(JSON.stringify(await f.received())).not.toContain('"turnId"');
     } finally { await f.cleanup(); }
   }, 30_000);
 
@@ -157,7 +158,7 @@ describe('outcome returns', () => {
       expect(await f.received()).toEqual([{ version: 1, kind: 'created_turn', origin: 'create',
         id: createdTurnReturnId(thread, 'created_expiry', 'create_expiry'), to: sender,
         from: { threadId: thread, turnId: 'created_expiry' }, clientUserMessageId: 'create_expiry',
-        outcome: 'unknown', lastAgentMessageItemId: null }]);
+        outcome: 'unknown' }]);
       await second.stop();
       const third = await f.make(0);
       await third.deliverDue();

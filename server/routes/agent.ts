@@ -716,7 +716,7 @@ router.post("/queue", (req: Request, res: Response) => {
 
 router.post('/tasks', async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as Record<string, unknown>;
-  let createSubmitted = false;
+  let observedCreatedThreadId: string | null = null;
   let createFirstTurnSeen = false;
   if (getProgrammaticClientIdError(body.clientUserMessageId)) {
     return res.status(400).json({ success: false, error: 'Invalid clientUserMessageId.' });
@@ -795,7 +795,6 @@ router.post('/tasks', async (req: Request, res: Response) => {
 
     const watches: Promise<boolean>[] = [];
     let firstTurn: string | null = null;
-    createSubmitted = true;
     const result = await startAgentTask({
       mode: 'headless',
       message: withSenderHeader(sender, message),
@@ -807,15 +806,22 @@ router.post('/tasks', async (req: Request, res: Response) => {
       clientUserMessageId,
       notifyStarted: !sender?.thread,
       onProgress: progress => {
+        observedCreatedThreadId = rememberCreatedThreadId(observedCreatedThreadId, progress);
         if (!sender?.thread || !clientUserMessageId || !shouldWatchFirstCreatedTurn(progress, firstTurn)) return;
         const key = `${progress.threadId}:${progress.turnId}`;
         firstTurn = key;
         createFirstTurnSeen = true;
-        watches.push(recordCreatedTurnReturn(progress.threadId, progress.turnId, sender, clientUserMessageId));
+        watches.push(settledCreatedTurnWatch(
+          recordCreatedTurnReturn(progress.threadId, progress.turnId, sender, clientUserMessageId)));
       },
     });
     if (sender?.thread && clientUserMessageId && firstTurn === null) {
-      const recorded = await recordCreatedTurnWithoutId(result.threadId ?? null, sender, clientUserMessageId);
+      if (!shouldRecordMissingCreatedTurn(observedCreatedThreadId !== null || Boolean(result.threadId), false)) {
+        return res.status(503).json({ success: false,
+          error: result.error ?? 'Task did not create a native thread.' });
+      }
+      const recorded = await recordCreatedTurnWithoutId(observedCreatedThreadId ?? result.threadId!, sender,
+        clientUserMessageId);
       return res.status(503).json(createdTurnMissingIdError(recorded));
     }
     if ((await Promise.all(watches)).some(recorded => !recorded)) {
@@ -829,9 +835,9 @@ router.post('/tasks', async (req: Request, res: Response) => {
     });
   } catch (error) {
     const sender = parseSubmissionSender(body.sender);
-    if (createSubmitted && !createFirstTurnSeen && sender?.thread &&
+    if (shouldRecordMissingCreatedTurn(observedCreatedThreadId !== null, createFirstTurnSeen) && sender?.thread &&
         typeof body.clientUserMessageId === 'string') {
-      const recorded = await recordCreatedTurnWithoutId(null, sender, body.clientUserMessageId)
+      const recorded = await recordCreatedTurnWithoutId(observedCreatedThreadId!, sender, body.clientUserMessageId)
         .catch(() => false);
       return res.status(503).json(createdTurnMissingIdError(recorded));
     }
@@ -910,7 +916,6 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
 
   let streamClosed = false;
   let observedTurn = false;
-  let createSubmitted = false;
   let firstTurn: string | null = null;
   let observedThreadId: string | null = null;
   const watchedTurns = new Map<string, Promise<boolean>>();
@@ -935,7 +940,6 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
       reasoningEffort,
     });
 
-    createSubmitted = true;
     const result = await startAgentTask({
       mode: 'headless',
       message: withSenderHeader(sender, message),
@@ -947,7 +951,7 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
       clientUserMessageId,
       notifyStarted: !sender?.thread,
       onProgress: (progress) => {
-        if (progress.kind === 'thread') observedThreadId = progress.threadId;
+        observedThreadId = rememberCreatedThreadId(observedThreadId, progress);
         if (progress.kind === 'turn' && sender?.thread && clientUserMessageId) {
           const key = `${progress.threadId}:${progress.turnId}`;
           if (firstTurn !== null && !shouldWatchFirstCreatedTurn(progress, firstTurn) &&
@@ -955,7 +959,8 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
           firstTurn ??= key;
           let watch = watchedTurns.get(key);
           if (!watch) {
-            watch = recordCreatedTurnReturn(progress.threadId, progress.turnId, sender, clientUserMessageId);
+            watch = settledCreatedTurnWatch(
+              recordCreatedTurnReturn(progress.threadId, progress.turnId, sender, clientUserMessageId));
             watchedTurns.set(key, watch);
             watches.push(watch);
           }
@@ -964,7 +969,7 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
               observedTurn = true;
               for (const event of toProgrammaticTaskProgressSseEvents(progress)) emit(event.event, event.payload);
             }
-          }).catch(() => undefined);
+          });
           return;
         }
         if (progress.kind === 'turn') observedTurn = true;
@@ -975,7 +980,12 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
     });
 
     if (sender?.thread && clientUserMessageId && firstTurn === null) {
-      const recorded = await recordCreatedTurnWithoutId(result.threadId ?? observedThreadId, sender,
+      if (!shouldRecordMissingCreatedTurn(observedThreadId !== null || Boolean(result.threadId), false)) {
+        emit('error', { message: result.error ?? 'Task did not create a native thread.' });
+        res.end();
+        return;
+      }
+      const recorded = await recordCreatedTurnWithoutId(observedThreadId ?? result.threadId!, sender,
         clientUserMessageId);
       emit('error', { outcome: 'unknown', message: createdTurnMissingIdError(recorded).error });
       res.end();
@@ -997,8 +1007,9 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
     }
     res.end();
   } catch (error) {
-    if (createSubmitted && firstTurn === null && sender?.thread && clientUserMessageId) {
-      const recorded = await recordCreatedTurnWithoutId(observedThreadId, sender, clientUserMessageId)
+    if (shouldRecordMissingCreatedTurn(observedThreadId !== null, firstTurn !== null) &&
+        sender?.thread && clientUserMessageId) {
+      const recorded = await recordCreatedTurnWithoutId(observedThreadId!, sender, clientUserMessageId)
         .catch(() => false);
       emit('error', { outcome: 'unknown', message: createdTurnMissingIdError(recorded).error });
       res.end();
@@ -1381,6 +1392,25 @@ export function getProgrammaticSenderError(body: Record<string, unknown>): strin
 export function shouldWatchFirstCreatedTurn(progress: AgentTaskProgressEvent, firstKey: string | null): progress is
   Extract<AgentTaskProgressEvent, { kind: 'turn' }> {
   return progress.kind === 'turn' && firstKey === null;
+}
+
+/** Observe a native thread before treating a start failure as a created task.
+ * Authentication and model failures before creation must not send a false
+ * created-turn notice. */
+export function shouldRecordMissingCreatedTurn(nativeThreadObserved: boolean, firstTurnSeen: boolean): boolean {
+  return nativeThreadObserved && !firstTurnSeen;
+}
+
+/** Retain the first actual native thread even when start later rejects before
+ * returning a result. Continuation progress cannot replace its identity. */
+export function rememberCreatedThreadId(previous: string | null, progress: AgentTaskProgressEvent): string | null {
+  return previous ?? (progress.kind === 'thread' || progress.kind === 'turn' ? progress.threadId : null);
+}
+
+/** Attach rejection handling at the progress callback, not after the long
+ * native task returns. The caller still awaits the fail-closed verdict. */
+export function settledCreatedTurnWatch(watch: Promise<boolean>): Promise<boolean> {
+  return watch.catch(() => false);
 }
 
 export function createdTurnMissingIdError(recorded: boolean):

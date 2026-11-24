@@ -86,7 +86,7 @@ type GoalNoticeReturnBase = {
 };
 /** A first-turn notification carries identifiers only, never assistant text. */
 export type CreatedTurnReturn = {
-  kind: 'created_turn'; origin: 'create'; id: string; threadId: string | null; turnId: string | null;
+  kind: 'created_turn'; origin: 'create'; id: string; threadId: string; turnId: string | null;
   sender: SubmissionSender; clientUserMessageId: string; status: OutcomeReturnStatus;
   outcome?: CreatedTurnOutcome; lastAgentMessageItemId?: string | null;
   attempts: number; nextAttemptAt?: string; createdAt: string; updatedAt: string;
@@ -119,8 +119,8 @@ export type OutcomeReturnPayload = {
   summary: string;
 } | {
   version: 1; kind: 'created_turn'; origin: 'create'; id: string; to: SubmissionSender;
-  from: { threadId: string | null; turnId: string | null }; clientUserMessageId: string;
-  outcome: CreatedTurnOutcome; lastAgentMessageItemId: string | null;
+  from: { threadId: string; turnId?: string }; clientUserMessageId: string;
+  outcome: CreatedTurnOutcome;
 } | {
   version: 1;
   kind: 'goal';
@@ -166,7 +166,7 @@ const GOAL_NOTICE_KEYS = ['status', 'previousStatus', 'reason', 'createdAt', 'up
 export function outcomeReturnId(threadId: string, turnId: string, clientUserMessageId: string): string {
   return createHash('sha256').update(`${threadId}:${turnId}:${clientUserMessageId}`).digest('hex');
 }
-export function createdTurnReturnId(threadId: string | null, turnId: string | null,
+export function createdTurnReturnId(threadId: string, turnId: string | null,
   clientUserMessageId: string): string {
   return createHash('sha256').update(JSON.stringify(['create', threadId, turnId, clientUserMessageId])).digest('hex');
 }
@@ -344,10 +344,10 @@ export type OutcomeReturnsOptions = {
 function validEntry(value: unknown): value is StoredEntry {
   if (value && typeof value === 'object' && (value as CreatedTurnReturn).kind === 'created_turn') {
     const entry = value as CreatedTurnReturn;
-    return entry.origin === 'create' && (entry.threadId === null || typeof entry.threadId === 'string') &&
+    return entry.origin === 'create' && typeof entry.threadId === 'string' && !!entry.threadId &&
       (entry.turnId === null || typeof entry.turnId === 'string') &&
-      (entry.turnId === null ? entry.outcome === 'unknown' && entry.status !== 'watching'
-        : entry.threadId !== null) && !!parseSubmissionSender(entry.sender)?.thread &&
+      (entry.turnId !== null || entry.outcome === 'unknown' && entry.status !== 'watching') &&
+      !!parseSubmissionSender(entry.sender)?.thread &&
       SUBMISSION_ID.test(entry.clientUserMessageId) &&
       entry.id === createdTurnReturnId(entry.threadId, entry.turnId, entry.clientUserMessageId) &&
       STATUSES.includes(entry.status) &&
@@ -574,12 +574,13 @@ export class OutcomeReturns {
     return true;
   }
 
-  /** A create that never reported its native turn ID still owes exactly one
-   * sender notice. Null identifiers are honest rather than synthetic IDs. */
-  async createdWithoutTurn(threadId: string | null, sender: SubmissionSender,
+  /** A created native thread without a first turn ID still owes exactly one
+   * sender notice. Pre-native failures cannot name a thread and owe none. */
+  async createdWithoutTurn(threadId: string, sender: SubmissionSender,
     clientUserMessageId: string): Promise<boolean> {
     const checked = parseSubmissionSender(sender);
-    if (!checked?.thread || !SUBMISSION_ID.test(clientUserMessageId)) throw new Error('Invalid created-turn return');
+    if (!checked?.thread || !SUBMISSION_ID.test(clientUserMessageId) || !threadId ||
+        !SUBMISSION_ID.test(threadId)) throw new Error('Invalid created-turn return');
     if (isOutcomeDelivery(clientUserMessageId)) return true;
     return this.exclusive(async () => {
       const id = createdTurnReturnId(threadId, null, clientUserMessageId);
@@ -804,9 +805,8 @@ export class OutcomeReturns {
           goal: { ...entry.goal }, summary: goalNoticeSummary(entry.threadId, entry.goal) }
         : entry.kind === 'created_turn'
           ? { version: 1, kind: 'created_turn', origin: 'create', id: entry.id, to: { ...entry.sender },
-            from: { threadId: entry.threadId, turnId: entry.turnId },
-            clientUserMessageId: entry.clientUserMessageId, outcome: entry.outcome ?? 'failed',
-            lastAgentMessageItemId: entry.lastAgentMessageItemId ?? null }
+            from: { threadId: entry.threadId, ...(entry.turnId !== null ? { turnId: entry.turnId } : {}) },
+            clientUserMessageId: entry.clientUserMessageId, outcome: entry.outcome ?? 'failed' }
         : { version: 1, kind: 'turn', id: entry.id, to: { ...entry.sender },
           from: { threadId: entry.threadId, turnId: entry.turnId },
           clientUserMessageId: entry.clientUserMessageId, outcome: entry.outcome ?? 'failed',

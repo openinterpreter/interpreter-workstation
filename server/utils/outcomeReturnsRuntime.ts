@@ -86,7 +86,7 @@ export async function recordCreatedTurnReturn(threadId: string, turnId: string, 
   return outcomeReturns.watchCreated(threadId, turnId, sender, clientUserMessageId);
 }
 
-export async function recordCreatedTurnWithoutId(threadId: string | null, sender: SubmissionSender,
+export async function recordCreatedTurnWithoutId(threadId: string, sender: SubmissionSender,
   clientUserMessageId: string): Promise<boolean> {
   if (!unsubscribe) return false;
   await readyOutcomeReturns();

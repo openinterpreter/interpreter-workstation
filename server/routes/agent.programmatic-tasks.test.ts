@@ -11,6 +11,9 @@ import {
   getProgrammaticSenderError,
   getUnacknowledgedTaskError,
   parseProgrammaticTaskBody,
+  rememberCreatedThreadId,
+  settledCreatedTurnWatch,
+  shouldRecordMissingCreatedTurn,
   shouldWatchFirstCreatedTurn,
   resolveTestModelRuntime,
   toProgrammaticTaskProgressSseEvents,
@@ -43,6 +46,31 @@ describe('programmatic task HTTP transport', () => {
     expect(createdTurnMissingIdError(true)).toEqual({ success: false, outcome: 'unknown',
       error: 'Created task ended without a native turn ID.' });
     expect(createdTurnMissingIdError(false).outcome).toBe('unknown');
+  });
+  test('both create routes handle an early rejected watch before native start settles', async () => {
+    for (const route of ['tasks', 'tasks/stream']) {
+      const watches: Promise<boolean>[] = [];
+      watches.push(settledCreatedTurnWatch(Promise.reject(new Error(`${route} durable write failed`))));
+      await new Promise(resolve => setTimeout(resolve, 0)); // Native task still running.
+      expect(await Promise.all(watches)).toEqual([false]);
+    }
+  });
+  test('pre-native rejection cannot fabricate an unknown notice for either create route', () => {
+    for (const route of ['tasks', 'tasks/stream']) {
+      let observed: string | null = null;
+      expect(shouldRecordMissingCreatedTurn(observed !== null, false)).toBe(false); // pre-native rejection
+      observed = rememberCreatedThreadId(observed,
+        { kind: 'thread', threadId: 'created_native_1' } as Parameters<typeof rememberCreatedThreadId>[1]);
+      // startAgentTask now rejects before any turn or result. The route must
+      // retain this actual ID for its one ID-only unknown notice.
+      expect(observed).toBe('created_native_1');
+      expect(shouldRecordMissingCreatedTurn(observed !== null, false)).toBe(true);
+      observed = rememberCreatedThreadId(observed,
+        { kind: 'thread', threadId: 'continuation_native_2' } as Parameters<typeof rememberCreatedThreadId>[1]);
+      expect(observed).toBe('created_native_1');
+      expect(shouldRecordMissingCreatedTurn(observed !== null, true)).toBe(false);
+      expect(route).toBeTruthy();
+    }
   });
   test('recognizes usage limits only from structured failed-turn errors', () => {
     expect(createdTurnOutcome('failed', { codexErrorInfo: 'usageLimitExceeded' })).toBe('usageLimited');
