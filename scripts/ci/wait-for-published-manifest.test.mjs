@@ -46,6 +46,19 @@ test('persistent stale version fails closed after the bounded attempts', async (
   assert.equal(count, 3);
 });
 
+test('a public alias that converges after the former one-minute bound is accepted', async () => {
+  let count = 0;
+  await waitForPublishedManifest({
+    ...options,
+    maxAttempts: 14,
+    fetchManifest: async () => {
+      count += 1;
+      return reply(count < 14 ? 'version: 0.2.259\n' : current);
+    },
+  });
+  assert.equal(count, 14);
+});
+
 test('a missing YAML version cannot borrow the target from the next line', async () => {
   await assert.rejects(waitForPublishedManifest({
     ...options,
@@ -110,6 +123,6 @@ test('network error text cannot masquerade as a permanent HTTP denial', async ()
 
 test('attempt cap cannot be raised beyond the release bound', async () => {
   await assert.rejects(waitForPublishedManifest({
-    ...options, maxAttempts: 13, fetchManifest: async () => reply(current),
-  }), /between 1 and 12/);
+    ...options, maxAttempts: 25, fetchManifest: async () => reply(current),
+  }), /between 1 and 24/);
 });

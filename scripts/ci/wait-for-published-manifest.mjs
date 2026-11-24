@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
-const MAX_ATTEMPTS = 12;
+// Allow nearly two minutes of ordinary propagation at the default five-second interval.
+const MAX_ATTEMPTS = 24;
 const RETRY_DELAY_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 10_000;
 class PermanentManifestFailure extends Error {}
