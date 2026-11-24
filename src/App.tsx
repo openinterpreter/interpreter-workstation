@@ -65,6 +65,7 @@ import { getMarketingDemoSurface, isMarketingDemoMode, isMarketingDemoWindowChro
 import { isWorkstationReadOnly } from "./remote/workstationConnection";
 import { WorkstationConnectionGate } from './components/WorkstationConnectionGate';
 import { SimpleShell, sendSimpleMessage } from './components/simple/SimpleShell';
+import { nativeComposerVoiceAdapter } from './components/voice/nativeComposerVoiceAdapter';
 import { SimpleInterface } from './components/simple/SimpleInterface';
 import { uiSettings, workspace as workspaceIpc, quickActions } from '@/ipc';
 import * as workstationIpc from '@/ipc';
@@ -961,7 +962,7 @@ function AppContent() {
         style={{ transition: 'opacity 400ms ease' }}
       >
         {shouldRenderMainSurfaces && advancedMode === false && simpleWorkspacePath && simpleThreadLoaded && simpleThreadWorkspacePath === simpleWorkspacePath && !simpleError ? (
-          <SimpleShell key={simpleWorkspacePath} workspacePath={simpleWorkspacePath} initialThreadId={simpleThreadId}
+          <SimpleShell voiceAdapter={nativeComposerVoiceAdapter} key={simpleWorkspacePath} workspacePath={simpleWorkspacePath} initialThreadId={simpleThreadId}
             firstRunSession={firstRunSession}
             onBindThread={async (threadId) => {
               const primaryThread = (workstationIpc as typeof workstationIpc & {

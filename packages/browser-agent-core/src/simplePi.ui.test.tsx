@@ -5,7 +5,7 @@ import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { LowerLeftNoticeProvider } from '../../../src/contexts/LowerLeftNoticesContext';
 import { ToastProvider } from '../../../src/contexts/ToastContext';
 import { BrowserPiAppServerSession } from './piSession';
-import { SimpleBrowserProject } from '../../../src/browser-project/SimpleBrowserProject';
+import { AppSimpleBrowserProject as SimpleBrowserProject } from '../../../src/browser-project/AppSimpleBrowserProject';
 import { useBrowserProjectHost, type BrowserProjectHost } from '../../../src/browser-project/host';
 import { MemoryProjectFiles } from '../../../src/browser-project/project';
 import { projectFilesWorkspaceCapability } from '../../../src/browser-project/workspace';

@@ -29,7 +29,8 @@ vi.mock('../ipc', () => ({ restoreBrowserProjectNativeEvents: vi.fn(),
     return () => { if (state.onDefaultChanged === listener) state.onDefaultChanged = null; };
   } } }));
 
-import { SimpleBrowserProject } from './SimpleBrowserProject';
+import { AppSimpleBrowserProject as SimpleBrowserProject } from './AppSimpleBrowserProject';
+import { SimpleBrowserProject as EmbeddedBrowserProject } from './SimpleBrowserProject';
 
 const props = {
   backend: { projectId: 'project', request: vi.fn(), downloadModel: vi.fn(),
@@ -42,6 +43,13 @@ const props = {
 
 beforeEach(() => { state.completed = false; state.modelId = 'model';
   state.onDefaultChanged = null; vi.clearAllMocks(); });
+
+test('embedder without an onboarding renderer opens without importing the app overlay', async () => {
+  render(<EmbeddedBrowserProject {...props} />);
+  await screen.findByText('Real Simple shell seam');
+  expect(screen.queryByText('Normal onboarding overlay')).toBeNull();
+  expect(props.backend.openSession).toHaveBeenCalledWith('model');
+});
 
 test('browser Simple host uses normal onboarding and hides it after persisted completion on remount', async () => {
   const first = render(<SimpleBrowserProject {...props} />);
