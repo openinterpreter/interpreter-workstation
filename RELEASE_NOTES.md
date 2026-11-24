@@ -3,6 +3,7 @@
 
 - Reports native thread-list failures instead of treating them as an empty thread list.
 - Bounds thread-list requests so a delayed native response cannot silently mask an error.
+- Reads thread-list pages from the native state database and checks empty pages against the ordinary scan.
 
 ## Distribution
 
