@@ -107,6 +107,53 @@ describe('thread list HTTP', () => {
     } finally { service.listThreads = original; console.warn = warn; }
   });
 
+  test('empty DB page with cursor returns the scanned page and fixed disagreement category', async () => {
+    const service = getCodexService();
+    const original = service.listThreads;
+    const warn = console.warn;
+    const warnings: unknown[][] = [];
+    const calls: Array<{ params?: v2.ThreadListParams; deadline?: number }> = [];
+    service.listThreads = async (params, deadline) => {
+      calls.push({ params, deadline });
+      return calls.length === 1 ? page([]) : page(['late-found'], 'scan-next');
+    };
+    console.warn = (...args) => { warnings.push(args); };
+    try {
+      const result = await request(app).get('/api/agent/threads?cursor=opaque-before&archived=1');
+      expect(result.status).toBe(200);
+      expect(result.body).toEqual(page(['late-found'], 'scan-next'));
+      expect(calls).toHaveLength(2);
+      expect(calls.map(({ params }) => params?.useStateDbOnly)).toEqual([true, undefined]);
+      expect(calls[1]?.params?.cursor).toBe('opaque-before');
+      expect(calls[1]?.params?.archived).toBe(true);
+      expect(calls[1]?.deadline).toBeGreaterThan(0);
+      expect(calls[1]?.deadline).toBeLessThanOrEqual(calls[0]!.deadline!);
+      expect(warnings).toContainEqual(['[Agent API] Native thread list DB disagreement.', 'db_disagreement']);
+    } finally { service.listThreads = original; console.warn = warn; }
+  });
+
+  for (const failure of [new Error('PRIVATE late scan error'), new NativeCustodyPhaseError('thread_list', 'deadline')]) {
+    test(`empty DB page with cursor and scan ${failure instanceof NativeCustodyPhaseError ? 'deadline' : 'error'} returns typed 503`, async () => {
+      const service = getCodexService();
+      const original = service.listThreads;
+      const calls: Array<v2.ThreadListParams | undefined> = [];
+      service.listThreads = async (params) => {
+        calls.push(params);
+        if (calls.length === 1) return page([]);
+        throw failure;
+      };
+      try {
+        const result = await request(app).get('/api/agent/threads?cursor=opaque-before');
+        expect(result.status).toBe(503);
+        expect(result.body).toMatchObject({ phase: 'thread_list',
+          category: failure instanceof NativeCustodyPhaseError ? 'deadline' : 'native_unavailable', available: false });
+        expect(result.text).not.toContain('PRIVATE');
+        expect(calls).toHaveLength(2);
+        expect(calls[1]?.cursor).toBe('opaque-before');
+      } finally { service.listThreads = original; }
+    });
+  }
+
   for (const failure of [new Error('PRIVATE scan error'), new NativeCustodyPhaseError('thread_list', 'deadline')]) {
     test(`empty DB with scan ${failure instanceof NativeCustodyPhaseError ? 'deadline' : 'error'} is typed 503`, async () => {
       const service = getCodexService();

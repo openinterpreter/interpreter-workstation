@@ -1343,9 +1343,9 @@ router.get('/threads', async (req: Request, res: Response) => {
     };
     let result = await listWithinBudget(true);
     // The native StateDbOnly implementation can report a successful empty
-    // page when its DB read failed. Check only the first empty page using the
-    // ordinary scan, never interpreting that response as proof of emptiness.
-    if (!cursor && result.data.length === 0) {
+    // page when its DB read failed. Confirm every empty page with the same
+    // cursor via the ordinary scan before treating it as the end of the list.
+    if (result.data.length === 0) {
       const scanned = await listWithinBudget(false);
       if (scanned.data.length) {
         console.warn('[Agent API] Native thread list DB disagreement.', 'db_disagreement');
