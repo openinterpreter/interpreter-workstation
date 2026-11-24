@@ -53,6 +53,20 @@ test('a missing YAML version cannot borrow the target from the next line', async
   }), /did not converge.*wrong version/);
 });
 
+test('a duplicate version cannot hide a stale effective YAML version', async () => {
+  await assert.rejects(waitForPublishedManifest({
+    ...options,
+    fetchManifest: async () => reply(`${current}version: 0.2.259\n`),
+  }), /did not converge.*wrong version/);
+});
+
+test('mismatched YAML version quotes are not accepted', async () => {
+  await assert.rejects(waitForPublishedManifest({
+    ...options,
+    fetchManifest: async () => reply('version: "0.2.260\'\npath: Interpreter-win-x64-0.2.260.exe\n'),
+  }), /did not converge.*wrong version/);
+});
+
 test('matching version without required asset also fails closed', async () => {
   await assert.rejects(waitForPublishedManifest({
     ...options,

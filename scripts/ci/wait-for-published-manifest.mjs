@@ -16,7 +16,7 @@ export async function waitForPublishedManifest({
   if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > MAX_ATTEMPTS) {
     throw new Error(`Manifest verification attempts must be between 1 and ${MAX_ATTEMPTS}`);
   }
-  const versionLine = new RegExp(`(?:^|\\n)version:[ \\t]*["']?${version.replaceAll('.', '\\.')}["']?[ \\t]*$`, 'm');
+  const expectedVersions = new Set([version, `"${version}"`, `'${version}'`]);
   let lastFailure = 'no response';
   const nonce = randomUUID();
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -35,7 +35,8 @@ export async function waitForPublishedManifest({
         lastFailure = `HTTP ${response.status}`;
       } else {
         const body = await response.text();
-        if (!versionLine.test(body)) {
+        const versionLines = body.split(/\r?\n/).filter((line) => line.startsWith('version:'));
+        if (versionLines.length !== 1 || !expectedVersions.has(versionLines[0].slice('version:'.length).trim())) {
           lastFailure = 'wrong version';
         } else {
           const missing = filenames.find((filename) => !body.includes(filename));
