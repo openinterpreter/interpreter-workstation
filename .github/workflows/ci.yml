@@ -41,6 +41,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
+      - run: node --test scripts/ci/e2e-diagnostics.test.mjs
       - run: node --test scripts/ci/release-workflow.test.mjs
       - run: node --test scripts/ci/wait-for-published-manifest.test.mjs
       - run: node --test scripts/electron-builder/startup-url-dependencies.test.cjs
@@ -124,6 +125,15 @@ jobs:
             .cache/trycua-cua-driver
             .cache/native-builds
           key: native-builds-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.cache/trycua-cua-driver/*/build-info.json', '.cache/native-builds/**') }}
+      - name: Upload Electron E2E failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: electron-e2e-diagnostics-shard-${{ matrix.shard }}
+          path: |
+            test-runs/**/logs
+            test-runs/**/test-results
+          if-no-files-found: warn
 
   # One stable result for the whole Electron suite: it passes only when every
   # shard passed.
