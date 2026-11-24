@@ -3,6 +3,7 @@ import { agentTabManager } from "../agentTabManager";
 import { getServerLocalOrigin } from "../utils/serverPort";
 import { resolveSimplePreviewRuntimeUrl } from "../utils/simplePreviewProxy";
 import type { SimpleAppStatus } from "../handlers/simpleApp";
+import { classifySimpleProjectStartError } from "../../shared/simpleInterfaceProblem";
 import { getCurrentWindowSessionKey, getWindowSessionByKey } from "../utils/windowSessions";
 import { answerBrowserTabCapture, listBrowserTabCaptures, stopBrowserTabCapture } from "../utils/browserExtensionRelay";
 import { readSimpleInterfaceAsset } from "../handlers/simpleAssets";
@@ -112,8 +113,8 @@ router.get("/", async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     res.json(forRenderer(req, await readSimpleProjectAppStatus()));
   } catch (error) {
-    const { status, message } = errorResponse(error);
-    res.status(status).json({ error: message });
+    const { status } = errorResponse(error);
+    res.status(status).json({ error: 'The interface project could not be checked.', problemKind: classifySimpleProjectStartError(error) });
   }
 });
 
@@ -124,8 +125,8 @@ router.post("/promote", async (req, res) => {
     // request reached the sidecar.
     res.json(forRenderer(req, await promoteSimpleProjectApp(getServerLocalOrigin())));
   } catch (error) {
-    const { status, message } = errorResponse(error);
-    res.status(status).json({ error: message });
+    const { status } = errorResponse(error);
+    res.status(status).json({ error: 'The interface project could not be started.', problemKind: classifySimpleProjectStartError(error) });
   }
 });
 

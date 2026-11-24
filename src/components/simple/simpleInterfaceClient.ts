@@ -1,10 +1,17 @@
 import { apiRequest, appendWindowSessionKey, getApiUrl } from '@/ipc';
 import { isWorkstationReadOnly } from '../../remote/workstationConnection';
+import { isSimpleInterfaceProblemKind, type SimpleInterfaceProblemKind } from '../../../shared/simpleInterfaceProblem';
+export class SimpleInterfaceRequestError extends Error {
+  constructor(readonly problemKind: SimpleInterfaceProblemKind | null) {
+    super('Interface request failed');
+  }
+}
 export type SimpleAppStatus = {
   revision: string;
   sourceRevision: string;
   assetRevision?: number;
   diagnostic: string | null;
+  problemKind?: SimpleInterfaceProblemKind | null;
   ready: boolean;
   runtimeUrl?: string | null;
 };
@@ -26,6 +33,11 @@ export type SimpleResolvedPath = { path: string; name: string; directory: boolea
 async function request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
   const response = await apiRequest({ method, path: `/api/simple-interface${path}`, body });
   if (!response.ok) {
+    if (path === '' || path === '/promote') {
+      const kind = response.data && typeof response.data === 'object' && 'problemKind' in response.data
+        ? (response.data as { problemKind: unknown }).problemKind : null;
+      throw new SimpleInterfaceRequestError(isSimpleInterfaceProblemKind(kind) ? kind : null);
+    }
     const error = response.data && typeof response.data === 'object' && 'error' in response.data
       ? String((response.data as { error: unknown }).error)
       : `Interface request failed (${response.status})`;
