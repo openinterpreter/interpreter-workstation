@@ -11,6 +11,14 @@
 
 import path from 'node:path';
 import { existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+
+const moduleLocation = typeof __filename === 'string' && __filename ? __filename : import.meta.url;
+const moduleDirectory = path.dirname(
+  typeof __filename === 'string' && __filename ? __filename : fileURLToPath(import.meta.url),
+);
+const requireSherpa = createRequire(moduleLocation);
 
 export interface SileroVadInstance {
   /** Feed Int16 PCM chunk. Returns true if speech is currently detected. */
@@ -30,8 +38,8 @@ function resolveSileroModelPath(): string {
     // Bundled in app resources (electron build)
     path.join(process.resourcesPath ?? '', 'silero', 'silero_vad_v5.onnx'),
     // In node_modules (dev mode)
-    path.join(__dirname, '../../node_modules/.pnpm/@ricky0123+vad-web@0.0.30/node_modules/@ricky0123/vad-web/dist/silero_vad_v5.onnx'),
-    path.join(__dirname, '../../node_modules/@ricky0123/vad-web/dist/silero_vad_v5.onnx'),
+    path.join(moduleDirectory, '../../node_modules/.pnpm/@ricky0123+vad-web@0.0.30/node_modules/@ricky0123/vad-web/dist/silero_vad_v5.onnx'),
+    path.join(moduleDirectory, '../../node_modules/@ricky0123/vad-web/dist/silero_vad_v5.onnx'),
   ];
 
   for (const candidate of candidates) {
@@ -50,7 +58,7 @@ function resolveSileroModelPath(): string {
 function getSherpaOnnx(): any {
   if (!sherpaOnnxModule) {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    sherpaOnnxModule = require('sherpa-onnx');
+    sherpaOnnxModule = requireSherpa('sherpa-onnx');
   }
   return sherpaOnnxModule;
 }

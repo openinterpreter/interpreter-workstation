@@ -49,6 +49,7 @@ if (process.env.NODE_ENV === 'test') {
 import { convertHeicToJpeg } from './utils/heicConverter';
 import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import { join as pathJoin, dirname, normalize as pathNormalize, resolve as pathResolve, sep as pathSep } from "node:path";
+import { fileURLToPath } from 'node:url';
 import os from "node:os";
 import agentRouter from "./routes/agent";
 import { createSupervisorPeerRouter } from './routes/supervisorPeer';
@@ -211,8 +212,11 @@ if (serveBuiltRendererFromServer) {
   const configuredRendererPath = process.env.INTERPRETER_WORKSTATION_RENDERER_DIR?.trim();
   const sourceRendererPath = pathJoin(process.cwd(), 'dist');
   const binaryRendererPath = dirname(process.execPath);
+  const moduleDirectory = dirname(
+    typeof __filename === 'string' && __filename ? __filename : fileURLToPath(import.meta.url),
+  );
   const distPath = process.versions.electron
-    ? pathJoin(__dirname, '../../dist')
+    ? pathJoin(moduleDirectory, '../../dist')
     : configuredRendererPath
       ? pathResolve(configuredRendererPath)
       : existsSync(pathJoin(sourceRendererPath, 'index.html'))
