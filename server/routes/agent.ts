@@ -9,7 +9,9 @@ import { isAcceptedOffer, isWakeId, PausedCommandConflictError, THREAD_INPUT_SOU
   WakeContentConflictError, WakeSourceCancelledError, wakeTokenValid, WakeUnsavedError, type WakeEvent }
   from '../utils/wakeSources';
 import { readyWakeSources, wakeSources } from '../utils/wakeSourcesRuntime';
-import { outcomeReturns, readyOutcomeReturns, recordCreatedTurnReturn } from '../utils/outcomeReturnsRuntime';
+import { outcomeReturns, readyOutcomeReturns, readyCreatedTurnReturns, recordCreatedTurnReturn,
+  recordCreatedTurnWithoutId }
+  from '../utils/outcomeReturnsRuntime';
 import { stat } from 'node:fs/promises';
 import { getCustomInstructions } from '../configStore';
 import { getServerJWT } from '../lib/jwtStore';
@@ -714,6 +716,8 @@ router.post("/queue", (req: Request, res: Response) => {
 
 router.post('/tasks', async (req: Request, res: Response) => {
   const body = (req.body ?? {}) as Record<string, unknown>;
+  let createSubmitted = false;
+  let createFirstTurnSeen = false;
   if (getProgrammaticClientIdError(body.clientUserMessageId)) {
     return res.status(400).json({ success: false, error: 'Invalid clientUserMessageId.' });
   }
@@ -782,6 +786,7 @@ router.post('/tasks', async (req: Request, res: Response) => {
         ...(event.refusal && { code: event.refusal.code, parentThreadId: event.refusal.parentThreadId }) });
     }
 
+    if (sender?.thread) await readyCreatedTurnReturns();
     await applyProgrammaticTaskRuntimeConfigFromBody(runtimeConfig);
     const resolvedModelConfig = await resolveAgentModelConfig(modelConfig, {
       modelId: model,
@@ -789,7 +794,8 @@ router.post('/tasks', async (req: Request, res: Response) => {
     });
 
     const watches: Promise<boolean>[] = [];
-    const watchedTurns = new Set<string>();
+    let firstTurn: string | null = null;
+    createSubmitted = true;
     const result = await startAgentTask({
       mode: 'headless',
       message: withSenderHeader(sender, message),
@@ -801,15 +807,18 @@ router.post('/tasks', async (req: Request, res: Response) => {
       clientUserMessageId,
       notifyStarted: !sender?.thread,
       onProgress: progress => {
-        const key = progress.kind === 'turn' ? `${progress.threadId}:${progress.turnId}` : '';
-        if (progress.kind !== 'turn' || !sender?.thread || !clientUserMessageId ||
-            watchedTurns.has(key)) return;
-        watchedTurns.add(key);
+        if (!sender?.thread || !clientUserMessageId || !shouldWatchFirstCreatedTurn(progress, firstTurn)) return;
+        const key = `${progress.threadId}:${progress.turnId}`;
+        firstTurn = key;
+        createFirstTurnSeen = true;
         watches.push(recordCreatedTurnReturn(progress.threadId, progress.turnId, sender, clientUserMessageId));
       },
     });
-    if ((await Promise.all(watches)).some(recorded => !recorded) ||
-        (sender?.thread && watches.length === 0)) {
+    if (sender?.thread && clientUserMessageId && firstTurn === null) {
+      const recorded = await recordCreatedTurnWithoutId(result.threadId ?? null, sender, clientUserMessageId);
+      return res.status(503).json(createdTurnMissingIdError(recorded));
+    }
+    if ((await Promise.all(watches)).some(recorded => !recorded)) {
       return res.status(503).json({ success: false, error: 'Created-turn outcome custody unavailable.' });
     }
     if (sender?.thread) notifyProgrammaticTaskStarted({ message: withSenderHeader(sender, message) }, 'headless');
@@ -819,6 +828,13 @@ router.post('/tasks', async (req: Request, res: Response) => {
       ...result,
     });
   } catch (error) {
+    const sender = parseSubmissionSender(body.sender);
+    if (createSubmitted && !createFirstTurnSeen && sender?.thread &&
+        typeof body.clientUserMessageId === 'string') {
+      const recorded = await recordCreatedTurnWithoutId(null, sender, body.clientUserMessageId)
+        .catch(() => false);
+      return res.status(503).json(createdTurnMissingIdError(recorded));
+    }
     const message = error instanceof Error ? error.message : String(error);
     return res.status(500).json({
       success: false,
@@ -894,6 +910,9 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
 
   let streamClosed = false;
   let observedTurn = false;
+  let createSubmitted = false;
+  let firstTurn: string | null = null;
+  let observedThreadId: string | null = null;
   const watchedTurns = new Map<string, Promise<boolean>>();
   const watches: Promise<boolean>[] = [];
   res.on('close', () => {
@@ -909,12 +928,14 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
   };
 
   try {
+    if (sender?.thread) await readyCreatedTurnReturns();
     await applyProgrammaticTaskRuntimeConfigFromBody(runtimeConfig);
     const resolvedModelConfig = await resolveAgentModelConfig(modelConfig, {
       modelId: model,
       reasoningEffort,
     });
 
+    createSubmitted = true;
     const result = await startAgentTask({
       mode: 'headless',
       message: withSenderHeader(sender, message),
@@ -926,8 +947,12 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
       clientUserMessageId,
       notifyStarted: !sender?.thread,
       onProgress: (progress) => {
+        if (progress.kind === 'thread') observedThreadId = progress.threadId;
         if (progress.kind === 'turn' && sender?.thread && clientUserMessageId) {
           const key = `${progress.threadId}:${progress.turnId}`;
+          if (firstTurn !== null && !shouldWatchFirstCreatedTurn(progress, firstTurn) &&
+              firstTurn !== key) return;
+          firstTurn ??= key;
           let watch = watchedTurns.get(key);
           if (!watch) {
             watch = recordCreatedTurnReturn(progress.threadId, progress.turnId, sender, clientUserMessageId);
@@ -949,8 +974,14 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
       },
     });
 
-    if ((await Promise.all(watches)).some(recorded => !recorded) ||
-        (sender?.thread && watches.length === 0)) {
+    if (sender?.thread && clientUserMessageId && firstTurn === null) {
+      const recorded = await recordCreatedTurnWithoutId(result.threadId ?? observedThreadId, sender,
+        clientUserMessageId);
+      emit('error', { outcome: 'unknown', message: createdTurnMissingIdError(recorded).error });
+      res.end();
+      return;
+    }
+    if ((await Promise.all(watches)).some(recorded => !recorded)) {
       emit('error', { message: 'Created-turn outcome custody unavailable.' });
       res.end();
       return;
@@ -966,6 +997,13 @@ router.post('/tasks/stream', async (req: Request, res: Response) => {
     }
     res.end();
   } catch (error) {
+    if (createSubmitted && firstTurn === null && sender?.thread && clientUserMessageId) {
+      const recorded = await recordCreatedTurnWithoutId(observedThreadId, sender, clientUserMessageId)
+        .catch(() => false);
+      emit('error', { outcome: 'unknown', message: createdTurnMissingIdError(recorded).error });
+      res.end();
+      return;
+    }
     const message = error instanceof Error ? error.message : String(error);
     if (!observedTurn && error instanceof SubagentDirectInputError) {
       emit('error', { message, ...subagentRefusalFields(error) });
@@ -1336,6 +1374,19 @@ export function getProgrammaticSenderError(body: Record<string, unknown>): strin
   if (!threadId && !sender.thread) return 'sender requires a source thread for created tasks.';
   if (!threadId && !body.clientUserMessageId) return 'clientUserMessageId is required for sender-attributed create.';
   return null;
+}
+
+/** A create may continue through later native turns; only the first is the
+ * sender's created turn, even if the later attempt has another turn ID. */
+export function shouldWatchFirstCreatedTurn(progress: AgentTaskProgressEvent, firstKey: string | null): progress is
+  Extract<AgentTaskProgressEvent, { kind: 'turn' }> {
+  return progress.kind === 'turn' && firstKey === null;
+}
+
+export function createdTurnMissingIdError(recorded: boolean):
+  { success: false; outcome: 'unknown'; error: string } {
+  return { success: false, outcome: 'unknown', error: recorded
+    ? 'Created task ended without a native turn ID.' : 'Created-turn outcome custody unavailable.' };
 }
 
 /** The exact text submitted to the native thread for a sender-attributed task. */

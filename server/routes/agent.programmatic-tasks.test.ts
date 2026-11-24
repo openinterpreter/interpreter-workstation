@@ -4,12 +4,14 @@ import { applyChatEvent, createInitialChatState } from '../../src/hooks/use-chat
 import { createdTurnOutcome } from '../utils/outcomeReturnsRuntime';
 import {
   createAgentStreamErrorPayload,
+  createdTurnMissingIdError,
   getAgentServiceTierConfig,
   getProgrammaticTaskHttpError,
   getProgrammaticClientIdError,
   getProgrammaticSenderError,
   getUnacknowledgedTaskError,
   parseProgrammaticTaskBody,
+  shouldWatchFirstCreatedTurn,
   resolveTestModelRuntime,
   toProgrammaticTaskProgressSseEvents,
   withSenderHeader,
@@ -25,6 +27,23 @@ describe('Simple mode service tier', () => {
 });
 
 describe('programmatic task HTTP transport', () => {
+  test('only the first native turn of a create receives the outcome watch', () => {
+    let first: string | null = null;
+    const watched: string[] = [];
+    for (const turnId of ['first', 'second', 'second']) {
+      const event = { kind: 'turn' as const, threadId: 'created_thread', turnId, status: 'inProgress' };
+      if (shouldWatchFirstCreatedTurn(event, first)) {
+        first = `${event.threadId}:${event.turnId}`;
+        watched.push(first);
+      }
+    }
+    expect(watched).toEqual(['created_thread:first']);
+  });
+  test('an unacknowledged create reports unknown, never completed', () => {
+    expect(createdTurnMissingIdError(true)).toEqual({ success: false, outcome: 'unknown',
+      error: 'Created task ended without a native turn ID.' });
+    expect(createdTurnMissingIdError(false).outcome).toBe('unknown');
+  });
   test('recognizes usage limits only from structured failed-turn errors', () => {
     expect(createdTurnOutcome('failed', { codexErrorInfo: 'usageLimitExceeded' })).toBe('usageLimited');
     expect(createdTurnOutcome('failed', { codexErrorInfo: { usageLimitReached: {} } })).toBe('usageLimited');

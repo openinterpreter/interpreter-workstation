@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  CREATED_WATCH_MAX_AGE_MS,
   GOAL_ASSIGNER_LIMIT,
   NO_SEPARATE_REPLY_SUMMARY,
   OUTCOME_RETURN_LIMIT,
@@ -93,7 +94,7 @@ describe('outcome returns', () => {
       expect(first.list()[0]?.status).toBe('watching');
       await first.stop();
       const second = await f.make(0, { readTurn: async () => ({ outcome: 'completed', summary: 'PRIVATE_MARKER',
-        items: [userItem('create_restart'), agentItem('PRIVATE_MARKER')] }) });
+        items: [userItem('create_restart'), { type: 'agentMessage', id: 'native_1', text: 'PRIVATE_MARKER' }] }) });
       await second.deliverDue();
       await second.deliverDue();
       expect(await f.received()).toHaveLength(1);
@@ -103,16 +104,57 @@ describe('outcome returns', () => {
     } finally { await f.cleanup(); }
   }, 30_000);
 
-  test('created turn does not complete from a saved turn with a different native input', async () => {
+  test('created turn resolves a mismatched saved input as unknown without a pointer', async () => {
     const f = await fixture();
     try {
       const store = await f.make(0);
       expect(await store.watchCreated(thread, 'turn_mismatch', sender, 'create_owner')).toBe(true);
       await store.turnEnded(thread, 'turn_mismatch', 'completed', 'Other answer',
         [userItem('someone_else'), agentItem('Other answer')]);
-      expect(store.list()[0]?.status).toBe('watching');
+      expect(store.list()[0]).toMatchObject({ status: 'pending', outcome: 'unknown',
+        lastAgentMessageItemId: null });
       await store.deliverDue();
-      expect(await f.received()).toEqual([]);
+      expect(await f.received()).toEqual([{ version: 1, kind: 'created_turn', origin: 'create',
+        id: createdTurnReturnId(thread, 'turn_mismatch', 'create_owner'), to: sender,
+        from: { threadId: thread, turnId: 'turn_mismatch' }, clientUserMessageId: 'create_owner',
+        outcome: 'unknown', lastAgentMessageItemId: null }]);
+    } finally { await f.cleanup(); }
+  }, 30_000);
+
+  test('a create without a native turn ID persists one honest unknown notice', async () => {
+    const f = await fixture();
+    try {
+      const first = await f.make(null);
+      expect(await first.createdWithoutTurn(null, sender, 'create_missing')).toBe(true);
+      expect(await first.createdWithoutTurn(null, sender, 'create_missing')).toBe(true);
+      await first.stop();
+      const second = await f.make(0);
+      await second.deliverDue();
+      await second.deliverDue();
+      expect(await f.received()).toEqual([{ version: 1, kind: 'created_turn', origin: 'create',
+        id: createdTurnReturnId(null, null, 'create_missing'), to: sender,
+        from: { threadId: null, turnId: null }, clientUserMessageId: 'create_missing',
+        outcome: 'unknown', lastAgentMessageItemId: null }]);
+    } finally { await f.cleanup(); }
+  }, 30_000);
+
+  test('an unanswered created watch expires to unknown once after 24 hours including restart', async () => {
+    const f = await fixture();
+    try {
+      const first = await f.make(null);
+      expect(await first.watchCreated(thread, 'created_expiry', sender, 'create_expiry')).toBe(true);
+      await first.stop();
+      f.advance(CREATED_WATCH_MAX_AGE_MS + 1);
+      const second = await f.make(0, { readTurn: async () => null });
+      await second.deliverDue();
+      expect(await f.received()).toEqual([{ version: 1, kind: 'created_turn', origin: 'create',
+        id: createdTurnReturnId(thread, 'created_expiry', 'create_expiry'), to: sender,
+        from: { threadId: thread, turnId: 'created_expiry' }, clientUserMessageId: 'create_expiry',
+        outcome: 'unknown', lastAgentMessageItemId: null }]);
+      await second.stop();
+      const third = await f.make(0);
+      await third.deliverDue();
+      expect(await f.received()).toHaveLength(1);
     } finally { await f.cleanup(); }
   }, 30_000);
   test('watch, turn end and delivery write the exact JSON to the command', async () => {

@@ -85,3 +85,17 @@ export async function recordCreatedTurnReturn(threadId: string, turnId: string, 
   await readyOutcomeReturns();
   return outcomeReturns.watchCreated(threadId, turnId, sender, clientUserMessageId);
 }
+
+export async function recordCreatedTurnWithoutId(threadId: string | null, sender: SubmissionSender,
+  clientUserMessageId: string): Promise<boolean> {
+  if (!unsubscribe) return false;
+  await readyOutcomeReturns();
+  return outcomeReturns.createdWithoutTurn(threadId, sender, clientUserMessageId);
+}
+
+/** Refuse a sender-attributed create before native submission when custody
+ * cannot run here; the exact-turn watch still has to be durably written later. */
+export async function readyCreatedTurnReturns(): Promise<void> {
+  if (!unsubscribe) throw new Error('Created-turn outcome custody unavailable.');
+  await readyOutcomeReturns();
+}
