@@ -71,9 +71,10 @@ describe('outcome returns', () => {
           'PRIVATE_MARKER never delivered', [userItem(`create_${outcome}`),
             { type: 'agentMessage', id: `native_${outcome}`, text: 'PRIVATE_MARKER never delivered' }], outcome);
       }
+      expect(await store.createdWithoutTurn(thread, sender, 'create_unknown')).toBe(true);
       await store.deliverDue();
       const received = await f.received();
-      expect(received).toHaveLength(4);
+      expect(received).toHaveLength(5);
       for (const outcome of ['completed', 'failed', 'interrupted', 'usageLimited'] as const) {
         expect(received).toContainEqual({ version: 1, kind: 'created_turn', origin: 'create',
           id: createdTurnReturnId(thread, `created_${outcome}`, `create_${outcome}`), to: sender,
@@ -81,6 +82,12 @@ describe('outcome returns', () => {
           clientUserMessageId: `create_${outcome}`, outcome,
           lastAgentMessageItemId: `native_${outcome}` });
       }
+      expect(received).toContainEqual({ version: 1, kind: 'created_turn', origin: 'create',
+        id: createdTurnReturnId(thread, null, 'create_unknown'), to: sender,
+        from: { threadId: thread, turnId: null }, clientUserMessageId: 'create_unknown',
+        outcome: 'unknown', lastAgentMessageItemId: null });
+      expect(new Set(received.map(value => (value as { outcome: string }).outcome))).toEqual(
+        new Set(['completed', 'failed', 'interrupted', 'usageLimited', 'unknown']));
       expect(JSON.stringify(received)).not.toContain('PRIVATE_MARKER');
     } finally { await f.cleanup(); }
   }, 30_000);
