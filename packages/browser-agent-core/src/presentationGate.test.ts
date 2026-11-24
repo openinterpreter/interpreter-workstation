@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from 'bun:test';
-import { indexedDB as fakeIndexedDB } from 'fake-indexeddb';
+import { IDBDatabase, indexedDB as fakeIndexedDB } from 'fake-indexeddb';
 import { createAssistantMessageEventStream, type Model } from '@earendil-works/pi-ai';
 import type { StreamFn } from '@earendil-works/pi-agent-core';
 import type { AppServerNotification } from '../../../src/lib/codex/protocol';
@@ -44,8 +44,11 @@ afterAll(() => {
   else Reflect.deleteProperty(globalThis, 'navigator');
 });
 class DurableTestStore extends IndexedDbPiTranscriptStore {
+  readonly testName: string;
   constructor() {
-    super(`browser-presentation-test-${crypto.randomUUID()}`);
+    const name = `browser-presentation-test-${crypto.randomUUID()}`;
+    super(name);
+    this.testName = name;
     brandPersistentStoreForTests(this);
   }
 }
@@ -74,6 +77,8 @@ test('an exact IndexedDB instance ignores volatile own-method shadows', async ()
   store.read = (...args) => memory.read(...args);
   store.compareAndSwapTerminal = (...args) => memory.compareAndSwapTerminal(...args);
   store.runExclusive = (...args) => memory.runExclusive(...args);
+  // An ordinary private TypeScript property is still writable at runtime.
+  Object.defineProperty(store, 'db', { value: Promise.resolve(null), configurable: true });
   const session = await BrowserPiAppServerSession.open({ ...options,
     presentationValidator: () => ({ accept: true }) }, store);
   await session.send(request);
@@ -451,7 +456,11 @@ test('a same-revision cross-tab byte change requires reload and revalidation bef
   if (final?.role !== 'assistant' || final.content[0]?.type !== 'text')
     throw new Error('Expected a completed assistant turn');
   final.content[0].text = 'Unverified answer';
-  const db = await (store as unknown as { db: Promise<IDBDatabase> }).db;
+  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+    const opening = fakeIndexedDB.open(store.testName);
+    opening.onsuccess = () => resolve(opening.result);
+    opening.onerror = () => reject(opening.error);
+  });
   await new Promise<void>((resolve, reject) => {
     const transaction = db.transaction('threads', 'readwrite');
     transaction.objectStore('threads').put(changed, `${options.projectId}:${options.threadId}`);
@@ -591,21 +600,20 @@ test('the exclusive lock covers model tools, validator, durable write and public
 
 test('strict IndexedDB transaction reaches its terminal event before answer publication and lock release', async () => {
   const store = new DurableTestStore();
-  const db = await (store as unknown as { db: Promise<IDBDatabase> }).db;
-  const original = db.transaction.bind(db);
+  const original = IDBDatabase.prototype.transaction;
   let strict = false;
   let terminal = false;
   let released = false;
   const observations: Array<{ strict: boolean; terminal: boolean; released: boolean }> = [];
-  db.transaction = ((names: string | string[], mode?: IDBTransactionMode,
-    options?: IDBTransactionOptions) => {
-    const transaction = original(names, mode, options);
+  IDBDatabase.prototype.transaction = (function (this: IDBDatabase, names: string | string[], mode?: IDBTransactionMode,
+    options?: IDBTransactionOptions) {
+    const transaction = original.call(this, names, mode, options);
     if (mode === 'readwrite' && options?.durability === 'strict') {
       strict = true;
       transaction.addEventListener('complete', () => { terminal = true; });
     }
     return transaction;
-  }) as typeof db.transaction;
+  }) as typeof IDBDatabase.prototype.transaction;
   const exclusive = store.runExclusive.bind(store);
   store.runExclusive = async (project, thread, action) => exclusive(project, thread, async () => {
     try { return await action(); }
@@ -618,7 +626,8 @@ test('strict IndexedDB transaction reaches its terminal event before answer publ
         observations.push({ strict, terminal, released });
       }
     } }, store);
-  await session.send(request);
+  try { await session.send(request); }
+  finally { IDBDatabase.prototype.transaction = original; }
   expect(observations).toEqual([{ strict: true, terminal: true, released: false }]);
   expect(terminal).toBe(true);
   expect(released).toBe(true);

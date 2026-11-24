@@ -144,12 +144,12 @@ export class IndexedDbPiTranscriptStore implements BrowserPiTranscriptStore {
   get crossTabLockCapability(): boolean {
     return typeof navigator !== 'undefined' && !!navigator.locks?.request;
   }
-  private readonly db: Promise<IDBDatabase>;
+  readonly #db: Promise<IDBDatabase>;
   constructor(name = 'interpreter-browser-pi-v1') {
     if (typeof indexedDB === 'undefined') throw new Error('Browser Pi persistent storage unavailable');
     // Subclasses can replace persistence and locking with volatile methods.
     if (new.target === IndexedDbPiTranscriptStore) reviewedPersistentStores.add(this);
-    this.db = new Promise((resolve, reject) => {
+    this.#db = new Promise((resolve, reject) => {
       const request = indexedDB.open(name, 1);
       request.onupgradeneeded = () => request.result.createObjectStore('threads');
       request.onsuccess = () => resolve(request.result);
@@ -169,7 +169,7 @@ export class IndexedDbPiTranscriptStore implements BrowserPiTranscriptStore {
   }
   async read(projectId: string, threadId: string): Promise<BrowserPiTranscript | null> {
     if (!idPattern.test(projectId) || !idPattern.test(threadId)) throw new Error('Invalid Pi transcript identity');
-    const db = await this.db;
+    const db = await this.#db;
     return new Promise((resolve, reject) => {
       const request = db.transaction('threads', 'readonly').objectStore('threads').get(`${projectId}:${threadId}`);
       request.onsuccess = () => {
@@ -182,7 +182,7 @@ export class IndexedDbPiTranscriptStore implements BrowserPiTranscriptStore {
   async compareAndSwap(value: BrowserPiTranscript, expectedRevision: number): Promise<void> {
     const next = validatePiTranscript(value, value.projectId, value.threadId);
     if (next.revision !== expectedRevision + 1) throw new Error('Invalid Pi transcript revision');
-    const db = await this.db;
+    const db = await this.#db;
     return new Promise((resolve, reject) => {
       const transaction = db.transaction('threads', 'readwrite');
       const store = transaction.objectStore('threads');
@@ -212,7 +212,7 @@ export class IndexedDbPiTranscriptStore implements BrowserPiTranscriptStore {
       signal?.addEventListener('abort', abortOpening, { once: true });
     });
     let db: IDBDatabase;
-    try { db = await Promise.race([this.db, openingAborted]); }
+    try { db = await Promise.race([this.#db, openingAborted]); }
     finally { if (abortOpening) signal?.removeEventListener('abort', abortOpening); }
     if (signal?.aborted) throw new DOMException('Browser transcript write aborted', 'AbortError');
     return new Promise((resolve, reject) => {
