@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import { applyChatEvent, createInitialChatState } from '../../src/hooks/use-chat-reducer';
+import { createdTurnOutcome } from '../utils/outcomeReturnsRuntime';
 import {
   createAgentStreamErrorPayload,
   getAgentServiceTierConfig,
@@ -24,6 +25,12 @@ describe('Simple mode service tier', () => {
 });
 
 describe('programmatic task HTTP transport', () => {
+  test('recognizes usage limits only from structured failed-turn errors', () => {
+    expect(createdTurnOutcome('failed', { codexErrorInfo: 'usageLimitExceeded' })).toBe('usageLimited');
+    expect(createdTurnOutcome('failed', { codexErrorInfo: { usageLimitReached: {} } })).toBe('usageLimited');
+    expect(createdTurnOutcome('failed', { message: 'usageLimitExceeded' })).toBe('failed');
+    expect(createdTurnOutcome('completed', { codexErrorInfo: 'usageLimitExceeded' })).toBe('completed');
+  });
   test('accepts a native client ID in the wake event ID alphabet and rejects malformed values before admission', () => {
     expect(parseProgrammaticTaskBody({ message: 'task', clientUserMessageId: 'origin_01' }).clientUserMessageId)
       .toBe('origin_01');
@@ -59,9 +66,14 @@ describe('programmatic task HTTP transport', () => {
     }
     const sender = { computer: 'host' };
     expect(getProgrammaticSenderError({ message: 'task', clientUserMessageId: 'c1', sender }))
-      .toBe('sender requires threadId.');
+      .toBe('sender requires a source thread for created tasks.');
     expect(getProgrammaticSenderError({ message: 'task', threadId: '  ', clientUserMessageId: 'c1', sender }))
-      .toBe('sender requires threadId.');
+      .toBe('sender requires a source thread for created tasks.');
+    expect(getProgrammaticSenderError({ message: 'task', clientUserMessageId: 'c1',
+      sender: { computer: 'host', thread: 'source_1' } })).toBeNull();
+    expect(getProgrammaticSenderError({ message: 'task',
+      sender: { computer: 'host', thread: 'source_1' } }))
+      .toBe('clientUserMessageId is required for sender-attributed create.');
     // The sender check covers only the sender; the task routes require a
     // client ID for any input to an existing thread.
     expect(getProgrammaticSenderError({ message: 'task', threadId: base.threadId, sender })).toBeNull();

@@ -9,6 +9,7 @@ import {
   UNKNOWN_REPLY_SUMMARY,
   OUTCOME_SUMMARY_LIMIT,
   OutcomeReturns,
+  createdTurnReturnId,
   earlierOutcomeReturnId,
   goalNoticeId,
   goalNoticeSummary,
@@ -58,6 +59,62 @@ process.stdin.on('end', () => {
 }
 
 describe('outcome returns', () => {
+  test('created first turn sends only IDs and status for all native terminal outcomes', async () => {
+    const f = await fixture();
+    try {
+      const store = await f.make(0);
+      for (const outcome of ['completed', 'failed', 'interrupted', 'usageLimited'] as const) {
+        const turnId = `created_${outcome}`;
+        expect(await store.watchCreated(thread, turnId, sender, `create_${outcome}`)).toBe(true);
+        await store.turnEnded(thread, turnId, outcome === 'usageLimited' ? 'failed' : outcome,
+          'PRIVATE_MARKER never delivered', [userItem(`create_${outcome}`),
+            { type: 'agentMessage', id: `native_${outcome}`, text: 'PRIVATE_MARKER never delivered' }], outcome);
+      }
+      await store.deliverDue();
+      const received = await f.received();
+      expect(received).toHaveLength(4);
+      for (const outcome of ['completed', 'failed', 'interrupted', 'usageLimited'] as const) {
+        expect(received).toContainEqual({ version: 1, kind: 'created_turn', origin: 'create',
+          id: createdTurnReturnId(thread, `created_${outcome}`, `create_${outcome}`), to: sender,
+          from: { threadId: thread, turnId: `created_${outcome}` },
+          clientUserMessageId: `create_${outcome}`, outcome,
+          lastAgentMessageItemId: `native_${outcome}` });
+      }
+      expect(JSON.stringify(received)).not.toContain('PRIVATE_MARKER');
+    } finally { await f.cleanup(); }
+  }, 30_000);
+
+  test('created watch waits for saved turn items; reopens and delivers once without outcome loop', async () => {
+    const f = await fixture();
+    try {
+      const first = await f.make(null);
+      expect(await first.watchCreated(thread, 'created_restart', sender, 'create_restart')).toBe(true);
+      await first.turnEnded(thread, 'created_restart', 'completed', 'PRIVATE_MARKER');
+      expect(first.list()[0]?.status).toBe('watching');
+      await first.stop();
+      const second = await f.make(0, { readTurn: async () => ({ outcome: 'completed', summary: 'PRIVATE_MARKER',
+        items: [userItem('create_restart'), agentItem('PRIVATE_MARKER')] }) });
+      await second.deliverDue();
+      await second.deliverDue();
+      expect(await f.received()).toHaveLength(1);
+      expect(await second.watchCreated(thread, 'loop', sender, 'outcome-abc')).toBe(true);
+      expect(second.list()).toHaveLength(1);
+      expect(JSON.stringify(await f.received())).not.toContain('PRIVATE_MARKER');
+    } finally { await f.cleanup(); }
+  }, 30_000);
+
+  test('created turn does not complete from a saved turn with a different native input', async () => {
+    const f = await fixture();
+    try {
+      const store = await f.make(0);
+      expect(await store.watchCreated(thread, 'turn_mismatch', sender, 'create_owner')).toBe(true);
+      await store.turnEnded(thread, 'turn_mismatch', 'completed', 'Other answer',
+        [userItem('someone_else'), agentItem('Other answer')]);
+      expect(store.list()[0]?.status).toBe('watching');
+      await store.deliverDue();
+      expect(await f.received()).toEqual([]);
+    } finally { await f.cleanup(); }
+  }, 30_000);
   test('watch, turn end and delivery write the exact JSON to the command', async () => {
     const f = await fixture();
     try {
