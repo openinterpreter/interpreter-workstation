@@ -32,8 +32,17 @@ export type BrowserPiTranscriptStore = {
 // Only instances constructed by this reviewed IndexedDB implementation carry
 // the module-private capability; callers cannot opt a memory subclass in.
 const reviewedPersistentStores = new WeakSet<BrowserPiTranscriptStore>();
+const reviewedTestStores = new WeakSet<BrowserPiTranscriptStore>();
 export function isReviewedPersistentStore(store: BrowserPiTranscriptStore): boolean {
   return reviewedPersistentStores.has(store);
+}
+/** Internal fault-injection seam. Never re-export from the package entry. */
+export function brandPersistentStoreForTests(store: BrowserPiTranscriptStore): void {
+  if (process.env.NODE_ENV !== 'test') throw new Error('Test environment required');
+  reviewedTestStores.add(store);
+}
+export function isReviewedTestStore(store: BrowserPiTranscriptStore): boolean {
+  return reviewedTestStores.has(store);
 }
 
 const encoder = new TextEncoder();
@@ -138,7 +147,8 @@ export class IndexedDbPiTranscriptStore implements BrowserPiTranscriptStore {
   private readonly db: Promise<IDBDatabase>;
   constructor(name = 'interpreter-browser-pi-v1') {
     if (typeof indexedDB === 'undefined') throw new Error('Browser Pi persistent storage unavailable');
-    reviewedPersistentStores.add(this);
+    // Subclasses can replace persistence and locking with volatile methods.
+    if (new.target === IndexedDbPiTranscriptStore) reviewedPersistentStores.add(this);
     this.db = new Promise((resolve, reject) => {
       const request = indexedDB.open(name, 1);
       request.onupgradeneeded = () => request.result.createObjectStore('threads');

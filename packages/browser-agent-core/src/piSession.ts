@@ -6,7 +6,7 @@ import type { AppServerNotification } from '../../../src/lib/codex/protocol';
 import { mapBrowserNotificationToUiEvents, SERVER_METHOD } from './protocolWire';
 import type { v2 } from '../../../server/handlers/codex-generated-types/index';
 import { BrowserProjectAppServer } from './appServer';
-import { IndexedDbPiTranscriptStore, isReviewedPersistentStore, validatePiTranscript,
+import { IndexedDbPiTranscriptStore, isReviewedPersistentStore, isReviewedTestStore, validatePiTranscript,
   type BrowserPiTranscript, type BrowserPiTranscriptStore } from './piTranscript';
 import { projectPiHistory } from './piHistory';
 import type { BrowserLocalModelCatalog } from './modelCatalog';
@@ -81,6 +81,14 @@ export class BrowserPiAppServerSession {
   private modelPassLimitReached = false;
   private toolCalls = 0;
   private readonly storage?: BrowserPiTranscriptStore;
+  private gatedStorageOps?: Pick<BrowserPiTranscriptStore, 'read' | 'runExclusive' | 'compareAndSwapTerminal'>;
+  private readTranscript(): Promise<BrowserPiTranscript | null> {
+    return (this.gatedStorageOps?.read ?? this.storage!.read).call(this.storage!, this.projectId, this.threadId);
+  }
+  private runStorageExclusive<T>(action: () => Promise<T>): Promise<T> {
+    return (this.gatedStorageOps?.runExclusive ?? this.storage!.runExclusive)
+      .call(this.storage!, this.projectId, this.threadId, action);
+  }
   private revision = 0;
   private knownDurableDigest: string | null = null;
   private unavailableReason: string | null = null;
@@ -108,10 +116,10 @@ export class BrowserPiAppServerSession {
 
   private async writeTranscript(next: BrowserPiTranscript, signal?: AbortSignal): Promise<void> {
     if (this.agentOptions.presentationValidator) {
-      if (!this.storage?.compareAndSwapTerminal) throw new BrowserPresentationError('capability');
+      if (!this.gatedStorageOps?.compareAndSwapTerminal) throw new BrowserPresentationError('capability');
       let graceTimer: ReturnType<typeof setTimeout> | undefined;
       let onAbort: (() => void) | undefined;
-      const terminal = this.storage.compareAndSwapTerminal(next, this.revision, signal);
+      const terminal = this.gatedStorageOps.compareAndSwapTerminal.call(this.storage!, next, this.revision, signal);
       const grace = new Promise<never>((_, reject) => {
         onAbort = () => { graceTimer = setTimeout(() =>
           reject(new BrowserPresentationError('storage-unavailable')), TERMINAL_EVENT_GRACE_MS); };
@@ -205,17 +213,25 @@ export class BrowserPiAppServerSession {
         catch { throw new BrowserPresentationError('capability'); }
       } else storage = new IndexedDbPiTranscriptStore();
     }
-    if (openedOptions.presentationValidator && (!isReviewedPersistentStore(storage) ||
+    if (openedOptions.presentationValidator && (!isReviewedPersistentStore(storage) && !isReviewedTestStore(storage) ||
       storage.crossTabLockCapability !== true || !storage.compareAndSwapTerminal))
       throw new BrowserPresentationError('capability');
+    const gatedStorageOps = openedOptions.presentationValidator ? {
+      read: isReviewedTestStore(storage) ? storage.read : IndexedDbPiTranscriptStore.prototype.read,
+      runExclusive: isReviewedTestStore(storage) ? storage.runExclusive : IndexedDbPiTranscriptStore.prototype.runExclusive,
+      compareAndSwapTerminal: isReviewedTestStore(storage) ? storage.compareAndSwapTerminal :
+        IndexedDbPiTranscriptStore.prototype.compareAndSwapTerminal,
+    } : undefined;
     let restored: BrowserPiTranscript | null;
     try {
-      restored = await storage.read(openedOptions.projectId, openedOptions.threadId);
+      restored = await (gatedStorageOps?.read ?? storage.read).call(storage,
+        openedOptions.projectId, openedOptions.threadId);
     } catch {
       if (openedOptions.presentationValidator) throw new BrowserPresentationError('storage-unavailable');
       throw new Error('Browser conversation storage unavailable; reload before sending');
     }
     const session = new BrowserPiAppServerSession({ ...openedOptions, storage }, verifiedGateOpen);
+    session.gatedStorageOps = gatedStorageOps;
     if (restored) {
       let transcript: BrowserPiTranscript;
       try { transcript = validatePiTranscript(restored, openedOptions.projectId, openedOptions.threadId); }
@@ -464,16 +480,16 @@ export class BrowserPiAppServerSession {
     try {
       if (this.storage) {
       try {
-        return await this.storage.runExclusive(this.projectId, this.threadId, async () => {
+        return await this.runStorageExclusive(async () => {
           let readTimer: ReturnType<typeof setTimeout> | undefined;
           const persisted = this.presentationGated ? await Promise.race([
-            this.storage!.read(this.projectId, this.threadId),
+            this.readTranscript(),
             new Promise<never>((_, reject) => {
               readTimer = setTimeout(() => reject(new BrowserPresentationError('storage-unavailable')),
                 this.timeoutMs);
             }),
           ]).finally(() => { if (readTimer) clearTimeout(readTimer); }) :
-            await this.storage!.read(this.projectId, this.threadId);
+            await this.readTranscript();
           // The HTTP stream may be stopped while IndexedDB is opening or reading.
           // Never start model inference or invoke tools after that cancellation.
           if (signal?.aborted) throw new DOMException('Browser turn aborted', 'AbortError');
@@ -698,7 +714,7 @@ export class BrowserPiAppServerSession {
           // Wait for the transaction's own terminal event, then verify the exact durable bytes.
           await this.writeTranscript(next, writeAbort.signal);
           if (expired || this.stoppedTurn === turnId) throw new BrowserPresentationError('storage-unavailable');
-          const readback = await Promise.race([this.storage.read(this.projectId, this.threadId),
+          const readback = await Promise.race([this.readTranscript(),
             deadline, interrupted]);
           if (!readback || readback.revision !== next.revision ||
               transcriptDigest(readback) !== transcriptDigest(next))
@@ -762,7 +778,7 @@ export class BrowserPiAppServerSession {
           let readTimer: ReturnType<typeof setTimeout> | undefined;
           let persisted: BrowserPiTranscript | null;
           try {
-            persisted = await Promise.race([this.storage!.read(this.projectId, this.threadId),
+            persisted = await Promise.race([this.readTranscript(),
               new Promise<never>((_, reject) => {
                 readTimer = setTimeout(() => reject(new BrowserPresentationError('storage-unavailable')),
                   TERMINAL_EVENT_GRACE_MS);

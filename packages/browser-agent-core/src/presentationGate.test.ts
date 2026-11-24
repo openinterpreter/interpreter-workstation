@@ -4,7 +4,7 @@ import { createAssistantMessageEventStream, type Model } from '@earendil-works/p
 import type { StreamFn } from '@earendil-works/pi-agent-core';
 import type { AppServerNotification } from '../../../src/lib/codex/protocol';
 import { BrowserPiAppServerSession } from './piSession';
-import { IndexedDbPiTranscriptStore, MemoryPiTranscriptStore, type BrowserPiTranscript,
+import { brandPersistentStoreForTests, IndexedDbPiTranscriptStore, MemoryPiTranscriptStore, type BrowserPiTranscript,
   type BrowserPiTranscriptStore } from './piTranscript';
 import { BrowserPresentationError, presentationCandidate, validatePresentation,
   type PresentationCandidate } from './presentationGate';
@@ -44,8 +44,43 @@ afterAll(() => {
   else Reflect.deleteProperty(globalThis, 'navigator');
 });
 class DurableTestStore extends IndexedDbPiTranscriptStore {
-  constructor() { super(`browser-presentation-test-${crypto.randomUUID()}`); }
+  constructor() {
+    super(`browser-presentation-test-${crypto.randomUUID()}`);
+    brandPersistentStoreForTests(this);
+  }
 }
+test('a volatile subclass of the IndexedDB store cannot acquire presentation capability', async () => {
+  const memory = new MemoryPiTranscriptStore();
+  class VolatileSubclass extends IndexedDbPiTranscriptStore {
+    constructor() { super(`browser-presentation-volatile-${crypto.randomUUID()}`); }
+    override read(...args: Parameters<IndexedDbPiTranscriptStore['read']>) { return memory.read(...args); }
+    override compareAndSwapTerminal(...args: Parameters<IndexedDbPiTranscriptStore['compareAndSwapTerminal']>) {
+      return memory.compareAndSwapTerminal(...args);
+    }
+    override runExclusive<T>(projectId: string, threadId: string, action: () => Promise<T>) {
+      return memory.runExclusive(projectId, threadId, action);
+    }
+  }
+  let published = 0;
+  const store = new VolatileSubclass();
+  await expect(BrowserPiAppServerSession.open({ ...options,
+    presentationValidator: () => ({ accept: true }), onEvent: () => { published++; } }, store))
+    .rejects.toMatchObject({ code: 'capability' });
+  expect(published).toBe(0);
+});
+test('an exact IndexedDB instance ignores volatile own-method shadows', async () => {
+  const memory = new MemoryPiTranscriptStore();
+  const store = new IndexedDbPiTranscriptStore(`browser-presentation-shadow-${crypto.randomUUID()}`);
+  store.read = (...args) => memory.read(...args);
+  store.compareAndSwapTerminal = (...args) => memory.compareAndSwapTerminal(...args);
+  store.runExclusive = (...args) => memory.runExclusive(...args);
+  const session = await BrowserPiAppServerSession.open({ ...options,
+    presentationValidator: () => ({ accept: true }) }, store);
+  await session.send(request);
+  expect(await IndexedDbPiTranscriptStore.prototype.read.call(store,
+    options.projectId, options.threadId)).not.toBeNull();
+  session.dispose();
+});
 const options = { projectId: 'gate_project', threadId: 'gate_thread',
   model, systemPrompt: '', tools: [], streamFn };
 const request = { workspacePath: 'browser-project:gate_project', message: 'Explain' };

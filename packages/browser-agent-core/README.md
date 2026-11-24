@@ -45,8 +45,8 @@ Reload revalidates complete turns, while provisional journals remain incomplete
 and hidden. With no validator the original session behavior is unchanged.
 This protects an application's presentation paths from its own unverified
 output; it is not a defense against hostile JavaScript running in the same realm.
-An application that subclasses the branded IndexedDB store and overrides its
-methods is outside that trusted same-realm boundary.
+Only exact IndexedDB store instances carry the durable capability; subclasses
+cannot opt in by inheriting its constructor.
 The package-local `protocolWire` contains only the emitted app-server method
 strings and their SSE projection. Tests compare every emitted notification to
 the canonical mapper; no root application code is imported at runtime. The
