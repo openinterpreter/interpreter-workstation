@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { waitForPublishedManifest } from './wait-for-published-manifest.mjs';
 
 const [version, baseUrl, repository] = process.argv.slice(2);
 const mode = process.env.RELEASE_PLATFORM_MODE ?? 'all';
@@ -25,9 +26,7 @@ async function fetchOk(name, init) {
 }
 
 for (const [manifest, filenames] of Object.entries(expectedManifestFiles)) {
-  const text = await (await fetchOk(manifest)).text();
-  assert.match(text, new RegExp(`(?:^|\\n)version:\\s*["']?${version.replaceAll('.', '\\.')}(?:["']?\\s*$)`, 'm'), `${manifest} has the wrong version`);
-  for (const filename of filenames) assert.ok(text.includes(filename), `${manifest} does not reference ${filename}`);
+  await waitForPublishedManifest({ baseUrl, name: manifest, version, filenames });
 }
 
 const aliases = new Map([
