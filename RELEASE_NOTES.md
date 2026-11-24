@@ -1,9 +1,8 @@
-<!-- release-notes-for: 0.2.259 -->
+<!-- release-notes-for: 0.2.260 -->
 ## What's new
 
-- Reports native thread-list failures instead of treating them as an empty thread list.
-- Bounds thread-list requests so a delayed native response cannot silently mask an error.
-- Reads thread-list pages from the native state database and checks empty pages against the ordinary scan.
+- Adds an opt-in validation gate that keeps browser-agent turns hidden until their transcript is durably committed and verified.
+- Updates server-side localization for the newer translation library.
 
 ## Distribution
 
