@@ -74,6 +74,19 @@ test('transient missing public object can converge without accepting an old vers
   assert.equal(count, 2);
 });
 
+test('network error text cannot masquerade as a permanent HTTP denial', async () => {
+  let count = 0;
+  await waitForPublishedManifest({
+    ...options,
+    fetchManifest: async () => {
+      count += 1;
+      if (count === 1) throw new Error('transient proxy says non-retryable HTTP in its message');
+      return reply(current);
+    },
+  });
+  assert.equal(count, 2);
+});
+
 test('attempt cap cannot be raised beyond the release bound', async () => {
   await assert.rejects(waitForPublishedManifest({
     ...options, maxAttempts: 13, fetchManifest: async () => reply(current),

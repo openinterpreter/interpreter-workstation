@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 const MAX_ATTEMPTS = 12;
 const RETRY_DELAY_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 10_000;
+class PermanentManifestFailure extends Error {}
 
 const pause = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
@@ -28,7 +29,7 @@ export async function waitForPublishedManifest({
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       if (response.status === 400 || response.status === 401 || response.status === 403) {
-        throw new Error(`${name} returned non-retryable HTTP ${response.status}`);
+        throw new PermanentManifestFailure(`${name} returned non-retryable HTTP ${response.status}`);
       }
       if (!response.ok) {
         lastFailure = `HTTP ${response.status}`;
@@ -43,7 +44,7 @@ export async function waitForPublishedManifest({
         }
       }
     } catch (error) {
-      if (String(error.message).includes('non-retryable HTTP')) throw error;
+      if (error instanceof PermanentManifestFailure) throw error;
       lastFailure = error instanceof Error ? error.message : String(error);
     }
     if (attempt < maxAttempts) await sleep(retryDelayMs);
