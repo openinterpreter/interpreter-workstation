@@ -9,7 +9,7 @@ serverI18n.init({
   resources,
   lng: 'en',
   fallbackLng: 'en',
-  initImmediate: false,
+  initAsync: false,
   interpolation: { escapeValue: false },
 });
 
