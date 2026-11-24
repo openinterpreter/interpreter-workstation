@@ -5,7 +5,7 @@ import { copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promi
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { draftPlan, findDraft, observeCreatedDraft } from './reconcile-release-draft.mjs';
+import { draftPlan, findDraft, findRelease, observeCreatedDraft, publishedPlan } from './reconcile-release-draft.mjs';
 import { listAllPages, objectState } from './reconcile-immutable-uploads.mjs';
 import { snapshotId, verifyRestored } from './reconcile-release-metadata.mjs';
 
@@ -209,6 +209,23 @@ test('draft custody preserves exact assets and fails closed on any mismatch', ()
   assert.equal(objectState([], 'releases/one', expected.get('one')), 'missing');
 });
 
+test('published same-source release resumes only when every built asset digest matches', () => {
+  const commit = 'a'.repeat(40);
+  const expected = new Map([['installer.exe', { name: 'installer.exe', size: 3, digest: digest('one') }],
+    ['SHA256SUMS', { name: 'SHA256SUMS', size: 3, digest: digest('two') }]]);
+  const release = { tag_name: 'v0.2.262', draft: false, target_commitish: commit,
+    assets: [...expected.values()] };
+  assert.deepEqual(publishedPlan(expected, findRelease([release], release.tag_name, commit)), []);
+  assert.throws(() => findRelease([release], release.tag_name, 'b'.repeat(40)), /another commit/);
+  assert.throws(() => publishedPlan(expected, { ...release, assets: [release.assets[0]] }), /missing 1 exact assets/);
+  assert.throws(() => publishedPlan(expected, { ...release,
+    assets: [{ ...release.assets[0], digest: digest('bad') }, release.assets[1]] }), /identity mismatch/);
+  assert.throws(() => publishedPlan(expected, { ...release,
+    assets: [...release.assets, release.assets[0]] }), /duplicate/);
+  assert.throws(() => publishedPlan(expected, { ...release,
+    assets: [...release.assets, { name: 'unexpected', size: 1, digest: digest('x') }] }), /Unexpected/);
+});
+
 test('new draft becomes visible only after bounded exact-identity reads', async () => {
   const commit = 'a'.repeat(40);
   const draft = { tag_name: 'v0.2.217', draft: true, target_commitish: commit, assets: [] };
@@ -286,6 +303,14 @@ else if(a[0]==='release'&&a[1]==='upload'){
   assert.equal(calls.length, expected.length - 1);
   assert.equal(calls.filter((call) => call === `UPLOAD ${expected[1].name}`).length, 1);
   const changed = JSON.parse(await readFile(stateFile, 'utf8'));
+  changed.draft = false;
+  await writeFile(stateFile, JSON.stringify(changed));
+  assert.equal(invoke().status, 0, 'the same published release with exact assets is resumable');
+  assert.equal((await readFile(logFile, 'utf8')).trim().split('\n').length, calls.length);
+  changed.target_commitish = 'b'.repeat(40);
+  await writeFile(stateFile, JSON.stringify(changed));
+  assert.match(invoke().stderr, /another commit/);
+  changed.target_commitish = commit;
   changed.assets[0].digest = digest('mismatch');
   await writeFile(stateFile, JSON.stringify(changed));
   assert.match(invoke().stderr, /identity mismatch/);

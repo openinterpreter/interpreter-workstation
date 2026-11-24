@@ -1,8 +1,9 @@
-<!-- release-notes-for: 0.2.261 -->
+<!-- release-notes-for: 0.2.262 -->
 ## What's new
 
-- Fixes bundled resource paths when running the standalone server.
-- Allows time for updated download manifests to become visible before verifying a published release.
+- Keeps first-failure end-to-end traces and logs available for diagnosing intermittent tests.
+- Resumes a matching published release only after verifying its source and all asset digests.
+- Copies stable download aliases from verified versioned packages and checks their public SHA-256 before completing publication.
 
 ## Distribution
 
