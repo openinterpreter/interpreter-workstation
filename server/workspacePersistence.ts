@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readdirSync, statSync } from 'fs';
 import { join, dirname, resolve as pathResolve } from 'path';
+import { fileURLToPath } from 'node:url';
 import { homedir } from 'os';
 import * as configStore from './configStore';
 
@@ -35,6 +36,9 @@ function getNextAvailableWorkspaceName(basePath: string, baseName: string): stri
  * Get the path to sample workspace files (works in both dev and packaged app)
  */
 function getSampleWorkspacePath(): string {
+  const moduleDirectory = dirname(
+    typeof __filename === 'string' && __filename ? __filename : fileURLToPath(import.meta.url),
+  );
   // In packaged app, use process.resourcesPath
   if (process.resourcesPath) {
     const prodPath = join(process.resourcesPath, 'resources', 'sample-workspace');
@@ -46,7 +50,7 @@ function getSampleWorkspacePath(): string {
 
   // In dev mode, __dirname is dist-electron/electron (compiled output)
   // Need to go up two levels to reach project root where resources/ lives
-  const projectRoot = join(dirname(__dirname), '..');
+  const projectRoot = join(dirname(moduleDirectory), '..');
   const devPath = join(projectRoot, 'resources', 'sample-workspace');
   console.log('[WorkspacePersistence] Checking dev sample path:', devPath);
   if (existsSync(devPath)) {
@@ -54,7 +58,7 @@ function getSampleWorkspacePath(): string {
   }
 
   // Fallback: try relative to source location (for sidecar/standalone mode)
-  const sourcePath = join(dirname(__dirname), 'resources', 'sample-workspace');
+  const sourcePath = join(dirname(moduleDirectory), 'resources', 'sample-workspace');
   console.log('[WorkspacePersistence] Checking source sample path:', sourcePath);
   if (existsSync(sourcePath)) {
     return sourcePath;
