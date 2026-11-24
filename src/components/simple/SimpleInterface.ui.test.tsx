@@ -288,11 +288,13 @@ describe("Simple executable interface", () => {
   test("a generated runtime error is redacted but remains a project-code action", async () => {
     render(<SimpleInterface onMessage={() => {}} />);
     const frame = (await screen.findByTitle("Interpreter interface")) as HTMLIFrameElement;
-    window.dispatchEvent(new MessageEvent("message", {
-      source: frame.contentWindow,
-      data: { protocol: "interpreter-interface-v1", type: "runtime-error", message: "App.jsx:4: token=secret /private/alice" },
-    }));
-    expect(screen.getByRole("status")).toHaveTextContent("Fix the interface project's code");
+    await act(async () => {
+      window.dispatchEvent(new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: { protocol: "interpreter-interface-v1", type: "runtime-error", message: "App.jsx:4: token=secret /private/alice" },
+      }));
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent("Fix the interface project's code");
     expect(screen.getByRole("status")).not.toHaveTextContent(/alice|secret/);
   });
 

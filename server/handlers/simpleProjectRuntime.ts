@@ -367,7 +367,7 @@ async function refreshProject(workstationOrigin: string): Promise<SimpleAppStatu
         || error.message.startsWith('The bundled Simple interface runtime is for ')
         || error.message === 'This project uses custom core package versions. Install its dependencies in the project before starting it.'
       )) throw error;
-      throw new Error('The interface project dependencies could not be installed.', { cause: error });
+      throw new Error('The interface project dependencies could not be installed.');
     }
   }
   const result = await trustedProjectRunner.start(project.path, {
