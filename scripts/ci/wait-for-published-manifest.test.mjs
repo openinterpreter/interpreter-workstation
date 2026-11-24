@@ -46,6 +46,13 @@ test('persistent stale version fails closed after the bounded attempts', async (
   assert.equal(count, 3);
 });
 
+test('a missing YAML version cannot borrow the target from the next line', async () => {
+  await assert.rejects(waitForPublishedManifest({
+    ...options,
+    fetchManifest: async () => reply('version:\n0.2.260\npath: Interpreter-win-x64-0.2.260.exe\n'),
+  }), /did not converge.*wrong version/);
+});
+
 test('matching version without required asset also fails closed', async () => {
   await assert.rejects(waitForPublishedManifest({
     ...options,

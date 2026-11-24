@@ -16,7 +16,7 @@ export async function waitForPublishedManifest({
   if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > MAX_ATTEMPTS) {
     throw new Error(`Manifest verification attempts must be between 1 and ${MAX_ATTEMPTS}`);
   }
-  const versionLine = new RegExp(`(?:^|\\n)version:\\s*["']?${version.replaceAll('.', '\\.')}["']?\\s*$`, 'm');
+  const versionLine = new RegExp(`(?:^|\\n)version:[ \\t]*["']?${version.replaceAll('.', '\\.')}["']?[ \\t]*$`, 'm');
   let lastFailure = 'no response';
   const nonce = randomUUID();
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
