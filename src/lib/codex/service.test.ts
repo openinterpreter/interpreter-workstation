@@ -596,6 +596,7 @@ function createFakeClient(overrides: {
   forkThread?: (...args: Parameters<CodexClient["forkThread"]>) => Promise<string>;
   threadRead?: (params: Parameters<CodexClient["threadRead"]>[0]) => Promise<v2.ThreadReadResponse>;
   threadTurnsList?: (params: v2.ThreadTurnsListParams) => Promise<v2.ThreadTurnsListResponse>;
+  threadList?: (params: v2.ThreadListParams) => Promise<v2.ThreadListResponse>;
   configValueWrite?: (keyPath: string, value: JsonValue) => Promise<void>;
   configRead?: () => Promise<v2.ConfigReadResponse>;
 } = {}) {
@@ -796,6 +797,7 @@ function createFakeClient(overrides: {
     },
     async threadList(params) {
       calls.threadListParams.push(params ?? {});
+      if (overrides.threadList) return overrides.threadList(params ?? {});
       return { data: [], nextCursor: null };
     },
     async threadLoadedList() {
@@ -3256,6 +3258,23 @@ describe("CodexService", () => {
     assert.deepEqual(fake.calls.threadListParams[0]?.modelProviders, []);
     assert.equal(fake.calls.threadListParams[0]?.sortKey, "updated_at");
     assert.equal(fake.calls.threadListParams[0]?.archived, false);
+  });
+
+  test('native thread-list deadline fails closed and does not accept a late page', async () => {
+    let finish!: (value: v2.ThreadListResponse) => void;
+    const client = createFakeClient({ threadList: () => new Promise((resolve) => { finish = resolve; }) });
+    const service = new CodexService(client.client);
+    await assert.rejects(service.listThreads({}, 10), (error: unknown) =>
+      error instanceof NativeCustodyPhaseError && error.phase === 'thread_list' && error.category === 'deadline');
+    finish({ data: [], nextCursor: null });
+  });
+
+  test('native thread-list error never becomes an empty success page or exposes native prose', async () => {
+    const client = createFakeClient({ threadList: async () => { throw new Error('PRIVATE native failure'); } });
+    const service = new CodexService(client.client);
+    await assert.rejects(service.listThreads({}, 100), (error: unknown) =>
+      error instanceof NativeCustodyPhaseError && error.phase === 'thread_list' &&
+      error.category === 'native_unavailable' && !error.message.includes('PRIVATE'));
   });
 
   test("should_pass_readThread_params_to_client", async () => {

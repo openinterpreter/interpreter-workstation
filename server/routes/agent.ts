@@ -77,6 +77,7 @@ import {
   type ThreadShell,
   NATIVE_CUSTODY_OPERATOR_PHASE_DEADLINE_MS,
   NATIVE_CUSTODY_GLOBAL_OPERATOR_DEADLINE_MS,
+  THREAD_LIST_OPERATOR_DEADLINE_MS,
   getCodexService,
   getSteerErrorCode,
   THREAD_LIST_DEFAULTS,
@@ -1328,20 +1329,38 @@ router.get('/threads', async (req: Request, res: Response) => {
     if (cursor !== undefined && (typeof cursor !== 'string' || cursor.length > 2048)) {
       return res.status(400).json({ error: 'Invalid pagination cursor.' });
     }
-    const result = await getCodexService().listThreads({
+    const params = {
       ...THREAD_LIST_DEFAULTS,
       archived,
       ...(cursor ? { cursor } : {}),
-    });
+    };
+    // Both native calls share PR438's single 12-second operator deadline.
+    const deadlineAt = performance.now() + THREAD_LIST_OPERATOR_DEADLINE_MS;
+    const listWithinBudget = async (useStateDbOnly: boolean) => {
+      const remaining = Math.floor(deadlineAt - performance.now());
+      if (remaining < 1) throw new NativeCustodyPhaseError('thread_list', 'deadline');
+      return getCodexService().listThreads({ ...params, ...(useStateDbOnly ? { useStateDbOnly: true } : {}) }, remaining);
+    };
+    let result = await listWithinBudget(true);
+    // The native StateDbOnly implementation can report a successful empty
+    // page when its DB read failed. Confirm every empty page with the same
+    // cursor via the ordinary scan before treating it as the end of the list.
+    if (result.data.length === 0) {
+      const scanned = await listWithinBudget(false);
+      if (scanned.data.length) {
+        console.warn('[Agent API] Native thread list DB disagreement.', 'db_disagreement');
+      }
+      result = scanned;
+    }
     res.json(result);
   } catch (error) {
-    console.warn(
-      '[Agent API] Failed to list threads; returning empty thread list.',
-      error instanceof Error ? error.message : error,
-    );
-    res.json({
-      data: [],
-      nextCursor: null,
+    const category = error instanceof NativeCustodyPhaseError ? error.category : 'native_unavailable';
+    console.warn('[Agent API] Native thread list unavailable.', category);
+    return res.status(503).json({
+      error: 'Native thread list unavailable.',
+      phase: 'thread_list',
+      category,
+      available: false,
     });
   }
 });
