@@ -7,7 +7,7 @@
     ".": "./src/index.ts",
     "./app-server": "./src/appServer.ts",
     "./catalog": "./src/modelCatalog.ts",
-    "./transcript": "./src/piTranscript.ts"
+    "./transcript": "./src/publicTranscript.ts"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.5.2",

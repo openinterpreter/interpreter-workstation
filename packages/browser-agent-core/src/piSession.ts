@@ -87,7 +87,7 @@ export class BrowserPiAppServerSession {
   }
   private runStorageExclusive<T>(action: () => Promise<T>): Promise<T> {
     return (this.gatedStorageOps?.runExclusive ?? this.storage!.runExclusive)
-      .call(this.storage!, this.projectId, this.threadId, action);
+      .call(this.storage!, this.projectId, this.threadId, action) as Promise<T>;
   }
   private revision = 0;
   private knownDurableDigest: string | null = null;
@@ -209,6 +209,8 @@ export class BrowserPiAppServerSession {
     const openedOptions = { ...options };
     if (!storage) {
       if (openedOptions.presentationValidator) {
+        if (typeof navigator === 'undefined' || !navigator.locks?.request)
+          throw new BrowserPresentationError('capability');
         try { storage = new IndexedDbPiTranscriptStore(); }
         catch { throw new BrowserPresentationError('capability'); }
       } else storage = new IndexedDbPiTranscriptStore();

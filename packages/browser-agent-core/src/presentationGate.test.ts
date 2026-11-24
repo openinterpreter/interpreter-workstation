@@ -1,4 +1,5 @@
 import { afterAll, expect, test } from 'bun:test';
+import * as publicTranscript from '@openinterpreter/browser-agent-core/transcript';
 import { IDBDatabase, indexedDB as fakeIndexedDB } from 'fake-indexeddb';
 import { createAssistantMessageEventStream, type Model } from '@earendil-works/pi-ai';
 import type { StreamFn } from '@earendil-works/pi-agent-core';
@@ -70,6 +71,30 @@ test('a volatile subclass of the IndexedDB store cannot acquire presentation cap
     presentationValidator: () => ({ accept: true }), onEvent: () => { published++; } }, store))
     .rejects.toMatchObject({ code: 'capability' });
   expect(published).toBe(0);
+});
+test('public transcript subpath never exports test-only review helpers', () => {
+  expect(Object.keys(publicTranscript)).not.toContain('brandPersistentStoreForTests');
+  expect(Object.keys(publicTranscript)).not.toContain('isReviewedTestStore');
+});
+test('missing Web Locks rejects gated default open before opening IndexedDB', async () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  const originalOpen = fakeIndexedDB.open;
+  let opened = 0;
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, value: {} });
+  fakeIndexedDB.open = function (...args: Parameters<typeof originalOpen>) {
+    opened++;
+    return originalOpen.apply(this, args);
+  } as typeof originalOpen;
+  try {
+    await expect(BrowserPiAppServerSession.open({ ...options,
+      presentationValidator: () => ({ accept: true }) }))
+      .rejects.toMatchObject({ code: 'capability' });
+    expect(opened).toBe(0);
+  } finally {
+    fakeIndexedDB.open = originalOpen;
+    if (previous) Object.defineProperty(globalThis, 'navigator', previous);
+    else Reflect.deleteProperty(globalThis, 'navigator');
+  }
 });
 test('an exact IndexedDB instance ignores volatile own-method shadows', async () => {
   const memory = new MemoryPiTranscriptStore();
