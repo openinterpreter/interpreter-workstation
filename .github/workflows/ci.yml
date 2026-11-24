@@ -48,6 +48,8 @@ jobs:
       - run: node --test scripts/ci/select-ubuntu-apt-mirror.test.mjs
       - run: node --test scripts/ci/windows-install-path.test.mjs
       - run: node --test scripts/ci/retry-transient-download.test.mjs
+      - run: node --test scripts/ci/publish-stable-aliases.test.mjs
+      - run: node --test scripts/ci/verify-alias-digest.test.mjs
       - run: node scripts/ci/retry-transient-download.mjs node_modules/electron/install.js
       - run: pnpm run test:unit
       - run: pnpm run test:vitest

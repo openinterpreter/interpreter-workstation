@@ -12,14 +12,18 @@ export function gh(args) {
   return execFileSync('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
-export function findDraft(releases, tag, commit) {
+export function findRelease(releases, tag, commit) {
   const found = releases.filter((release) => release.tag_name === tag);
   if (found.length > 1) throw new Error(`Duplicate release identity: ${tag}`);
   if (!found.length) return null;
   const release = found[0];
-  if (!release.draft || release.target_commitish !== commit) {
-    throw new Error(`Release tag ${tag} is published or belongs to another commit`);
-  }
+  if (release.target_commitish !== commit) throw new Error(`Release tag ${tag} belongs to another commit`);
+  return release;
+}
+
+export function findDraft(releases, tag, commit) {
+  const release = findRelease(releases, tag, commit);
+  if (release && !release.draft) throw new Error(`Release tag ${tag} is published`);
   return release;
 }
 
@@ -32,6 +36,16 @@ export function draftPlan(expected, release) {
     assets.set(asset.name, asset);
   }
   return [...expected.values()].filter((item) => reconcile(item, assets.get(item.name), item.name) === 'missing');
+}
+
+// A published release can be resumed only when all of its assets already
+// match this run's locally checked installer and metadata bytes. Never add to
+// or replace assets on an existing published tag.
+export function publishedPlan(expected, release) {
+  if (release.draft) throw new Error('Expected a published release');
+  const missing = draftPlan(expected, release);
+  if (missing.length) throw new Error(`Published release is missing ${missing.length} exact assets`);
+  return missing;
 }
 
 // GitHub can accept draft creation before its release list reflects the draft.
@@ -69,7 +83,12 @@ export async function main(directory) {
       manifest.build?.runId !== process.env.GITHUB_RUN_ID) {
     throw new Error('Release manifest does not bind this source and run');
   }
-  let draft = findDraft(releases(repo), tag, commit);
+  let draft = findRelease(releases(repo), tag, commit);
+  if (draft && !draft.draft) {
+    publishedPlan(expected, draft);
+    console.log(`Verified ${expected.size} exact published assets for ${tag}`);
+    return;
+  }
   if (!draft) {
     gh(['release', 'create', tag, '--repo', repo, '--target', commit,
       '--title', `Interpreter Workstation v${version}`, '--notes-file', path.join(directory, 'RELEASE_NOTES.md'), '--draft']);

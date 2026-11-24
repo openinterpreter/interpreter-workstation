@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { parseChecksums } from './release-identity.mjs';
+import { verifyAliasDigest } from './verify-alias-digest.mjs';
 import { waitForPublishedManifest } from './wait-for-published-manifest.mjs';
 
 const [version, baseUrl, repository] = process.argv.slice(2);
@@ -34,6 +37,7 @@ const aliases = new Map([
   ['Interpreter-latest.AppImage', `Interpreter-linux-x86_64-${version}.AppImage`],
   ['Interpreter-linux-amd64.deb', `Interpreter-linux-amd64-${version}.deb`],
 ]);
+const checksums = parseChecksums(await readFile('release/SHA256SUMS', 'utf8'));
 if (mode === 'all') {
   aliases.set('Interpreter-arm64.dmg', `Interpreter-arm64-${version}.dmg`);
   aliases.set('Interpreter-x64.dmg', `Interpreter-x64-${version}.dmg`);
@@ -48,6 +52,13 @@ for (const [alias, source] of aliases) {
   const sourceSize = Number(sourceResponse.headers.get('content-length'));
   assert.ok(aliasSize > 0, `${alias} is empty`);
   assert.equal(aliasSize, sourceSize, `${alias} does not match ${source}`);
+  const expectedDigest = checksums.get(source);
+  assert.ok(expectedDigest, `Missing SHA256SUMS entry for ${source}`);
+  const body = await fetchOk(alias, {
+    cache: 'no-store', headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' },
+    signal: AbortSignal.timeout(5 * 60_000),
+  });
+  await verifyAliasDigest(body, alias, sourceSize, expectedDigest);
 }
 
 const release = JSON.parse(execFileSync('gh', [
