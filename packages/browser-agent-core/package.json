@@ -7,12 +7,15 @@
     ".": "./src/index.ts",
     "./app-server": "./src/appServer.ts",
     "./catalog": "./src/modelCatalog.ts",
-    "./transcript": "./src/piTranscript.ts"
+    "./transcript": "./src/publicTranscript.ts"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.5.2",
     "@earendil-works/pi-ai": "1.5.2",
     "@noble/hashes": "1.8.0",
     "@wllama/wllama": "3.13.0"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "6.2.8"
   }
 }

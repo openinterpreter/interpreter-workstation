@@ -3,6 +3,7 @@ import { CLIENT_METHOD } from './protocolWire';
 import type { v2 } from '../../../server/handlers/codex-generated-types/index';
 import type { BrowserPiAppServerSession } from './piSession';
 import type { BrowserLocalModelCatalog } from './modelCatalog';
+import { BrowserPresentationError } from './presentationGate';
 
 /** Pre-session catalogue uses the same canonical app-server list methods. */
 export class BrowserModelCatalogAppServer {
@@ -63,12 +64,12 @@ export class BrowserProjectAppServer {
     const threadId = this.session.threadId;
     if (method === CLIENT_METHOD.interpreterProviderList ||
         method === CLIENT_METHOD.interpreterModelList || method === CLIENT_METHOD.modelList) {
-      const model = this.session.agent.state.model;
+      const model = this.session.model;
       if (this.session.catalog)
         return new BrowserModelCatalogAppServer(this.session.catalog, model.provider, model.id)
           .request(method, params);
       // Sessions without a catalogue still expose their active model.
-      const entry = { id: model.id, name: model.name, inputModalities: model.input };
+      const entry = { id: model.id, name: model.name, inputModalities: [...model.input] };
       const provider: v2.InterpreterProvider = { id: model.provider, name: 'Browser-local models',
         description: 'Models registered for this browser', isCurrent: true,
         configured: true, isDefault: true };
@@ -108,7 +109,7 @@ export class BrowserProjectAppServer {
       if (input.threadId !== threadId || !Array.isArray(input.input) || input.input.length !== 1 ||
           input.input[0]?.type !== 'text' || input.input[0].text_elements.length ||
           input.cwd != null && input.cwd !== `browser-project:${this.session.projectId}` ||
-          input.model != null && input.model !== this.session.agent.state.model.id ||
+          input.model != null && input.model !== this.session.model.id ||
           input.toolOutput != null || input.disabledPluginIds?.length || input.outputSchema != null ||
           input.approvalPolicy != null || input.sandboxPolicy != null || input.approvalsReviewer != null ||
           input.serviceTier != null || input.serviceTierForTurn != null || input.effort != null ||
@@ -145,20 +146,28 @@ export class BrowserProjectAppServer {
 
   /** JSON-RPC 2.0 envelope for a standard client; all unsupported methods fail closed. */
   async handle(request: unknown): Promise<{ jsonrpc: '2.0'; id: string | number | null;
-    result?: unknown; error?: { code: number; message: string } }> {
+    result?: unknown; error?: { code: number; message: string; data?: { code: string } } }> {
+    const invalid = (id: string | number | null) => ({ jsonrpc: '2.0' as const, id,
+      error: { code: -32600, message: 'Invalid request',
+        ...(this.session.presentationGated ? { data: { code: 'rejected' } } : {}) } });
     if (!request || typeof request !== 'object' || Array.isArray(request))
-      return { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid request' } };
+      return invalid(null);
     const input = request as Record<string, unknown>;
     const id = typeof input.id === 'string' || typeof input.id === 'number' ? input.id : null;
     if (input.jsonrpc !== '2.0' || id === null || typeof input.method !== 'string' ||
         !input.params || typeof input.params !== 'object' || Array.isArray(input.params))
-      return { jsonrpc: '2.0', id, error: { code: -32600, message: 'Invalid request' } };
+      return invalid(id);
     try {
       // Validation remains in the method boundary and Pi session; never execute an
       // arbitrary method or route a browser request to the desktop app-server.
       const result = await this.request(input.method as keyof RequestMap, input.params as never);
       return { jsonrpc: '2.0', id, result };
     } catch (error) {
+      if (this.session.presentationGated) {
+        const code = error instanceof BrowserPresentationError ? error.code : 'rejected';
+        return { jsonrpc: '2.0', id, error: { code: -32000,
+          message: `Browser presentation ${code}`, data: { code } } };
+      }
       const message = error instanceof Error ? error.message : 'Browser request failed';
       return { jsonrpc: '2.0', id, error: { code: message.startsWith('Browser app-server capability unavailable:')
         ? -32601 : -32602, message } };

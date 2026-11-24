@@ -6,3 +6,5 @@ export { BrowserProjectAppServer, BrowserModelCatalogAppServer } from './appServ
 export { BrowserLocalProjectBackend } from './browserBackend';
 export { IndexedDbPiTranscriptStore, MemoryPiTranscriptStore,
   validatePiTranscript, type BrowserPiTranscriptStore } from './piTranscript';
+export { BrowserPresentationError, type PresentationValidator,
+  type PresentationCandidate } from './presentationGate';

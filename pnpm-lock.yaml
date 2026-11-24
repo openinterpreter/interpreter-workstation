@@ -591,6 +591,10 @@ importers:
       '@wllama/wllama':
         specifier: 3.13.0
         version: 3.13.0
+    devDependencies:
+      fake-indexeddb:
+        specifier: 6.2.8
+        version: 6.2.8
 
 packages:
 
@@ -2039,6 +2043,7 @@ packages:
   '@nut-tree-fork/libnut@4.2.6':
     resolution: {integrity: sha512-2FCiTBokMGrMl4eL/trEIO+mtpkXpdPHoVKdTBmW8UBIbhCbrCKmnXb2skWGfVs+U3q7o5EYDjVTNUYaUWbaxQ==}
     engines: {node: '>=10.15.3'}
+    cpu: [x64, arm64]
 
   '@nut-tree-fork/node-mac-permissions@2.2.1':
     resolution: {integrity: sha512-iSfOTDiBZ7VDa17PoQje5rUaZSvSAaq+XEyXCmhPuQwV5XuNU02Grv6oFhsdpz89w7+UvB/8KX/cX5IYQ5o2Bw==}
@@ -5734,6 +5739,10 @@ packages:
 
   extend@3.0.2:
     resolution: {integrity: sha512-fjquC59cD7CyW6urNXK0FBufkZcoiGG80wTuPujX590cB5Ttln20E2UB4S/WARVqhXffZl2LNgS+gQdPIIim/g==}
+
+  fake-indexeddb@6.2.8:
+    resolution: {integrity: sha512-mpVW/HLUqwKXJ6F/s0hMgdK1eQfM4ncTHDioNGHWL0WKV3VcZCoZq1NKgboBbAge07aRCO7L48yziKssL59XEQ==}
+    engines: {node: '>=18'}
 
   fast-csv@4.3.6:
     resolution: {integrity: sha512-2RNSpuwwsJGP0frGsOmTb9oUF+VkFSM4SyLTDgwf2ciHWTarN0lQTC+F2f/t5J9QjW+c65VFIAAu85GsvMIusw==}
@@ -14796,6 +14805,8 @@ snapshots:
       is-extendable: 0.1.1
 
   extend@3.0.2: {}
+
+  fake-indexeddb@6.2.8: {}
 
   fast-csv@4.3.6:
     dependencies:

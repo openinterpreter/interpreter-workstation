@@ -34,6 +34,19 @@ independently versioned package. Its production imports are:
 
 The package uses Pi's normal `Agent` and browser-supplied `StreamFn`. Optional
 telemetry is not configured by the package.
+An optional `presentationValidator` can hold every assistant delta and tool or
+assistant item until a complete turn has been validated and its transcript
+transaction has terminated successfully and read back with an identical digest.
+It requires an explicitly durable transcript store and a cross-tab lock; the
+memory store is never eligible. The exclusive lock spans inference, validation,
+storage, and notification publication. The gated session does not expose its
+mutable Pi agent; callers use the app-server request and subscription surface.
+Reload revalidates complete turns, while provisional journals remain incomplete
+and hidden. With no validator the original session behavior is unchanged.
+This protects an application's presentation paths from its own unverified
+output; it is not a defense against hostile JavaScript running in the same realm.
+Only exact IndexedDB store instances carry the durable capability; subclasses
+cannot opt in by inheriting its constructor.
 The package-local `protocolWire` contains only the emitted app-server method
 strings and their SSE projection. Tests compare every emitted notification to
 the canonical mapper; no root application code is imported at runtime. The
