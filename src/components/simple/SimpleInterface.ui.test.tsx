@@ -232,7 +232,7 @@ describe("Simple executable interface", () => {
     window.removeEventListener("simple-interface:interaction", onInteraction);
   });
 
-  test("reports a Next.js project diagnostic without replacing the iframe", async () => {
+  test("does not trust a raw App.jsx-shaped process log without compiler provenance", async () => {
     client.refresh.mockResolvedValue({
       ...status,
       sourceRevision: "broken-source",
@@ -241,8 +241,59 @@ describe("Simple executable interface", () => {
     render(<SimpleInterface onMessage={() => {}} />);
     expect(await screen.findByTitle("Interpreter interface")).toBeTruthy();
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Next.js will refresh it automatically",
+      "The interface could not load. Check the project setup and try again.",
     );
+    expect(screen.getByRole("status")).not.toHaveTextContent("App.jsx:4");
+  });
+
+  test.each([undefined, 'hostile/unknown'])('fails closed when the server category is %s', async (problemKind) => {
+    client.refresh.mockResolvedValue({ ...status, ready: false, runtimeUrl: null,
+      diagnostic: 'Failed to compile /private/alice token=secret', problemKind });
+    render(<SimpleInterface onMessage={() => {}} />);
+    const notice = await screen.findByRole('status');
+    expect(notice).toHaveTextContent('The interface could not load. Check the project setup and try again.');
+    expect(notice).not.toHaveTextContent(/Fix the latest edit|Next.js will refresh|alice|secret/);
+  });
+
+  test('a pre-bridge compile-like log does not falsely claim the HTTP server failed to start', async () => {
+    client.refresh.mockResolvedValue({ ...status, ready: false, runtimeUrl: null,
+      diagnostic: 'App.jsx:4: Unexpected token; Failed to compile', problemKind: 'project-start' });
+    render(<SimpleInterface onMessage={() => {}} />);
+    const notice = await screen.findByRole('status');
+    expect(notice).toHaveTextContent('The interface could not load. Check the project setup and try again.');
+    expect(notice).not.toHaveTextContent(/project server could not start|Fix the latest edit|App\.jsx/);
+  });
+
+  test.each([
+    ["bundled-runtime-missing", "Reinstall or update Interpreter"],
+    ["bundled-runtime-incompatible", "Install an Interpreter build for this computer"],
+    ["dependency-install", "Check the project dependencies"],
+    ["project-start", "The interface could not load"],
+  ])("distinguishes %s without exposing error details", async (problemKind, advice) => {
+    client.refresh.mockResolvedValue({ ...status, ready: false, runtimeUrl: null, diagnostic: "/private/alice token=secret", problemKind });
+    render(<SimpleInterface onMessage={() => {}} />);
+    const notice = await screen.findByRole("status");
+    expect(notice).toHaveTextContent(advice);
+    expect(notice).not.toHaveTextContent(/alice|secret|latest edit/);
+  });
+
+  test("a client request failure never claims that project code needs fixing", async () => {
+    client.refresh.mockRejectedValue(new Error("/private/alice token=secret"));
+    render(<SimpleInterface onMessage={() => {}} />);
+    const notice = await screen.findByRole("status");
+    expect(notice).toHaveTextContent("Could not check the interface project");
+    expect(notice).not.toHaveTextContent(/alice|secret|latest edit/);
+  });
+
+  test("a generated runtime error is redacted but remains a project-code action", async () => {
+    render(<SimpleInterface onMessage={() => {}} />);
+    const frame = (await screen.findByTitle("Interpreter interface")) as HTMLIFrameElement;
+    window.dispatchEvent(new MessageEvent("message", {
+      source: frame.contentWindow,
+      data: { protocol: "interpreter-interface-v1", type: "runtime-error", message: "App.jsx:4: token=secret /private/alice" },
+    }));
+    expect(screen.getByRole("status")).toHaveTextContent("Fix the interface project's code");
+    expect(screen.getByRole("status")).not.toHaveTextContent(/alice|secret/);
   });
 
   test("keeps one stable iframe while Next Fast Refresh updates source", async () => {

@@ -12,6 +12,7 @@ import {
   simpleInterfaceClient,
   type SimpleAppStatus,
 } from "./simpleInterfaceClient";
+import { isSimpleInterfaceProblemKind, type SimpleInterfaceProblemKind } from "../../../shared/simpleInterfaceProblem";
 
 type Props = {
   /** Messages from generated interface code enter the one durable conversation. */
@@ -46,6 +47,20 @@ type HostView = {
 
 const PROTOCOL = "interpreter-interface-v1";
 
+const RECOVERY_ADVICE: Record<SimpleInterfaceProblemKind, string> = {
+  'project-code': "Fix the interface project's code; Next.js will refresh it automatically.",
+  'bundled-runtime-missing': 'Reinstall or update Interpreter to restore the bundled interface runtime.',
+  'bundled-runtime-incompatible': 'Install an Interpreter build for this computer and its operating system.',
+  'dependency-install': 'Check the project dependencies, then try starting the interface again.',
+  'project-start': 'The interface could not load. Check the project setup and try again.',
+};
+
+function adviceForStatus(status: SimpleAppStatus): string {
+  const kind = isSimpleInterfaceProblemKind(status.problemKind)
+    ? status.problemKind : 'project-start';
+  return RECOVERY_ADVICE[kind];
+}
+
 /** A moving/resizing generated viewer must not recreate its live file tree. */
 const SimpleFolderHostView = memo(function SimpleFolderHostView({
   viewId,
@@ -76,6 +91,7 @@ export function SimpleInterface({ onMessage }: Props) {
   const [status, setStatus] = useState<SimpleAppStatus | null>(null);
   const [runtimeUrl, setRuntimeUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [requestProblem, setRequestProblem] = useState<SimpleInterfaceProblemKind | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const rootRef = useRef<HTMLElement | null>(null);
   const revisionRef = useRef<string | null>(null);
@@ -164,6 +180,7 @@ export function SimpleInterface({ onMessage }: Props) {
       setStatus((previous) =>
         previous?.revision === next.revision &&
         previous?.diagnostic === next.diagnostic &&
+        previous?.problemKind === next.problemKind &&
         previous?.sourceRevision === next.sourceRevision &&
         previous?.assetRevision === next.assetRevision &&
         previous?.ready === next.ready &&
@@ -173,12 +190,12 @@ export function SimpleInterface({ onMessage }: Props) {
       );
       setRuntimeUrl(nextRuntimeUrl);
       setError(null);
+      setRequestProblem(null);
     } catch (failure) {
-      setError(
-        failure instanceof Error
-          ? failure.message
-          : "Unable to start the interface project.",
-      );
+      setError('client');
+      const kind = failure && typeof failure === 'object' && 'problemKind' in failure
+        ? failure.problemKind : null;
+      setRequestProblem(isSimpleInterfaceProblemKind(kind) ? kind : null);
     } finally {
       inFlightRef.current = false;
     }
@@ -196,6 +213,8 @@ export function SimpleInterface({ onMessage }: Props) {
       runtimeUrlRef.current = null;
       setHostViews({});
       setStatus(null);
+      setError(null);
+      setRequestProblem(null);
       setRuntimeUrl(null);
       void refresh();
     };
@@ -253,7 +272,7 @@ export function SimpleInterface({ onMessage }: Props) {
         const message = String(
           request.message ?? "Interface runtime error",
         ).slice(0, 4000);
-        setError(message);
+        setError('project-runtime');
         void simpleInterfaceClient.runtimeError(message).catch(() => {});
         return;
       }
@@ -516,8 +535,8 @@ export function SimpleInterface({ onMessage }: Props) {
         </motion.div>
       ) : (
         <div className="grid size-full place-items-center px-6 pb-32 text-ui-sm text-muted-foreground">
-          {status?.diagnostic
-            ? "The interface project needs a code fix."
+          {status?.diagnostic && !error
+            ? adviceForStatus(status)
             : "Starting your interface project…"}
         </div>
       )}
@@ -545,8 +564,15 @@ export function SimpleInterface({ onMessage }: Props) {
           role="status"
           className="pointer-events-none absolute left-1/2 top-5 z-20 max-w-[min(760px,calc(100%-2rem))] -translate-x-1/2 rounded-full border border-foreground/10 bg-background/90 px-4 py-2 text-xs text-muted-foreground shadow-sm backdrop-blur-xl"
         >
-          The interface project reported an error. Fix the latest edit and
-          Next.js will refresh it automatically.
+          {error === 'project-runtime'
+            ? RECOVERY_ADVICE['project-code']
+            : error
+              ? requestProblem
+                ? RECOVERY_ADVICE[requestProblem]
+                : 'Could not check the interface project. Check the connection and try again.'
+              : status
+                ? adviceForStatus(status)
+                : 'Could not check the interface project. Check the connection and try again.'}
         </div>
       )}
     </main>
