@@ -75,6 +75,16 @@ test('embedder can retry a failed model opening without the app onboarding overl
   expect(props.backend.openSession).toHaveBeenCalledTimes(2);
 });
 
+test('embedder without a selected model can open model settings instead of retrying forever', async () => {
+  state.modelId = '';
+  render(<EmbeddedBrowserProject {...props} />);
+  await screen.findByRole('alert');
+  expect(props.backend.openSession).not.toHaveBeenCalled();
+  expect(screen.queryByText('Normal onboarding overlay')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /settings/i }));
+  expect(props.onOpenSettings).toHaveBeenCalledOnce();
+});
+
 test('browser Simple host uses normal onboarding and hides it after persisted completion on remount', async () => {
   const first = render(<SimpleBrowserProject {...props} />);
   await waitFor(() => expect(screen.getByText('Normal onboarding overlay')).toBeTruthy());
