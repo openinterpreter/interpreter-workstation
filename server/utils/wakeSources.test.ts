@@ -1531,6 +1531,186 @@ process.stdout.write((n===0?first:n===1?first+'\\n'+second:'{"status":"waiting"}
     } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
   });
 
+  test('admission during a command poll leaves its running state and re-arm to that poll', async () => {
+    const f = await fixture();
+    const release = path.join(f.root, 'release-command');
+    const started = path.join(f.root, 'started-command');
+    const script = `const fs=require('fs');fs.writeFileSync(${JSON.stringify(started)},'1');
+const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){
+clearInterval(timer);process.stdout.write('{"status":"waiting"}\\n')}},10);`;
+    try {
+      const wake = await f.make(MANUAL);
+      await wake.put({ id: 'poll', threadId: 'thread-1', kind: 'command', argv: [process.execPath, '-e', script] });
+      const input = await wake.ingest('thread-1', 'poll', 'first', 'first input');
+      await wake.tick();
+      await settle(() => existsSync(started));
+      expect(wake.list('thread-1').sources[0]?.status).toBe('running');
+      expect(wake.list('thread-1').events[0]?.status).toBe('offered');
+      f.messages.push(wakeInput(input));
+      await wake.tick();
+      expect(wake.list('thread-1').events[0]?.status).toBe('admitted');
+      expect(wake.list('thread-1').sources[0]?.status).toBe('running');
+      await writeFile(release, 'go');
+      await settle(() => wake.list('thread-1').sources[0]?.status === 'waiting');
+      expect(Date.parse(wake.list('thread-1').sources[0]!.nextAt!) - Date.now()).toBeGreaterThan(25_000);
+    } finally { await writeFile(release, 'go'); await f.cleanup(); }
+  });
+
+  test('put refuses a command task even after its source is no longer marked running', async () => {
+    const f = await fixture();
+    try {
+      const wake = await f.make(MANUAL);
+      const source = { id: 'poll', threadId: 'thread-1', kind: 'command' as const,
+        argv: ['/bin/echo', '{"status":"waiting"}'] };
+      await wake.put(source);
+      (wake as any).commandTasksBySource.set('thread-1:poll', Promise.resolve());
+      await expect(wake.put(source)).rejects.toThrow('running command');
+      (wake as any).commandTasksBySource.delete('thread-1:poll');
+      expect((await wake.put(source)).status).toBe('waiting');
+    } finally { await f.cleanup(); }
+  });
+
+  test('refusal during a command run stops it; duplicate refused ID and put cannot re-arm it', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-command-refusal-'));
+    const release = path.join(root, 'release');
+    const started = path.join(root, 'started');
+    const script = `const fs=require('fs');fs.writeFileSync(${JSON.stringify(started)},'1');
+const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){
+clearInterval(timer);process.stdout.write(JSON.stringify({id:'later',message:'later input'})+'\\n')}},10);`;
+    const wake = new WakeSources({
+      inspect: async () => ({ messages: [] }),
+      start: async (thread) => { throw new WakeAdmissionFailure('start',
+        new SubagentDirectInputError(thread, 'parent-thread')); },
+      steer: async () => { throw new Error('unexpected steer'); },
+    }, root, 30_000, MANUAL);
+    const source = { id: 'poll', threadId: 'thread-1', kind: 'command' as const,
+      argv: [process.execPath, '-e', script] };
+    try {
+      await wake.initialize();
+      await wake.put(source);
+      await wake.ingest('thread-1', 'poll', 'refused-id', 'first input');
+      await wake.tick();
+      await settle(() => existsSync(started));
+      expect(wake.list('thread-1').events[0]?.status).toBe('refused');
+      expect(wake.list('thread-1').sources[0]).toMatchObject({ status: 'error', stopped: 'refusal' });
+      await expect(wake.put(source)).rejects.toThrow('running command');
+      await writeFile(release, 'go');
+      await settle(() => wake.list('thread-1').events.length === 2);
+      expect(wake.list('thread-1').events.map(e => [e.eventId, e.status]))
+        .toEqual([['refused-id', 'refused'], ['later', 'pending']]);
+      expect(wake.list('thread-1').sources[0]).toMatchObject({ status: 'error', stopped: 'refusal' });
+      expect(wake.list('thread-1').sources[0]?.nextAt).toBeUndefined();
+      expect((await wake.ingest('thread-1', 'poll', 'refused-id', 'different')).status).toBe('refused');
+      await wake.tick(Date.now() + 600_000);
+      expect(wake.list('thread-1').sources[0]?.status).toBe('error');
+    } finally { await writeFile(release, 'go'); await wake.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  test('operator hold or unconfirmed review during a poll cannot be undone by command exit', async () => {
+    for (const decision of ['hold', 'unconfirmed'] as const) {
+      const root = await mkdtemp(path.join(os.tmpdir(), `wake-command-${decision}-`));
+      const release = path.join(root, 'release');
+      const started = path.join(root, 'started');
+      const script = `const fs=require('fs');fs.writeFileSync(${JSON.stringify(started)},'1');
+const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){
+clearInterval(timer);process.stdout.write('{"status":"waiting"}\\n')}},10);`;
+      const wake = new WakeSources({
+        inspect: async () => ({ messages: [] }),
+        custody: async () => ({ queuedSubmissionCount: 0, lastTurnId: 'turn-1',
+          turnStatus: 'completed', threadStatus: 'idle' }),
+        start: async () => 'turn-1',
+        steer: async () => { throw new Error('unexpected steer'); },
+      }, root, 30_000, MANUAL);
+      try {
+        await wake.initialize();
+        await wake.put({ id: 'poll', threadId: 'thread-1', kind: 'command', rearmMs: 2_000,
+          argv: [process.execPath, '-e', script] });
+        await wake.ingest('thread-1', 'poll', 'first', 'first input');
+        await wake.tick();
+        await settle(() => existsSync(started));
+        expect(wake.list('thread-1').sources[0]?.status).toBe('running');
+        expect(wake.list('thread-1').events[0]?.status).toBe('offered');
+        if (decision === 'hold') {
+          expect((await wake.holdOffered('thread-1', 'poll', 'first', 'turn-1')).status).toBe('held');
+        } else {
+          const event = (wake as any).state.events[0] as WakeEvent;
+          event.offerAttempts = 3;
+          event.offeredAt = new Date(Date.now() - 70_000).toISOString();
+          const now = Date.now();
+          await wake.tick(now);
+          await wake.tick(now + 16_000);
+          expect(wake.list('thread-1').events[0]).toMatchObject({ status: 'offered',
+            error: 'Input could not be confirmed; operator review required' });
+        }
+        expect(wake.list('thread-1').sources[0]?.status).toBe('error');
+        expect(wake.list('thread-1').sources[0]?.nextAt).toBeUndefined();
+        await writeFile(release, 'go');
+        await settle(() => (wake as any).inFlight.size === 0);
+        expect((wake as any).inFlight.size).toBe(0);
+        expect(wake.list('thread-1').sources[0]?.status).toBe('error');
+        expect(wake.list('thread-1').sources[0]?.nextAt).toBeUndefined();
+        if (decision === 'hold') {
+          expect((await wake.ingest('thread-1', 'poll', 'first', 'different')).status).toBe('held');
+        }
+        await wake.tick(Date.now() + 600_000);
+        expect(wake.list('thread-1').sources[0]?.status).toBe('error');
+      } finally { await writeFile(release, 'go'); await wake.stop(); await rm(root, { recursive: true, force: true }); }
+    }
+  });
+
+  test('pending schedule and errored command remain fenced even when due', async () => {
+    const f = await fixture();
+    try {
+      const wake = await f.make(MANUAL);
+      const command = path.join(f.root, 'ran');
+      await wake.put({ id: 'scheduled', threadId: 'thread-schedule', kind: 'schedule',
+        message: 'scheduled', at: new Date(Date.now() + 60_000).toISOString() });
+      await wake.ingest('thread-schedule', 'scheduled', 'older', 'not admitted');
+      await wake.put({ id: 'poll', threadId: 'thread-command', kind: 'command',
+        argv: [process.execPath, '-e', `require('fs').writeFileSync(${JSON.stringify(command)},'ran')`] });
+      await wake.ingest('thread-command', 'poll', 'older', 'not admitted');
+      const errored = (wake as any).state.sources.find((s: { id: string }) => s.id === 'poll');
+      errored.status = 'error'; errored.nextAt = new Date(Date.now() - 1000).toISOString();
+      await wake.tick(Date.now() + 120_000);
+      expect(wake.list('thread-schedule').events.map(e => e.eventId)).toEqual(['older']);
+      expect(wake.list('thread-command').sources[0]?.status).toBe('error');
+      expect(existsSync(command)).toBe(false);
+    } finally { await f.cleanup(); }
+  });
+
+  test('empty re-poll preserves immediate drain while an earlier ID awaits admission', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-empty-repoll-'));
+    const counter = path.join(root, 'runs');
+    const clientIds: string[] = [];
+    const wake = new WakeSources({
+      inspect: async () => ({ messages: [], clientIds }),
+      start: async () => 'turn-1',
+      steer: async () => 'turn-1',
+    }, root, 30_000, MANUAL);
+    const script = `const fs=require('fs');const p=${JSON.stringify(counter)};let n=0;
+try{n=Number(fs.readFileSync(p,'utf8'))}catch{}fs.writeFileSync(p,String(n+1));
+process.stdout.write(n===0?JSON.stringify({id:'first',message:'input'})+'\\n':'{"status":"waiting"}\\n');`;
+    try {
+      await wake.initialize();
+      await wake.put({ id: 'poll', threadId: 'thread-1', kind: 'command', rearmMs: 2_000,
+        argv: [process.execPath, '-e', script] });
+      await wake.tick();
+      await settle(() => wake.list('thread-1').events.length === 1 &&
+        wake.list('thread-1').sources[0]?.status === 'waiting');
+      await wake.tick(); // offer, but no native receipt yet
+      expect(wake.list('thread-1').events[0]?.status).toBe('offered');
+      await wake.tick(Date.now() + 3_000);
+      await settle(() => wake.list('thread-1').sources[0]?.status === 'waiting' &&
+        (wake as any).inFlight.size === 0 && existsSync(counter));
+      expect(await readFile(counter, 'utf8')).toBe('2');
+      expect(wake.list('thread-1').sources[0]?.moreAvailable).toBe(true);
+      clientIds.push(wakeClientId(wake.list('thread-1').events[0]!));
+      await wake.tick();
+      expect(wake.list('thread-1').events[0]?.status).toBe('admitted');
+      expect(Date.parse(wake.list('thread-1').sources[0]!.nextAt!)).toBeLessThanOrEqual(Date.now());
+    } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
   test('command re-arm defaults to 30 s and rejects intervals below its 2 s floor', async () => {
     const f = await fixture();
     try {
