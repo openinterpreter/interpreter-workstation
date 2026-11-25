@@ -1539,6 +1539,8 @@ process.stdout.write((n===0?first:n===1?first+'\\n'+second:'{"status":"waiting"}
       await expect(wake.put({ ...source, rearmMs: 1_999 })).rejects.toThrow();
       await expect(wake.put({ ...source, rearmMs: Number.NaN })).rejects.toThrow();
       await expect(wake.put({ ...source, rearmMs: 2_000.5 })).rejects.toThrow();
+      await expect(wake.put({ ...source, rearmMs: Number.MAX_SAFE_INTEGER })).rejects.toThrow();
+      await expect(wake.put({ ...source, rearmMs: 2_147_483_648 })).rejects.toThrow();
       await wake.put(source);
       await wake.tick();
       await settle(() => wake.list('thread-1').sources[0]?.status === 'waiting' &&

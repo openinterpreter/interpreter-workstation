@@ -174,8 +174,11 @@ const MIN_INTERVAL = 60_000;
 const MAX_SCHEDULE_ID = 143;
 const COMMAND_REARM_MS = 30_000;
 const MIN_COMMAND_REARM_MS = 2_000;
+// Keep persisted delays inside both the JS timer range and Date's future range.
+const MAX_COMMAND_REARM_MS = 2_147_483_647;
 const commandRearmMs = (source: WakeSource): number =>
-  Number.isSafeInteger(source.rearmMs) && source.rearmMs! >= MIN_COMMAND_REARM_MS
+  Number.isSafeInteger(source.rearmMs) && source.rearmMs! >= MIN_COMMAND_REARM_MS &&
+    source.rearmMs! <= MAX_COMMAND_REARM_MS
     ? source.rearmMs! : COMMAND_REARM_MS;
 // A short follow-up pass after a pass that changed something while accepted
 // inputs await their receipts, so a burst is not paced by the 2 s interval.
@@ -975,7 +978,7 @@ export class WakeSources {
     } else if (source.dailyAt !== undefined || source.timeZone !== undefined || source.at !== undefined ||
       source.everyMs !== undefined || source.message !== undefined ||
       (source.rearmMs !== undefined && (!Number.isSafeInteger(source.rearmMs) ||
-        source.rearmMs < MIN_COMMAND_REARM_MS)) ||
+        source.rearmMs < MIN_COMMAND_REARM_MS || source.rearmMs > MAX_COMMAND_REARM_MS)) ||
       !Array.isArray(source.argv) || !source.argv.length || source.argv.length > 32 ||
       source.argv.some(arg => typeof arg !== 'string' || !arg || arg.length > 4096) ||
       !path.isAbsolute(source.argv[0])) {
