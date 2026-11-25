@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
+import { existsSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -1634,6 +1635,7 @@ process.stdout.write(JSON.stringify({id:'same',message:'repeated input'})+'\\n{"
 
   test('a command may poll later IDs while its earlier offer stays unadmitted without a second native start', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'wake-command-fence-'));
+    const releaseFirst = path.join(root, 'release-first');
     let starts = 0;
     // History never shows the marker, so the offered input stays unadmitted.
     const native: WakeNative = {
@@ -1645,23 +1647,39 @@ process.stdout.write(JSON.stringify({id:'same',message:'repeated input'})+'\\n{"
     // A new ID on every run; the native start for run-1 remains unconfirmed.
     const script = `const fs=require('fs');const p=${JSON.stringify(counter)};let n=0;
 try{n=Number(fs.readFileSync(p,'utf8'))}catch{}fs.writeFileSync(p,String(n+1));
-process.stdout.write(JSON.stringify({id:'run-'+(n+1),message:'input '+(n+1)})+'\\n{"status":"more"}\\n');`;
+const output=JSON.stringify({id:'run-'+(n+1),message:'input '+(n+1)})+'\\n{"status":"more"}\\n';
+if(n===0){const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(releaseFirst)})){
+clearInterval(timer);process.stdout.write(output)}},10)}else process.stdout.write(output);`;
     const first = new WakeSources(native, root, 30_000, MANUAL);
     let second: WakeSources | undefined;
+    const commandDrained = (wake: WakeSources, expectedEvents: number) =>
+      wake.list('thread-1').events.length === expectedEvents &&
+      wake.list('thread-1').sources[0]?.status === 'waiting' &&
+      (wake as any).inFlight.size === 0;
     try {
       await first.initialize();
       await first.put({ id: 'poll', threadId: 'thread-1', kind: 'command', argv: [process.execPath, '-e', script] });
       await first.tick();
-      await settle(() => first.list('thread-1').events.length === 1 && first.list('thread-1').sources[0]?.status === 'waiting');
+      expect((first as any).inFlight.size).toBe(1);
+      await settle(() => existsSync(counter));
+      expect(await readFile(counter, 'utf8')).toBe('1');
       const t0 = Date.now();
+      // A synthetic re-arm tick during the gated child must not queue a
+      // duplicate command or consume the future tick after the child exits.
+      await first.tick(t0 + 31_000);
+      expect((first as any).inFlight.size).toBe(1);
+      expect(await readFile(counter, 'utf8')).toBe('1');
+      await writeFile(releaseFirst, 'continue');
+      await settle(() => commandDrained(first, 1));
+      expect(commandDrained(first, 1)).toBe(true);
       await first.tick(t0);
       // An accepted offer fences native admission, not future command polls.
       expect(first.list('thread-1').events.map(e => [e.eventId, e.status, e.turnId]))
         .toEqual([['run-1', 'offered', 'turn-unconfirmed']]);
       for (const [index, offset] of [31_000, 61_000].entries()) {
         await first.tick(t0 + offset);
-        await settle(() => first.list('thread-1').events.length === index + 2 &&
-          first.list('thread-1').sources[0]?.status === 'waiting');
+        await settle(() => commandDrained(first, index + 2));
+        expect(commandDrained(first, index + 2)).toBe(true);
       }
       expect(await readFile(counter, 'utf8')).toBe('3');
       await first.stop();
@@ -1673,14 +1691,16 @@ process.stdout.write(JSON.stringify({id:'run-'+(n+1),message:'input '+(n+1)})+'\
       second = new WakeSources(native, root, 30_000, MANUAL);
       await second.initialize();
       await second.tick(t0 + 61_001);
-      await settle(() => second!.list('thread-1').events.length === 4);
+      await settle(() => commandDrained(second!, 4));
+      expect(commandDrained(second!, 4)).toBe(true);
       expect(await readFile(counter, 'utf8')).toBe('4');
       const events = second.list('thread-1').events;
       expect(events.map(e => e.eventId)).toEqual(['run-1', 'run-2', 'run-3', 'run-4']);
       expect(events[0]?.status).toBe('offered');
       expect(events.slice(1).every(e => e.status === 'offered' || e.status === 'pending')).toBe(true);
       expect(starts).toBe(1);
-    } finally { await second?.stop(); await first.stop(); await rm(root, { recursive: true, force: true }); }
+    } finally { await writeFile(releaseFirst, 'continue'); await second?.stop(); await first.stop();
+      await rm(root, { recursive: true, force: true }); }
   });
 
   test('command output is bounded in aggregate: sixteen maximum events fit, an oversized batch is never partial', async () => {
