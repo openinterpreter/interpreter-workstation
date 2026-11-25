@@ -1,6 +1,6 @@
-import { getApiUrl, getRuntimeSystemInfo } from '../../src/ipc';
+import { getApiUrl } from '../../src/ipc';
 import { emitVoiceLatencyEvent } from './voiceLatency';
-import type { SttBackend } from '../../shared/types/stt';
+export { shouldUseMoonshineVoiceBackend } from './voiceBackend';
 
 const TARGET_SAMPLE_RATE = 16000;
 const AUDIO_MONITOR_INTERVAL_MS = 75;
@@ -26,15 +26,6 @@ export const MICROPHONE_CAPTURE_REQUEST: MediaStreamConstraints = {
 interface AdaptiveVoiceSilenceOptions {
   silenceTimeoutMs?: number;
   fastSentenceSilenceTimeoutMs?: number;
-}
-
-export function shouldUseMoonshineVoiceBackend(preferredBackend?: SttBackend): boolean {
-  const forcedBackend = (globalThis as { __VOICE_BACKEND__?: string }).__VOICE_BACKEND__;
-  if (forcedBackend === 'moonshine') return true;
-  if (forcedBackend === 'qwen') return false;
-  if (preferredBackend === 'moonshine') return true;
-  if (preferredBackend === 'qwen') return false;
-  return getRuntimeSystemInfo().platform === 'win32';
 }
 
 export function getAdaptiveVoiceSilenceTimeoutMs(text: string, options?: AdaptiveVoiceSilenceOptions): number {

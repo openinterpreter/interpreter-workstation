@@ -2,6 +2,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect } from "react";
 import { describe, expect, test, vi } from "vitest";
+import type { ComposerVoiceAdapter } from '../../../agent/components/composerVoiceAdapter';
 
 const ipcMocks = vi.hoisted(() => ({
   openFolderDialog: vi.fn(async () => ({
@@ -202,6 +203,10 @@ const props = {
 };
 
 describe("Simple shell", () => {
+  test('embedded shell without desktop voice adapter has no voice control', () => {
+    render(<SimpleShell {...props} />);
+    expect(screen.queryByRole('button', { name: 'Start GPT Live' })).toBeNull();
+  });
   test('browser project settings do not mount native channels or request a thread binding', async () => {
     ipcMocks.browserHost = true;
     ipcMocks.channelSettingsMounted.mockClear();
@@ -461,7 +466,7 @@ describe("Simple shell", () => {
 
   test("keeps the GPT Live control icon-only and focuses model setup when no Realtime key is available", async () => {
     const user = userEvent.setup();
-    render(<SimpleShell {...props} />);
+    render(<SimpleShell {...props} voiceAdapter={{} as ComposerVoiceAdapter} />);
     const liveButton = await screen.findByRole("button", {
       name: "Start GPT Live",
     });

@@ -35,6 +35,7 @@ import { ThreadWakeSources } from '../../../agent/components/ThreadWakeSources';
 import { AgentMetadataProvider } from '../../../agent/contexts/AgentMetadataContext';
 import { AgentErrorProvider } from '../../../agent/contexts/AgentErrorContext';
 import { ComposerArea } from '../../../agent/components/ComposerArea';
+import { nativeComposerVoiceAdapter } from '../voice/nativeComposerVoiceAdapter';
 import { AgentLogo } from '../../../agent/components/AgentLogo';
 import { PlanChecklistCard } from '../../../agent/components/PlanChecklistCard';
 import { SettingsPopover } from '../../../agent/components/composer/SettingsPopover';
@@ -779,6 +780,7 @@ const EditorAgentPane = React.memo(function EditorAgentPane({ agentId, threadId,
               className="mx-auto mb-2 w-full max-w-[48rem] px-2 sm:px-[var(--unit-padding-medium)]"
             />
             <ComposerArea
+              voiceAdapter={nativeComposerVoiceAdapter}
               ref={composerRef}
               isTerminal={false}
               agentId={agentId}

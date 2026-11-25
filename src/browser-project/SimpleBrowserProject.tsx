@@ -1,21 +1,24 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SimpleShell } from '../components/simple/SimpleShell';
-import { OnboardingOverlay } from '../components/onboarding/OnboardingOverlay';
 import { getOnboardingState, getProfiles } from '../api';
 import { shouldShowOnboarding } from '../lib/onboardingGate';
 import { profiles, restoreBrowserProjectNativeEvents } from '../ipc';
 import { activateBrowserProjectBackend, BrowserProjectHostProvider,
   createBrowserProjectHost, type BrowserProjectBackend, type BrowserProjectSession } from './host';
 import type { BrowserProjectFiles } from './workspace';
+import type { ComposerVoiceAdapter } from '../../agent/components/composerVoiceAdapter';
 
-type SimpleBrowserProjectProps = {
+export type SimpleBrowserProjectProps = {
   backend: BrowserProjectBackend;
   projectFiles: BrowserProjectFiles;
   canvas: ReactNode;
   onOpenSettings: () => void;
   onCloseSettings: () => void;
   onLeaveFeedback: () => void;
+  /** An embedder owns its onboarding. Without one, open the project directly. */
+  renderOnboarding?: (onComplete: () => void) => ReactNode;
+  voiceAdapter?: ComposerVoiceAdapter;
 };
 
 /** A project switch must never reuse another project's agent or opening promise. */
@@ -25,7 +28,7 @@ export function SimpleBrowserProject(props: SimpleBrowserProjectProps) {
 
 /** The normal onboarding overlay runs before any model or agent session exists. */
 function BrowserProjectInstance({ backend, projectFiles, canvas, onOpenSettings,
-  onCloseSettings, onLeaveFeedback }: SimpleBrowserProjectProps) {
+  onCloseSettings, onLeaveFeedback, renderOnboarding, voiceAdapter }: SimpleBrowserProjectProps) {
   const { t } = useTranslation();
   const tRef = useRef(t);
   tRef.current = t;
@@ -34,6 +37,8 @@ function BrowserProjectInstance({ backend, projectFiles, canvas, onOpenSettings,
   const [error, setError] = useState<string | null>(null);
   const backendRef = useRef(backend);
   backendRef.current = backend;
+  const onboardingRendererRef = useRef(renderOnboarding);
+  onboardingRendererRef.current = renderOnboarding;
   const activationRef = useRef<number | null>(null);
   const sessionRef = useRef<BrowserProjectSession | null>(null);
   const openingRef = useRef<{ modelId: string; promise: Promise<BrowserProjectSession> } | null>(null);
@@ -55,7 +60,8 @@ function BrowserProjectInstance({ backend, projectFiles, canvas, onOpenSettings,
   useEffect(() => {
     if (teardownRef.current) clearTimeout(teardownRef.current);
     let mounted = true;
-    getOnboardingState().then(({ state }) => {
+    if (!onboardingRendererRef.current) setPhase('opening');
+    else getOnboardingState().then(({ state }) => {
       if (mounted) setPhase(shouldShowOnboarding(state) ? 'onboarding' : 'opening');
     }).catch(reason => {
       console.error('[BrowserProject] Cannot read onboarding state', reason);
@@ -117,7 +123,7 @@ function BrowserProjectInstance({ backend, projectFiles, canvas, onOpenSettings,
       openingRef.current = null;
       void pending?.promise.then(opened => { if (opened !== owned) opened.dispose(); }, () => {});
       activationRef.current = activateBrowserProjectBackend(backendRef.current);
-      setError(null); setPhase('onboarding');
+      setError(null); setPhase(onboardingRendererRef.current ? 'onboarding' : 'opening');
     };
     window.addEventListener('settings:restart-onboarding', restart);
     return () => window.removeEventListener('settings:restart-onboarding', restart);
@@ -145,13 +151,23 @@ function BrowserProjectInstance({ backend, projectFiles, canvas, onOpenSettings,
   if (phase === 'checking' || phase === 'opening') return <p role="status"
     className="p-6 text-ui-sm text-[var(--oa-text-muted)]">{t('onboarding.browserProject.opening')}</p>;
   if (phase === 'onboarding') return <div className="relative h-full">
-    <OnboardingOverlay simpleMode onComplete={() => { setError(null); setPhase('opening'); }} />
+    {renderOnboarding ? renderOnboarding(() => { setError(null); setPhase('opening'); })
+      : <div className="m-6 flex gap-3">
+        <button type="button" onClick={() => { setError(null); setPhase('opening'); }}
+          className="rounded-lg border border-[var(--oa-border)] p-3 text-[var(--oa-text-primary)]">
+          {t('common.retry', { defaultValue: 'Retry' })}
+        </button>
+        <button type="button" onClick={onOpenSettings}
+          className="rounded-lg border border-[var(--oa-border)] p-3 text-[var(--oa-text-primary)]">
+          {t('common.settings', { defaultValue: 'Settings' })}
+        </button>
+      </div>}
     {error && <p role="alert" className="absolute bottom-6 left-1/2 z-[100] max-w-lg -translate-x-1/2 rounded-lg border border-[var(--oa-border)] bg-[var(--oa-bg-app)] p-3 text-[var(--oa-text-primary)] shadow-lg">{error}</p>}
   </div>;
   if (!host || !session) return <p role="alert" className="p-6 text-ui-sm text-[var(--oa-text-muted)]">
     {t('onboarding.browserProject.unavailable')}</p>;
   return <BrowserProjectHostProvider host={host} restoreOnUnmount={false}>
-    <SimpleShell workspacePath={host.workspacePath} initialThreadId={session.threadId}
+    <SimpleShell voiceAdapter={voiceAdapter} workspacePath={host.workspacePath} initialThreadId={session.threadId}
       onBindThread={threadId => {
         if (threadId !== session.threadId) throw new Error('Browser thread binding mismatch');
       }} settingsOpen={false} onOpenSettings={onOpenSettings}
