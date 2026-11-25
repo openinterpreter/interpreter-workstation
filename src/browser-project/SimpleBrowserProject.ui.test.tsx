@@ -2,13 +2,16 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { beforeEach, expect, test, vi } from 'vitest';
 
-const state = vi.hoisted(() => ({ completed: false, modelId: 'model',
+const state = vi.hoisted(() => ({ completed: false, modelId: 'model', failProfiles: false,
   onDefaultChanged: null as null | (() => void) }));
 vi.mock('../api', () => ({
   getOnboardingState: async () => ({ state: { version: 1, completed: state.completed,
     completedStepIds: [] } }),
-  getProfiles: async () => ({ profiles: [{ id: 'selected', modelId: state.modelId }],
-    defaultProfileId: 'selected' }),
+  getProfiles: async () => {
+    if (state.failProfiles) throw new Error('Profile temporarily unavailable');
+    return { profiles: [{ id: 'selected', modelId: state.modelId }],
+      defaultProfileId: 'selected' };
+  },
 }));
 vi.mock('../components/simple/SimpleShell', () => ({
   SimpleShell: () => <div>Real Simple shell seam</div>,
@@ -41,7 +44,7 @@ const props = {
   onOpenSettings: vi.fn(), onCloseSettings: vi.fn(), onLeaveFeedback: vi.fn(),
 };
 
-beforeEach(() => { state.completed = false; state.modelId = 'model';
+beforeEach(() => { state.completed = false; state.modelId = 'model'; state.failProfiles = false;
   state.onDefaultChanged = null; vi.clearAllMocks(); });
 
 test('embedder without an onboarding renderer opens without importing the app overlay', async () => {
@@ -49,6 +52,27 @@ test('embedder without an onboarding renderer opens without importing the app ov
   await screen.findByText('Real Simple shell seam');
   expect(screen.queryByText('Normal onboarding overlay')).toBeNull();
   expect(props.backend.openSession).toHaveBeenCalledWith('model');
+});
+
+test('embedder can retry after profile discovery fails without the app onboarding overlay', async () => {
+  state.failProfiles = true;
+  render(<EmbeddedBrowserProject {...props} />);
+  await screen.findByText('Profile temporarily unavailable');
+  expect(screen.queryByText('Normal onboarding overlay')).toBeNull();
+  state.failProfiles = false;
+  fireEvent.click(screen.getByRole('button', { name: /retry/i }));
+  await screen.findByText('Real Simple shell seam');
+  expect(props.backend.openSession).toHaveBeenCalledWith('model');
+});
+
+test('embedder can retry a failed model opening without the app onboarding overlay', async () => {
+  props.backend.openSession.mockRejectedValueOnce(new Error('Session temporarily unavailable'));
+  render(<EmbeddedBrowserProject {...props} />);
+  await screen.findByText('Session temporarily unavailable');
+  expect(screen.queryByText('Normal onboarding overlay')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: /retry/i }));
+  await screen.findByText('Real Simple shell seam');
+  expect(props.backend.openSession).toHaveBeenCalledTimes(2);
 });
 
 test('browser Simple host uses normal onboarding and hides it after persisted completion on remount', async () => {

@@ -1,6 +1,5 @@
 import { getApiUrl } from '../../src/ipc';
 import { emitVoiceLatencyEvent } from './voiceLatency';
-import { shouldUseMoonshineVoiceBackend } from './voiceBackend';
 export { shouldUseMoonshineVoiceBackend } from './voiceBackend';
 
 const TARGET_SAMPLE_RATE = 16000;

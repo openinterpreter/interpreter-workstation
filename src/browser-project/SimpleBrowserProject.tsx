@@ -151,7 +151,11 @@ function BrowserProjectInstance({ backend, projectFiles, canvas, onOpenSettings,
   if (phase === 'checking' || phase === 'opening') return <p role="status"
     className="p-6 text-ui-sm text-[var(--oa-text-muted)]">{t('onboarding.browserProject.opening')}</p>;
   if (phase === 'onboarding') return <div className="relative h-full">
-    {renderOnboarding?.(() => { setError(null); setPhase('opening'); })}
+    {renderOnboarding ? renderOnboarding(() => { setError(null); setPhase('opening'); })
+      : <button type="button" onClick={() => { setError(null); setPhase('opening'); }}
+        className="m-6 rounded-lg border border-[var(--oa-border)] p-3 text-[var(--oa-text-primary)]">
+        {t('common.retry', { defaultValue: 'Retry' })}
+      </button>}
     {error && <p role="alert" className="absolute bottom-6 left-1/2 z-[100] max-w-lg -translate-x-1/2 rounded-lg border border-[var(--oa-border)] bg-[var(--oa-bg-app)] p-3 text-[var(--oa-text-primary)] shadow-lg">{error}</p>}
   </div>;
   if (!host || !session) return <p role="alert" className="p-6 text-ui-sm text-[var(--oa-text-muted)]">
