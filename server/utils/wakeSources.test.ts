@@ -1630,7 +1630,7 @@ process.stdout.write(JSON.stringify({id:'same',message:'repeated input'})+'\\n{"
     } finally { await f.cleanup(); }
   });
 
-  test('a command is not run again while its own earlier input awaits admission', async () => {
+  test('a command may poll later IDs while its earlier offer stays unadmitted without a second native start', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'wake-command-fence-'));
     let starts = 0;
     // History never shows the marker, so the offered input stays unadmitted.
@@ -1640,7 +1640,7 @@ process.stdout.write(JSON.stringify({id:'same',message:'repeated input'})+'\\n{"
       steer: async () => { throw new Error('unexpected steer'); },
     };
     const counter = path.join(root, 'runs');
-    // A new ID on every run, so any second run would add a second input.
+    // A new ID on every run; the native start for run-1 remains unconfirmed.
     const script = `const fs=require('fs');const p=${JSON.stringify(counter)};let n=0;
 try{n=Number(fs.readFileSync(p,'utf8'))}catch{}fs.writeFileSync(p,String(n+1));
 process.stdout.write(JSON.stringify({id:'run-'+(n+1),message:'input '+(n+1)})+'\\n{"status":"more"}\\n');`;
@@ -1653,27 +1653,30 @@ process.stdout.write(JSON.stringify({id:'run-'+(n+1),message:'input '+(n+1)})+'\
       await settle(() => first.list('thread-1').events.length === 1 && first.list('thread-1').sources[0]?.status === 'waiting');
       const t0 = Date.now();
       await first.tick(t0);
-      // An accepted offer still fences its own source.
+      // An accepted offer fences native admission, not future command polls.
       expect(first.list('thread-1').events.map(e => [e.eventId, e.status, e.turnId]))
         .toEqual([['run-1', 'offered', 'turn-unconfirmed']]);
-      for (const offset of [31_000, 61_000, 301_000, 3_600_000]) {
+      for (const [index, offset] of [31_000, 61_000, 301_000, 3_600_000].entries()) {
         await first.tick(t0 + offset);
-        expect(first.list('thread-1').sources[0]?.status).toBe('waiting');
+        await settle(() => first.list('thread-1').events.length === index + 2 &&
+          first.list('thread-1').sources[0]?.status === 'waiting');
       }
-      await new Promise(resolve => setTimeout(resolve, 150));
-      expect(await readFile(counter, 'utf8')).toBe('1');
+      expect(await readFile(counter, 'utf8')).toBe('5');
       await first.stop();
-      // Even a source that is due by its own clock stays fenced by its unadmitted input.
+      // Restart retains the earlier native offer and polls for additional IDs.
       const file = path.join(root, 'wake-sources.json');
       const saved = JSON.parse(await readFile(file, 'utf8'));
       saved.sources[0].nextAt = new Date(t0 - 1000).toISOString();
       await writeFile(file, JSON.stringify(saved));
       second = new WakeSources(native, root, 30_000, MANUAL);
       await second.initialize();
-      for (const offset of [0, 61_000, 3_600_000]) await second.tick(t0 + offset);
-      await new Promise(resolve => setTimeout(resolve, 150));
-      expect(await readFile(counter, 'utf8')).toBe('1');
-      expect(second.list('thread-1').events.map(e => [e.eventId, e.status])).toEqual([['run-1', 'offered']]);
+      await second.tick(t0 + 3_600_001);
+      await settle(() => second!.list('thread-1').events.length === 6);
+      expect(await readFile(counter, 'utf8')).toBe('6');
+      expect(second.list('thread-1').events.map(e => [e.eventId, e.status])).toEqual([
+        ['run-1', 'offered'], ['run-2', 'pending'], ['run-3', 'pending'],
+        ['run-4', 'pending'], ['run-5', 'pending'], ['run-6', 'pending'],
+      ]);
       expect(starts).toBe(1);
     } finally { await second?.stop(); await first.stop(); await rm(root, { recursive: true, force: true }); }
   });
