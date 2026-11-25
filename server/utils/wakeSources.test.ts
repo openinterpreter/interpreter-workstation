@@ -1570,6 +1570,61 @@ clearInterval(timer);process.stdout.write('{"status":"waiting"}\\n')}},10);`;
     } finally { await f.cleanup(); }
   });
 
+  test('an operator stop queued between tick eligibility and launch prevents the command', async () => {
+    const f = await fixture();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    try {
+      const wake = await f.make(MANUAL);
+      const started = path.join(f.root, 'started');
+      await wake.put({ id: 'poll', threadId: 'thread-1', kind: 'command',
+        argv: [process.execPath, '-e', `require('fs').writeFileSync(${JSON.stringify(started)},'started')`] });
+      const blocker = (wake as any).exclusive(async () => { await gate; });
+      await Promise.resolve(); // ensure the locked section is occupied
+      const stop = (wake as any).exclusive(async () => {
+        const source = (wake as any).state.sources[0];
+        source.status = 'error'; source.stopped = 'operator_review';
+        source.error = 'Operator review required'; delete source.nextAt;
+        await (wake as any).save();
+      });
+      await wake.tick(); // eligibility was observed before the stop was saved
+      release();
+      await blocker; await stop;
+      await settle(() => (wake as any).commandTasksBySource.size === 0);
+      expect((wake as any).commandTasksBySource.size).toBe(0);
+      expect(existsSync(started)).toBe(false);
+      expect(wake.list('thread-1').sources[0]).toMatchObject({ status: 'error', stopped: 'operator_review' });
+      expect(wake.list('thread-1').sources[0]?.nextAt).toBeUndefined();
+    } finally { release(); await f.cleanup(); }
+  });
+
+  test('a failed command transition save records an error for this run', async () => {
+    for (const output of ['{"status":"waiting"}', '{"id":"later","message":"later input"}']) {
+      const f = await fixture();
+      try {
+        const wake = await f.make(MANUAL);
+        await wake.put({ id: 'poll', threadId: 'thread-1', kind: 'command',
+          argv: [process.execPath, '-e', `process.stdout.write(${JSON.stringify(output + '\n')})`] });
+        const write = (wake as any).writeState.bind(wake);
+        let failed = false;
+        (wake as any).writeState = async () => {
+          if (!failed && (wake as any).inFlight.size &&
+              wake.list('thread-1').sources[0]?.status === 'waiting') {
+            failed = true; throw new Error('simulated transition write failure');
+          }
+          return write();
+        };
+        await wake.tick();
+        await settle(() => (wake as any).inFlight.size === 0);
+        expect(failed).toBe(true);
+        expect(wake.list('thread-1').sources[0]).toMatchObject({ status: 'error',
+          error: output.includes('waiting') ? 'simulated transition write failure' :
+            'Wake state could not be saved; retry with the same ID' });
+        expect(wake.list('thread-1').sources[0]?.nextAt).toBeTruthy();
+      } finally { await f.cleanup(); }
+    }
+  });
+
   test('refusal during a command run stops it; duplicate refused ID and put cannot re-arm it', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'wake-command-refusal-'));
     const release = path.join(root, 'release');
@@ -1662,6 +1717,15 @@ clearInterval(timer);process.stdout.write(JSON.stringify({id:'later',message:'la
         }
         // Native history later confirms the new output. A receipt may settle
         // its event, but must not silently resume the operator-stopped source.
+        if (decision === 'unconfirmed') {
+          // The earlier unresolved offer still precedes the later output.
+          clientIds.push(wakeClientId(wake.list('thread-1').events[1]!));
+          await wake.tick();
+          expect(wake.list('thread-1').events[1]?.status).toBe('pending');
+          clientIds.push(wakeClientId(wake.list('thread-1').events[0]!));
+          await wake.tick();
+          expect(wake.list('thread-1').events[0]?.status).toBe('admitted');
+        }
         clientIds.push(wakeClientId(wake.list('thread-1').events[1]!));
         await wake.tick();
         expect(wake.list('thread-1').events[1]?.status).toBe('admitted');
@@ -1690,6 +1754,24 @@ clearInterval(timer);process.stdout.write(JSON.stringify({id:'later',message:'la
       expect(wake.list('thread-schedule').events.map(e => e.eventId)).toEqual(['older']);
       expect(wake.list('thread-command').sources[0]?.status).toBe('error');
       expect(existsSync(command)).toBe(false);
+    } finally { await f.cleanup(); }
+  });
+
+  test('a stopped schedule does not re-arm on a later native receipt', async () => {
+    const f = await fixture();
+    try {
+      const wake = await f.make(MANUAL);
+      await wake.put({ id: 'daily', threadId: 'thread-1', kind: 'schedule',
+        message: 'scheduled input', at: new Date(Date.now() + 60_000).toISOString(), everyMs: 600_000 });
+      await wake.ingest('thread-1', 'daily', 'held-previously', 'scheduled input');
+      const source = (wake as any).state.sources[0];
+      source.status = 'error'; source.stopped = 'operator_review'; delete source.nextAt;
+      await wake.tick();
+      expect(wake.list('thread-1').events[0]?.status).toBe('offered');
+      await wake.tick();
+      expect(wake.list('thread-1').events[0]?.status).toBe('admitted');
+      expect(wake.list('thread-1').sources[0]).toMatchObject({ status: 'error', stopped: 'operator_review' });
+      expect(wake.list('thread-1').sources[0]?.nextAt).toBeUndefined();
     } finally { await f.cleanup(); }
   });
 

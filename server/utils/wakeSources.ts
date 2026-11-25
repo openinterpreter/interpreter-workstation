@@ -819,7 +819,7 @@ export class WakeSources {
     // A command still in flight owns its own re-arm. Admission may settle
     // during that run, but must not overwrite the running or stopped state.
     if (source && source.status !== 'cancelled' && !source.stopped &&
-        !(source.status === 'error' && !source.nextAt) &&
+        !(source.kind === 'command' && source.status === 'error' && !source.nextAt) &&
         !this.inFlight.has(sourceKey(source.threadId, source.id))) {
       delete source.error;
       delete source.stopped;
@@ -1876,10 +1876,15 @@ export class WakeSources {
   private async runCommand(source: WakeSource): Promise<void> {
     const key = `${source.threadId}:${source.id}`;
     const inFlightKey = sourceKey(source.threadId, source.id);
+    let transitioned = false;
     this.inFlight.add(inFlightKey);
     try {
       const shouldRun = await this.exclusive(async () => {
-        if (source.paused || source.status === 'cancelled') return false;
+        if (source.paused || source.stopped ||
+            !(source.status === 'waiting' || (source.status === 'error' && !!source.nextAt)) ||
+            (source.status === 'error' && this.state.events.some(event =>
+              event.threadId === source.threadId && event.sourceId === source.id &&
+              (event.status === 'pending' || event.status === 'offered')))) return false;
         source.status = 'running';
         await this.save();
         return true;
@@ -1911,6 +1916,7 @@ export class WakeSources {
         await this.exclusive(async () => {
           if (source.status === 'running') {
             source.status = 'waiting';
+            transitioned = true;
             delete source.error;
             const outstanding = this.state.events.some(event => event.threadId === source.threadId &&
               event.sourceId === source.id && (event.status === 'pending' || event.status === 'offered'));
@@ -1929,6 +1935,7 @@ export class WakeSources {
         const { fresh } = this.addEvents(source.threadId, source.id, output.events);
         if (source.status === 'running') {
           source.status = 'waiting';
+          transitioned = true;
           delete source.error;
           const outstanding = this.state.events.some(event => event.threadId === source.threadId &&
             event.sourceId === source.id && (event.status === 'pending' || event.status === 'offered'));
@@ -1938,15 +1945,16 @@ export class WakeSources {
           source.nextAt = new Date(Date.now() + commandRearmMs(source)).toISOString();
         }
         // On a failed write the batch stays in memory, unsaved: nothing is
-        // offered until a later write succeeds, and the catch below records
-        // the source error. A re-emitted batch finds the same IDs.
+        // offered until a later write succeeds. The catch records this run's
+        // error even after its status transition; re-emitted IDs stay stable.
         await this.saveForAcknowledgement();
         return fresh.length;
       });
       if (added) this.requestTick();
     } catch (error) {
       await this.exclusive(async () => {
-        if (source.status !== 'running') return;
+        if (source.status !== 'running' &&
+            !(transitioned && source.status === 'waiting' && !source.stopped)) return;
         source.status = 'error';
         source.error = safeError(error);
         source.nextAt = new Date(Date.now() + (/operator action/.test(source.error) ? 300_000 : 60_000)).toISOString();
