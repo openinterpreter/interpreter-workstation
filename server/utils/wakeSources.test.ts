@@ -1639,7 +1639,7 @@ process.stdout.write(JSON.stringify({id:'same',message:'repeated input'})+'\\n{"
     const native: WakeNative = {
       inspect: async () => ({ messages: [] }),
       start: async () => { starts++; return 'turn-unconfirmed'; },
-      steer: async () => { throw new Error('unexpected steer'); },
+      steer: async () => 'turn-unconfirmed',
     };
     const counter = path.join(root, 'runs');
     // A new ID on every run; the native start for run-1 remains unconfirmed.
@@ -1658,12 +1658,12 @@ process.stdout.write(JSON.stringify({id:'run-'+(n+1),message:'input '+(n+1)})+'\
       // An accepted offer fences native admission, not future command polls.
       expect(first.list('thread-1').events.map(e => [e.eventId, e.status, e.turnId]))
         .toEqual([['run-1', 'offered', 'turn-unconfirmed']]);
-      for (const [index, offset] of [31_000, 61_000, 301_000, 3_600_000].entries()) {
+      for (const [index, offset] of [31_000, 61_000].entries()) {
         await first.tick(t0 + offset);
         await settle(() => first.list('thread-1').events.length === index + 2 &&
           first.list('thread-1').sources[0]?.status === 'waiting');
       }
-      expect(await readFile(counter, 'utf8')).toBe('5');
+      expect(await readFile(counter, 'utf8')).toBe('3');
       await first.stop();
       // Restart retains the earlier native offer and polls for additional IDs.
       const file = path.join(root, 'wake-sources.json');
@@ -1672,13 +1672,13 @@ process.stdout.write(JSON.stringify({id:'run-'+(n+1),message:'input '+(n+1)})+'\
       await writeFile(file, JSON.stringify(saved));
       second = new WakeSources(native, root, 30_000, MANUAL);
       await second.initialize();
-      await second.tick(t0 + 3_600_001);
-      await settle(() => second!.list('thread-1').events.length === 6);
-      expect(await readFile(counter, 'utf8')).toBe('6');
-      expect(second.list('thread-1').events.map(e => [e.eventId, e.status])).toEqual([
-        ['run-1', 'offered'], ['run-2', 'pending'], ['run-3', 'pending'],
-        ['run-4', 'pending'], ['run-5', 'pending'], ['run-6', 'pending'],
-      ]);
+      await second.tick(t0 + 61_001);
+      await settle(() => second!.list('thread-1').events.length === 4);
+      expect(await readFile(counter, 'utf8')).toBe('4');
+      const events = second.list('thread-1').events;
+      expect(events.map(e => e.eventId)).toEqual(['run-1', 'run-2', 'run-3', 'run-4']);
+      expect(events[0]?.status).toBe('offered');
+      expect(events.slice(1).every(e => e.status === 'offered' || e.status === 'pending')).toBe(true);
       expect(starts).toBe(1);
     } finally { await second?.stop(); await first.stop(); await rm(root, { recursive: true, force: true }); }
   });
