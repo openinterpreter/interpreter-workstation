@@ -1617,10 +1617,12 @@ clearInterval(timer);process.stdout.write('{"status":"waiting"}\\n')}},10);`;
         await wake.tick();
         await settle(() => (wake as any).inFlight.size === 0);
         expect(failed).toBe(true);
-        // Public source state exposes only the fixed safe diagnostic, never
-        // the filesystem exception or an internal acknowledgement error.
+        // Public source state exposes only fixed safe diagnostics, never the
+        // injected filesystem exception or raw command output.
         expect(wake.list('thread-1').sources[0]).toMatchObject({ status: 'error',
-          error: 'Wake source failed; check local service diagnostics' });
+          error: output.includes('waiting') ? 'Wake source failed; check local service diagnostics' :
+            'Wake state could not be saved; retrying' });
+        expect(wake.list('thread-1').sources[0]?.error).not.toContain('simulated transition write failure');
         expect(wake.list('thread-1').sources[0]?.nextAt).toBeTruthy();
       } finally { await f.cleanup(); }
     }
