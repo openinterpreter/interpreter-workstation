@@ -1663,15 +1663,17 @@ clearInterval(timer);process.stdout.write(output)}},10)}else process.stdout.writ
       expect((first as any).inFlight.size).toBe(1);
       await settle(() => existsSync(counter));
       expect(await readFile(counter, 'utf8')).toBe('1');
-      const t0 = Date.now();
+      const inFlightAt = Date.now();
       // A synthetic re-arm tick during the gated child must not queue a
       // duplicate command or consume the future tick after the child exits.
-      await first.tick(t0 + 31_000);
+      await first.tick(inFlightAt + 31_000);
       expect((first as any).inFlight.size).toBe(1);
       expect(await readFile(counter, 'utf8')).toBe('1');
       await writeFile(releaseFirst, 'continue');
       await settle(() => commandDrained(first, 1));
       expect(commandDrained(first, 1)).toBe(true);
+      // The re-arm is scheduled by the completed child, not by its start.
+      const t0 = Date.now();
       await first.tick(t0);
       // An accepted offer fences native admission, not future command polls.
       expect(first.list('thread-1').events.map(e => [e.eventId, e.status, e.turnId]))
