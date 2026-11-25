@@ -1464,7 +1464,7 @@ process.stdout.write(ids.map(id=>JSON.stringify({id,message:'input '+id})).join(
         source('thread-idle').moreAvailable === false);
       expect(Date.parse(source('thread-idle').nextAt!) - Date.now()).toBeGreaterThan(25_000);
       expect(source('thread-more')).toMatchObject({ status: 'waiting', moreAvailable: true });
-      expect(source('thread-more').nextAt).toBeUndefined();
+      expect(Date.parse(source('thread-more').nextAt!) - Date.now()).toBeGreaterThan(25_000);
       expect(source('thread-plain').moreAvailable).toBe(true);
       await wake.tick();
       admit('thread-more', 'm1');
@@ -1481,6 +1481,90 @@ process.stdout.write(ids.map(id=>JSON.stringify({id,message:'input '+id})).join(
       expect(Date.parse(source('thread-more').nextAt!)).toBeLessThanOrEqual(Date.now());
       expect(source('thread-more').status).toBe('waiting');
     } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  test('a configurable command re-arm polls later text behind an unadmitted event without replaying its ID', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-command-rearm-'));
+    const counter = path.join(root, 'runs');
+    const clientIds: string[] = [];
+    let starts = 0;
+    const native: WakeNative = {
+      inspect: async () => ({ messages: [], clientIds }),
+      start: async () => { starts++; return 'turn-1'; },
+      steer: async () => 'turn-1',
+    };
+    const script = `const fs=require('fs');const p=${JSON.stringify(counter)};let n=0;
+try{n=Number(fs.readFileSync(p,'utf8'))}catch{}fs.writeFileSync(p,String(n+1));
+const first=JSON.stringify({id:'first',message:'first text'});
+const second=JSON.stringify({id:'second',message:'later text'});
+process.stdout.write((n===0?first:n===1?first+'\\n'+second:'{"status":"waiting"}')+'\\n');`;
+    let wake = new WakeSources(native, root, 30_000, MANUAL);
+    try {
+      await wake.initialize();
+      const put = { id: 'intake', threadId: 'thread-1', kind: 'command' as const,
+        argv: [process.execPath, '-e', script], rearmMs: 2_000 };
+      await wake.put(put);
+      await wake.tick();
+      await settle(() => wake.list('thread-1').events.length === 1 &&
+        wake.list('thread-1').sources[0]?.status === 'waiting');
+      expect(wake.list('thread-1').sources[0]?.rearmMs).toBe(2_000);
+      await wake.tick(); // offer first, but native has not admitted it
+      expect(wake.list('thread-1').events[0]?.status).toBe('offered');
+      await wake.tick(Date.now() + 3_000); // collect later text despite the unresolved first offer
+      await settle(() => wake.list('thread-1').events.length === 2 &&
+        wake.list('thread-1').sources[0]?.status === 'waiting');
+      expect(wake.list('thread-1').events.map(e => e.eventId)).toEqual(['first', 'second']);
+      expect(starts).toBe(1);
+      await wake.stop();
+      wake = new WakeSources(native, root, 30_000, MANUAL);
+      await wake.initialize();
+      expect(wake.list('thread-1').sources[0]?.rearmMs).toBe(2_000);
+      expect(wake.list('thread-1').events.map(e => e.eventId)).toEqual(['first', 'second']);
+      clientIds.push(wakeClientId({ threadId: 'thread-1', sourceId: 'intake', eventId: 'first' }));
+      await wake.tick();
+      expect(wake.list('thread-1').events[0]?.status).toBe('admitted');
+      clientIds.push(wakeClientId({ threadId: 'thread-1', sourceId: 'intake', eventId: 'second' }));
+      await wake.tick();
+      expect(wake.list('thread-1').events.map(e => e.status)).toEqual(['admitted', 'admitted']);
+      expect(starts).toBe(1);
+    } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  test('command re-arm defaults to 30 s and rejects intervals below its 2 s floor', async () => {
+    const f = await fixture();
+    try {
+      const wake = await f.make(MANUAL);
+      const source = { id: 'poll', threadId: 'thread-1', kind: 'command' as const,
+        argv: ['/bin/echo', '{"status":"waiting"}'] };
+      await expect(wake.put({ ...source, rearmMs: 1_999 })).rejects.toThrow();
+      await expect(wake.put({ ...source, rearmMs: Number.NaN })).rejects.toThrow();
+      await expect(wake.put({ ...source, rearmMs: 2_000.5 })).rejects.toThrow();
+      await wake.put(source);
+      await wake.tick();
+      await settle(() => wake.list('thread-1').sources[0]?.status === 'waiting' &&
+        Date.parse(wake.list('thread-1').sources[0]?.nextAt ?? '') > Date.now());
+      expect(Date.parse(wake.list('thread-1').sources[0]!.nextAt!) - Date.now()).toBeGreaterThan(25_000);
+    } finally { await f.cleanup(); }
+  });
+
+  test('a command error and restart retain the error backoff and configured poll interval', async () => {
+    const f = await fixture();
+    try {
+      const wake = await f.make(MANUAL);
+      await wake.put({ id: 'poll', threadId: 'thread-1', kind: 'command', rearmMs: 2_000,
+        argv: ['/bin/echo', 'not-json'] });
+      await wake.tick();
+      await settle(() => wake.list('thread-1').sources[0]?.status === 'error');
+      const source = wake.list('thread-1').sources[0]!;
+      expect(source.rearmMs).toBe(2_000);
+      expect(Date.parse(source.nextAt!) - Date.now()).toBeGreaterThan(50_000);
+      await wake.stop();
+      const restored = await f.make(MANUAL);
+      expect(restored.list('thread-1').sources[0]).toMatchObject({ status: 'error', rearmMs: 2_000 });
+      expect(Date.parse(restored.list('thread-1').sources[0]!.nextAt!)).toBe(Date.parse(source.nextAt!));
+      await restored.tick();
+      expect(restored.list('thread-1').sources[0]?.status).toBe('error');
+    } finally { await f.cleanup(); }
   });
 
   test('a persisted moreAvailable re-runs the command once its last input is admitted after restart', async () => {
