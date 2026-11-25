@@ -33,9 +33,9 @@ export type WakeSource = {
   /** Command only: the last run emitted events (or reported more), so the
    * source runs again as soon as its last input is admitted. */
   moreAvailable?: boolean;
-  /** Why an errored source stays stopped until it is saved again: the runtime
-   * refused direct input to its thread. A restart does not re-arm it. */
-  stopped?: 'refusal';
+  /** An operator decision or runtime refusal is not cleared by a later
+   * event receipt or restart; reconfiguration requires explicit recovery. */
+  stopped?: 'refusal' | 'operator_review';
 };
 export type WakeSourceDrain = {
   drained: true;
@@ -450,9 +450,11 @@ export class WakeSources {
       // Older command sources stopped permanently on a transient source
       // error. Keep the diagnostic visible, but recover on a bounded timer
       // after a restart without creating a second consumer. A source stopped
-      // because the runtime refused its thread's input stays stopped.
+      // by a runtime refusal or operator review stays stopped.
       if (source.kind === 'command' && source.status === 'error' && !source.nextAt &&
-          source.stopped !== 'refusal') {
+          !source.stopped && !this.state.events.some(event => event.threadId === source.threadId &&
+            event.sourceId === source.id && (event.status === 'held' ||
+              (event.status === 'offered' && event.error === UNCONFIRMED_OFFER)))) {
         source.nextAt = new Date(Date.now() + 300_000).toISOString();
       }
       if (source.kind === 'schedule' && source.status === 'waiting') {
@@ -816,7 +818,8 @@ export class WakeSources {
     const source =this.state.sources.find(s => s.id === event.sourceId && s.threadId === event.threadId);
     // A command still in flight owns its own re-arm. Admission may settle
     // during that run, but must not overwrite the running or stopped state.
-    if (source && source.status !== 'cancelled' &&
+    if (source && source.status !== 'cancelled' && !source.stopped &&
+        !(source.status === 'error' && !source.nextAt) &&
         !this.inFlight.has(sourceKey(source.threadId, source.id))) {
       delete source.error;
       delete source.stopped;
@@ -1262,6 +1265,7 @@ export class WakeSources {
         source.status = 'error';
         source.nextAt = undefined;
         source.error = 'Operator-held ambiguous native offer; review source before rearming';
+        source.stopped = 'operator_review';
       }
       await this.save();
       return structuredClone(current);
@@ -1313,6 +1317,7 @@ export class WakeSources {
       if (source && source.status !== 'cancelled') {
         source.status = 'error'; source.nextAt = undefined;
         source.error = 'Operator-held historical ambiguous native offer; review source before rearming';
+        source.stopped = 'operator_review';
       }
       await this.save();
       return structuredClone(current);
@@ -1810,6 +1815,7 @@ export class WakeSources {
       delete event.nextAttemptAt;
       if (source) {
         source.status = 'error'; source.nextAt = undefined; source.error = UNCONFIRMED_OFFER;
+        source.stopped = 'operator_review';
       }
       if (event.sourceId !== THREAD_INPUT_SOURCE) { await this.saveTransition(); return 'review'; }
       // No source record to review: hold it, retaining its text and ID, so

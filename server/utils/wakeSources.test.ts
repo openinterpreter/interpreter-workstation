@@ -1574,11 +1574,12 @@ clearInterval(timer);process.stdout.write('{"status":"waiting"}\\n')}},10);`;
     const root = await mkdtemp(path.join(os.tmpdir(), 'wake-command-refusal-'));
     const release = path.join(root, 'release');
     const started = path.join(root, 'started');
+    const clientIds: string[] = [];
     const script = `const fs=require('fs');fs.writeFileSync(${JSON.stringify(started)},'1');
 const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){
 clearInterval(timer);process.stdout.write(JSON.stringify({id:'later',message:'later input'})+'\\n')}},10);`;
     const wake = new WakeSources({
-      inspect: async () => ({ messages: [] }),
+      inspect: async () => ({ messages: [], clientIds }),
       start: async (thread) => { throw new WakeAdmissionFailure('start',
         new SubagentDirectInputError(thread, 'parent-thread')); },
       steer: async () => { throw new Error('unexpected steer'); },
@@ -1601,6 +1602,11 @@ clearInterval(timer);process.stdout.write(JSON.stringify({id:'later',message:'la
       expect(wake.list('thread-1').sources[0]).toMatchObject({ status: 'error', stopped: 'refusal' });
       expect(wake.list('thread-1').sources[0]?.nextAt).toBeUndefined();
       expect((await wake.ingest('thread-1', 'poll', 'refused-id', 'different')).status).toBe('refused');
+      clientIds.push(wakeClientId(wake.list('thread-1').events[1]!));
+      await wake.tick();
+      expect(wake.list('thread-1').events[1]?.status).toBe('admitted');
+      expect(wake.list('thread-1').sources[0]).toMatchObject({ status: 'error', stopped: 'refusal' });
+      expect(wake.list('thread-1').sources[0]?.nextAt).toBeUndefined();
       await wake.tick(Date.now() + 600_000);
       expect(wake.list('thread-1').sources[0]?.status).toBe('error');
     } finally { await writeFile(release, 'go'); await wake.stop(); await rm(root, { recursive: true, force: true }); }
@@ -1611,11 +1617,12 @@ clearInterval(timer);process.stdout.write(JSON.stringify({id:'later',message:'la
       const root = await mkdtemp(path.join(os.tmpdir(), `wake-command-${decision}-`));
       const release = path.join(root, 'release');
       const started = path.join(root, 'started');
+      const clientIds: string[] = [];
       const script = `const fs=require('fs');fs.writeFileSync(${JSON.stringify(started)},'1');
 const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){
-clearInterval(timer);process.stdout.write('{"status":"waiting"}\\n')}},10);`;
+clearInterval(timer);process.stdout.write(JSON.stringify({id:'later',message:'later input'})+'\\n')}},10);`;
       const wake = new WakeSources({
-        inspect: async () => ({ messages: [] }),
+        inspect: async () => ({ messages: [], clientIds }),
         custody: async () => ({ queuedSubmissionCount: 0, lastTurnId: 'turn-1',
           turnStatus: 'completed', threadStatus: 'idle' }),
         start: async () => 'turn-1',
@@ -1645,13 +1652,21 @@ clearInterval(timer);process.stdout.write('{"status":"waiting"}\\n')}},10);`;
         expect(wake.list('thread-1').sources[0]?.status).toBe('error');
         expect(wake.list('thread-1').sources[0]?.nextAt).toBeUndefined();
         await writeFile(release, 'go');
-        await settle(() => (wake as any).inFlight.size === 0);
+        await settle(() => (wake as any).inFlight.size === 0 && wake.list('thread-1').events.length === 2);
         expect((wake as any).inFlight.size).toBe(0);
+        expect(wake.list('thread-1').events.map(event => event.eventId)).toEqual(['first', 'later']);
         expect(wake.list('thread-1').sources[0]?.status).toBe('error');
         expect(wake.list('thread-1').sources[0]?.nextAt).toBeUndefined();
         if (decision === 'hold') {
           expect((await wake.ingest('thread-1', 'poll', 'first', 'different')).status).toBe('held');
         }
+        // Native history later confirms the new output. A receipt may settle
+        // its event, but must not silently resume the operator-stopped source.
+        clientIds.push(wakeClientId(wake.list('thread-1').events[1]!));
+        await wake.tick();
+        expect(wake.list('thread-1').events[1]?.status).toBe('admitted');
+        expect(wake.list('thread-1').sources[0]?.status).toBe('error');
+        expect(wake.list('thread-1').sources[0]?.nextAt).toBeUndefined();
         await wake.tick(Date.now() + 600_000);
         expect(wake.list('thread-1').sources[0]?.status).toBe('error');
       } finally { await writeFile(release, 'go'); await wake.stop(); await rm(root, { recursive: true, force: true }); }
