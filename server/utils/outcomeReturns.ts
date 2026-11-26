@@ -199,7 +199,7 @@ const turnKey = (threadId: string, turnId: string) => JSON.stringify([threadId, 
  * transient notice of a pending automatic resume has its own ID, so the
  * block's later outcome is a separate notice even with the same times. */
 export function goalNoticeId(threadId: string,
-  goal: Pick<GoalNotice, 'status' | 'createdAt' | 'updatedAt'> & { reason?: GoalNoticeReason }): string {
+  goal: Pick<GoalNotice, 'status' | 'createdAt' | 'updatedAt' | 'inputId'> & { reason?: GoalNoticeReason }): string {
   const transient = goal.reason === CAPACITY_RETRY_PENDING ? `:${CAPACITY_RETRY_PENDING}` :
     goal.inputId ? `:${goal.reason}:${goal.inputId}` : '';
   return createHash('sha256').update(`goal:${threadId}:${goal.createdAt}:${goal.status}:${goal.updatedAt}${transient}`)
