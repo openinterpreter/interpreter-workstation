@@ -3,6 +3,7 @@ import type { v2 } from '../handlers/codex-generated-types/index';
 import { isSubagentDirectInputRefusal, SubagentDirectInputError } from '../../src/lib/codex/subagent-input';
 import { WakeSources, WakeAdmissionFailure, wakeClientId, type WakeNative } from './wakeSources';
 import { recordOutcomeReturn } from './outcomeReturnsRuntime';
+import { resumeBlockedGoalOnNativeInput } from './goalInputResumeRuntime';
 
 export async function startWakeThreadTurn(
   threadId: string,
@@ -79,6 +80,7 @@ const TERMINAL_TURN = ['completed', 'interrupted', 'failed'];
 
 /** The production native adapter of the wake queue. Exported for route tests. */
 export const wakeNative: WakeNative = {
+  onGoalInput: resumeBlockedGoalOnNativeInput,
   inspect(threadId, since) {
     return inspectThread(threadId, since);
   },
