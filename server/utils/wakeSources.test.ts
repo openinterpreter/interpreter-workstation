@@ -1686,6 +1686,63 @@ if(${padding})process.stdout.write('x'.repeat(${padding})+'\\n');`;
     } finally { await f.cleanup(); }
   });
 
+  test('command re-arm accepts a bounded per-source interval and defaults to 30 seconds', async () => {
+    const f = await fixture();
+    try {
+      const wake = await f.make(MANUAL);
+      const command = { id: 'poll', threadId: 'thread-1', kind: 'command' as const,
+        argv: ['/bin/echo', '{"status":"waiting"}'] };
+      await expect(wake.put({ ...command, rearmMs: 1_999 })).rejects.toThrow();
+      await expect(wake.put({ ...command, rearmMs: 2_000.5 })).rejects.toThrow();
+      await expect(wake.put({ ...command, rearmMs: Number.NaN })).rejects.toThrow();
+      await expect(wake.put({ ...command, rearmMs: Number.MAX_SAFE_INTEGER })).rejects.toThrow();
+      await expect(wake.put({ ...command, rearmMs: 2_147_483_648 })).rejects.toThrow();
+      await expect(wake.put({ id: 'schedule', threadId: 'thread-1', kind: 'schedule',
+        message: 'scheduled input', at: new Date(Date.now() + 60_000).toISOString(),
+        rearmMs: 2_000 })).rejects.toThrow('Only a command');
+      await wake.put(command);
+      await wake.put({ ...command, id: 'fast', threadId: 'thread-2', rearmMs: 2_000 });
+      const startedAt = Date.now();
+      await wake.tick();
+      await settle(() => wake.list('thread-1').sources[0]?.status === 'waiting' &&
+        wake.list('thread-2').sources[0]?.status === 'waiting' &&
+        Date.parse(wake.list('thread-1').sources[0]?.nextAt ?? '') > startedAt &&
+        Date.parse(wake.list('thread-2').sources[0]?.nextAt ?? '') > startedAt);
+      const standard = wake.list('thread-1').sources[0]!;
+      const fast = wake.list('thread-2').sources[0]!;
+      expect(standard.rearmMs).toBeUndefined();
+      expect(fast.rearmMs).toBe(2_000);
+      expect(Date.parse(standard.nextAt!) - startedAt).toBeGreaterThanOrEqual(30_000);
+      expect(Date.parse(fast.nextAt!) - startedAt).toBeGreaterThanOrEqual(2_000);
+      expect(Date.parse(fast.nextAt!) - startedAt).toBeLessThan(10_000);
+    } finally { await f.cleanup(); }
+  });
+
+  test('restart retains a command interval and defaults invalid persisted values', async () => {
+    const f = await fixture();
+    try {
+      const first = await f.make(MANUAL);
+      await first.put({ id: 'poll', threadId: 'thread-1', kind: 'command', rearmMs: 2_000,
+        argv: ['/bin/echo', '{"status":"waiting"}'] });
+      await first.stop();
+      const file = path.join(f.root, 'wake-sources.json');
+      const saved = JSON.parse(await readFile(file, 'utf8'));
+      saved.sources[0].status = 'running';
+      await writeFile(file, JSON.stringify(saved));
+      const restored = await f.make(MANUAL);
+      expect(restored.list('thread-1').sources[0]?.rearmMs).toBe(2_000);
+      expect(Date.parse(restored.list('thread-1').sources[0]!.nextAt!) - Date.now())
+        .toBeGreaterThan(1_000);
+      await restored.stop();
+      saved.sources[0].rearmMs = Number.MAX_SAFE_INTEGER;
+      await writeFile(file, JSON.stringify(saved));
+      const fallback = await f.make(MANUAL);
+      expect(fallback.list('thread-1').sources[0]?.rearmMs).toBe(Number.MAX_SAFE_INTEGER);
+      expect(Date.parse(fallback.list('thread-1').sources[0]!.nextAt!) - Date.now())
+        .toBeGreaterThan(25_000);
+    } finally { await f.cleanup(); }
+  });
+
   test('oversized command output is not misreported as subscription usage', async () => {
     const f = await fixture();
     try {
