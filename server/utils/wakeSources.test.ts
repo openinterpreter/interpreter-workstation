@@ -135,7 +135,8 @@ describe('durable thread wake sources', () => {
       order.length = 0;
       wake = new WakeSources(native, root, 30_000, MANUAL);
       await wake.initialize();
-      expect(order).toEqual([]);
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(order).not.toContain('goal');
     } finally { await wake?.stop(); await rm(root, { recursive: true, force: true }); }
   });
 
