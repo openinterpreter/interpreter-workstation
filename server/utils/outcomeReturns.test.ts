@@ -630,6 +630,28 @@ describe('outcome returns', () => {
     } finally { await f.cleanup(); }
   });
 
+  test('input-resume and each bound refusal retain distinct fixed, text-free Goal notices', async () => {
+    const f = await fixture();
+    try {
+      const store = await f.make(0);
+      const goalId = '11111111-2222-4333-8444-555555555555';
+      const base = { status: 'blocked' as const, reason: 'resume_bound_reached' as const,
+        createdAt: 1_700_000_000, updatedAt: 1_700_000_500, goalId,
+        missionRevision: 2, lifecycleRevision: 4 };
+      const first = { ...base, inputId: '1'.repeat(64) };
+      const second = { ...base, inputId: '2'.repeat(64) };
+      const resumed = { ...base, status: 'active' as const, previousStatus: 'blocked' as const,
+        reason: 'resumed_on_input' as const, inputId: '3'.repeat(64) };
+      expect(await store.noticeGoal(thread, { unrouted: 'no_assigner' }, first)).toBe(true);
+      expect(await store.noticeGoal(thread, { unrouted: 'no_assigner' }, second)).toBe(true);
+      expect(await store.noticeGoal(thread, { unrouted: 'no_assigner' }, resumed)).toBe(true);
+      expect(new Set(store.list().map(entry => entry.id)).size).toBe(3);
+      expect(JSON.stringify(store.list())).not.toContain('unreported project');
+      await store.stop();
+      expect((await f.make(null)).list()).toHaveLength(3);
+    } finally { await f.cleanup(); }
+  });
+
   test('a watched turn whose end was missed is read again on the re-check interval, without a restart', async () => {
     const f = await fixture();
     try {

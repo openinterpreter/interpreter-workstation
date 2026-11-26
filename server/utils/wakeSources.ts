@@ -93,6 +93,8 @@ export function threadInputCustody(event: WakeEvent) {
 /** An admitted, sender-attributed input, handed to `WakeNative.onAdmitted`. */
 export type WakeAdmission = { threadId: string; sourceId: string; eventId: string; turnId: string;
   sender: SubmissionSender };
+export type GoalInputAdmission = Pick<WakeEvent, 'threadId' | 'sourceId' | 'eventId' | 'turnId'> &
+  { turnId: string };
 export class WakeAdmissionFailure extends Error {
   constructor(readonly phase: 'preflight' | 'resume' | 'start', readonly original: unknown) {
     super('Native wake admission failed');
@@ -135,7 +137,8 @@ function nativeFailure(error: unknown, phase: NonNullable<WakeEvent['failure']>[
   return { phase: error instanceof WakeAdmissionFailure ? error.phase : phase, name, category,
     ...(code ? { code } : {}), messageSha256 };
 }
-type State = { sources: WakeSource[]; events: WakeEvent[] };
+type GoalResumeAttempt = { threadId: string; goalId: string; inputKey: string; at: number };
+type State = { sources: WakeSource[]; events: WakeEvent[]; goalResumeAttempts?: GoalResumeAttempt[] };
 const EMPTY: State = { sources: [], events: [] };
 type NativeView = Awaited<ReturnType<WakeNative['inspect']>>;
 /** What one delivery step means for the later inputs of its thread in this pass:
@@ -337,6 +340,9 @@ export interface WakeNative {
    * leaves it to be offered again on the retry interval and at the next
    * start. Must be idempotent. */
   onAdmitted?(admission: WakeAdmission): Promise<boolean>;
+  /** A confirmed, live native input. Returning or failing never changes its admission. */
+  onGoalInput?(admission: GoalInputAdmission,
+    reserve: (goalId: string) => Promise<'reserved' | 'bounded' | 'duplicate'>): Promise<void>;
 }
 
 /** One owner per application process; all transitions use an atomic, mode-0600 replace. */
@@ -397,6 +403,7 @@ export class WakeSources {
   private readonly turnsUnsaved = new Set<WakeEvent>();
   /** Running onAdmitted hand-overs, by thread, source and event. */
   private readonly admissionHandOvers = new Map<string, Promise<void>>();
+  private readonly goalInputHandOvers = new Set<string>();
 
   constructor(private readonly native: WakeNative, root = getInterpreterAppDataDir(),
     private readonly inspectTimeoutMs = 30_000,
@@ -424,6 +431,12 @@ export class WakeSources {
     try {
       const raw = JSON.parse(await readFile(this.file, 'utf8')) as State;
       if (!Array.isArray(raw.sources) || !Array.isArray(raw.events)) throw new Error('Invalid wake source state');
+      if (raw.goalResumeAttempts !== undefined && (!Array.isArray(raw.goalResumeAttempts) ||
+          raw.goalResumeAttempts.some(item => !item || typeof item.threadId !== 'string' ||
+            typeof item.goalId !== 'string' || typeof item.inputKey !== 'string' ||
+            !Number.isSafeInteger(item.at) || item.at < 0))) {
+        throw new Error('Invalid wake Goal resume ledger');
+      }
       this.state = raw;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -714,6 +727,43 @@ export class WakeSources {
       }
     })().finally(() => { this.admissionHandOvers.delete(key); });
     this.admissionHandOvers.set(key, task);
+  }
+
+  /** Reserve before native CAS: an uncertain mutation after a crash must not
+   * produce an unbounded series of retries from a chatty source. */
+  private reserveGoalInput(admission: GoalInputAdmission, goalId: string):
+    Promise<'reserved' | 'bounded' | 'duplicate'> {
+    return this.exclusive(async () => {
+      const now = Date.now();
+      const inputKey = eventKey(admission.threadId, admission.sourceId, admission.eventId);
+      const attempts = this.state.goalResumeAttempts ??= [];
+      if (attempts.some(item => item.inputKey === inputKey && item.goalId === goalId)) return 'duplicate';
+      const withinHour = attempts.filter(item => item.threadId === admission.threadId &&
+        item.goalId === goalId && item.at > now - 3_600_000 && item.at <= now);
+      if (withinHour.length >= 3) return 'bounded';
+      attempts.push({ threadId: admission.threadId, goalId, inputKey, at: now });
+      // A sliding hour needs no older entries, except the current input's key
+      // which already has a permanent admitted-event record for deduplication.
+      this.state.goalResumeAttempts = attempts.filter(item => item.at > now - 3_600_000);
+      await this.save();
+      return 'reserved';
+    });
+  }
+
+  private handOverGoalInput(event: WakeEvent, liveTurnId: string | undefined): void {
+    const hook = this.native.onGoalInput;
+    if (!hook || this.stopping || !event.turnId || event.turnId !== liveTurnId) return;
+    const key = eventKey(event.threadId, event.sourceId, event.eventId);
+    if (this.goalInputHandOvers.has(key)) return;
+    const admission: GoalInputAdmission = { threadId: event.threadId, sourceId: event.sourceId,
+      eventId: event.eventId, turnId: event.turnId };
+    this.goalInputHandOvers.add(key);
+    const task = Promise.resolve().then(() => hook.call(this.native, admission,
+      goalId => this.reserveGoalInput(admission, goalId)));
+    void this.track(task).catch(error => {
+      console.error('[Goal input resume] Admission preserved; resume unavailable.',
+        error instanceof Error ? error.name : 'UnknownError');
+    }).finally(() => { this.goalInputHandOvers.delete(key); });
   }
 
   /** A content-free, deterministic CAS token for one source and its unadmitted
@@ -1527,6 +1577,7 @@ export class WakeSources {
           await this.saveTransition();
         });
         this.handOverAdmission(event);
+        this.handOverGoalInput(event, state.activeTurnId);
         return 'ok';
       }
       if (event.status === 'offered') {

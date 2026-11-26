@@ -49,7 +49,8 @@ export type OutcomeReturn = {
 export type GoalNoticeStatus = 'active' | 'paused' | 'blocked' | 'usageLimited' | 'budgetLimited' | 'complete';
 /** Fixed vocabulary for why a Goal changed; never free text. */
 export type GoalNoticeReason = 'turn_error' | 'model_capacity_exhausted' | 'capacity_retry_pending' |
-  'usage_limit' | 'budget_limit' | 'changed_during_turn' | 'changed_outside_turn' | 'unknown';
+  'usage_limit' | 'budget_limit' | 'changed_during_turn' | 'changed_outside_turn' | 'unknown' |
+  'resumed_on_input' | 'resume_bound_reached';
 /** Reason of the one transient notice for a block the automatic capacity
  * resume is about to retry; the block's outcome is reported after it. */
 export const CAPACITY_RETRY_PENDING = 'capacity_retry_pending';
@@ -67,6 +68,8 @@ export type GoalNotice = {
   goalId?: string;
   missionRevision?: number;
   lifecycleRevision?: number;
+  /** Hash of an admitted input, for one notice per bound refusal without its text. */
+  inputId?: string;
 };
 /** Why a Goal has no agent to tell: no sender of its thread named a thread,
  * or several did and none is known to have assigned it. */
@@ -155,12 +158,13 @@ const REPLIES: readonly OutcomeReply[] = ['own_reply', 'turn_reply', 'no_separat
 export const GOAL_NOTICE_STATUSES: readonly GoalNoticeStatus[] =
   ['active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'];
 const GOAL_NOTICE_REASONS: readonly GoalNoticeReason[] = ['turn_error', 'model_capacity_exhausted',
-  CAPACITY_RETRY_PENDING, 'usage_limit', 'budget_limit', 'changed_during_turn', 'changed_outside_turn', 'unknown'];
+  CAPACITY_RETRY_PENDING, 'usage_limit', 'budget_limit', 'changed_during_turn', 'changed_outside_turn',
+  'unknown', 'resumed_on_input', 'resume_bound_reached'];
 const GOAL_UNROUTED_REASONS: readonly GoalUnroutedReason[] = ['no_assigner', 'ambiguous_assigner'];
 const GOAL_ASSIGNER_SOURCES: readonly string[] = ['turn', 'sole_sender'];
 const GOAL_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const GOAL_NOTICE_KEYS = ['status', 'previousStatus', 'reason', 'createdAt', 'updatedAt', 'goalId',
-  'missionRevision', 'lifecycleRevision'];
+  'missionRevision', 'lifecycleRevision', 'inputId'];
 
 /** Stable delivery ID of one turn's outcome for one sender's input: every
  * input that started or steered the turn gets its own return. */
@@ -196,7 +200,8 @@ const turnKey = (threadId: string, turnId: string) => JSON.stringify([threadId, 
  * block's later outcome is a separate notice even with the same times. */
 export function goalNoticeId(threadId: string,
   goal: Pick<GoalNotice, 'status' | 'createdAt' | 'updatedAt'> & { reason?: GoalNoticeReason }): string {
-  const transient = goal.reason === CAPACITY_RETRY_PENDING ? `:${CAPACITY_RETRY_PENDING}` : '';
+  const transient = goal.reason === CAPACITY_RETRY_PENDING ? `:${CAPACITY_RETRY_PENDING}` :
+    goal.inputId ? `:${goal.reason}:${goal.inputId}` : '';
   return createHash('sha256').update(`goal:${threadId}:${goal.createdAt}:${goal.status}:${goal.updatedAt}${transient}`)
     .digest('hex');
 }
@@ -226,6 +231,7 @@ function validGoalNotice(value: unknown): value is GoalNotice {
     Number.isFinite(goal.updatedAt) &&
     (goal.goalId === undefined || (typeof goal.goalId === 'string' && GOAL_ID.test(goal.goalId))) &&
     validRevision(goal.missionRevision) && validRevision(goal.lifecycleRevision) &&
+    (goal.inputId === undefined || /^[0-9a-f]{64}$/.test(goal.inputId)) &&
     Object.keys(goal).every(key => GOAL_NOTICE_KEYS.includes(key));
 }
 

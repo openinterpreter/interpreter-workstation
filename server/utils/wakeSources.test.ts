@@ -50,6 +50,44 @@ async function settle(done: () => boolean, attempts = 300): Promise<void> {
 }
 
 describe('durable thread wake sources', () => {
+  test('a live admitted input reserves at most three Goal resumes per rolling hour across restart', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-goal-input-'));
+    const receipts: string[] = [];
+    const decisions: string[] = [];
+    const native: WakeNative = {
+      inspect: async () => ({ activeTurnId: 'turn-1', messages: [], clientIds: [...receipts],
+        clientTurns: receipts.map(clientId => ({ clientId, turnId: 'turn-1' })) }),
+      steer: async (_thread, _turn, _message, clientId) => {
+        if (clientId) receipts.push(clientId);
+        return 'turn-1';
+      },
+      start: async () => { throw Error('a live turn must be steered'); },
+      onGoalInput: async (input, reserve) => { decisions.push(`${input.eventId}:${await reserve('goal-1')}`); },
+    };
+    let wake: WakeSources | undefined;
+    try {
+      wake = new WakeSources(native, root, 30_000, MANUAL);
+      await wake.initialize();
+      for (const id of ['peer-1', 'thread-2']) {
+        await wake.ingest('thread-1', id === 'peer-1' ? 'peer' : THREAD_INPUT_SOURCE, id, id);
+        await wake.tick(); await wake.tick();
+        await settle(() => decisions.length === (id === 'peer-1' ? 1 : 2));
+      }
+      expect(decisions).toEqual(['peer-1:reserved', 'thread-2:reserved']);
+      await wake.stop();
+      wake = new WakeSources(native, root, 30_000, MANUAL);
+      await wake.initialize();
+      for (const id of ['wake-3', 'wake-4']) {
+        await wake.ingest('thread-1', 'timer', id, id);
+        await wake.tick(); await wake.tick();
+        await settle(() => decisions.length === (id === 'wake-3' ? 3 : 4));
+      }
+      expect(decisions).toEqual(['peer-1:reserved', 'thread-2:reserved',
+        'wake-3:reserved', 'wake-4:bounded']);
+      expect(wake.list('thread-1').events.filter(event => event.status === 'admitted').length).toBe(4);
+    } finally { await wake?.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
   test('retargets only a drained paused command with exact prior argv, preserving pending custody', async () => {
     const f = await fixture();
     try {
