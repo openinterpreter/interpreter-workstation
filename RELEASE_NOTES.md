@@ -1,9 +1,7 @@
-<!-- release-notes-for: 0.2.262 -->
+<!-- release-notes-for: 0.2.263 -->
 ## What's new
 
-- Keeps first-failure end-to-end traces and logs available for diagnosing intermittent tests.
-- Resumes a matching published release only after verifying its source and all asset digests.
-- Copies stable download aliases from verified versioned packages and checks their public SHA-256 before completing publication.
+- Lets command wake sources use a configurable re-arm interval, with a two-second minimum and the existing 30-second default.
 
 ## Distribution
 
