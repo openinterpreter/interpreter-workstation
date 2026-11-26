@@ -450,7 +450,7 @@ export class WakeSources {
             !['reserved', 'confirmed', 'bounded', 'rejected'].includes(item.phase) ||
             ![item.goalCreatedAt, item.goalUpdatedAt].every(Number.isFinite) ||
             ![item.missionRevision, item.lifecycleRevision].every(value => Number.isSafeInteger(value) && value >= 0) ||
-            (item.phase === 'confirmed' && !Number.isFinite(item.resultUpdatedAt)))) {
+            (item.phase === 'confirmed' && !Number.isFinite(item.resultUpdatedAt))))) {
         throw new Error('Invalid wake Goal resume ledger');
       }
       this.state = raw;
