@@ -390,6 +390,9 @@ describe('outcome returns', () => {
       await store.watch(thread, 'turn_1', first, 'handoff_1');
       await store.watch(thread, 'turn_1', { computer: 'plain-host' }, 'handoff_plain');
       await store.watch(thread, 'turn_2', second, 'handoff_2');
+      // A later retry peer never becomes the Goal's assigner merely by
+      // supplying the first input observed after a restart.
+      expect(store.existingGoalAssigner(thread, 10)).toBeNull();
       // The turn's one sender with a thread, although the thread has two.
       expect(await store.bindGoalAssigner(thread, 10, 'turn_1')).toEqual({ threadId: thread, goalCreatedAt: 10,
         sender: first, source: 'turn' });
@@ -398,6 +401,7 @@ describe('outcome returns', () => {
         unrouted: 'ambiguous_assigner' });
       // Bound once: later calls and senders never change it.
       expect(await store.bindGoalAssigner(thread, 10, 'turn_2')).toMatchObject({ sender: first, source: 'turn' });
+      expect(store.existingGoalAssigner(thread, 10)).toMatchObject({ sender: first, source: 'turn' });
       const other = '00000000-0000-4000-8000-000000000002';
       await store.watch(other, 'turn_3', { computer: 'plain-host' }, 'handoff_3');
       expect(await store.bindGoalAssigner(other, 30, null)).toEqual({ threadId: other, goalCreatedAt: 30,

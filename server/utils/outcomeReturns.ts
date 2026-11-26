@@ -50,7 +50,7 @@ export type GoalNoticeStatus = 'active' | 'paused' | 'blocked' | 'usageLimited' 
 /** Fixed vocabulary for why a Goal changed; never free text. */
 export type GoalNoticeReason = 'turn_error' | 'model_capacity_exhausted' | 'capacity_retry_pending' |
   'usage_limit' | 'budget_limit' | 'changed_during_turn' | 'changed_outside_turn' | 'unknown' |
-  'resumed_on_input' | 'resume_bound_reached';
+  'resumed_on_input' | 'resume_bound_reached' | 'resume_result_unconfirmed';
 /** Reason of the one transient notice for a block the automatic capacity
  * resume is about to retry; the block's outcome is reported after it. */
 export const CAPACITY_RETRY_PENDING = 'capacity_retry_pending';
@@ -159,7 +159,7 @@ export const GOAL_NOTICE_STATUSES: readonly GoalNoticeStatus[] =
   ['active', 'paused', 'blocked', 'usageLimited', 'budgetLimited', 'complete'];
 const GOAL_NOTICE_REASONS: readonly GoalNoticeReason[] = ['turn_error', 'model_capacity_exhausted',
   CAPACITY_RETRY_PENDING, 'usage_limit', 'budget_limit', 'changed_during_turn', 'changed_outside_turn',
-  'unknown', 'resumed_on_input', 'resume_bound_reached'];
+  'unknown', 'resumed_on_input', 'resume_bound_reached', 'resume_result_unconfirmed'];
 const GOAL_UNROUTED_REASONS: readonly GoalUnroutedReason[] = ['no_assigner', 'ambiguous_assigner'];
 const GOAL_ASSIGNER_SOURCES: readonly string[] = ['turn', 'sole_sender'];
 const GOAL_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
@@ -213,6 +213,10 @@ const GOAL_STATUS_WORDS: Record<GoalNoticeStatus, string> = { active: 'active ag
 /** The plain sentence a receiver can deliver for a Goal notice. Built only
  * from status words, IDs and revisions. */
 export function goalNoticeSummary(threadId: string, goal: GoalNotice): string {
+  if (goal.reason === 'resume_result_unconfirmed') {
+    return `Goal resume on thread ${threadId} has an unconfirmed result` +
+      (goal.goalId ? ` (goal ${goal.goalId}).` : '.');
+  }
   const previous = goal.previousStatus ? `, previously ${goal.previousStatus}` : '';
   const identity = [goal.goalId !== undefined && `goal ${goal.goalId}`,
     goal.missionRevision !== undefined && `mission revision ${goal.missionRevision}`,
@@ -708,6 +712,12 @@ export class OutcomeReturns {
       }
       return structuredClone(record);
     });
+  }
+
+  /** A retrying input cannot establish who originally assigned a Goal. */
+  existingGoalAssigner(threadId: string, goalCreatedAt: number): GoalAssigner | null {
+    const known = this.assigners.find(item => item.threadId === threadId && item.goalCreatedAt === goalCreatedAt);
+    return known ? structuredClone(known) : null;
   }
 
   /** Threads with a recorded sender, most recently attributed first. */

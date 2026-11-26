@@ -62,7 +62,10 @@ describe('durable thread wake sources', () => {
         return 'turn-1';
       },
       start: async () => { throw Error('a live turn must be steered'); },
-      onGoalInput: async (input, reserve) => { decisions.push(`${input.eventId}:${await reserve('goal-1')}`); },
+      onGoalInput: async (input, ledger) => {
+        decisions.push(`${input.eventId}:${await ledger.reserve({ goalId: 'goal-1', goalCreatedAt: 1,
+          goalUpdatedAt: 2, missionRevision: 1, lifecycleRevision: 3 })}`); return true;
+      },
     };
     let wake: WakeSources | undefined;
     try {
@@ -86,6 +89,77 @@ describe('durable thread wake sources', () => {
         'wake-3:reserved', 'wake-4:bounded']);
       expect(wake.list('thread-1').events.filter(event => event.status === 'admitted').length).toBe(4);
     } finally { await wake?.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  test('a saved receipt retries its Goal handoff after restart and waits for sender attribution', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-goal-retry-'));
+    const receipts: string[] = [];
+    const order: string[] = [];
+    let canRecord = false;
+    let canCheck = false;
+    const native: WakeNative = {
+      inspect: async () => ({ messages: [], clientIds: [...receipts],
+        clientTurns: receipts.map(clientId => ({ clientId, turnId: 'turn-1' })) }),
+      start: async (_thread, _message, clientId) => {
+        if (clientId) receipts.push(clientId);
+        return 'turn-1';
+      },
+      steer: async () => { throw Error('unexpected steer'); },
+      onAdmitted: async () => { order.push('watch'); return canRecord; },
+      onGoalInput: async (_input, ledger) => {
+        order.push('goal');
+        if (!canCheck) throw Error('temporary custody failure');
+        expect(await ledger.reserve({ goalId: 'goal-1', goalCreatedAt: 1, goalUpdatedAt: 2,
+          missionRevision: 1, lifecycleRevision: 3 })).toBe('reserved');
+        return true;
+      },
+    };
+    let wake: WakeSources | undefined;
+    try {
+      wake = new WakeSources(native, root, 30_000, MANUAL);
+      await wake.initialize();
+      await wake.ingest('thread-1', THREAD_INPUT_SOURCE, 'retry-1', 'text', sender);
+      await wake.tick(); await wake.tick();
+      expect(wake.find('thread-1', THREAD_INPUT_SOURCE, 'retry-1')).toMatchObject({
+        status: 'admitted', goalInputPending: true,
+      });
+      await wake.stop();
+      order.length = 0;
+      canRecord = true;
+      canCheck = true;
+      wake = new WakeSources(native, root, 30_000, MANUAL);
+      await wake.initialize();
+      await settle(() => wake!.find('thread-1', THREAD_INPUT_SOURCE, 'retry-1')?.goalInputPending === false);
+      expect(order).toEqual(['watch', 'goal']);
+      await wake.stop();
+      order.length = 0;
+      wake = new WakeSources(native, root, 30_000, MANUAL);
+      await wake.initialize();
+      expect(order).toEqual([]);
+    } finally { await wake?.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  test('an exact native receipt with no active-turn snapshot gets a Goal handoff', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-goal-stale-snapshot-'));
+    const receipts: string[] = [];
+    const calls: string[] = [];
+    const wake = new WakeSources({
+      inspect: async () => ({ messages: [], clientIds: [...receipts],
+        clientTurns: receipts.map(clientId => ({ clientId, turnId: 'turn-1' })) }),
+      start: async (_thread, _message, clientId) => {
+        if (clientId) receipts.push(clientId);
+        return 'turn-1';
+      },
+      steer: async () => { throw Error('unexpected steer'); },
+      onGoalInput: async admission => { calls.push(admission.turnId); return true; },
+    }, root, 30_000, MANUAL);
+    try {
+      await wake.initialize();
+      await wake.ingest('thread-1', THREAD_INPUT_SOURCE, 'late-turn', 'text');
+      await wake.tick(); await wake.tick();
+      await settle(() => calls.length === 1);
+      expect(calls).toEqual(['turn-1']);
+    } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
   });
 
   test('retargets only a drained paused command with exact prior argv, preserving pending custody', async () => {

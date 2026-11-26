@@ -77,6 +77,8 @@ export type WakeEvent = {
   offerAttempts?: number;
   /** A sender-attributed input admitted without a known turn: no outcome can be returned for it. */
   outcomeReturn?: 'turn_unknown';
+  /** Durable handoff for the input-triggered Goal check, never inferred for older events. */
+  goalInputPending?: boolean;
 };
 /** An accepted offer: the runtime returned a turn for the steer or start and
  * that turn is saved, but the input's receipt is not yet in thread history. */
@@ -95,6 +97,16 @@ export type WakeAdmission = { threadId: string; sourceId: string; eventId: strin
   sender: SubmissionSender };
 export type GoalInputAdmission = Pick<WakeEvent, 'threadId' | 'sourceId' | 'eventId' | 'turnId'> &
   { turnId: string };
+export type GoalInputIntent = { goalId: string; goalCreatedAt: number; goalUpdatedAt: number;
+  missionRevision: number; lifecycleRevision: number;
+  phase: 'reserved' | 'confirmed' | 'bounded' | 'rejected'; resultUpdatedAt?: number };
+export type GoalInputLedger = {
+  lookup(): Promise<GoalInputIntent | undefined>;
+  reserve(intent: Omit<GoalInputIntent, 'phase' | 'resultUpdatedAt'>):
+    Promise<'reserved' | 'bounded' | 'duplicate'>;
+  confirm(goalId: string, resultUpdatedAt: number): Promise<void>;
+  reject(goalId: string): Promise<void>;
+};
 export class WakeAdmissionFailure extends Error {
   constructor(readonly phase: 'preflight' | 'resume' | 'start', readonly original: unknown) {
     super('Native wake admission failed');
@@ -137,7 +149,7 @@ function nativeFailure(error: unknown, phase: NonNullable<WakeEvent['failure']>[
   return { phase: error instanceof WakeAdmissionFailure ? error.phase : phase, name, category,
     ...(code ? { code } : {}), messageSha256 };
 }
-type GoalResumeAttempt = { threadId: string; goalId: string; inputKey: string; at: number };
+type GoalResumeAttempt = { threadId: string; goalId: string; inputKey: string; at: number } & GoalInputIntent;
 type State = { sources: WakeSource[]; events: WakeEvent[]; goalResumeAttempts?: GoalResumeAttempt[] };
 const EMPTY: State = { sources: [], events: [] };
 type NativeView = Awaited<ReturnType<WakeNative['inspect']>>;
@@ -342,7 +354,7 @@ export interface WakeNative {
   onAdmitted?(admission: WakeAdmission): Promise<boolean>;
   /** A confirmed, live native input. Returning or failing never changes its admission. */
   onGoalInput?(admission: GoalInputAdmission,
-    reserve: (goalId: string) => Promise<'reserved' | 'bounded' | 'duplicate'>): Promise<void>;
+    ledger: GoalInputLedger): Promise<boolean>;
 }
 
 /** One owner per application process; all transitions use an atomic, mode-0600 replace. */
@@ -434,7 +446,11 @@ export class WakeSources {
       if (raw.goalResumeAttempts !== undefined && (!Array.isArray(raw.goalResumeAttempts) ||
           raw.goalResumeAttempts.some(item => !item || typeof item.threadId !== 'string' ||
             typeof item.goalId !== 'string' || typeof item.inputKey !== 'string' ||
-            !Number.isSafeInteger(item.at) || item.at < 0))) {
+            !Number.isSafeInteger(item.at) || item.at < 0 ||
+            !['reserved', 'confirmed', 'bounded', 'rejected'].includes(item.phase) ||
+            ![item.goalCreatedAt, item.goalUpdatedAt].every(Number.isFinite) ||
+            ![item.missionRevision, item.lifecycleRevision].every(value => Number.isSafeInteger(value) && value >= 0) ||
+            (item.phase === 'confirmed' && !Number.isFinite(item.resultUpdatedAt)))) {
         throw new Error('Invalid wake Goal resume ledger');
       }
       this.state = raw;
@@ -507,7 +523,10 @@ export class WakeSources {
    * watch is recorded, however long that takes. */
   private retryHandOvers(): void {
     if (this.stopping) return;
-    for (const event of this.state.events) this.handOverAdmission(event);
+    for (const event of this.state.events) {
+      this.handOverAdmission(event);
+      this.handOverGoalInput(event);
+    }
   }
 
   /** Mark admissions that carry no admission time and still await their
@@ -705,12 +724,12 @@ export class WakeSources {
    * saved only after the hook confirms a durable record, so a restart in
    * between offers it again (the hook is idempotent) and a watch is never
    * lost; once saved it is never offered again. Never throws. */
-  private handOverAdmission(event: WakeEvent): void {
+  private handOverAdmission(event: WakeEvent): Promise<void> | undefined {
     const hook = this.native.onAdmitted;
     if (!hook || this.stopping || event.status !== 'admitted' || !event.sender || !event.turnId ||
         event.outcomeWatched) return;
     const key = `${event.threadId}:${event.sourceId}:${event.eventId}`;
-    if (this.admissionHandOvers.has(key)) return;
+    if (this.admissionHandOvers.has(key)) return this.admissionHandOvers.get(key);
     const admission: WakeAdmission = { threadId: event.threadId, sourceId: event.sourceId,
       eventId: event.eventId, turnId: event.turnId, sender: { ...event.sender } };
     const task = (async () => {
@@ -727,39 +746,81 @@ export class WakeSources {
       }
     })().finally(() => { this.admissionHandOvers.delete(key); });
     this.admissionHandOvers.set(key, task);
+    return task;
   }
 
   /** Reserve before native CAS: an uncertain mutation after a crash must not
    * produce an unbounded series of retries from a chatty source. */
-  private reserveGoalInput(admission: GoalInputAdmission, goalId: string):
+  private reserveGoalInput(admission: GoalInputAdmission,
+    intent: Omit<GoalInputIntent, 'phase' | 'resultUpdatedAt'>):
     Promise<'reserved' | 'bounded' | 'duplicate'> {
     return this.exclusive(async () => {
       const now = Date.now();
       const inputKey = eventKey(admission.threadId, admission.sourceId, admission.eventId);
       const attempts = this.state.goalResumeAttempts ??= [];
-      if (attempts.some(item => item.inputKey === inputKey && item.goalId === goalId)) return 'duplicate';
+      if (attempts.some(item => item.inputKey === inputKey)) return 'duplicate';
       const withinHour = attempts.filter(item => item.threadId === admission.threadId &&
-        item.goalId === goalId && item.at > now - 3_600_000 && item.at <= now);
-      if (withinHour.length >= 3) return 'bounded';
-      attempts.push({ threadId: admission.threadId, goalId, inputKey, at: now });
-      // A sliding hour needs no older entries, except the current input's key
-      // which already has a permanent admitted-event record for deduplication.
-      this.state.goalResumeAttempts = attempts.filter(item => item.at > now - 3_600_000);
+        item.goalId === intent.goalId && item.phase !== 'bounded' &&
+        item.at > now - 3_600_000 && item.at <= now);
+      const bounded = withinHour.length >= 3;
+      attempts.push({ threadId: admission.threadId, inputKey, at: now, ...intent,
+        phase: bounded ? 'bounded' : 'reserved' });
+      // Retain the per-input token after the hour: a crash between a native
+      // mutation and handoff completion must never mutate the same Goal twice.
       await this.save();
-      return 'reserved';
+      return bounded ? 'bounded' : 'reserved';
     });
   }
 
-  private handOverGoalInput(event: WakeEvent, liveTurnId: string | undefined): void {
+  private goalInputLedger(admission: GoalInputAdmission): GoalInputLedger {
+    const key = eventKey(admission.threadId, admission.sourceId, admission.eventId);
+    return {
+      lookup: async () => {
+        const attempt = this.state.goalResumeAttempts?.find(item => item.inputKey === key);
+        return attempt ? { goalId: attempt.goalId, goalCreatedAt: attempt.goalCreatedAt,
+          goalUpdatedAt: attempt.goalUpdatedAt, missionRevision: attempt.missionRevision,
+          lifecycleRevision: attempt.lifecycleRevision, phase: attempt.phase,
+          ...(attempt.resultUpdatedAt !== undefined && { resultUpdatedAt: attempt.resultUpdatedAt }) } : undefined;
+      },
+      reserve: intent => this.reserveGoalInput(admission, intent),
+      confirm: (goalId, resultUpdatedAt) => this.exclusive(async () => {
+        const attempt = this.state.goalResumeAttempts?.find(item => item.inputKey === key &&
+          item.goalId === goalId && item.phase === 'reserved');
+        if (!attempt) throw new Error('Goal input reservation unavailable');
+        attempt.phase = 'confirmed'; attempt.resultUpdatedAt = resultUpdatedAt;
+        await this.save();
+      }),
+      reject: goalId => this.exclusive(async () => {
+        const attempt = this.state.goalResumeAttempts?.find(item => item.inputKey === key &&
+          item.goalId === goalId && item.phase === 'reserved');
+        if (!attempt) throw new Error('Goal input reservation unavailable');
+        attempt.phase = 'rejected';
+        await this.save();
+      }),
+    };
+  }
+
+  private handOverGoalInput(event: WakeEvent): void {
     const hook = this.native.onGoalInput;
-    if (!hook || this.stopping || !event.turnId || event.turnId !== liveTurnId) return;
+    if (!hook || this.stopping || event.status !== 'admitted' || !event.turnId ||
+        !event.goalInputPending) return;
     const key = eventKey(event.threadId, event.sourceId, event.eventId);
     if (this.goalInputHandOvers.has(key)) return;
     const admission: GoalInputAdmission = { threadId: event.threadId, sourceId: event.sourceId,
       eventId: event.eventId, turnId: event.turnId };
     this.goalInputHandOvers.add(key);
-    const task = Promise.resolve().then(() => hook.call(this.native, admission,
-      goalId => this.reserveGoalInput(admission, goalId)));
+    const task = (async () => {
+      // The sender's durable watch must precede Goal notice binding. If its
+      // write failed, retry both on the next handover interval.
+      await this.handOverAdmission(event);
+      if (event.sender && !event.outcomeWatched) return;
+      if (!await hook.call(this.native, admission, this.goalInputLedger(admission))) return;
+      await this.exclusive(async () => {
+        if (!this.state.events.includes(event) || this.released) return;
+        event.goalInputPending = false;
+        await this.save();
+      });
+    })();
     void this.track(task).catch(error => {
       console.error('[Goal input resume] Admission preserved; resume unavailable.',
         error instanceof Error ? error.name : 'UnknownError');
@@ -851,6 +912,7 @@ export class WakeSources {
       this.admitObserved(owned, Date.now());
       await this.save();
       this.handOverAdmission(owned);
+      this.handOverGoalInput(owned);
       return this.recoverySnapshot(threadId, id);
     });
   }
@@ -858,6 +920,7 @@ export class WakeSources {
   private admitObserved(event: WakeEvent, now: number): void {
     this.forgetEvent(event);
     event.status = 'admitted'; event.message = ''; event.admittedAt = new Date().toISOString();
+    if (event.turnId) event.goalInputPending = true;
     delete event.error; delete event.failure; delete event.offeredAt; delete event.nextAttemptAt;
     // Without its turn no outcome can be watched: say so instead of staying silent.
     if (event.sender && !event.turnId) event.outcomeReturn = 'turn_unknown';
@@ -1577,7 +1640,7 @@ export class WakeSources {
           await this.saveTransition();
         });
         this.handOverAdmission(event);
-        this.handOverGoalInput(event, state.activeTurnId);
+        this.handOverGoalInput(event);
         return 'ok';
       }
       if (event.status === 'offered') {
