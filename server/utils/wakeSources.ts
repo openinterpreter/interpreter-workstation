@@ -22,6 +22,8 @@ export type WakeSource = {
   dailyAt?: string;
   timeZone?: string;
   argv?: string[];
+  /** Command only: delay between ordinary polls, at least 2 seconds (default 30 seconds). */
+  rearmMs?: number;
   status: 'waiting' | 'running' | 'delivered' | 'error' | 'cancelled';
   nextAt?: string;
   error?: string;
@@ -171,6 +173,12 @@ const MIN_INTERVAL = 60_000;
 // Leave room for a hyphen and the full decimal safe-integer sequence.
 const MAX_SCHEDULE_ID = 143;
 const COMMAND_REARM_MS = 30_000;
+const MIN_COMMAND_REARM_MS = 2_000;
+const MAX_COMMAND_REARM_MS = 2_147_483_647;
+const commandRearmMs = (source: WakeSource): number =>
+  Number.isSafeInteger(source.rearmMs) && source.rearmMs! >= MIN_COMMAND_REARM_MS &&
+    source.rearmMs! <= MAX_COMMAND_REARM_MS
+    ? source.rearmMs! : COMMAND_REARM_MS;
 // A short follow-up pass after a pass that changed something while accepted
 // inputs await their receipts, so a burst is not paced by the 2 s interval.
 const FOLLOW_UP_MS = 250;
@@ -435,7 +443,7 @@ export class WakeSources {
     for (const source of this.state.sources) {
       if (source.status === 'running') {
         source.status = 'waiting';
-        if (!source.paused) source.nextAt = new Date(Date.now() + COMMAND_REARM_MS).toISOString();
+        if (!source.paused) source.nextAt = new Date(Date.now() + commandRearmMs(source)).toISOString();
       }
       // Older command sources stopped permanently on a transient source
       // error. Keep the diagnostic visible, but recover on a bounded timer
@@ -819,7 +827,7 @@ export class WakeSources {
         const remaining = this.state.events.some(e => e.threadId === source.threadId &&
           e.sourceId === source.id && (e.status === 'pending' || e.status === 'offered'));
         const immediate = source.moreAvailable === true && !remaining;
-        source.nextAt = new Date(now + (immediate ? 0 : COMMAND_REARM_MS)).toISOString(); source.status = 'waiting';
+        source.nextAt = new Date(now + (immediate ? 0 : commandRearmMs(source))).toISOString(); source.status = 'waiting';
         if (immediate) this.requestTick();
       }
     }
@@ -950,11 +958,12 @@ export class WakeSources {
     if (!ID.test(source.threadId) || !ID.test(source.id)) throw new Error('Invalid thread or source ID');
     if (source.id === THREAD_INPUT_SOURCE) throw new Error('Reserved wake source ID');
     if (source.kind !== 'schedule' && source.kind !== 'command') throw new Error('Unknown wake source kind');
-    if (Object.keys(source).some(key => !['id', 'threadId', 'kind', 'message', 'at', 'everyMs', 'dailyAt', 'timeZone', 'argv'].includes(key))) {
+    if (Object.keys(source).some(key => !['id', 'threadId', 'kind', 'message', 'at', 'everyMs', 'dailyAt', 'timeZone', 'argv', 'rearmMs'].includes(key))) {
       throw new Error('Unknown wake source field');
     }
     const civil = source.kind === 'schedule' && (source.dailyAt !== undefined || source.timeZone !== undefined);
     if (source.kind === 'schedule') {
+      if (source.rearmMs !== undefined) throw new Error('Only a command may set rearmMs');
       if (source.id.length > MAX_SCHEDULE_ID) throw new Error('Schedule ID is too long');
       if (!source.message?.trim() || source.message.length > MAX_MESSAGE ||
           (civil && (typeof source.dailyAt !== 'string' || typeof source.timeZone !== 'string' ||
@@ -966,6 +975,8 @@ export class WakeSources {
       if (civil) nextCivilDaily(Date.now(), source.timeZone!, source.dailyAt!);
     } else if (source.dailyAt !== undefined || source.timeZone !== undefined || source.at !== undefined ||
       source.everyMs !== undefined || source.message !== undefined ||
+      (source.rearmMs !== undefined && (!Number.isSafeInteger(source.rearmMs) ||
+        source.rearmMs < MIN_COMMAND_REARM_MS || source.rearmMs > MAX_COMMAND_REARM_MS)) ||
       !Array.isArray(source.argv) || !source.argv.length || source.argv.length > 32 ||
       source.argv.some(arg => typeof arg !== 'string' || !arg || arg.length > 4096) ||
       !path.isAbsolute(source.argv[0])) {
@@ -1884,7 +1895,7 @@ export class WakeSources {
             source.status = 'waiting';
             delete source.error;
             source.moreAvailable = false;
-            source.nextAt = new Date(Date.now() + COMMAND_REARM_MS).toISOString();
+            source.nextAt = new Date(Date.now() + commandRearmMs(source)).toISOString();
           }
           await this.save();
         });
@@ -1907,7 +1918,7 @@ export class WakeSources {
         // interval instead of re-running at once.
         source.nextAt = this.state.events.some(e => e.threadId === source.threadId && e.sourceId === source.id &&
           (e.status === 'pending' || e.status === 'offered'))
-          ? undefined : new Date(Date.now() + COMMAND_REARM_MS).toISOString();
+          ? undefined : new Date(Date.now() + commandRearmMs(source)).toISOString();
         // On a failed write the batch stays in memory, unsaved: nothing is
         // offered until a later write succeeds, and the catch below records
         // the source error. A re-emitted batch finds the same IDs.
