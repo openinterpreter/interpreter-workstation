@@ -810,10 +810,9 @@ export class WakeSources {
       eventId: event.eventId, turnId: event.turnId };
     this.goalInputHandOvers.add(key);
     const task = (async () => {
-      // The sender's durable watch must precede Goal notice binding. If its
-      // write failed, retry both on the next handover interval.
-      await this.handOverAdmission(event);
-      if (event.sender && !event.outcomeWatched) return;
+      // Goal custody is independent of the input's outcome-return store.
+      // Notices use only an already-bound Goal assigner, never this retry's
+      // sender, so a full outcome-return store cannot suppress the resume.
       if (!await hook.call(this.native, admission, this.goalInputLedger(admission))) return;
       await this.exclusive(async () => {
         if (!this.state.events.includes(event) || this.released) return;

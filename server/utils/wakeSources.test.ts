@@ -91,11 +91,11 @@ describe('durable thread wake sources', () => {
     } finally { await wake?.stop(); await rm(root, { recursive: true, force: true }); }
   });
 
-  test('a saved receipt retries its Goal handoff after restart and waits for sender attribution', async () => {
+  test('a saved receipt retries its Goal handoff even if the sender watch is unavailable', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'wake-goal-retry-'));
     const receipts: string[] = [];
     const order: string[] = [];
-    let canRecord = false;
+    const canRecord = false;
     let canCheck = false;
     const native: WakeNative = {
       inspect: async () => ({ messages: [], clientIds: [...receipts],
@@ -125,12 +125,12 @@ describe('durable thread wake sources', () => {
       });
       await wake.stop();
       order.length = 0;
-      canRecord = true;
       canCheck = true;
       wake = new WakeSources(native, root, 30_000, MANUAL);
       await wake.initialize();
       await settle(() => wake!.find('thread-1', THREAD_INPUT_SOURCE, 'retry-1')?.goalInputPending === false);
-      expect(order).toEqual(['watch', 'goal']);
+      expect(order).toContain('goal');
+      expect(wake.find('thread-1', THREAD_INPUT_SOURCE, 'retry-1')?.outcomeWatched).toBeUndefined();
       await wake.stop();
       order.length = 0;
       wake = new WakeSources(native, root, 30_000, MANUAL);
