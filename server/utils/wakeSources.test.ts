@@ -93,6 +93,7 @@ describe('durable thread wake sources', () => {
 
   test('a saved receipt retries its Goal handoff even if the sender watch is unavailable', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'wake-goal-retry-'));
+    const sender = { computer: 'peer-host', thread: 'origin_thread-1' };
     const receipts: string[] = [];
     const order: string[] = [];
     const canRecord = false;
