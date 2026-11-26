@@ -25,7 +25,9 @@ describe('verified main-agent local thread inventory', () => {
       observation: 'saved-native-thread-page-not-queue-or-process-custody',
       threads: [{ threadId, status: 'idle' }],
       nextCursor: 'opaque|cursor', pageExhausted: false });
-    expect(calls[0]).toMatchObject({ sourceKinds: ['vscode', 'appServer'],
+    expect(calls[0]).toMatchObject({ sourceKinds: ['cli', 'vscode', 'exec', 'appServer',
+        'subAgent', 'subAgentReview', 'subAgentCompact', 'subAgentThreadSpawn',
+        'subAgentOther', 'unknown'],
       modelProviders: [], limit: 100, useStateDbOnly: true });
     expect(JSON.stringify(first)).not.toContain('PRIVATE');
     const second = await readThreadInventoryForCaller(owner, 'opaque|cursor', async params => {

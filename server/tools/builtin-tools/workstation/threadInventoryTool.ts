@@ -4,6 +4,13 @@ import { getCodexService, THREAD_LIST_DEFAULTS } from '../../../../src/lib/codex
 
 const THREAD = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
 const MAX_WAIT_MS = 3_000;
+// An omitted or empty source filter defaults to interactive sources in native
+// thread/list. Enumerate every supported kind instead of silently losing CLI,
+// exec and delegated threads from the local inventory.
+const SOURCE_KINDS: v2.ThreadSourceKind[] = [
+  'cli', 'vscode', 'exec', 'appServer', 'subAgent', 'subAgentReview',
+  'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther', 'unknown',
+];
 
 function unavailable(category: 'caller_unavailable' | 'invalid_cursor' | 'inventory_unavailable') {
   return { content: [{ type: 'text' as const, text: JSON.stringify({ available: false, category }) }], isError: true };
@@ -32,7 +39,7 @@ export async function readThreadInventoryForCaller(
     const remaining = Math.floor(deadline - performance.now());
     if (remaining < 1) throw new Error('deadline');
     return Promise.race([
-      read({ ...THREAD_LIST_DEFAULTS, limit: 100, useStateDbOnly,
+      read({ ...THREAD_LIST_DEFAULTS, sourceKinds: SOURCE_KINDS, limit: 100, useStateDbOnly,
         ...(cursor === undefined ? {} : { cursor }) }, remaining),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('deadline')), remaining); }),
     ]).finally(() => { if (timer) clearTimeout(timer); timer = undefined; });
