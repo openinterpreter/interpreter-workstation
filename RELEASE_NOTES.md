@@ -1,7 +1,7 @@
-<!-- release-notes-for: 0.2.263 -->
+<!-- release-notes-for: 0.2.264 -->
 ## What's new
 
-- Lets command wake sources use a configurable re-arm interval, with a two-second minimum and the existing 30-second default.
+- Resumes a blocked Goal when new thread input arrives, with an hourly limit and status notices.
 
 ## Distribution
 
