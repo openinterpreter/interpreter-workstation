@@ -10,6 +10,7 @@ import { WakeSources, WakeAdmissionFailure, WakeContentConflictError, WakeSource
 import { nextCivilDaily } from './civilSchedule';
 import { THREAD_INPUT_SOURCE, threadInputCustody, type WakeAdmission } from './wakeSources';
 import { SubagentDirectInputError } from '../../src/lib/codex/subagent-input';
+import { resumeBlockedGoalOnInput } from './goalInputResumeRuntime';
 
 /** No background interval or follow-up timer: every pass is an explicit tick(). */
 const MANUAL = { intervalMs: 0, followUpMs: 0 };
@@ -138,6 +139,47 @@ describe('durable thread wake sources', () => {
       await wake.initialize();
       await new Promise(resolve => setTimeout(resolve, 20));
       expect(order).not.toContain('goal');
+    } finally { await wake?.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  test('a blocked Goal custody failure clears the admitted input handoff without retry', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-goal-custody-'));
+    const receipts: string[] = [];
+    let custodyReads = 0;
+    let resumes = 0;
+    const native: WakeNative = {
+      inspect: async () => ({ activeTurnId: 'turn-1', messages: [], clientIds: [...receipts],
+        clientTurns: receipts.map(clientId => ({ clientId, turnId: 'turn-1' })) }),
+      steer: async (_thread, _turn, _message, clientId) => {
+        if (clientId) receipts.push(clientId);
+        return 'turn-1';
+      },
+      start: async () => { throw Error('a live turn must be steered'); },
+      onGoalInput: (admission, ledger) => resumeBlockedGoalOnInput(admission, ledger, {
+        read: async () => ({ goal: { threadId: 'thread-1', status: 'blocked', objective: 'test',
+          tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 2 },
+          revision: { goalId: 'goal-1', status: 'blocked', missionRevision: 1, lifecycleRevision: 3 } }),
+        custody: async () => { custodyReads++; throw Error('native custody unavailable'); },
+        resume: async () => { resumes++; throw Error('unexpected resume'); },
+        notice: async () => { throw Error('unexpected notice'); },
+      }),
+    };
+    let wake: WakeSources | undefined;
+    try {
+      wake = new WakeSources(native, root, 30_000, MANUAL);
+      await wake.initialize();
+      await wake.ingest('thread-1', THREAD_INPUT_SOURCE, 'custody-1', 'text');
+      await wake.tick(); await wake.tick();
+      await settle(() => wake!.find('thread-1', THREAD_INPUT_SOURCE, 'custody-1')?.goalInputPending === false);
+      expect(wake.find('thread-1', THREAD_INPUT_SOURCE, 'custody-1')?.status).toBe('admitted');
+      expect(wake.find('thread-1', THREAD_INPUT_SOURCE, 'custody-1')?.goalInputPending).toBe(false);
+      expect(custodyReads).toBe(1);
+      expect(resumes).toBe(0);
+      await wake.stop();
+      wake = new WakeSources(native, root, 30_000, MANUAL);
+      await wake.initialize();
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(custodyReads).toBe(1);
     } finally { await wake?.stop(); await rm(root, { recursive: true, force: true }); }
   });
 

@@ -16,6 +16,7 @@ function fixture(status: 'blocked' | 'paused' | 'usageLimited' | 'budgetLimited'
   const notices: string[] = [];
   let resumes = 0;
   let reads = 0;
+  let custodyReads = 0;
   let intent: GoalInputIntent | undefined;
   const ledger: GoalInputLedger = {
     lookup: async () => intent,
@@ -33,8 +34,8 @@ function fixture(status: 'blocked' | 'paused' | 'usageLimited' | 'budgetLimited'
     intent = { ...candidate, phase: 'bounded' }; return 'bounded';
   } };
   const deps = {
-    custody: async () => ({ status: 'active', lastTurnId: TURN, lastTurnStatus: 'inProgress',
-      queuedSubmissionCount: 0 }),
+    custody: async () => { custodyReads++; return { status: 'active', lastTurnId: TURN,
+      lastTurnStatus: 'inProgress', queuedSubmissionCount: 0 }; },
     read: async () => { reads++; return { goal, revision }; },
     resume: async () => { resumes++; return { goal: { ...goal, status: 'active', updatedAt: 3 },
       revision: { ...revision, status: 'active', lifecycleRevision: 4 }, continuation: 'already_running' }; },
@@ -42,7 +43,8 @@ function fixture(status: 'blocked' | 'paused' | 'usageLimited' | 'budgetLimited'
       notices.push(reason);
     },
   } as unknown as GoalInputResumeDeps;
-  return { admission, deps, ledger, boundLedger, notices, reads: () => reads, resumes: () => resumes };
+  return { admission, deps, ledger, boundLedger, notices, reads: () => reads,
+    custodyReads: () => custodyReads, resumes: () => resumes };
 }
 
 describe('blocked Goal resume on a native input receipt', () => {
@@ -59,14 +61,27 @@ describe('blocked Goal resume on a native input receipt', () => {
       await resumeBlockedGoalOnInput(f.admission, f.ledger, f.deps);
       expect(f.resumes()).toBe(0);
       expect(f.notices).toEqual([]);
+      expect(f.custodyReads()).toBe(0);
     });
 
-  test('does not read a Goal when its admitting turn ended or changed', async () => {
+  test('reads the Goal but does not resume when its admitting turn ended or changed', async () => {
     const f = fixture();
     f.deps.custody = async () => ({ status: 'idle', lastTurnId: TURN,
       lastTurnStatus: 'completed', queuedSubmissionCount: 0 }) as never;
     await resumeBlockedGoalOnInput(f.admission, f.ledger, f.deps);
-    expect(f.reads()).toBe(0);
+    expect(f.reads()).toBe(1);
+    expect(f.resumes()).toBe(0);
+  });
+
+  test('an unavailable custody read on a blocked Goal does not resume or retry', async () => {
+    const f = fixture();
+    let calls = 0;
+    f.deps.custody = async () => { calls++; throw Error('native custody unavailable'); };
+    expect(await resumeBlockedGoalOnInput(f.admission, f.ledger, f.deps)).toBe(true);
+    expect(calls).toBe(1);
+    expect(f.reads()).toBe(1);
+    expect(f.resumes()).toBe(0);
+    expect(f.notices).toEqual([]);
   });
 
   test('a bound refusal leaves the native input delivered and records its notice', async () => {

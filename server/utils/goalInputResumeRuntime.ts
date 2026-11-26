@@ -46,12 +46,16 @@ export async function resumeBlockedGoalOnInput(admission: GoalInputAdmission,
     if (existing.phase !== 'rejected') await noticeIntent(admission, existing, deps);
     return true;
   }
-  const custody = await deps.custody(admission.threadId);
-  if (custody.lastTurnId !== admission.turnId || custody.lastTurnStatus !== 'inProgress' ||
-      custody.status !== 'active') return true;
   const { goal, revision } = await deps.read(admission.threadId);
   if (!goal || !revision || goal.threadId !== admission.threadId ||
       goal.status !== 'blocked' || revision.status !== 'blocked') return true;
+  // Most inputs have no blocked Goal. Native custody can reject long turns;
+  // it is only needed before mutating a blocked Goal, never for delivery.
+  let custody: Custody;
+  try { custody = await deps.custody(admission.threadId); }
+  catch { return true; }
+  if (custody.lastTurnId !== admission.turnId || custody.lastTurnStatus !== 'inProgress' ||
+      custody.status !== 'active') return true;
   const intent = { goalId: revision.goalId, goalCreatedAt: goal.createdAt,
     goalUpdatedAt: goal.updatedAt, missionRevision: revision.missionRevision,
     lifecycleRevision: revision.lifecycleRevision };
