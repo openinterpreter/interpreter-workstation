@@ -1,9 +1,8 @@
-<!-- release-notes-for: 0.2.265 -->
+<!-- release-notes-for: 0.2.266 -->
 ## What's new
 
-- Updates the bundled Interpreter runtime to 0.0.64 with a bounded wait for tool responses.
-- Automatically resumes usage-limited Goals when the account allowance returns.
-- Accepts new thread input after the previous turn failed.
+- Sends Linux window clicks, keys, shortcuts, and text through foreground input delivery so Chromium controls receive the actions.
+- Corrects the first-run workspace default when the configuration root is the home directory.
 
 ## Distribution
 
