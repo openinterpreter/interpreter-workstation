@@ -634,7 +634,7 @@ describe('outcome returns', () => {
     } finally { await f.cleanup(); }
   });
 
-  test('input-resume and each bound refusal retain distinct fixed, text-free Goal notices', async () => {
+  test('replayed bound refusal is one notice per immutable Goal revision, but new transitions remain distinct', async () => {
     const f = await fixture();
     try {
       const store = await f.make(0);
@@ -644,15 +644,21 @@ describe('outcome returns', () => {
         missionRevision: 2, lifecycleRevision: 4 };
       const first = { ...base, inputId: '1'.repeat(64) };
       const second = { ...base, inputId: '2'.repeat(64) };
+      const revised = { ...base, lifecycleRevision: 5, inputId: '4'.repeat(64) };
+      const uncertain = { ...base, reason: 'resume_result_unconfirmed' as const, inputId: '5'.repeat(64) };
       const resumed = { ...base, status: 'active' as const, previousStatus: 'blocked' as const,
         reason: 'resumed_on_input' as const, inputId: '3'.repeat(64) };
       expect(await store.noticeGoal(thread, { unrouted: 'no_assigner' }, first)).toBe(true);
       expect(await store.noticeGoal(thread, { unrouted: 'no_assigner' }, second)).toBe(true);
+      expect(await store.noticeGoal(thread, { unrouted: 'no_assigner' }, revised)).toBe(true);
+      expect(await store.noticeGoal(thread, { unrouted: 'no_assigner' }, uncertain)).toBe(true);
       expect(await store.noticeGoal(thread, { unrouted: 'no_assigner' }, resumed)).toBe(true);
-      expect(new Set(store.list().map(entry => entry.id)).size).toBe(3);
+      expect(store.list().map(entry => [entry.kind, entry.goal?.reason, entry.goal?.lifecycleRevision]))
+        .toEqual([['goal', 'resume_bound_reached', 4], ['goal', 'resume_bound_reached', 5],
+          ['goal', 'resume_result_unconfirmed', 4], ['goal', 'resumed_on_input', 4]]);
       expect(JSON.stringify(store.list())).not.toContain('unreported project');
       await store.stop();
-      expect((await f.make(null)).list()).toHaveLength(3);
+      expect((await f.make(null)).list()).toHaveLength(4);
     } finally { await f.cleanup(); }
   });
 
