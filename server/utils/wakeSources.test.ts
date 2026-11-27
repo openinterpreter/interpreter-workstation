@@ -142,11 +142,13 @@ describe('durable thread wake sources', () => {
     } finally { await wake?.stop(); await rm(root, { recursive: true, force: true }); }
   });
 
-  test('a blocked Goal custody failure clears the admitted input handoff without retry', async () => {
+  test('a failed Goal custody read preserves the admitted input for a retry after restart', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'wake-goal-custody-'));
     const receipts: string[] = [];
     let custodyReads = 0;
     let resumes = 0;
+    let custodyAvailable = false;
+    const notices: string[] = [];
     const native: WakeNative = {
       inspect: async () => ({ activeTurnId: 'turn-1', messages: [], clientIds: [...receipts],
         clientTurns: receipts.map(clientId => ({ clientId, turnId: 'turn-1' })) }),
@@ -159,9 +161,20 @@ describe('durable thread wake sources', () => {
         read: async () => ({ goal: { threadId: 'thread-1', status: 'blocked', objective: 'test',
           tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 2 },
           revision: { goalId: 'goal-1', status: 'blocked', missionRevision: 1, lifecycleRevision: 3 } }),
-        custody: async () => { custodyReads++; throw Error('native custody unavailable'); },
-        resume: async () => { resumes++; throw Error('unexpected resume'); },
-        notice: async () => { throw Error('unexpected notice'); },
+        custody: async () => {
+          custodyReads++;
+          if (!custodyAvailable) throw Error('native custody unavailable');
+          return { status: 'active', lastTurnId: 'turn-1',
+            lastTurnStatus: 'inProgress', queuedSubmissionCount: 0 } as never;
+        },
+        resume: async () => {
+          resumes++;
+          return { goal: { threadId: 'thread-1', status: 'active', objective: 'test',
+            tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 3 },
+          revision: { goalId: 'goal-1', status: 'active', missionRevision: 1,
+            lifecycleRevision: 4 }, continuation: 'already_running' } as never;
+        },
+        notice: async (_admission, _goal, _revision, reason) => { notices.push(reason); },
       }),
     };
     let wake: WakeSources | undefined;
@@ -170,16 +183,20 @@ describe('durable thread wake sources', () => {
       await wake.initialize();
       await wake.ingest('thread-1', THREAD_INPUT_SOURCE, 'custody-1', 'text');
       await wake.tick(); await wake.tick();
-      await settle(() => wake!.find('thread-1', THREAD_INPUT_SOURCE, 'custody-1')?.goalInputPending === false);
+      await settle(() => custodyReads === 1);
       expect(wake.find('thread-1', THREAD_INPUT_SOURCE, 'custody-1')?.status).toBe('admitted');
-      expect(wake.find('thread-1', THREAD_INPUT_SOURCE, 'custody-1')?.goalInputPending).toBe(false);
+      expect(wake.find('thread-1', THREAD_INPUT_SOURCE, 'custody-1')?.goalInputPending).toBe(true);
       expect(custodyReads).toBe(1);
       expect(resumes).toBe(0);
       await wake.stop();
+      custodyAvailable = true;
       wake = new WakeSources(native, root, 30_000, MANUAL);
       await wake.initialize();
-      await new Promise(resolve => setTimeout(resolve, 20));
-      expect(custodyReads).toBe(1);
+      await settle(() => wake!.find('thread-1', THREAD_INPUT_SOURCE, 'custody-1')?.goalInputPending === false);
+      expect(wake.find('thread-1', THREAD_INPUT_SOURCE, 'custody-1')?.goalInputPending).toBe(false);
+      expect(custodyReads).toBe(2);
+      expect(resumes).toBe(1);
+      expect(notices).toEqual(['resumed_on_input']);
     } finally { await wake?.stop(); await rm(root, { recursive: true, force: true }); }
   });
 

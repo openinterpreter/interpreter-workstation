@@ -77,11 +77,11 @@ describe('blocked Goal resume on a native input receipt', () => {
     expect(f.resumes()).toBe(0);
   });
 
-  test('an unavailable custody read on a blocked Goal does not resume or retry', async () => {
+  test('an unavailable custody read on a blocked Goal leaves the hand-off pending', async () => {
     const f = fixture();
     let calls = 0;
     f.deps.custody = async () => { calls++; throw Error('native custody unavailable'); };
-    expect(await resumeBlockedGoalOnInput(f.admission, f.ledger, f.deps)).toBe(true);
+    expect(await resumeBlockedGoalOnInput(f.admission, f.ledger, f.deps)).toBe(false);
     expect(calls).toBe(1);
     expect(f.reads()).toBe(1);
     expect(f.resumes()).toBe(0);
