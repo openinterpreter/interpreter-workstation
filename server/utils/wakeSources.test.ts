@@ -7,7 +7,7 @@ import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promise
 import os from 'node:os';
 import path from 'node:path';
 import { WakeSources, WakeAdmissionFailure, WakeContentConflictError, WakeSourceCancelledError, WakeUnsavedError,
-  wakeClientId, wakeInput, wakeTokenValid, type WakeEvent, type WakeNative } from './wakeSources';
+  wakeClientId, wakeInput, wakeTokenValid, scheduleDefinitionMetadata, type WakeEvent, type WakeNative } from './wakeSources';
 import { nextCivilDaily } from './civilSchedule';
 import { THREAD_INPUT_SOURCE, threadInputCustody, type WakeAdmission } from './wakeSources';
 import { SubagentDirectInputError } from '../../src/lib/codex/subagent-input';
@@ -2239,6 +2239,41 @@ if(${padding})process.stdout.write('x'.repeat(${padding})+'\\n');`;
       expect(view.commandOutput).toBe('ndjson');
       expect({ sources: view.sources, events: view.events }).toEqual(w.list('thread-1'));
     } finally { await f.cleanup(); }
+  });
+
+  test('schedule view carries a bounded definition digest and no new message or error prose', async () => {
+    const f = await fixture();
+    try {
+      const w = await f.make();
+      await w.put({ id: 'daily', threadId: 'thread-1', kind: 'schedule',
+        message: 'private schedule instruction', at: '2030-01-01T00:00:00.000Z', everyMs: 86_400_000 });
+      const source = w.view('thread-1').sources[0] as Record<string, unknown>;
+      expect(source.definitionDigest).toEqual({ version: 1, sha256: createHash('sha256').update(JSON.stringify([
+        'wake-schedule-definition-v1', 'thread-1', 'daily', 'schedule', '2030-01-01T00:00:00.000Z', 86_400_000,
+        null, null, 'private schedule instruction',
+      ])).digest('hex') });
+      expect(source.errorCategory).toBe('none');
+      expect(JSON.stringify(source.definitionDigest)).not.toContain('private schedule instruction');
+      expect(w.list('thread-1').sources[0]).not.toHaveProperty('definitionDigest');
+      await w.put({ id: 'daily', threadId: 'thread-1', kind: 'schedule',
+        message: 'changed private instruction', at: '2030-01-01T00:00:00.000Z', everyMs: 86_400_000 });
+      expect((w.view('thread-1').sources[0] as Record<string, unknown>).definitionDigest)
+        .not.toEqual(source.definitionDigest);
+    } finally { await f.cleanup(); }
+  });
+
+  test('oversized or malformed persisted schedule definitions fail closed without hashing prose', async () => {
+    const source = { id: 'daily', threadId: 'thread-1', kind: 'schedule', status: 'error',
+      sequence: 17, message: 'x'.repeat(70_000), at: '2030-01-01T00:00:00.000Z', everyMs: 86_400_000 } as const;
+    expect(scheduleDefinitionMetadata(source)).toEqual({
+      definitionDigest: { version: 1, available: false, category: 'oversized' }, errorCategory: 'none',
+    });
+    const invalid = { ...source, message: undefined, error: 'secret provider response' };
+    expect(scheduleDefinitionMetadata(invalid)).toEqual({
+      definitionDigest: { version: 1, available: false, category: 'invalid_definition' },
+      errorCategory: 'unclassified-native-error',
+    });
+    expect(JSON.stringify(scheduleDefinitionMetadata(invalid))).not.toContain('secret provider response');
   });
 
   test('command transport errors stay visible, retry on a bounded timer and recover after restart', async () => {
