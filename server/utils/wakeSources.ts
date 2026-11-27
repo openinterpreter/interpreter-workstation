@@ -33,9 +33,9 @@ export type WakeSource = {
   /** Command only: the last run emitted events (or reported more), so the
    * source runs again as soon as its last input is admitted. */
   moreAvailable?: boolean;
-  /** Why an errored source stays stopped until it is saved again: the runtime
-   * refused direct input to its thread. A restart does not re-arm it. */
-  stopped?: 'refusal';
+  /** An operator decision or runtime refusal is not cleared by a later
+   * event receipt or restart; reconfiguration requires explicit recovery. */
+  stopped?: 'refusal' | 'operator_review';
 };
 export type WakeSourceDrain = {
   drained: true;
@@ -199,6 +199,7 @@ const MIN_INTERVAL = 60_000;
 const MAX_SCHEDULE_ID = 143;
 const COMMAND_REARM_MS = 30_000;
 const MIN_COMMAND_REARM_MS = 2_000;
+// Keep persisted delays inside both the JS timer range and Date's future range.
 const MAX_COMMAND_REARM_MS = 2_147_483_647;
 const commandRearmMs = (source: WakeSource): number =>
   Number.isSafeInteger(source.rearmMs) && source.rearmMs! >= MIN_COMMAND_REARM_MS &&
@@ -480,7 +481,8 @@ export class WakeSources {
         delete event.nextAttemptAt;
       }
     }
-    // Never launch a second command when it has an unadmitted output event.
+    // Recover an interrupted command without resubmitting its durable IDs.
+    // A waiting command can poll for later IDs while older ones are unadmitted.
     for (const source of this.state.sources) {
       if (source.status === 'running') {
         source.status = 'waiting';
@@ -489,9 +491,10 @@ export class WakeSources {
       // Older command sources stopped permanently on a transient source
       // error. Keep the diagnostic visible, but recover on a bounded timer
       // after a restart without creating a second consumer. A source stopped
-      // because the runtime refused its thread's input stays stopped.
+      // by a runtime refusal or operator review stays stopped.
       if (source.kind === 'command' && source.status === 'error' && !source.nextAt &&
-          source.stopped !== 'refusal') {
+          !source.stopped && !this.state.events.some(event => event.threadId === source.threadId &&
+            event.sourceId === source.id && event.status === 'held')) {
         source.nextAt = new Date(Date.now() + 300_000).toISOString();
       }
       if (source.kind === 'schedule' && source.status === 'waiting') {
@@ -970,7 +973,13 @@ export class WakeSources {
     // Without its turn no outcome can be watched: say so instead of staying silent.
     if (event.sender && !event.turnId) event.outcomeReturn = 'turn_unknown';
     const source =this.state.sources.find(s => s.id === event.sourceId && s.threadId === event.threadId);
-    if (source && source.status !== 'cancelled') {
+    // A command still in flight owns its own re-arm. Admission may settle
+    // during that run, but must not overwrite the running or stopped state.
+    if (source && source.status !== 'cancelled' && !source.stopped &&
+        !this.inFlight.has(sourceKey(source.threadId, source.id)) &&
+        !(source.kind === 'command' && source.status === 'error' && !source.nextAt &&
+          this.state.events.some(item => item.threadId === source.threadId &&
+            item.sourceId === source.id && (item.status === 'pending' || item.status === 'offered')))) {
       delete source.error;
       delete source.stopped;
       source.status = 'delivered';
@@ -981,7 +990,8 @@ export class WakeSources {
       } else if (source.kind === 'command') {
         // Once the last input of a run that produced events is admitted, run
         // again at once: the command may have more ready input. While inputs
-        // remain, the pending fence keeps the source from running anyway.
+        // remain, their stable IDs stay in the durable ledger while the next
+        // command poll may discover later input without resubmitting them.
         const remaining = this.state.events.some(e => e.threadId === source.threadId &&
           e.sourceId === source.id && (e.status === 'pending' || e.status === 'offered'));
         const immediate = source.moreAvailable === true && !remaining;
@@ -1143,7 +1153,11 @@ export class WakeSources {
     return this.exclusive(async () => {
       const old = this.state.sources.find(s => s.id === source.id && s.threadId === source.threadId);
       if (old?.paused) throw new Error('Resume the paused source before editing it');
-      if (old?.status === 'running') throw new Error('Wait for the running command before changing it');
+      const key = sourceKey(source.threadId, source.id);
+      const taskKey = `${source.threadId}:${source.id}`;
+      if (old?.status === 'running' || this.inFlight.has(key) ||
+          this.commands.has(taskKey) || this.commandTasksBySource.has(taskKey))
+        throw new Error('Wait for the running command before changing it');
       if (old && this.state.events.some(e => e.sourceId === old.id && e.threadId === old.threadId &&
         (e.status === 'pending' || e.status === 'offered'))) {
         throw new Error('Cannot change a source while its input awaits native admission');
@@ -1410,6 +1424,7 @@ export class WakeSources {
         source.status = 'error';
         source.nextAt = undefined;
         source.error = 'Operator-held ambiguous native offer; review source before rearming';
+        source.stopped = 'operator_review';
       }
       await this.save();
       return structuredClone(current);
@@ -1471,6 +1486,7 @@ export class WakeSources {
       if (source && source.status !== 'cancelled') {
         source.status = 'error'; source.nextAt = undefined;
         source.error = 'Operator-held historical ambiguous native offer; review source before rearming';
+        source.stopped = 'operator_review';
       }
       await this.save();
       return structuredClone(current);
@@ -1498,10 +1514,12 @@ export class WakeSources {
       if (this.stopping) break;
       if (source.paused || !(source.status === 'waiting' || (source.kind === 'command' && source.status === 'error')) ||
           !source.nextAt || Date.parse(source.nextAt) > now ||
-          // A held terminal offer is retained for audit, not an admission fence.
-          // Re-arm of that same source must still be explicit through put().
-          this.state.events.some(e => e.threadId === source.threadId && e.sourceId === source.id &&
-            (e.status === 'pending' || e.status === 'offered'))) continue;
+          // A waiting command may collect later input while an older event
+          // awaits admission. Schedules and errored commands retain their
+          // original admission fence (including operator-held errors).
+          ((source.kind === 'schedule' || source.status === 'error') &&
+            this.state.events.some(e => e.threadId === source.threadId && e.sourceId === source.id &&
+              (e.status === 'pending' || e.status === 'offered')))) continue;
       if (source.kind === 'schedule') {
         await this.exclusive(async () => {
           // Commit event custody and its sequence in the same atomic replace.
@@ -2027,10 +2045,15 @@ export class WakeSources {
   private async runCommand(source: WakeSource): Promise<void> {
     const key = `${source.threadId}:${source.id}`;
     const inFlightKey = sourceKey(source.threadId, source.id);
+    let transitioned = false;
     this.inFlight.add(inFlightKey);
     try {
       const shouldRun = await this.exclusive(async () => {
-        if (source.paused || source.status === 'cancelled') return false;
+        if (source.paused || source.stopped ||
+            !(source.status === 'waiting' || (source.status === 'error' && !!source.nextAt)) ||
+            (source.status === 'error' && this.state.events.some(event =>
+              event.threadId === source.threadId && event.sourceId === source.id &&
+              (event.status === 'pending' || event.status === 'offered')))) return false;
         source.status = 'running';
         await this.save();
         return true;
@@ -2060,10 +2083,13 @@ export class WakeSources {
       const output = parseCommandOutput(stdout);
       if (output.waiting) {
         await this.exclusive(async () => {
-          if (source.status !== 'cancelled') {
+          if (source.status === 'running') {
             source.status = 'waiting';
+            transitioned = true;
             delete source.error;
-            source.moreAvailable = false;
+            const outstanding = this.state.events.some(event => event.threadId === source.threadId &&
+              event.sourceId === source.id && (event.status === 'pending' || event.status === 'offered'));
+            source.moreAvailable = source.moreAvailable === true && outstanding;
             source.nextAt = new Date(Date.now() + commandRearmMs(source)).toISOString();
           }
           await this.save();
@@ -2076,28 +2102,28 @@ export class WakeSources {
       const added = await this.exclusive(async () => {
         if (source.status === 'cancelled') return 0;
         const { fresh } = this.addEvents(source.threadId, source.id, output.events);
-        source.status = 'waiting';
-        delete source.error;
-        // Only a run that produced new input earns an immediate re-run. A
-        // command that repeats inputs which already have receipts waits the
-        // minimum interval, whatever it reports.
-        source.moreAvailable = fresh.length > 0;
-        // Admission of the last new input re-arms the source. A batch with
-        // nothing new (every ID already has a receipt) waits the minimum
-        // interval instead of re-running at once.
-        source.nextAt = this.state.events.some(e => e.threadId === source.threadId && e.sourceId === source.id &&
-          (e.status === 'pending' || e.status === 'offered'))
-          ? undefined : new Date(Date.now() + commandRearmMs(source)).toISOString();
+        if (source.status === 'running') {
+          source.status = 'waiting';
+          transitioned = true;
+          delete source.error;
+          const outstanding = this.state.events.some(event => event.threadId === source.threadId &&
+            event.sourceId === source.id && (event.status === 'pending' || event.status === 'offered'));
+          // An empty or duplicate-only re-poll cannot erase an earlier fresh
+          // batch's immediate drain before its last admission.
+          source.moreAvailable = fresh.length > 0 || (source.moreAvailable === true && outstanding);
+          source.nextAt = new Date(Date.now() + commandRearmMs(source)).toISOString();
+        }
         // On a failed write the batch stays in memory, unsaved: nothing is
-        // offered until a later write succeeds, and the catch below records
-        // the source error. A re-emitted batch finds the same IDs.
+        // offered until a later write succeeds. The catch records this run's
+        // error even after its status transition; re-emitted IDs stay stable.
         await this.saveForAcknowledgement();
         return fresh.length;
       });
       if (added) this.requestTick();
     } catch (error) {
       await this.exclusive(async () => {
-        if (source.status === 'cancelled') return;
+        if (source.status !== 'running' &&
+            !(transitioned && source.status === 'waiting' && !source.stopped)) return;
         source.status = 'error';
         source.error = safeError(error);
         source.nextAt = new Date(Date.now() + (/operator action/.test(source.error) ? 300_000 : 60_000)).toISOString();
