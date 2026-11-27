@@ -43,7 +43,16 @@ export function browserChatInput(context: TranscriptContext): {
 
 /** A generic Pi StreamFn: only the model chooses tool names and JSON arguments. */
 export function createBrowserGgufStream(engine: BrowserChatEngine): StreamFn {
+  // Local model IDs may be absent or reused on later passes and turns. Pi owns
+  // the durable call/result identity, independently of the model's raw ID.
+  const issuedIds = new Set<string>();
+  let nextId = 0;
   return (model, context, options) => {
+    for (const message of context.messages) {
+      if (message.role === 'assistant') for (const part of message.content)
+        if (part.type === 'toolCall') issuedIds.add(part.id);
+      if (message.role === 'toolResult') issuedIds.add(message.toolCallId);
+    }
     const stream = createAssistantMessageEventStream();
     const response: AssistantMessage = { role: 'assistant', content: [], api: model.api,
       provider: model.provider, model: model.id, timestamp: Date.now(), stopReason: 'pending',
@@ -54,7 +63,7 @@ export function createBrowserGgufStream(engine: BrowserChatEngine): StreamFn {
       let textIndex = -1;
       let finishReason: BrowserChatChunk['choices'][number]['finish_reason'];
       let reportedTokens: number | undefined;
-      const toolParts = new Map<number, { id: string; name: string; arguments: string }>();
+      const toolParts = new Map<number, { name: string; arguments: string }>();
       try {
         const input = browserChatInput(context);
         await engine.complete(input.messages, input.tools,
@@ -79,8 +88,7 @@ export function createBrowserGgufStream(engine: BrowserChatEngine): StreamFn {
                 delta: delta.content, partial: response });
             }
             for (const call of delta?.tool_calls ?? []) {
-              const part = toolParts.get(call.index) ?? { id: '', name: '', arguments: '' };
-              part.id += call.id ?? '';
+              const part = toolParts.get(call.index) ?? { name: '', arguments: '' };
               part.name += call.function?.name ?? '';
               part.arguments += call.function?.arguments ?? '';
               toolParts.set(call.index, part);
@@ -108,7 +116,10 @@ export function createBrowserGgufStream(engine: BrowserChatEngine): StreamFn {
           const args: unknown = JSON.parse(part.arguments);
           if (!args || typeof args !== 'object' || Array.isArray(args))
             throw new Error('Browser model tool arguments must be an object');
-          const call = { type: 'toolCall' as const, id: part.id || crypto.randomUUID(),
+          let id: string;
+          do { id = `call_${crypto.randomUUID()}_${++nextId}`; } while (issuedIds.has(id));
+          issuedIds.add(id);
+          const call = { type: 'toolCall' as const, id,
             name: part.name, arguments: args as Record<string, never> };
           const index = response.content.length;
           response.content.push(call);
