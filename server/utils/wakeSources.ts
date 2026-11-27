@@ -37,6 +37,37 @@ export type WakeSource = {
    * event receipt or restart; reconfiguration requires explicit recovery. */
   stopped?: 'refusal' | 'operator_review';
 };
+
+/** A content-free receipt for one stored schedule definition. This is not
+ * a handler identity or an authorization to resume a paused source. */
+export function scheduleDefinitionMetadata(source: Pick<WakeSource,
+  'id' | 'threadId' | 'kind' | 'at' | 'everyMs' | 'dailyAt' | 'timeZone' | 'message' | 'error'>) {
+  const errorCategory = source.error !== undefined && source.error !== ''
+    ? 'unclassified-native-error' as const : 'none' as const;
+  const unavailable = (category: 'oversized' | 'invalid_definition') => ({
+    definitionDigest: { version: 1 as const, available: false as const, category }, errorCategory,
+  });
+  const fields = [source.threadId, source.id, source.at, source.dailyAt, source.timeZone, source.message];
+  if (source.kind !== 'schedule' || typeof source.threadId !== 'string' || !ID.test(source.threadId) ||
+      typeof source.id !== 'string' || !ID.test(source.id) ||
+      typeof source.message !== 'string' ||
+      [source.at, source.dailyAt, source.timeZone].some(value => value !== undefined && typeof value !== 'string') ||
+      (source.everyMs !== undefined && (!Number.isSafeInteger(source.everyMs) || source.everyMs < MIN_INTERVAL)))
+    return unavailable('invalid_definition');
+  if (fields.some(value => typeof value === 'string' &&
+      (value.length > 65_536 || Buffer.byteLength(value, 'utf8') > 65_536)))
+    return unavailable('oversized');
+  if (!source.message.trim() ||
+      (source.dailyAt === undefined && (typeof source.at !== 'string' || !Number.isFinite(Date.parse(source.at)))) ||
+      (source.dailyAt !== undefined && (typeof source.timeZone !== 'string' || source.at !== undefined ||
+        source.everyMs !== undefined)))
+    return unavailable('invalid_definition');
+  const serialized = JSON.stringify(['wake-schedule-definition-v1', source.threadId, source.id, 'schedule',
+    source.at ?? null, source.everyMs ?? null, source.dailyAt ?? null, source.timeZone ?? null, source.message]);
+  if (Buffer.byteLength(serialized, 'utf8') > 65_536) return unavailable('oversized');
+  return { definitionDigest: { version: 1 as const, sha256: createHash('sha256').update(serialized).digest('hex') },
+    errorCategory };
+}
 export type WakeSourceDrain = {
   drained: true;
   commandInFlight: false;
@@ -651,7 +682,9 @@ export class WakeSources {
 
   /** The wake-sources listing, with the accepted command output format. */
   view(threadId: string) {
-    return { ...this.list(threadId), commandOutput: WAKE_COMMAND_OUTPUT };
+    const result = this.list(threadId);
+    return { ...result, sources: result.sources.map(source => source.kind === 'schedule'
+      ? { ...source, ...scheduleDefinitionMetadata(source) } : source), commandOutput: WAKE_COMMAND_OUTPUT };
   }
 
   /** A copy of one event, or undefined. */
