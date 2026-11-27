@@ -109,6 +109,46 @@ describe('optional enrolled target peer verifier', () => {
     expect(await verify(req(`/threads/${threadId}/goal/document`))).not.toBeNull();
     expect(capabilities).toEqual(['goal:objective-update', 'goal:document-update']);
   });
+  it('asks for command:read on terminal status and the terminal owners list', async () => {
+    const capabilities: string[] = [];
+    const verify = createSupervisorPeerVerifier(config, {
+      identity: async () => 'a.b.c',
+      fetcher: (async (_url: URL, init: RequestInit) => {
+        const body = JSON.parse(String(init.body));
+        expect(body).toEqual({ action: 'verify', assertion: 'owned.assertion',
+          targetComputer: 'target-1', threadId, capability: body.capability });
+        capabilities.push(body.capability);
+        return new Response(JSON.stringify({ ...grant, capabilities: [body.capability] }));
+      }) as typeof fetch,
+    });
+    expect(await verify(req(`/threads/${threadId}/terminals`))).not.toBeNull();
+    expect(await verify(req(`/threads/${threadId}/terminals/status`))).not.toBeNull();
+    // An id that happens to read "terminals" keeps its own route's capability.
+    expect(await verify(req(`/threads/${threadId}/submissions/terminals`))).not.toBeNull();
+    expect(await verify(req(`/threads/${threadId}/artifacts/terminals`))).not.toBeNull();
+    expect(capabilities).toEqual(['command:read', 'command:read', 'task:read', 'artifact:read']);
+  });
+  it('maps every supervisor peer route to a capability', async () => {
+    const source = await readFile(path.join(import.meta.dir, '../routes/supervisorPeer.ts'), 'utf8');
+    const routes = [...source.matchAll(/router\.(?:get|post|put|patch|delete)\(\s*'([^']+)'/g)]
+      .map(match => match[1]);
+    expect(routes.length).toBeGreaterThan(0);
+    const capabilities: string[] = [];
+    const verify = createSupervisorPeerVerifier(config, {
+      identity: async () => 'a.b.c',
+      fetcher: (async (_url: URL, init: RequestInit) => {
+        const capability = JSON.parse(String(init.body)).capability;
+        capabilities.push(capability);
+        return new Response(JSON.stringify({ ...grant, capabilities: [capability] }));
+      }) as typeof fetch,
+    });
+    for (const route of routes) {
+      const concrete = route.replace(':threadId', threadId).replace(/:[A-Za-z]+/g, 'id-1');
+      expect({ route, verified: await verify(req(concrete)) !== null })
+        .toEqual({ route, verified: true });
+    }
+    expect(capabilities).toHaveLength(routes.length);
+  });
   it('rejects unconfigured or unsafe verification destinations', () => {
     expect(() => createSupervisorPeerVerifier({ ...config, verifyUrl: 'http://localhost:3000/' })).toThrow();
     expect(() => createSupervisorPeerVerifier({ ...config,

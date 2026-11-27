@@ -122,7 +122,8 @@ export function createSupervisorPeerVerifier(config: SupervisorVerifierConfig,
       request.path.endsWith('/terminals/status') ? 'command:read' :
       request.path.endsWith('/turns/current') ? 'task:read' :
       request.path.includes('/submissions/') ? 'task:read' :
-      request.path.includes('/artifacts/') ? 'artifact:read' : undefined;
+      request.path.includes('/artifacts/') ? 'artifact:read' :
+      request.path.endsWith('/terminals') ? 'command:read' : undefined;
     if (!capability) return null;
     if (signerCommand) {
       try {
