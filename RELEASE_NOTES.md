@@ -1,7 +1,9 @@
-<!-- release-notes-for: 0.2.264 -->
+<!-- release-notes-for: 0.2.265 -->
 ## What's new
 
-- Resumes a blocked Goal when new thread input arrives, with an hourly limit and status notices.
+- Updates the bundled Interpreter runtime to 0.0.64 with a bounded wait for tool responses.
+- Automatically resumes usage-limited Goals when the account allowance returns.
+- Accepts new thread input after the previous turn failed.
 
 ## Distribution
 

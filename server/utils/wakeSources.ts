@@ -99,6 +99,8 @@ export type GoalInputAdmission = Pick<WakeEvent, 'threadId' | 'sourceId' | 'even
   { turnId: string };
 export type GoalInputIntent = { goalId: string; goalCreatedAt: number; goalUpdatedAt: number;
   missionRevision: number; lifecycleRevision: number;
+  /** The stopped status the input found; absent in entries that predate it (blocked). */
+  goalStatus?: 'blocked' | 'usageLimited';
   phase: 'reserved' | 'confirmed' | 'bounded' | 'rejected'; resultUpdatedAt?: number };
 export type GoalInputLedger = {
   lookup(): Promise<GoalInputIntent | undefined>;
@@ -269,6 +271,7 @@ export const wakeInput = (event: WakeEvent) => `${marker(event.sourceId, event.e
 // steered input is persisted independently of the turn that accepted the RPC.
 export const wakeClientId = (event: Pick<WakeEvent, 'threadId' | 'sourceId' | 'eventId'>) =>
   `wake_${createHash('sha256').update(JSON.stringify([event.threadId, event.sourceId, event.eventId])).digest('hex')}`;
+const USAGE_LIMIT_ERROR = 'Usage limit reached; operator action required';
 function safeError(error: unknown): string {
   const message = error instanceof Error ? error.message.toLowerCase() : '';
   // A supervising SIGKILL/oversized stdout is not a subscription allowance.
@@ -281,7 +284,7 @@ function safeError(error: unknown): string {
   // A full local backlog is not a subscription allowance either.
   if (error instanceof WakeBacklogFull) return error.message;
   if (error instanceof WakeUnsavedError) return 'Wake state could not be saved; retrying';
-  if (/usage|quota|credit|billing|limit/.test(message)) return 'Usage limit reached; operator action required';
+  if (/usage|quota|credit|billing|limit/.test(message)) return USAGE_LIMIT_ERROR;
   if (/oauth|token|credential|authentication|unauthoriz|login/.test(message)) return 'Authentication unavailable; operator action required';
   if (/overload|capacity|unavailable|timeout|disconnect/.test(message)) return 'Runtime temporarily unavailable';
   if (/command exited/.test(message)) return 'Command exited nonzero or exceeded limits';
@@ -450,6 +453,7 @@ export class WakeSources {
             !['reserved', 'confirmed', 'bounded', 'rejected'].includes(item.phase) ||
             ![item.goalCreatedAt, item.goalUpdatedAt].every(Number.isFinite) ||
             ![item.missionRevision, item.lifecycleRevision].every(value => Number.isSafeInteger(value) && value >= 0) ||
+            (item.goalStatus !== undefined && item.goalStatus !== 'blocked' && item.goalStatus !== 'usageLimited') ||
             (item.phase === 'confirmed' && !Number.isFinite(item.resultUpdatedAt))))) {
         throw new Error('Invalid wake Goal resume ledger');
       }
@@ -646,6 +650,39 @@ export class WakeSources {
     return event && this.copy(event);
   }
 
+  /** Threads this queue serves (a live source or an input awaiting
+   * admission), each with the number of inputs still pending or offered. */
+  threadInputs(): Map<string, number> {
+    const threads = new Map<string, number>();
+    for (const source of this.state.sources) {
+      if (source.status !== 'cancelled' && !threads.has(source.threadId)) threads.set(source.threadId, 0);
+    }
+    for (const event of this.state.events) {
+      if (event.status !== 'pending' && event.status !== 'offered') continue;
+      threads.set(event.threadId, (threads.get(event.threadId) ?? 0) + 1);
+    }
+    return threads;
+  }
+
+  /** The thread's Goal became active again after a usage limit: pending
+   * inputs that are only waiting out a usage-limit backoff may be offered on
+   * the next pass instead of minutes later. Nothing is offered, replayed or
+   * removed here; order, receipts and every other backoff are unchanged. */
+  async releaseUsageLimitBackoff(threadId: string): Promise<number> {
+    if (this.stopping) return 0;
+    return this.exclusive(async () => {
+      let released = 0;
+      for (const event of this.state.events) {
+        if (event.threadId !== threadId || event.status !== 'pending' || !event.nextAttemptAt ||
+            event.error !== USAGE_LIMIT_ERROR) continue;
+        delete event.nextAttemptAt;
+        released += 1;
+      }
+      if (released) await this.save();
+      return released;
+    });
+  }
+
   /** Nothing in memory differs from disk: no write is outstanding and the last one succeeded. */
   private durable(): boolean { return !this.unsaved && this.writesInFlight === 0; }
 
@@ -780,6 +817,7 @@ export class WakeSources {
         return attempt ? { goalId: attempt.goalId, goalCreatedAt: attempt.goalCreatedAt,
           goalUpdatedAt: attempt.goalUpdatedAt, missionRevision: attempt.missionRevision,
           lifecycleRevision: attempt.lifecycleRevision, phase: attempt.phase,
+          ...(attempt.goalStatus !== undefined && { goalStatus: attempt.goalStatus }),
           ...(attempt.resultUpdatedAt !== undefined && { resultUpdatedAt: attempt.resultUpdatedAt }) } : undefined;
       },
       reserve: intent => this.reserveGoalInput(admission, intent),

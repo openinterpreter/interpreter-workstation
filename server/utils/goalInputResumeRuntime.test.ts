@@ -14,6 +14,7 @@ function fixture(status: 'blocked' | 'paused' | 'usageLimited' | 'budgetLimited'
   const goal = { threadId: THREAD, status, objective: 'unreported', tokenBudget: null,
     tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 2 };
   const notices: string[] = [];
+  const statuses: string[] = [];
   let resumes = 0;
   let reads = 0;
   let custodyReads = 0;
@@ -39,11 +40,14 @@ function fixture(status: 'blocked' | 'paused' | 'usageLimited' | 'budgetLimited'
     read: async () => { reads++; return { goal, revision }; },
     resume: async () => { resumes++; return { goal: { ...goal, status: 'active', updatedAt: 3 },
       revision: { ...revision, status: 'active', lifecycleRevision: 4 }, continuation: 'already_running' }; },
-    notice: async (_admission: GoalInputAdmission, _goal: unknown, _revision: unknown, reason: string) => {
+    notice: async (_admission: GoalInputAdmission, _goal: unknown, revision: { status: string },
+      reason: string, _updatedAt?: number, stoppedStatus?: string) => {
       notices.push(reason);
+      statuses.push(`${revision.status}<-${stoppedStatus}`);
     },
   } as unknown as GoalInputResumeDeps;
-  return { admission, deps, ledger, boundLedger, notices, reads: () => reads,
+  return { admission, deps, ledger, boundLedger, notices, statuses, reads: () => reads,
+    intent: () => intent,
     custodyReads: () => custodyReads, resumes: () => resumes };
 }
 
@@ -55,7 +59,7 @@ describe('blocked Goal resume on a native input receipt', () => {
     expect(f.notices).toEqual(['resumed_on_input']);
   });
 
-  test.each(['paused', 'usageLimited', 'budgetLimited', 'complete', 'active'] as const)(
+  test.each(['paused', 'budgetLimited', 'complete', 'active'] as const)(
     'does not resume a %s Goal', async status => {
       const f = fixture(status);
       await resumeBlockedGoalOnInput(f.admission, f.ledger, f.deps);
@@ -129,5 +133,49 @@ describe('blocked Goal resume on a native input receipt', () => {
     await resumeBlockedGoalOnInput(f.admission, f.ledger, f.deps);
     expect(f.resumes()).toBe(0);
     expect(f.notices).toEqual(['resume_result_unconfirmed']);
+  });
+});
+
+describe('usage-limited Goal resume on a native input receipt', () => {
+  test('an input whose turn is running resumes the usage-limited Goal once, by exact revision', async () => {
+    const f = fixture('usageLimited');
+    let expected: unknown;
+    const resume = f.deps.resume;
+    f.deps.resume = async (threadId, revision) => { expected = revision; return resume(threadId, revision); };
+    await resumeBlockedGoalOnInput(f.admission, f.ledger, f.deps);
+    expect(f.resumes()).toBe(1);
+    expect(expected).toEqual({ goalId: GOAL, status: 'usageLimited', missionRevision: 1, lifecycleRevision: 3 });
+    expect(f.notices).toEqual(['resumed_on_input']);
+    expect(f.statuses).toEqual(['active<-usageLimited']);
+    expect(f.intent()?.goalStatus).toBe('usageLimited');
+    // The same admission handed over again never mutates a second time.
+    await resumeBlockedGoalOnInput(f.admission, f.ledger, f.deps);
+    expect(f.resumes()).toBe(1);
+  });
+
+  test('an input whose turn already failed (still limited) does not resume', async () => {
+    const f = fixture('usageLimited');
+    f.deps.custody = async () => ({ status: 'systemError', lastTurnId: TURN,
+      lastTurnStatus: 'failed', queuedSubmissionCount: 0 }) as never;
+    await resumeBlockedGoalOnInput(f.admission, f.ledger, f.deps);
+    expect(f.resumes()).toBe(0);
+    expect(f.notices).toEqual([]);
+  });
+
+  test('the shared per-Goal bound applies and reports the usage-limited status', async () => {
+    const f = fixture('usageLimited');
+    await resumeBlockedGoalOnInput(f.admission, f.boundLedger, f.deps);
+    expect(f.resumes()).toBe(0);
+    expect(f.notices).toEqual(['resume_bound_reached']);
+    expect(f.statuses).toEqual(['usageLimited<-usageLimited']);
+  });
+
+  test('a concurrent change is rejected without a retry', async () => {
+    const f = fixture('usageLimited');
+    f.deps.resume = async () => { throw new GoalRevisionConflictError(); };
+    await resumeBlockedGoalOnInput(f.admission, f.ledger, f.deps);
+    expect(f.intent()?.phase).toBe('rejected');
+    await resumeBlockedGoalOnInput(f.admission, f.ledger, f.deps);
+    expect(f.notices).toEqual([]);
   });
 });

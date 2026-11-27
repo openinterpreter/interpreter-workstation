@@ -926,6 +926,7 @@ function isCodexReauthCloseError(reason: string): boolean {
 // side effect or hide an upstream app-server lifecycle bug.
 const RETRYABLE_RPC_METHODS = new Set<keyof RequestMap>([
   CLIENT_METHOD.accountRead,
+  CLIENT_METHOD.accountRateLimitsRead,
   CLIENT_METHOD.configRead,
   CLIENT_METHOD.configValueWrite,
   CLIENT_METHOD.mcpServerReload,
@@ -2859,6 +2860,13 @@ export class CodexAppServerClient {
 
   async getAccount(refreshToken = false): Promise<v2.GetAccountResponse> {
     return this.rpcRequest(CLIENT_METHOD.accountRead, { refreshToken });
+  }
+
+  /** The account's current usage allowance. A backend usage read, never a model call. */
+  async accountRateLimitsRead(
+    params: v2.GetAccountRateLimitsParams = {},
+  ): Promise<v2.GetAccountRateLimitsResponse> {
+    return this.rpcRequest(CLIENT_METHOD.accountRateLimitsRead, params);
   }
 
   async cancelLogin(loginId: string): Promise<void> {
