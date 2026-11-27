@@ -15,6 +15,8 @@ const SECRET_MARKERS = [
   /\bauthorization\s*[:=]\s*[^\r\n]+/giu,
   /\b(?:api[_ -]?key|access[_ -]?token)\s*[:=]\s*\S+/giu,
   /\b(?:sk|ghp|github_pat)_[A-Za-z0-9_-]{12,}\b/gu,
+  // A device pairing link's one-time code grants full access.
+  /\bpair#code=[A-Za-z0-9_-]+/gu,
 ];
 
 const PRIVATE_MARKDOWN_PATH_LINK = /\[([^\]\r\n]{1,500})\]\(((?:file:\/{2,3}|\/(?:workspace|Users|home|root|private|tmp|var|etc|opt|srv|mnt|Volumes)(?:\/[^)\r\n]*)?|[A-Za-z]:[\\/][^)\r\n]+))\)/gu;

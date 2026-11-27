@@ -128,6 +128,10 @@ import {
   workstationAccessMiddleware,
   workstationCorsMiddleware,
 } from './workstationConnection';
+import {
+  DEVICE_ATTRIBUTED_INPUT_PATHS,
+  createDeviceInputAttributionMiddleware,
+} from './deviceConnections/deviceAttribution';
 
 const FILE_WATCHER_DISABLED_FOR_RUNTIME = process.env.INTERPRETER_DISABLE_FILE_WATCHER === '1';
 const app = express();
@@ -161,6 +165,8 @@ app.use((err: Error & { status?: number; type?: string }, _req: express.Request,
 
 app.use('/api/workstation-connection', createWorkstationConnectionRouter());
 app.use(workstationAccessMiddleware);
+// Input from a paired device carries that device's name, like other sources.
+app.use(DEVICE_ATTRIBUTED_INPUT_PATHS, createDeviceInputAttributionMiddleware());
 
 app.use((req, _res, next) => {
   const headerSessionKey = req.headers['x-interpreter-window-session'];

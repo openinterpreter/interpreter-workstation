@@ -25,6 +25,7 @@ import type { TtsModelId, TtsProvider, TtsSettings } from '../../shared/types/tt
 import type { SttSettings } from '../../shared/types/stt';
 import type { EnvApiKeyType } from '../../shared/types/provider';
 import { PRELAUNCH_SECURITY_DISABLE_HTTP_TOOL_EXECUTION } from '../securityFlags';
+import { trustedClientDeviceId } from '../deviceConnections/gatewayTrust';
 import type { v2 } from '../handlers/codex-generated-types';
 
 const runtimeRequire = createRequire(process.execPath);
@@ -42,8 +43,11 @@ const ipcErrorRepeatCounts = new Map<string, number>();
 // Handler Definitions (Thin wrappers - all logic in server/handlers/)
 // ============================================================================
 
+/** Who called: `deviceId` is set only for a request a paired device sent through the device gateway. */
+type IpcCallContext = { deviceId: string | null };
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type HandlerFn = (...args: any[]) => Promise<unknown> | unknown;
+type HandlerFn = (args: any, context: IpcCallContext) => Promise<unknown> | unknown;
 
 const handlers: Record<string, Record<string, HandlerFn>> = {
   // ========== Approvals ==========
@@ -210,7 +214,8 @@ const handlers: Record<string, Record<string, HandlerFn>> = {
   // ========== Settings ==========
   settings: {
     get: async () => {
-      return await configStore.loadConfigWithModelState();
+      // Without credentials or paired-device secret hashes.
+      return await configStore.getFullConfig();
     },
     reset: async () => {
       await configStore.resetConfig();
@@ -399,6 +404,28 @@ const handlers: Record<string, Record<string, HandlerFn>> = {
     dismiss: async ([noticeId]: [string]) => {
       const { dismissTopNotice } = await import('../handlers/topNotices');
       return dismissTopNotice(noticeId);
+    },
+  },
+
+  // ========== Connect a device ==========
+  // Links and QR codes are returned only to this Workstation's own interface;
+  // a request from a paired device is refused (it may disconnect only itself).
+  deviceConnections: {
+    create: async ([input]: [{ label?: string; kind?: string }?], context: IpcCallContext) => {
+      const { createDeviceConnection } = await import('../handlers/deviceConnections');
+      return createDeviceConnection(input ?? {}, { deviceId: context.deviceId });
+    },
+    pending: async (_args: unknown, context: IpcCallContext) => {
+      const { listPendingDeviceLinks } = await import('../handlers/deviceConnections');
+      return listPendingDeviceLinks({ deviceId: context.deviceId });
+    },
+    list: async () => {
+      const { listDeviceConnections } = await import('../handlers/deviceConnections');
+      return listDeviceConnections();
+    },
+    revoke: async ([id]: [string], context: IpcCallContext) => {
+      const { revokeDeviceConnection } = await import('../handlers/deviceConnections');
+      return revokeDeviceConnection(id, { deviceId: context.deviceId });
     },
   },
 
@@ -1418,7 +1445,7 @@ router.post('/:namespace/:method', async (req: Request, res: Response) => {
   }
 
   try {
-    const result = await handler(args);
+    const result = await handler(args, { deviceId: trustedClientDeviceId(req) });
     res.json(result);
   } catch (error: any) {
     const message = error?.message || 'Internal server error';

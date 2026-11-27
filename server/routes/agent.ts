@@ -9,6 +9,7 @@ import { HistoricalHoldConflict, isAcceptedOffer, isWakeId, PausedCommandConflic
   WakeContentConflictError, WakeSourceCancelledError, wakeTokenValid, WakeUnsavedError, type WakeEvent }
   from '../utils/wakeSources';
 import { readyWakeSources, wakeSources } from '../utils/wakeSourcesRuntime';
+import { isRelayedRequest } from '../deviceConnections/gatewayTrust';
 import { outcomeReturns, readyOutcomeReturns, readyCreatedTurnReturns, recordCreatedTurnReturn,
   recordCreatedTurnWithoutId }
   from '../utils/outcomeReturnsRuntime';
@@ -271,7 +272,9 @@ router.post('/custody/approvals/:approvalId/decide', (req: Request, res: Respons
     continuationStatus: 'not-verified' });
 });
 
-function wakeMutationAllowed(req: Request): boolean {
+export function wakeMutationAllowed(req: Request): boolean {
+  // The device gateway and other proxies reach this server over loopback.
+  if (isRelayedRequest(req)) return false;
   const address = req.socket.remoteAddress;
   if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address ?? '')) return false;
   const origin = req.header('origin');
@@ -282,7 +285,7 @@ function wakeMutationAllowed(req: Request): boolean {
 
 // Saved-thread identity includes local filesystem paths. Matching Origin to an
 // arbitrary Host is not sufficient: a rebinding hostname can supply both.
-function savedThreadIdentityReadAllowed(req: Request): boolean {
+export function savedThreadIdentityReadAllowed(req: Request): boolean {
   if (!wakeMutationAllowed(req)) return false;
   const host = req.get('host');
   if (!host) return false;

@@ -184,6 +184,15 @@ export interface AppConfig {
   nativeCuaDiscoveryGrants?: Array<{ threadId: string; toolName: 'list_apps' }>;
   /** Explicit operator choice: ungranted headless tool calls return a denial, never an invisible pending question. */
   headlessToolApprovalMode?: 'fail-closed' | 'ordinary-auto';
+  /** Devices paired through Connect a device. Stores a hash of each device secret, never the secret. */
+  connectedDevices?: Array<{
+    id: string;
+    label: string;
+    kind: 'web';
+    createdAt: string;
+    lastSeenAt: string | null;
+    secretHash: string;
+  }>;
 
   // UI settings
   showHelpPanelPreview?: boolean; // Show file preview in help panel (default: false)
@@ -1501,6 +1510,11 @@ export async function getFullConfig(): Promise<Record<string, unknown>> {
   const fullConfig: Record<string, unknown> = { ...config };
   delete fullConfig.authToken;
   delete fullConfig.refreshToken;
+  if (config.connectedDevices) {
+    fullConfig.connectedDevices = config.connectedDevices.map(
+      ({ id, label, kind, createdAt, lastSeenAt }) => ({ id, label, kind, createdAt, lastSeenAt }),
+    );
+  }
 
   return fullConfig;
 }

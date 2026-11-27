@@ -1,7 +1,13 @@
 import { Router, type Request } from "express";
 import { agentTabManager } from "../agentTabManager";
 import { getServerLocalOrigin } from "../utils/serverPort";
-import { resolveSimplePreviewRuntimeUrl } from "../utils/simplePreviewProxy";
+import {
+  createSimplePreviewTicket,
+  resolveSimplePreviewRuntimeUrl,
+  withSimplePreviewTicket,
+} from "../utils/simplePreviewProxy";
+import { getPreviewSigningKey } from "../deviceConnections/previewSigningKey";
+import { previewSubjectForRequest } from "../deviceConnections/previewSubjects";
 import type { SimpleAppStatus } from "../handlers/simpleApp";
 import { classifySimpleProjectStartError } from "../../shared/simpleInterfaceProblem";
 import { getCurrentWindowSessionKey, getWindowSessionByKey } from "../utils/windowSessions";
@@ -97,21 +103,28 @@ function errorResponse(error: unknown): { status: number; message: string } {
   return { status, message };
 }
 
-/** A browser on another device loads the preview through its public origin. */
-function forRenderer(req: Request, status: SimpleAppStatus): SimpleAppStatus {
-  return {
-    ...status,
-    runtimeUrl: resolveSimplePreviewRuntimeUrl(status.runtimeUrl, {
-      host: req.headers.host,
-      forwardedHost: req.header("x-forwarded-host"),
-    }),
-  };
+/**
+ * A browser on another device loads the preview through its public origin.
+ * That URL carries a short-lived, single-use ticket for the preview origin,
+ * issued only to a paired device (through the device gateway) or to an
+ * authenticated password session. Any other request gets no preview URL.
+ */
+async function forRenderer(req: Request, status: SimpleAppStatus): Promise<SimpleAppStatus> {
+  const runtimeUrl = resolveSimplePreviewRuntimeUrl(status.runtimeUrl, {
+    host: req.headers.host,
+    forwardedHost: req.header("x-forwarded-host"),
+  });
+  if (!runtimeUrl || runtimeUrl === status.runtimeUrl) return { ...status, runtimeUrl };
+  const subject = previewSubjectForRequest(req);
+  if (!subject) return { ...status, runtimeUrl: null };
+  const ticket = createSimplePreviewTicket(subject, await getPreviewSigningKey());
+  return { ...status, runtimeUrl: withSimplePreviewTicket(runtimeUrl, ticket) };
 }
 
 router.get("/", async (req, res) => {
   try {
     res.setHeader("Cache-Control", "no-store");
-    res.json(forRenderer(req, await readSimpleProjectAppStatus()));
+    res.json(await forRenderer(req, await readSimpleProjectAppStatus()));
   } catch (error) {
     const { status } = errorResponse(error);
     res.status(status).json({ error: 'The interface project could not be checked.', problemKind: classifySimpleProjectStartError(error) });
@@ -123,7 +136,7 @@ router.post("/promote", async (req, res) => {
     res.setHeader("Cache-Control", "no-store");
     // The project server calls back over loopback regardless of how this
     // request reached the sidecar.
-    res.json(forRenderer(req, await promoteSimpleProjectApp(getServerLocalOrigin())));
+    res.json(await forRenderer(req, await promoteSimpleProjectApp(getServerLocalOrigin())));
   } catch (error) {
     const { status } = errorResponse(error);
     res.status(status).json({ error: 'The interface project could not be started.', problemKind: classifySimpleProjectStartError(error) });

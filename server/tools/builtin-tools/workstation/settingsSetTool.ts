@@ -451,6 +451,13 @@ export const settingsSetTool: BuiltinToolDefinition = {
         };
       }
 
+      if (!isEqual(get(modifiedConfig, 'connectedDevices'), get(config, 'connectedDevices'))) {
+        return {
+          content: [{ type: 'text', text: 'Connected devices are managed with interpreter_device_connection_create, interpreter_device_connections_list, and interpreter_device_connection_revoke.' }],
+          isError: true,
+        };
+      }
+
       if (!isEqual(get(modifiedConfig, 'nativeCuaDiscoveryGrants'), get(config, 'nativeCuaDiscoveryGrants'))) {
         return {
           content: [{ type: 'text', text: 'Native Computer Use discovery grants are operator-owned and cannot be edited by an agent.' }],

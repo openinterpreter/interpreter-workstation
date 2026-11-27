@@ -63,11 +63,20 @@ import { stopOutcomeReturns } from "./utils/outcomeReturnsRuntime";
 import { stopGoalAutoResume } from "./utils/goalAutoResumeRuntime";
 import { stopUsageLimitResume } from "./utils/usageLimitResumeRuntime";
 import { stopGoalNotices } from "./utils/goalNoticesRuntime";
-import { setServerHost } from "./utils/serverPort";
+import { getServerLocalOrigin, setServerHost } from "./utils/serverPort";
 import {
+  parseSimplePreviewPublicOrigin,
+  SIMPLE_PREVIEW_PUBLIC_ORIGIN_ENV,
   startSimplePreviewProxyFromEnvironment,
   type SimplePreviewProxyHandle,
 } from "./utils/simplePreviewProxy";
+import {
+  startDeviceGatewayFromEnvironment,
+  type DeviceGatewayHandle,
+} from "./deviceConnections/deviceGateway";
+import { getDeviceGatewayToken, setActiveDeviceGateway } from "./deviceConnections/gatewayTrust";
+import { getDeviceRegistry } from "./deviceConnections/deviceRegistry";
+import { createPreviewAccess } from "./deviceConnections/previewSubjects";
 
 const DEFAULT_PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 5177;
 const DEFAULT_WORKSPACE = process.env.WORKSPACE || process.cwd();
@@ -80,6 +89,7 @@ async function shutdownServer(
     interpreterCliFileBridge: InterpreterCliFileBridgeHandle;
     interpreterCliSocketServer: InterpreterCliSocketServerHandle | null;
     simplePreviewProxy: SimplePreviewProxyHandle | null;
+    deviceGateway: DeviceGatewayHandle | null;
     cleanupFileWatcher: () => Promise<void>;
     cleanupSandbox: () => Promise<void>;
     cleanupAllACPProviders: () => Promise<void>;
@@ -107,6 +117,10 @@ async function shutdownServer(
     await deps.interpreterCliSocketServer.close();
   }
   await deps.simplePreviewProxy?.close();
+  if (deps.deviceGateway) {
+    setActiveDeviceGateway(null);
+    await deps.deviceGateway.close();
+  }
 
   await new Promise<void>((resolve) => {
     server.close(() => {
@@ -286,9 +300,28 @@ export async function runStandaloneCli(argv: string[] = process.argv.slice(2)) {
     });
   });
   const { getSimplePreviewTarget } = await import("./handlers/simpleProjectRuntime");
-  const simplePreviewProxy = await startSimplePreviewProxyFromEnvironment(getSimplePreviewTarget);
+  const simplePreviewProxy = await startSimplePreviewProxyFromEnvironment(
+    getSimplePreviewTarget,
+    process.env,
+    createPreviewAccess,
+  );
   if (simplePreviewProxy && !cliOptions.quietStartup) {
     console.log(`  Simple preview proxy: http://127.0.0.1:${simplePreviewProxy.port}`);
+  }
+  const deviceGateway = await startDeviceGatewayFromEnvironment({
+    upstreamOrigin: getServerLocalOrigin,
+    previewPublicOrigin: simplePreviewProxy
+      ? parseSimplePreviewPublicOrigin(process.env[SIMPLE_PREVIEW_PUBLIC_ORIGIN_ENV])
+      : null,
+    access: () => getWorkstationHostPolicy().access,
+    devices: getDeviceRegistry(),
+    gatewayToken: getDeviceGatewayToken(),
+  });
+  if (deviceGateway) {
+    setActiveDeviceGateway({ publicOrigin: deviceGateway.publicOrigin, port: deviceGateway.port });
+    if (!cliOptions.quietStartup) {
+      console.log(`  Device gateway: http://127.0.0.1:${deviceGateway.port} (${deviceGateway.publicOrigin})`);
+    }
   }
 
   let shuttingDown = false;
@@ -299,6 +332,7 @@ export async function runStandaloneCli(argv: string[] = process.argv.slice(2)) {
       interpreterCliFileBridge,
       interpreterCliSocketServer,
       simplePreviewProxy,
+      deviceGateway,
       cleanupFileWatcher,
       cleanupSandbox,
       cleanupAllACPProviders,

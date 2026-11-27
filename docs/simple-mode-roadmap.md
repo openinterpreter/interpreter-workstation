@@ -4,8 +4,23 @@ Simple and Advanced are two experiences in the same Workstation application.
 The local project format, interface runtime, and conversation bridge remain
 usable without a hosted account.
 
+## Current remote capabilities
+
+- **Connect a device (source).** A sidecar configured with a device gateway
+  pairs a phone's web browser through a one-time link and QR code that the
+  agent creates with `interpreter-app` tools. The phone opens the same
+  renderer and Simple mode against that host's backend and durable
+  conversation; its input is labelled with the device name. An operator must
+  supply an HTTPS tunnel or reverse proxy for the gateway and preview origins.
+  See [Connect a device](remote-workstation.md#connect-a-device). Real-phone
+  acceptance across browsers is still to be recorded.
+
 ## Future capabilities
 
+- A Settings panel for pairing, listing, and revoking devices, using the
+  existing `deviceConnections` bridge methods.
+- Built-in tunnel management, so pairing does not require operator-supplied
+  public origins.
 - Future native phone clients should use a versioned, project-scoped remote
   session contract while supplying their own native composer and pairing UI.
 - Managed device enrollment and enterprise policy can later provide private
@@ -59,7 +74,8 @@ distribution forks:
 | Desktop + native local host (current source; installed acceptance pending) | Installed OIX app-server and configured tools/approvals | Workstation-supervised full-stack Next.js project with local routes/server actions; app-shipped Node and package manager |
 | Browser + connected host (renderer supported; app integration to verify) | Authenticated desktop, peer, or operated backend owns execution and approvals | Project processes and files live on that backend, not implicitly on the visiting device |
 | Browser + visitor-local host (bounded project proof only) | **Proposed** consented browser-safe agent adapter; no native OIX or browser OAuth assumed | Bounded OPFS files, approved edits, isolated preview, Worker/Wasm compute where tested; no full-stack server assumed |
-| Phone client (proposed) | Explicitly selected authenticated backend, or separately proven local capability | Remote project view first; local compute/storage requires platform tests |
+| Phone web browser + paired host (source; real-device acceptance pending) | The paired host's OIX app-server, tools, and approvals, reached through its device gateway | Project processes and files stay on the host; the preview is served through the host's preview origin |
+| Native phone client (proposed) | Explicitly selected authenticated backend, or separately proven local capability | Remote project view first; local compute/storage requires platform tests |
 
 **Proposed common contract.** Version an app-server-like boundary for
 conversation identity/events, project file reads and revisioned writes,

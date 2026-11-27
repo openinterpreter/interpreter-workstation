@@ -55,6 +55,9 @@ describe('ToolManager hidden builtin discovery', () => {
       'interpreter_browser_page_type',
       'interpreter_browser_page_select',
       'interpreter_browser_page_scroll',
+      'interpreter_device_connection_create',
+      'interpreter_device_connections_list',
+      'interpreter_device_connection_revoke',
     ].sort());
     expect(server!.tools.some((tool) => tool.name === 'interpreter_layout_set')).toBe(false);
   });

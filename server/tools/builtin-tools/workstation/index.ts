@@ -38,6 +38,11 @@ import { browserPageSelectTool } from './browserPageSelectTool';
 import { browserPageScrollTool } from './browserPageScrollTool';
 import { readImageTool } from './readImageTool';
 import { displayInSimpleModeTool } from './displayInSimpleModeTool';
+import {
+  deviceConnectionCreateTool,
+  deviceConnectionRevokeTool,
+  deviceConnectionsListTool,
+} from './deviceConnectionTools';
 
 export const interpreterServerDefinition: BuiltinServerDefinition = {
   id: 'builtin-interpreter',
@@ -80,6 +85,9 @@ export const interpreterServerDefinition: BuiltinServerDefinition = {
     browserPageSelectTool,
     browserPageScrollTool,
     usageGetTool,
+    deviceConnectionCreateTool,
+    deviceConnectionsListTool,
+    deviceConnectionRevokeTool,
   ],
   resources: [],
   prompts: [],
