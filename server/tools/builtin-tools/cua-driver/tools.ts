@@ -16,6 +16,7 @@ import {
 import { getSandboxDir } from '../../../utils/sandboxManager';
 import type { BuiltinToolContext, BuiltinToolDefinition } from '../../builtinTools';
 import type { ToolCallResponse } from '../../toolTypes';
+import { linuxPixelClickArgs } from './linuxPointer';
 import { callWindowsCuaDriverTool } from './windowsUia';
 import { cuaDriverProcessEnvironment } from './driverEnvironment';
 import type { BrowserControlStatus } from '../../../../shared/types/browserControl';
@@ -1924,13 +1925,13 @@ async function callMacComputerUseTool(
       }, context, undefined, appApprovalArgs);
     }
     if (typeof args.x === 'number' && typeof args.y === 'number') {
-      return callCuaDriverCli('click', {
+      return callCuaDriverCli('click', linuxPixelClickArgs({
         pid: target.pid,
         window_id: target.windowId,
         x: args.x,
         y: args.y,
         count: typeof args.click_count === 'number' ? Math.max(1, Math.round(args.click_count)) : undefined,
-      }, context, undefined, appApprovalArgs);
+      }), context, undefined, appApprovalArgs);
     }
     throw new Error('click requires element_index or x/y.');
   }
