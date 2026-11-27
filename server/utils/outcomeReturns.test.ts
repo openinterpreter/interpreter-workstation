@@ -690,6 +690,39 @@ describe('outcome returns', () => {
     } finally { await f.cleanup(); }
   });
 
+  test('a bounded revision is delivered once per distinct recipient, even across restart', async () => {
+    const f = await fixture();
+    try {
+      const goal = { status: 'blocked' as const, reason: 'resume_bound_reached' as const,
+        createdAt: 1_700_000_000, updatedAt: 1_700_000_500,
+        goalId: '11111111-2222-4333-8444-555555555555', missionRevision: 2,
+        lifecycleRevision: 4, inputId: '1'.repeat(64) };
+      const store = await f.make(null);
+      expect(await store.noticeGoal(thread, { sender }, goal, { perRecipient: true })).toBe(true);
+      expect(await store.noticeGoal(thread, { sender: secondSender }, { ...goal, inputId: '2'.repeat(64) },
+        { perRecipient: true })).toBe(true);
+      expect(await store.noticeGoal(thread, { sender }, { ...goal, inputId: '3'.repeat(64) },
+        { perRecipient: true })).toBe(true);
+      expect(store.list().map(entry => entry.sender)).toEqual([sender, secondSender]);
+      await store.stop();
+      expect((await f.make(null)).list().map(entry => entry.sender)).toEqual([sender, secondSender]);
+    } finally { await f.cleanup(); }
+  });
+
+  test('an unrouted bounded revision cannot suppress its first later routed delivery', async () => {
+    const f = await fixture();
+    try {
+      const goal = { status: 'blocked' as const, reason: 'resume_bound_reached' as const,
+        createdAt: 1_700_000_000, updatedAt: 1_700_000_500,
+        goalId: '11111111-2222-4333-8444-555555555555', missionRevision: 2,
+        lifecycleRevision: 4, inputId: '1'.repeat(64) };
+      const store = await f.make(null);
+      expect(await store.noticeGoal(thread, { unrouted: 'no_assigner' }, goal)).toBe(true);
+      expect(await store.noticeGoal(thread, { sender }, { ...goal, inputId: '2'.repeat(64) })).toBe(true);
+      expect(store.list().map(entry => entry.status)).toEqual(['unrouted', 'pending']);
+    } finally { await f.cleanup(); }
+  });
+
   test('a watched turn whose end was missed is read again on the re-check interval, without a restart', async () => {
     const f = await fixture();
     try {
