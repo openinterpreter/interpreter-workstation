@@ -115,6 +115,14 @@ export class WakeAdmissionFailure extends Error {
     this.name = 'WakeAdmissionFailure';
   }
 }
+/** Bounded operator diagnostics; never include native messages or tool input. */
+export class HistoricalHoldConflict extends Error {
+  constructor(readonly code: 'BUSY' | 'CUSTODY_MISMATCH' | 'CUSTODY_CHANGED' |
+    'RECEIPT_EXISTS' | 'INSPECTION_UNAVAILABLE', message: string) {
+    super(message);
+    this.name = 'HistoricalHoldConflict';
+  }
+}
 export class WakeRecoveryError extends Error {
   constructor(readonly category: 'invalid_request' | 'stale_revision' | 'refused_ambiguous' |
     'native_unavailable') {
@@ -1414,11 +1422,12 @@ export class WakeSources {
    */
   async holdHistoricalOffered(threadId: string, sourceId: string, eventId: string,
     expectedClientId: string, expectedLatestTurnId: string, decisionRef: string): Promise<WakeEvent> {
-    if (this.stopping) throw new Error('Wake admission is draining for restart');
+    if (this.stopping) throw new HistoricalHoldConflict('BUSY', 'Wake admission is draining for restart');
     if (![threadId, sourceId, eventId, expectedLatestTurnId, decisionRef].every(x => ID.test(x)))
-      throw new Error('Invalid wake custody ID');
+      throw new HistoricalHoldConflict('CUSTODY_MISMATCH', 'Invalid wake custody ID');
     const key = eventKey(threadId, sourceId, eventId);
-    if (this.ticking || this.inFlight.has(key)) throw new Error('Wake inspection in progress');
+    if (this.ticking || this.inFlight.has(key))
+      throw new HistoricalHoldConflict('BUSY', 'Wake inspection in progress');
     this.inFlight.add(key);
     return this.track(this.holdHistoricalOwned(threadId, sourceId, eventId, expectedClientId,
       expectedLatestTurnId, decisionRef).finally(() => { this.inFlight.delete(key); this.proofSeenAt.delete(key); }));
@@ -1431,20 +1440,29 @@ export class WakeSources {
     if (!found || found.status !== 'offered' || found.turnId || !found.offeredAt ||
         !Number.isFinite(Date.parse(found.offeredAt)) || Date.now() - Date.parse(found.offeredAt) < 60_000 ||
         wakeClientId(found) !== expectedClientId || !custodyOf)
-      throw new Error('Historical offer custody mismatch');
+      throw new HistoricalHoldConflict('CUSTODY_MISMATCH', 'Historical offer custody mismatch');
     const event = structuredClone(found);
     // Bounded native reads outside the exclusive section; see holdOfferedOwned.
-    const [state, custody] = await Promise.all([
-      this.inspectWithDeadline(threadId, inspectSince(event.createdAt), true),
-      this.withDeadline(custodyOf.call(this.native, threadId, expectedLatestTurnId), 'Native custody timeout')]);
+    let state: Awaited<ReturnType<WakeNative['inspect']>>;
+    let custody: NonNullable<Awaited<ReturnType<NonNullable<WakeNative['custody']>>>>;
+    try {
+      [state, custody] = await Promise.all([
+        this.inspectWithDeadline(threadId, inspectSince(event.createdAt), true),
+        this.withDeadline(custodyOf.call(this.native, threadId, expectedLatestTurnId), 'Native custody timeout')]);
+    } catch {
+      throw new HistoricalHoldConflict('INSPECTION_UNAVAILABLE', 'Native custody inspection unavailable');
+    }
     if (state.activeTurnId || custody.queuedSubmissionCount !== 0 ||
         custody.lastTurnId !== expectedLatestTurnId ||
         !TERMINAL_TURN.includes(custody.turnStatus ?? '') ||
         !['idle', 'systemError', 'notLoaded'].includes(custody.threadStatus ?? ''))
-      throw new Error('Historical offer requires terminal queue-empty native custody');
-    if (this.hasReceipt(event, state)) throw new Error('Native receipt exists; reconcile admission instead');
+      throw new HistoricalHoldConflict('CUSTODY_CHANGED', 'Historical offer requires terminal queue-empty native custody');
+    if (this.hasReceipt(event, state))
+      throw new HistoricalHoldConflict('RECEIPT_EXISTS', 'Native receipt exists; reconcile admission instead');
     return this.exclusive(async () => {
-      const current = this.sameOffer(threadId, sourceId, eventId, event);
+      let current: WakeEvent;
+      try { current = this.sameOffer(threadId, sourceId, eventId, event); }
+      catch { throw new HistoricalHoldConflict('CUSTODY_CHANGED', 'Historical offer changed during inspection'); }
       this.forgetEvent(current);
       current.status = 'held';
       current.error = `Operator-held historical ambiguous native offer; decision ${decisionRef}; latest terminal turn ${expectedLatestTurnId}; not admitted or replayed`;
