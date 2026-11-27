@@ -59,6 +59,32 @@ describe('blocked Goal resume on a native input receipt', () => {
     expect(f.notices).toEqual(['resumed_on_input']);
   });
 
+  test.each(['blocked', 'usageLimited'] as const)(
+    'an outcome or Goal notice delivery neither resumes a %s Goal nor records a notice', async status => {
+      // A delivered notice that resumed the receiver's Goal and told its
+      // assigner would make two threads answer each other without end.
+      for (const ledger of ['ledger', 'boundLedger'] as const) {
+        const f = fixture(status);
+        f.admission.sourceId = 'thread-input';
+        f.admission.eventId = `outcome-${'a'.repeat(64)}`;
+        expect(await resumeBlockedGoalOnInput(f.admission, f[ledger], f.deps)).toBe(true);
+        expect(f.resumes()).toBe(0);
+        expect(f.notices).toEqual([]);
+        expect(f.reads()).toBe(0);
+        expect(f.intent()).toBeUndefined();
+      }
+    });
+
+  test('a delivery with a reservation left by an earlier release records no notice', async () => {
+    const f = fixture();
+    f.admission.eventId = `outcome-${'b'.repeat(64)}`;
+    await f.ledger.reserve({ goalId: GOAL, goalCreatedAt: 1, goalUpdatedAt: 2, missionRevision: 1,
+      lifecycleRevision: 3 });
+    expect(await resumeBlockedGoalOnInput(f.admission, f.ledger, f.deps)).toBe(true);
+    expect(f.notices).toEqual([]);
+    expect(f.resumes()).toBe(0);
+  });
+
   test.each(['paused', 'budgetLimited', 'complete', 'active'] as const)(
     'does not resume a %s Goal', async status => {
       const f = fixture(status);

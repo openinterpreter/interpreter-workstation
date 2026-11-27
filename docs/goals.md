@@ -94,7 +94,9 @@ someone changed in the meantime is never overridden. The same Goal and thread
 continue: inputs waiting only for a usage-limit backoff are offered on the
 next wake pass, and nothing is replayed or dropped. An input admitted into a
 running turn of a usage-limited thread also resumes its Goal once, under the
-same bound of three resumes per Goal per hour as for a blocked Goal. Usage-limited
+same bound of three resumes per Goal per hour as for a blocked Goal. A
+delivered outcome or Goal notice (client message ID `outcome-<id>`) never
+resumes a Goal and never records a notice. Usage-limited
 Goals are found again at startup from threads with wake sources or recent
 senders. Each poll and attempt is logged with a `[usage-resume]` prefix.
 
