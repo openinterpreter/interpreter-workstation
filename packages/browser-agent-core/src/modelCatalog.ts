@@ -11,7 +11,7 @@ export type BrowserModelAsset = Readonly<{
   url: string;
   sha256: string;
   bytes: number;
-  /** Exact HTTPS response hosts permitted after a public model download redirect. */
+  /** Pinned response hosts for a future trusted resolver; browser Fetch does not follow them. */
   redirectHosts?: readonly string[];
 }>;
 export type BrowserModelDescriptor = Readonly<{

@@ -15,10 +15,14 @@ application-specific picker or a second chat protocol.
 
 With no descriptors supplied, the catalogue registers one public, immutable
 revision- and SHA-256-pinned Qwen3 GGUF model. The weights remain external until
-explicit acquisition. Downloads use an exact final-host allow-list, the Web
-Locks API to serialize tabs, and wllama's streamed OPFS storage; browser hosts
-must supply the cross-origin isolation headers required by the multithread
-WASM engine. A missing storage or lock capability is an explicit error.
+explicit acquisition. Verified GGUF files already in wllama's OPFS cache remain
+usable. A new external GGUF download is unavailable until a trusted,
+catalogue-ID-only host service can validate each redirect before requesting
+its target. Browser Fetch never automatically follows model redirects; a
+same-origin asset may download without redirects. Web Locks serialize tabs,
+and wllama streams accepted bytes into OPFS. Browser hosts must supply the
+cross-origin isolation headers required by the multithread WASM engine. A
+missing storage or lock capability is an explicit error.
 
 ## Repository coupling
 
