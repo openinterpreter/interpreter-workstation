@@ -2241,6 +2241,19 @@ describe("CodexService", () => {
     assert.equal(fake.calls.startTurn, 0);
   });
 
+  test('strict unloaded resume refuses a loaded thread without replacing its shell', async () => {
+    const id = '00000000-0000-4000-8000-000000000135';
+    const fake = createFakeClient({
+      async threadRead() { return { thread: { id, cwd: '/workspace', status: { type: 'idle' },
+        turns: [] } as v2.Thread }; },
+    });
+    const service = new CodexService(fake.client);
+    await assert.rejects(service.resumeThread({ threadId: id, model: null, cwd: '/workspace',
+      config: { shell_environment_policy: { set: { INTERPRETER_CALLER_TOKEN: 'agtok_prior' } } },
+      requireUnloadedShellPolicy: true }), /Thread is loaded/);
+    assert.equal(fake.calls.resumeThread, 0);
+  });
+
   test('unloaded existing-thread input without a registered carrier keeps the ordinary resume', async () => {
     const id = '00000000-0000-4000-8000-000000000126';
     const fake = createFakeClient({
