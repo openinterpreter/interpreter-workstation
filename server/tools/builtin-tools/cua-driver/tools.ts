@@ -16,7 +16,7 @@ import {
 import { getSandboxDir } from '../../../utils/sandboxManager';
 import type { BuiltinToolContext, BuiltinToolDefinition } from '../../builtinTools';
 import type { ToolCallResponse } from '../../toolTypes';
-import { linuxPixelClickArgs } from './linuxPointer';
+import { linuxFocusedKeyboardArgs, linuxPixelClickArgs } from './linuxPointer';
 import { callWindowsCuaDriverTool } from './windowsUia';
 import { cuaDriverProcessEnvironment } from './driverEnvironment';
 import type { BrowserControlStatus } from '../../../../shared/types/browserControl';
@@ -1951,10 +1951,10 @@ async function callMacComputerUseTool(
     if (typeof args.key !== 'string' || !args.key.trim()) throw new Error('Missing required string field key.');
     const key = keyAndModifiers(args.key.trim());
     if (key.modifiers?.length) {
-      return callCuaDriverCli('hotkey', {
+      return callCuaDriverCli('hotkey', linuxFocusedKeyboardArgs({
         ...macWindowScopedInputArgsForTest(target, wasExplicitlyFocusedByAgent(target, context)),
         keys: [...key.modifiers, key.key],
-      }, context, undefined, appApprovalArgs);
+      }), context, undefined, appApprovalArgs);
     }
     const pressArgs: Record<string, unknown> = {
       ...macWindowScopedInputArgsForTest(target, wasExplicitlyFocusedByAgent(target, context)),
@@ -1964,7 +1964,7 @@ async function callMacComputerUseTool(
     if (target.focusedElementIndex !== null) {
       pressArgs.element_index = target.focusedElementIndex;
     }
-    return callCuaDriverCli('press_key', pressArgs, context, undefined, appApprovalArgs);
+    return callCuaDriverCli('press_key', linuxFocusedKeyboardArgs(pressArgs), context, undefined, appApprovalArgs);
   }
 
   if (toolName === 'type_text') {
@@ -1980,7 +1980,7 @@ async function callMacComputerUseTool(
     } else if (target.focusedElementIndex !== null) {
       typeArgs.element_index = target.focusedElementIndex;
     }
-    return callCuaDriverCli('type_text', typeArgs, context, undefined, appApprovalArgs);
+    return callCuaDriverCli('type_text', linuxFocusedKeyboardArgs(typeArgs), context, undefined, appApprovalArgs);
   }
 
   if (toolName === 'set_value') {
