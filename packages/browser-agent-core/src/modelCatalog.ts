@@ -54,7 +54,7 @@ const MAX_GGUF_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_CONTEXT_TOKENS = 2048;
 const MAX_CONTEXT_TOKENS = 8192;
 export function browserModelContextTokens(descriptor: BrowserModelDescriptor): number {
-  const value = descriptor.contextTokens ?? DEFAULT_CONTEXT_TOKENS;
+  const value = descriptor.contextTokens === undefined ? DEFAULT_CONTEXT_TOKENS : descriptor.contextTokens;
   if (!Number.isSafeInteger(value) || value < DEFAULT_CONTEXT_TOKENS || value > MAX_CONTEXT_TOKENS)
     throw new Error('Invalid browser model context');
   return value;

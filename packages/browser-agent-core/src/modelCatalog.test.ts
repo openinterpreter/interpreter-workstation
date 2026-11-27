@@ -59,7 +59,8 @@ test('manifest rejects unpinned assets, off-origin HTTP and duplicate model iden
 });
 
 test('catalog refuses unsupported browser model context bounds', () => {
-  for (const contextTokens of [0, 2047, 8193, 4096.5, Number.NaN]) {
+  for (const contextTokens of [0, 2047, 8193, 4096.5, Number.NaN,
+    null as unknown as number]) {
     expect(() => new BrowserLocalModelCatalog([{ ...descriptor, contextTokens }], origin))
       .toThrow('Invalid browser model context');
   }
