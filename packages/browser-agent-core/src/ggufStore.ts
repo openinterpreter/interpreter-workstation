@@ -43,17 +43,19 @@ export async function acquireGgufAsset(asset: BrowserModelAsset, origin: string,
       await cache.delete(url.href);
     }
   }
+  // The browser cannot validate an external redirect target before Fetch
+  // follows it. Only a trusted host-side resolver may acquire an uncached
+  // external GGUF; a verified OPFS asset remains usable without network.
+  if (url.origin !== new URL(origin).origin)
+    throw new Error('Trusted browser model download host unavailable');
   let wrote = false;
   try {
     aborted(signal);
     const response = await fetch(url.href, { signal, credentials: 'omit',
-      redirect: 'follow', cache: 'no-store' });
+      redirect: 'error', cache: 'no-store' });
     const finalUrl = new URL(response.url || url.href);
-    if ((finalUrl.protocol !== 'https:' && finalUrl.origin !== url.origin) ||
-        finalUrl.username || finalUrl.password ||
-        (finalUrl.origin !== url.origin &&
-          !asset.redirectHosts?.includes(finalUrl.hostname)))
-      throw new Error('Browser model asset final host is not allow-listed');
+    if (response.redirected || finalUrl.href !== url.href)
+      throw new Error('Browser model asset redirect unavailable');
     if (!response.ok || !response.body) throw new Error('Browser model asset download failed');
     const length = response.headers.get('content-length');
     if (length && Number(length) !== asset.bytes)

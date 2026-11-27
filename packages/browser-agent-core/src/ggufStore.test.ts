@@ -64,7 +64,7 @@ test('download omits credentials and fails closed on browser storage exhaustion'
   const exhausted = cache();
   exhausted.write = async () => { throw new DOMException('Quota reached', 'QuotaExceededError'); };
   globalThis.fetch = async (_url, options) => {
-    expect(options).toMatchObject({ credentials: 'omit', redirect: 'follow', cache: 'no-store' });
+    expect(options).toMatchObject({ credentials: 'omit', redirect: 'error', cache: 'no-store' });
     return new Response(bytes);
   };
   try {
@@ -174,22 +174,79 @@ test('missing cross-tab lock capability cannot read or mutate a cached model', a
   }
 });
 
-test('pinned HTTPS asset follows only an explicitly allowed final download host', async () => {
+test('uncached external GGUF is unavailable before any browser request, even with a final-host allow-list', async () => {
   const originalFetch = globalThis.fetch;
-  const allowed = 'objects.example';
-  let finalHost = allowed;
-  globalThis.fetch = async (_url, options) => {
-    expect(options?.redirect).toBe('follow');
-    const response = new Response(bytes);
-    Object.defineProperty(response, 'url', { value: `https://${finalHost}/file.gguf` });
-    return response;
+  const external = { ...asset, url: 'https://downloads.example/weights.gguf',
+    redirectHosts: ['objects.example'] };
+  let requests = 0;
+  globalThis.fetch = async () => { requests++; return new Response(bytes); };
+  try {
+    const empty = cache();
+    await expect(acquireGgufAsset(external, origin, undefined, undefined, empty, lock))
+      .rejects.toThrow('Trusted browser model download host unavailable');
+    expect(requests).toBe(0);
+    expect(empty.deleted).toHaveLength(0);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('verified external GGUF cache remains usable without a network request', async () => {
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = async () => { requests++; throw new Error('network must remain unused'); };
+  try {
+    const verified = cache(new Blob([bytes]));
+    const external = { ...asset, url: 'https://downloads.example/weights.gguf' };
+    const result = await acquireGgufAsset(external, origin, undefined, undefined, verified, lock);
+    expect(result.size).toBe(bytes.length);
+    expect(requests).toBe(0);
+    expect(verified.deleted).toHaveLength(0);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('unverified external cache is discarded without a network fallback', async () => {
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  globalThis.fetch = async () => { requests++; return new Response(bytes); };
+  try {
+    const corrupt = cache(new Blob(['x'.repeat(bytes.length)]));
+    const external = { ...asset, url: 'https://downloads.example/weights.gguf' };
+    await expect(acquireGgufAsset(external, origin, undefined, undefined, corrupt, lock))
+      .rejects.toThrow('Trusted browser model download host unavailable');
+    expect(corrupt.deleted).toEqual([external.url]);
+    expect(requests).toBe(0);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('same-origin GGUF may download directly but never auto-follow a redirect', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: string[] = [];
+  globalThis.fetch = async (input, options) => {
+    requests.push(String(input));
+    if (options?.redirect === 'follow') requests.push('https://unlisted.example/weights.gguf');
+    expect(options?.redirect).toBe('error');
+    return Response.redirect('https://unlisted.example/weights.gguf', 302);
   };
   try {
-    const pinned = { ...asset, redirectHosts: [allowed] };
-    await expect(acquireGgufAsset(pinned, origin, undefined, undefined, cache(), lock))
-      .resolves.toHaveProperty('size', bytes.length);
-    finalHost = 'other.example';
-    await expect(acquireGgufAsset(pinned, origin, undefined, undefined, cache(), lock))
-      .rejects.toThrow('final host');
+    await expect(acquireGgufAsset(asset, origin, undefined, undefined, cache(), lock))
+      .rejects.toThrow();
+    expect(requests).toEqual([`${origin}/weights.gguf`]);
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test('loopback redirect cannot request an unlisted destination before rejecting it', async () => {
+  let unlistedRequests = 0;
+  const unlisted = Bun.serve({ hostname: '127.0.0.1', port: 0,
+    fetch() { unlistedRequests++; return new Response(bytes); } });
+  try {
+    const source = Bun.serve({ hostname: '127.0.0.1', port: 0,
+      fetch(request) {
+        if (new URL(request.url).pathname !== '/weights.gguf') return new Response('not found', { status: 404 });
+        return Response.redirect(`http://127.0.0.1:${unlisted.port}/weights.gguf`, 302);
+      } });
+    try {
+      await expect(acquireGgufAsset(asset, `http://127.0.0.1:${source.port}`,
+        undefined, undefined, cache(), lock)).rejects.toThrow();
+      expect(unlistedRequests).toBe(0);
+    } finally { source.stop(true); }
+  } finally { unlisted.stop(true); }
 });
