@@ -32,7 +32,8 @@ type Timer = { at: number; callback: () => void; cleared: boolean };
 type Recorded = { threadId: string; sender?: SubmissionSender; unrouted?: GoalUnroutedReason; notice: GoalNotice };
 
 function harness(options: { sender?: SubmissionSender | null; settleMs?: number; store?: OutcomeReturns;
-  refreshTerminal?: (threadId: string, autoResume: Map<string, GoalAutoResumeState>) => Promise<void> } = {}) {
+  refreshTerminal?: (threadId: string, autoResume: Map<string, GoalAutoResumeState>) => Promise<void>;
+  revisionRead?: (revision: ThreadGoalRevision | null) => Promise<ThreadGoalRevision | null> } = {}) {
   let now = Date.parse('2026-11-16T00:00:00.000Z');
   let updatedAt = CREATED;
   const timers: Timer[] = [];
@@ -74,7 +75,10 @@ function harness(options: { sender?: SubmissionSender | null; settleMs?: number;
     },
     ...(store && { recentSenders: async (threadId: string, limit: number) =>
       store.recentThreadedSenders(threadId, limit) }),
-    readRevision: async () => revision && { createdAt: CREATED, revision },
+    readRevision: async () => {
+      const read = options.revisionRead ? await options.revisionRead(revision) : revision;
+      return read && { createdAt: CREATED, revision: read };
+    },
     autoResumeState: threadId => autoResume.get(threadId) ?? null,
     refreshAutoResumeIdentity: async threadId => { await options.refreshTerminal?.(threadId, autoResume); },
     recentSenderThreads: async limit => store ? store.recentSenderThreads(limit) : [...senders.keys()].slice(0, limit),
@@ -289,6 +293,47 @@ describe('goal notices', () => {
       status: 'blocked', reason: 'model_capacity_exhausted', createdAt: CREATED,
       updatedAt: CREATED + 9, goalId: GOAL_ID, missionRevision: 2, lifecycleRevision: 5,
     }]);
+  });
+
+  test('a live replacement during startup identity refresh cannot be overwritten by the stale block', async () => {
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const h = harness({ refreshTerminal: async () => pending });
+    h.goals.set(thread, { status: 'blocked', createdAt: CREATED, updatedAt: CREATED + 1 });
+    h.autoResume.set(thread, { state: 'exhausted', reason: 'capacity bound', expected: undefined });
+    const startup = h.notices.reconcile();
+    await h.flush();
+    h.autoResume.delete(thread);
+    const replacementId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    h.setRevision({ goalId: replacementId, status: 'blocked', missionRevision: 1, lifecycleRevision: 1 });
+    h.goal('blocked', 'replacement-turn', thread, replacementId);
+    release();
+    await startup;
+    await h.advance(GOAL_NOTICE_SETTLE_MS);
+    expect(h.recorded.map(item => item.notice.goalId)).toEqual([replacementId]);
+  });
+
+  test('a live replacement during startup native revision failure keeps its own pending notice', async () => {
+    let rejectRead!: (error: Error) => void;
+    const pending = new Promise<ThreadGoalRevision | null>((_resolve, reject) => { rejectRead = reject; });
+    let first = true;
+    const h = harness({ revisionRead: async revision => {
+      if (first) { first = false; return pending; }
+      return revision;
+    } });
+    h.goals.set(thread, { status: 'blocked', createdAt: CREATED, updatedAt: CREATED + 1 });
+    h.autoResume.set(thread, { state: 'exhausted', reason: 'capacity bound',
+      expected: { goalId: GOAL_ID, status: 'blocked', missionRevision: 1, lifecycleRevision: 1 } });
+    const startup = h.notices.reconcile();
+    await h.flush();
+    h.autoResume.delete(thread);
+    const replacementId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    h.setRevision({ goalId: replacementId, status: 'blocked', missionRevision: 1, lifecycleRevision: 1 });
+    h.goal('blocked', 'replacement-turn', thread, replacementId);
+    rejectRead(Error('temporary native read failure'));
+    await startup;
+    await h.advance(GOAL_NOTICE_SETTLE_MS);
+    expect(h.recorded.map(item => item.notice.goalId)).toEqual([replacementId]);
   });
 
   test('a scheduled resume that never reverses the block is reported after it settles', async () => {

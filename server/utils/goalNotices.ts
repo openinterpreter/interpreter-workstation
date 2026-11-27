@@ -206,6 +206,7 @@ export class GoalNotices {
         if (terminalCapacity) {
           if (capacity?.state === 'exhausted' && !capacity.expected) {
             try { await this.deps.refreshAutoResumeIdentity?.(threadId); } catch { /* Keep the exact notice pending. */ }
+            if (this.stopped || this.threads.has(threadId)) continue;
             capacity = this.deps.autoResumeState(threadId);
             if (capacity?.state !== 'exhausted' || !capacity.expected) {
               // A startup read may also fail. Keep this thread in the normal
@@ -220,6 +221,7 @@ export class GoalNotices {
           // silently degrade into an unbound status when custody is down.
           try {
             const read = await this.deps.readRevision(threadId);
+            if (this.stopped || this.threads.has(threadId)) continue;
             const expected = capacity?.state === 'exhausted' ? capacity.expected : undefined;
             if (!read || !expected || read.createdAt !== goal.createdAt ||
                 read.revision.goalId !== expected.goalId ||
@@ -227,6 +229,7 @@ export class GoalNotices {
                 read.revision.lifecycleRevision !== expected.lifecycleRevision ||
                 read.revision.status !== 'blocked') continue;
           } catch {
+            if (this.stopped || this.threads.has(threadId)) continue;
             // A transient post-rebind custody failure must not discard the
             // startup terminal notice. The next settled check revalidates it.
             const state = this.state(threadId);
@@ -235,11 +238,12 @@ export class GoalNotices {
             continue;
           }
         }
+        if (this.stopped || this.threads.has(threadId)) continue;
         try { await this.serialize(() => this.decide(threadId, goal,
           { reason: terminalCapacity
             ? capacity?.state === 'exhausted' && capacity.outcome === 'unconfirmed'
               ? 'resume_result_unconfirmed' : 'model_capacity_exhausted'
-            : 'unknown' }, null, () => true,
+            : 'unknown' }, null, () => !this.stopped && !this.threads.has(threadId),
           terminalCapacity)); }
         catch (error) { this.deps.log(`[goal-notices] failed threadId=${threadId} error=${String(error)}`); }
       }
