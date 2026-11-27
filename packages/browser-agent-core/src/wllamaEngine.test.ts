@@ -3,6 +3,7 @@ import type { Wllama } from '@wllama/wllama';
 import { browserChatTemplateOptions, createWllamaRuntime } from './wllamaEngine';
 import { BrowserPiAppServerSession } from './piSession';
 import { MemoryPiTranscriptStore } from './piTranscript';
+import { DEFAULT_BROWSER_GGUF_MODEL } from './modelCatalog';
 
 test('template options are declared by the model, not inferred from its name', () => {
   expect(browserChatTemplateOptions({ id: 'Qwen3-lookalike', name: 'Local',
@@ -11,6 +12,39 @@ test('template options are declared by the model, not inferred from its name', (
     assets: [], disableThinking: true })).toEqual({ chat_template_kwargs: {
       enable_thinking: false,
     } });
+});
+
+test('the pinned local model loads and advertises a context larger than its real tool prompt', async () => {
+  const weights = new Blob(['mock weights']);
+  let loadedContext = 0;
+  const runtime = await createWllamaRuntime(DEFAULT_BROWSER_GGUF_MODEL, weights,
+    'browser-local', undefined, () => ({
+      async loadModel(_files: Blob[], options: { n_ctx: number }) {
+        loadedContext = options.n_ctx;
+      },
+      async exit() {},
+    }) as unknown as Wllama);
+  try {
+    expect(loadedContext).toBe(8192);
+    expect(runtime.model.contextWindow).toBe(loadedContext);
+    expect(runtime.model.maxTokens).toBeLessThan(loadedContext);
+  } finally { runtime.dispose?.(); }
+});
+
+test('a registered model can request a bounded context without changing other model defaults', async () => {
+  const weights = new Blob(['mock weights']);
+  const contexts: number[] = [];
+  const descriptor = { id: 'context-configured', name: 'Local', contextTokens: 4096,
+    assets: [{ path: 'weights.gguf', url: '/weights.gguf', bytes: weights.size,
+      sha256: 'a'.repeat(64) }] };
+  const runtime = await createWllamaRuntime(descriptor, weights, 'browser-local', undefined,
+    () => ({ async loadModel(_files: Blob[], options: { n_ctx: number }) {
+      contexts.push(options.n_ctx);
+    }, async exit() {} }) as unknown as Wllama);
+  try {
+    expect(contexts).toEqual([4096]);
+    expect(runtime.model.contextWindow).toBe(4096);
+  } finally { runtime.dispose?.(); }
 });
 
 test('lazy wllama runtime loads a Blob, streams an answer and disposes its worker', async () => {

@@ -17,6 +17,8 @@ export type BrowserModelAsset = Readonly<{
 export type BrowserModelDescriptor = Readonly<{
   id: string;
   name: string;
+  /** CPU/WASM context allocation; omitted preserves the existing 2048-token default. */
+  contextTokens?: number;
   /** Pinned source revision of a GGUF model; asset SHA-256 pins its actual bytes. */
   revision?: string;
   /** Disable optional model reasoning in templates that declare this setting. */
@@ -30,6 +32,7 @@ export type BrowserModelRuntime = Readonly<{ model: Model<any>; streamFn: Stream
 /** Public, revision- and digest-pinned CPU/WASM browser default; weights are fetched on demand. */
 export const DEFAULT_BROWSER_GGUF_MODEL: BrowserModelDescriptor = Object.freeze({
   id: 'ggml-org/Qwen3-1.7B-GGUF', name: 'Qwen3 1.7B (local)',
+  contextTokens: 8192,
   revision: 'daeb8e2d528a760970442092f6bf1e55c3b659eb',
   inputModalities: Object.freeze(['text' as const]), disableThinking: true,
   assets: Object.freeze([Object.freeze({ path: 'Qwen3-1.7B-Q4_K_M.gguf',
@@ -48,6 +51,14 @@ const assetPath = /^[a-zA-Z0-9_.-]{1,100}$/;
 const MAX_ASSET_BYTES = 8 * 1024 * 1024;
 const MAX_MODEL_BYTES = 32 * 1024 * 1024;
 const MAX_GGUF_BYTES = 2 * 1024 * 1024 * 1024;
+const DEFAULT_CONTEXT_TOKENS = 2048;
+const MAX_CONTEXT_TOKENS = 8192;
+export function browserModelContextTokens(descriptor: BrowserModelDescriptor): number {
+  const value = descriptor.contextTokens ?? DEFAULT_CONTEXT_TOKENS;
+  if (!Number.isSafeInteger(value) || value < DEFAULT_CONTEXT_TOKENS || value > MAX_CONTEXT_TOKENS)
+    throw new Error('Invalid browser model context');
+  return value;
+}
 const gguf = (descriptor: BrowserModelDescriptor) =>
   descriptor.assets.length === 1 && descriptor.assets[0].path.toLowerCase().endsWith('.gguf');
 const CACHE_NAME = 'workstation-browser-model-v1';
@@ -73,6 +84,7 @@ export class BrowserLocalModelCatalog {
     private readonly origin: string = globalThis.location?.origin ?? '') {
     if (!origin) throw new Error('Browser model origin unavailable');
     for (const descriptor of descriptors) {
+      browserModelContextTokens(descriptor);
       if (!modelIdentity.test(descriptor.id) || descriptor.id.includes('..') ||
           !descriptor.name || descriptor.name.length > 160 ||
           (gguf(descriptor) && !/^[a-f0-9]{40}$/.test(descriptor.revision ?? '')) ||

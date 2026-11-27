@@ -58,6 +58,15 @@ test('manifest rejects unpinned assets, off-origin HTTP and duplicate model iden
   expect(() => new BrowserLocalModelCatalog([descriptor, descriptor], origin)).toThrow();
 });
 
+test('catalog refuses unsupported browser model context bounds', () => {
+  for (const contextTokens of [0, 2047, 8193, 4096.5, Number.NaN]) {
+    expect(() => new BrowserLocalModelCatalog([{ ...descriptor, contextTokens }], origin))
+      .toThrow('Invalid browser model context');
+  }
+  expect(new BrowserLocalModelCatalog([{ ...descriptor, contextTokens: 4096 }], origin)
+    .list()[0]?.contextTokens).toBe(4096);
+});
+
 test('catalog session forwards opt-in finite timeout and turn budget to Pi', async () => {
   const originalCaches = globalThis.caches;
   const originalStorage = globalThis.localStorage;
