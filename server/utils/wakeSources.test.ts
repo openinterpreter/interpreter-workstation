@@ -317,6 +317,7 @@ describe('durable thread wake sources', () => {
     let clientIds: string[] = [];
     let queued = 0;
     let latest = 'later-turn';
+    let inspectUnavailable = false;
     const wake = new WakeSources({
       inspect: async () => ({ messages: [], clientIds }),
       custody: async () => ({ queuedSubmissionCount: queued, lastTurnId: latest,
@@ -338,7 +339,10 @@ describe('durable thread wake sources', () => {
       saved.events[0].offeredAt = new Date(Date.now() - 61_000).toISOString();
       await writeFile(file, JSON.stringify(saved));
       const resumed = new WakeSources({
-        inspect: async () => ({ messages: [], clientIds }),
+        inspect: async () => {
+          if (inspectUnavailable) throw new Error('native inspection unavailable');
+          return { messages: [], clientIds };
+        },
         custody: async () => ({ queuedSubmissionCount: queued, lastTurnId: latest,
           turnStatus: 'completed', threadStatus: 'idle' }),
         start: async () => { throw new Error('unexpected start'); },
@@ -346,16 +350,20 @@ describe('durable thread wake sources', () => {
       }, root);
       await resumed.initialize();
       await expect(resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
-        'wrong-client', latest, 'decision-1')).rejects.toThrow('mismatch');
+        'wrong-client', latest, 'decision-1')).rejects.toHaveProperty('code', 'CUSTODY_MISMATCH');
       clientIds = [clientId];
       await expect(resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
-        clientId, latest, 'decision-1')).rejects.toThrow('receipt exists');
+        clientId, latest, 'decision-1')).rejects.toHaveProperty('code', 'RECEIPT_EXISTS');
       clientIds = []; queued = 1;
       await expect(resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
-        clientId, latest, 'decision-1')).rejects.toThrow('queue-empty');
+        clientId, latest, 'decision-1')).rejects.toHaveProperty('code', 'CUSTODY_CHANGED');
       queued = 0; latest = 'changed-turn';
       await expect(resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
-        clientId, 'later-turn', 'decision-1')).rejects.toThrow('queue-empty');
+        clientId, 'later-turn', 'decision-1')).rejects.toHaveProperty('code', 'CUSTODY_CHANGED');
+      inspectUnavailable = true;
+      await expect(resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
+        clientId, latest, 'decision-1')).rejects.toHaveProperty('code', 'INSPECTION_UNAVAILABLE');
+      inspectUnavailable = false;
       const held = await resumed.holdHistoricalOffered('thread-1', 'old-schedule', first.eventId,
         clientId, latest, 'decision-1');
       expect(held.status).toBe('held');

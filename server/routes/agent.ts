@@ -5,7 +5,7 @@ import { nativeSubmissionJournal, parseSubmissionSender, senderHeader,
   type SubmissionSender } from '../utils/nativeSubmissionJournal';
 import { SubagentDirectInputError, type SubagentInputRefusal }
   from '../../src/lib/codex/subagent-input';
-import { isAcceptedOffer, isWakeId, PausedCommandConflictError, THREAD_INPUT_SOURCE, threadInputCustody, WAKE_MESSAGE_LIMIT,
+import { HistoricalHoldConflict, isAcceptedOffer, isWakeId, PausedCommandConflictError, THREAD_INPUT_SOURCE, threadInputCustody, WAKE_MESSAGE_LIMIT,
   WakeContentConflictError, WakeSourceCancelledError, wakeTokenValid, WakeUnsavedError, type WakeEvent }
   from '../utils/wakeSources';
 import { readyWakeSources, wakeSources } from '../utils/wakeSourcesRuntime';
@@ -505,8 +505,9 @@ router.post('/threads/:threadId/wake-events/:sourceId/:eventId/hold-historical',
     const event = await wakeSources.holdHistoricalOffered(req.params.threadId, req.params.sourceId,
       req.params.eventId, req.body.expectedClientId, req.body.expectedLatestTurnId, req.body.decisionRef);
     return res.json({ eventId: event.eventId, status: event.status, turnId: event.turnId });
-  } catch {
-    return res.status(409).json({ error: 'Historical native custody cannot support a no-replay hold.' });
+  } catch (error) {
+    return res.status(409).json({ error: 'Historical native custody cannot support a no-replay hold.',
+      code: error instanceof HistoricalHoldConflict ? error.code : 'INSPECTION_UNAVAILABLE' });
   }
 });
 
