@@ -2,7 +2,8 @@ import type { GoalAutoResumeState } from '../../src/lib/codex/goal-auto-resume';
 import type { ThreadGoalRevision } from '../../src/lib/codex/goal-revision';
 import type { AppServerNotification } from '../../src/lib/codex/protocol';
 import { CAPACITY_RETRY_PENDING, GOAL_NOTICE_STATUSES, type GoalAssigner, type GoalNotice, type GoalNoticeReason,
-  type GoalNoticeStatus } from './outcomeReturns';
+  type GoalNoticeStatus, type GoalUnroutedReason } from './outcomeReturns';
+import type { SubmissionSender } from './nativeSubmissionJournal';
 
 /**
  * Tells the agent that assigned a thread's Goal when that Goal stops (paused,
@@ -30,6 +31,8 @@ const RECONCILE_CONCURRENCY = 5;
 const TRACKED_THREAD_LIMIT = 1_000;
 const FAILED_TURNS_KEPT = 4;
 const STOPPED: ReadonlySet<GoalNoticeStatus> = new Set(['paused', 'blocked', 'usageLimited', 'budgetLimited']);
+/** A usage-limit stop with an ambiguous assigner goes to at most this many recent senders. */
+export const AMBIGUOUS_USAGE_NOTICE_RECIPIENTS = 3;
 
 /** The native Goal fields a notice uses. */
 export type ObservedGoal = { status: GoalNoticeStatus; createdAt: number; updatedAt: number };
@@ -43,8 +46,12 @@ export type GoalNoticesDeps = {
   bindAssigner(threadId: string, goalCreatedAt: number, turnId: string | null): Promise<GoalAssigner | null>;
   /** The last notice recorded for the thread, or null. */
   lastNotice(threadId: string): Promise<GoalNotice | null>;
-  /** Durably queue a notice for delivery to the assigner, or record it unrouted. */
-  record(threadId: string, assigner: GoalAssigner, notice: GoalNotice): Promise<void>;
+  /** Durably queue a notice for delivery to the assigner, or record it unrouted.
+   * `perRecipient` gives each of several recipients of one change its own entry. */
+  record(threadId: string, route: { sender: SubmissionSender } | { unrouted: GoalUnroutedReason },
+    notice: GoalNotice, options?: { perRecipient?: boolean }): Promise<void>;
+  /** The thread's most recent distinct senders that named a thread, newest first. */
+  recentSenders?(threadId: string, limit: number): Promise<SubmissionSender[]>;
   /** The thread's current native Goal identity and revisions; may throw. */
   readRevision(threadId: string): Promise<{ createdAt: number; revision: ThreadGoalRevision } | null>;
   /** The automatic capacity resume's view of the thread. */
@@ -256,12 +263,28 @@ export class GoalNotices {
     from?: GoalNoticeStatus }, turnId: string | null, current: () => boolean = () => true): Promise<void> {
     const assigner = await this.deps.bindAssigner(threadId, goal.createdAt, turnId);
     if (!assigner || this.stopped || !current()) return;
-    const due = goalNoticeDue({ ...goal, reason: cause.reason }, await this.deps.lastNotice(threadId));
+    const last = await this.deps.lastNotice(threadId);
+    const due = goalNoticeDue({ ...goal, reason: cause.reason }, last);
     if (!due || this.stopped || !current()) return;
     const notice: GoalNotice = { status: goal.status, reason: cause.reason, createdAt: goal.createdAt,
       updatedAt: goal.updatedAt, ...(cause.from && cause.from !== goal.status && { previousStatus: cause.from }),
       ...await this.identity(threadId, goal) };
     if (this.stopped || !current()) return;
+    // A usage limit stops every agent on the account at once and nothing in
+    // the thread resumes it, so its stop (and the later resume) is not left
+    // undelivered when several senders could have assigned the Goal: each of
+    // the few most recent ones is told.
+    if ('unrouted' in assigner && assigner.unrouted === 'ambiguous_assigner' && this.deps.recentSenders &&
+        (goal.status === 'usageLimited' || (goal.status === 'active' && last?.status === 'usageLimited'))) {
+      const senders = await this.deps.recentSenders(threadId, AMBIGUOUS_USAGE_NOTICE_RECIPIENTS);
+      if (this.stopped || !current()) return;
+      if (senders.length) {
+        for (const sender of senders) await this.deps.record(threadId, { sender }, notice, { perRecipient: true });
+        this.deps.log(`[goal-notices] ambiguous assigner threadId=${threadId} status=${goal.status} ` +
+          `reason=${cause.reason} recipients=${senders.length}`);
+        return;
+      }
+    }
     await this.deps.record(threadId, assigner, notice);
     this.deps.log('unrouted' in assigner
       ? `[goal-notices] unrouted threadId=${threadId} status=${goal.status} reason=${assigner.unrouted}`

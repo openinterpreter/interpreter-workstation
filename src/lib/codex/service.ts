@@ -457,6 +457,7 @@ export type CodexClient = {
   ): Promise<McpResourceReadResponse>;
   loginWithChatGPT(): Promise<{ loginId: string; authUrl: string }>;
   getAccount(refreshToken?: boolean): Promise<v2.GetAccountResponse>;
+  accountRateLimitsRead?(params?: v2.GetAccountRateLimitsParams): Promise<v2.GetAccountRateLimitsResponse>;
   cancelLogin(loginId: string): Promise<void>;
   logout(): Promise<void>;
   modelList(params?: v2.ModelListParams): Promise<v2.ModelListResponse>;
@@ -955,6 +956,13 @@ export class CodexService {
 
   async loginWithChatGPT() { return this.client.loginWithChatGPT(); }
   async getAccount(refreshToken?: boolean) { return this.client.getAccount(refreshToken); }
+  /** The account's current usage allowance from the runtime's backend usage
+   * read; it does not run the model. Throws when the runtime cannot read it
+   * (for example an API-key account). */
+  async readAccountRateLimits(): Promise<v2.GetAccountRateLimitsResponse> {
+    if (!this.client.accountRateLimitsRead) throw new Error('Account usage read unavailable');
+    return this.client.accountRateLimitsRead({ excludeResetCreditDetails: true });
+  }
   async cancelLogin(loginId: string) { await this.client.cancelLogin(loginId); }
   async logout() { await this.client.logout(); }
   async listModels(params?: v2.ModelListParams) {
@@ -1619,7 +1627,7 @@ export class CodexService {
     const archived = (thread as v2.Thread & { archived?: unknown }).archived;
     if (thread.id !== threadId || !Array.isArray(thread.turns) || thread.turns.length !== 0 ||
         (archived !== undefined && archived !== false) ||
-        !['notLoaded', 'idle', 'active'].includes(thread.status?.type) ||
+        !['notLoaded', 'idle', 'active', 'systemError'].includes(thread.status?.type) ||
         thread.ephemeral === true || typeof sessionPath !== 'string' ||
         !/^\/workspace\/home\/(?:sessions|\.codex\/sessions)\/.+\.jsonl$/.test(sessionPath) ||
         !sessionPath.endsWith(`-${threadId}.jsonl`) || sessionPath.split('/').includes('..') ||
@@ -1988,7 +1996,10 @@ export class CodexService {
     }
     if (thread.id !== threadId) return notStarted('thread_identity_mismatch');
     if (thread.status.type === 'active') return 'already_running';
-    if (thread.status.type === 'idle') return 'already_loaded';
+    // A thread whose last turn failed (for example on a usage limit) reports
+    // systemError but is still loaded and idle: the runtime starts the
+    // continuation of the now active Goal itself, so it must not be resumed.
+    if (thread.status.type === 'idle' || thread.status.type === 'systemError') return 'already_loaded';
     if (thread.status.type !== 'notLoaded') return notStarted('thread_unavailable');
     try {
       // The same resume ordinary input to a saved, unloaded thread uses.
