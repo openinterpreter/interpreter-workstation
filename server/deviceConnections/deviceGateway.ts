@@ -317,7 +317,8 @@ function isHtml(headers: http.IncomingHttpHeaders | http.OutgoingHttpHeaders): b
 function deviceResponseHeaders(source: http.IncomingHttpHeaders): http.OutgoingHttpHeaders {
   const headers: http.OutgoingHttpHeaders = {};
   for (const [name, value] of Object.entries(source)) {
-    if (value === undefined || HOP_BY_HOP_HEADERS.has(name) || name.startsWith('access-control-allow-')) continue;
+    if (value === undefined || HOP_BY_HOP_HEADERS.has(name)
+      || name.startsWith('access-control-allow-') || name === 'x-powered-by') continue;
     headers[name] = value;
   }
   if (isHtml(headers)) {

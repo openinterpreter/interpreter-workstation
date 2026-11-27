@@ -67,6 +67,7 @@ async function startUpstream() {
         'Content-Type': 'application/json',
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Credentials': 'true',
+        'X-Powered-By': 'Express',
       });
       response.end(JSON.stringify({ ok: true }));
     });
@@ -512,6 +513,7 @@ describe('device gateway browser protections', () => {
     expect(api.status).toBe(200);
     expect(api.headers['access-control-allow-origin']).toBeUndefined();
     expect(api.headers['access-control-allow-credentials']).toBeUndefined();
+    expect(api.headers['x-powered-by']).toBeUndefined();
     expect(api.headers['x-frame-options']).toBeUndefined();
   });
 });
