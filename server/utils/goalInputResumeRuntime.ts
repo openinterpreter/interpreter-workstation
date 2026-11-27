@@ -3,7 +3,7 @@ import { getCodexService } from '../../src/lib/codex/service';
 import { GoalRevisionConflictError, type ThreadGoalRevision } from '../../src/lib/codex/goal-revision';
 import { outcomeReturns, readyOutcomeReturns } from './outcomeReturnsRuntime';
 import type { GoalInputAdmission, GoalInputIntent, GoalInputLedger } from './wakeSources';
-import type { GoalNotice, GoalNoticeReason } from './outcomeReturns';
+import { isOutcomeDelivery, type GoalNotice, type GoalNoticeReason } from './outcomeReturns';
 
 type Read = Awaited<ReturnType<ReturnType<typeof getCodexService>['getThreadGoalWithRevision']>>;
 type Resume = Awaited<ReturnType<ReturnType<typeof getCodexService>['resumeThreadGoalWithRevision']>>;
@@ -45,6 +45,11 @@ const RESUMABLE_ON_INPUT: ReadonlySet<string> = new Set(['blocked', 'usageLimite
 export async function resumeBlockedGoalOnInput(admission: GoalInputAdmission,
   ledger: GoalInputLedger,
   deps: GoalInputResumeDeps): Promise<boolean> {
+  // A delivered outcome or Goal notice is a report, not work for the Goal. If
+  // it resumed the Goal and told its assigner, that notice would be delivered
+  // back and resume the other side's Goal in turn: two threads would answer
+  // each other without end.
+  if (isOutcomeDelivery(admission.eventId)) return true;
   // A persisted pre-CAS intent is the recovery boundary. No retry may make a
   // second native mutation; an unconfirmed result is reported as such, never
   // inferred from a later Goal status that another actor could have changed.

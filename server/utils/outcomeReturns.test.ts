@@ -425,6 +425,26 @@ describe('outcome returns', () => {
     } finally { await f.cleanup(); }
   });
 
+  test('distinct native Goals created in the same second bind to their own assigners across restart', async () => {
+    const f = await fixture();
+    try {
+      const store = await f.make(null);
+      const first = { computer: 'first-host', thread: 'first_thread' };
+      const second = { computer: 'second-host', thread: 'second_thread' };
+      const idA = '11111111-2222-4333-8444-555555555555';
+      const idB = '11111111-2222-4333-8444-666666666666';
+      await store.watch(thread, 'turn_a', first, 'handoff_a');
+      expect(await store.bindGoalAssigner(thread, 10, 'turn_a', idA)).toMatchObject({ sender: first, goalId: idA });
+      await store.watch(thread, 'turn_b', second, 'handoff_b');
+      expect(await store.bindGoalAssigner(thread, 10, 'turn_b', idB)).toMatchObject({ sender: second, goalId: idB });
+      expect(store.existingGoalAssigner(thread, 10, idA)).toMatchObject({ sender: first });
+      await store.stop();
+      const restarted = await f.make(null);
+      expect(await restarted.bindGoalAssigner(thread, 10, 'turn_b', idA)).toMatchObject({ sender: first });
+      expect(await restarted.bindGoalAssigner(thread, 10, 'turn_a', idB)).toMatchObject({ sender: second });
+    } finally { await f.cleanup(); }
+  });
+
   test('assigner records are bounded, oldest dropped first, and validated on load', async () => {
     const f = await fixture();
     try {

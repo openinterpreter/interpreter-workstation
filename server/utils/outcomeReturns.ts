@@ -74,9 +74,9 @@ export type GoalNotice = {
 /** Why a Goal has no agent to tell: no sender of its thread named a thread,
  * or several did and none is known to have assigned it. */
 export type GoalUnroutedReason = 'no_assigner' | 'ambiguous_assigner';
-/** The immutable recipient of one Goal's notices. A Goal is identified by its
- * thread and its native creation time. */
-export type GoalAssigner = { threadId: string; goalCreatedAt: number } & (
+/** The immutable recipient of one Goal's notices. A native ID disambiguates
+ * Goals created during the same second; older persisted records lack it. */
+export type GoalAssigner = { threadId: string; goalCreatedAt: number; goalId?: string } & (
   { sender: SubmissionSender; source: 'turn' | 'sole_sender' } | { unrouted: GoalUnroutedReason });
 type GoalNoticeReturnBase = {
   kind: 'goal';
@@ -206,10 +206,15 @@ export function goalNoticeId(threadId: string,
     return createHash('sha256').update(JSON.stringify(['goal-bound-revision-v1', threadId, goal.goalId,
       goal.missionRevision, goal.lifecycleRevision, goal.status, goal.reason])).digest('hex');
   }
-  return legacyGoalNoticeId(threadId, goal);
+  const transient = goal.reason === CAPACITY_RETRY_PENDING ? `:${CAPACITY_RETRY_PENDING}` :
+    goal.inputId ? `:${goal.reason}:${goal.inputId}` : '';
+  const identity = goal.goalId ? `:${goal.goalId}` : '';
+  return createHash('sha256').update(`goal:${threadId}:${goal.createdAt}:${goal.status}:${goal.updatedAt}${transient}${identity}`)
+    .digest('hex');
 }
 
-/** Read-only compatibility for bounded notices persisted with per-input IDs. */
+/** Read-only compatibility for notices persisted before native Goal IDs and
+ * bounded-revision recipient IDs were incorporated into delivery IDs. */
 function legacyGoalNoticeId(threadId: string,
   goal: Pick<GoalNotice, 'status' | 'createdAt' | 'updatedAt' | 'inputId'> & { reason?: GoalNoticeReason }): string {
   const transient = goal.reason === CAPACITY_RETRY_PENDING ? `:${CAPACITY_RETRY_PENDING}` :
@@ -278,7 +283,8 @@ function validGoalAssigner(value: unknown): value is GoalAssigner {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   if (typeof record.threadId !== 'string' || !Number.isFinite(record.goalCreatedAt)) return false;
-  const keys = Object.keys(record).sort().join();
+  if (record.goalId !== undefined && (typeof record.goalId !== 'string' || !GOAL_ID.test(record.goalId))) return false;
+  const keys = Object.keys(record).filter(key => key !== 'goalId').sort().join();
   if (keys === 'goalCreatedAt,threadId,unrouted') {
     return GOAL_UNROUTED_REASONS.includes(record.unrouted as GoalUnroutedReason);
   }
@@ -419,7 +425,7 @@ function validEntry(value: unknown): value is StoredEntry {
         entry.status !== ('watching' as OutcomeReturnStatus);
     return typeof entry.threadId === 'string' && validGoalNotice(entry.goal) &&
       (entry.id === goalNoticeId(entry.threadId, entry.goal) ||
-        entry.goal.reason === 'resume_bound_reached' &&
+        entry.goal.goalId !== undefined &&
         entry.id === legacyGoalNoticeId(entry.threadId, entry.goal) ||
         entry.sender !== undefined && entry.id === recipientGoalNoticeId(
           goalNoticeId(entry.threadId, entry.goal), entry.sender) ||
@@ -723,9 +729,12 @@ export class OutcomeReturns {
    * of the thread's inputs. A thread with no recorded input gets no record (a
    * local Goal); otherwise the Goal is recorded unrouted rather than guessed.
    */
-  async bindGoalAssigner(threadId: string, goalCreatedAt: number, turnId: string | null): Promise<GoalAssigner | null> {
+  async bindGoalAssigner(threadId: string, goalCreatedAt: number, turnId: string | null,
+    goalId?: string): Promise<GoalAssigner | null> {
     return this.exclusive(async () => {
-      const known = this.assigners.find(item => item.threadId === threadId && item.goalCreatedAt === goalCreatedAt);
+      if (goalId !== undefined && !GOAL_ID.test(goalId)) return null;
+      const known = this.assigners.find(item => item.threadId === threadId && item.goalCreatedAt === goalCreatedAt &&
+        item.goalId === goalId);
       if (known) return structuredClone(known);
       const inputs = this.entries.filter((entry): entry is OutcomeReturn | CreatedTurnReturn =>
         (entry.kind === undefined || entry.kind === 'created_turn') &&
@@ -740,10 +749,11 @@ export class OutcomeReturns {
       };
       const ofTurn = turnId ? threaded(inputs.filter(entry => entry.turnId === turnId)) : [];
       const all = threaded(inputs);
+      const identity = { threadId, goalCreatedAt, ...(goalId && { goalId }) };
       const record: GoalAssigner = ofTurn.length === 1
-        ? { threadId, goalCreatedAt, sender: { ...ofTurn[0]! }, source: 'turn' }
-        : all.length === 1 ? { threadId, goalCreatedAt, sender: { ...all[0]! }, source: 'sole_sender' }
-          : { threadId, goalCreatedAt, unrouted: all.length ? 'ambiguous_assigner' : 'no_assigner' };
+        ? { ...identity, sender: { ...ofTurn[0]! }, source: 'turn' }
+        : all.length === 1 ? { ...identity, sender: { ...all[0]! }, source: 'sole_sender' }
+          : { ...identity, unrouted: all.length ? 'ambiguous_assigner' : 'no_assigner' };
       this.assigners.push(record);
       const dropped = this.assigners.length > GOAL_ASSIGNER_LIMIT ? this.assigners.shift() : undefined;
       try { await this.save(); } catch (error) {
@@ -756,8 +766,9 @@ export class OutcomeReturns {
   }
 
   /** A retrying input cannot establish who originally assigned a Goal. */
-  existingGoalAssigner(threadId: string, goalCreatedAt: number): GoalAssigner | null {
-    const known = this.assigners.find(item => item.threadId === threadId && item.goalCreatedAt === goalCreatedAt);
+  existingGoalAssigner(threadId: string, goalCreatedAt: number, goalId?: string): GoalAssigner | null {
+    const known = this.assigners.find(item => item.threadId === threadId && item.goalCreatedAt === goalCreatedAt &&
+      item.goalId === goalId);
     return known ? structuredClone(known) : null;
   }
 
