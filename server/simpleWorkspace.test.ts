@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { clearConfigCache, getSimpleWorkspaceSetting, reloadConfig, setInterpreterHomeDir } from './configStore';
@@ -59,6 +59,36 @@ describe('Simple workspace', () => {
 
     await reloadConfig();
     expect(await getSimpleWorkspacePath()).toBe(expected);
+  });
+
+  test('first launch selects one dedicated Documents folder when config root equals app home', async () => {
+    process.chdir(temp);
+    process.env.INTERPRETER_HOME = temp;
+    setInterpreterHomeDir(temp);
+    const expected = join(temp, 'Documents', 'Interpreter');
+    expect(await getSimpleWorkspacePath(temp)).toBe(expected);
+    expect(await getSimpleWorkspaceSetting()).toBe(expected);
+    expect(readdirSync(join(temp, 'Documents'))).toEqual(['Interpreter']);
+    expect(existsSync(join(expected, 'AGENTS.md'))).toBe(true);
+    await reloadConfig();
+    expect(await getSimpleWorkspacePath(temp)).toBe(expected);
+    expect(readdirSync(join(temp, 'Documents'))).toEqual(['Interpreter']);
+    expect(() => validateSimpleWorkspacePath(temp)).toThrow('dedicated folder');
+  });
+
+  test('still rejects a workspace nested inside a distinct configuration root', () => {
+    const configChild = join(temp, 'config', 'nested');
+    mkdirSync(configChild, { recursive: true });
+    expect(() => validateSimpleWorkspacePath(configChild)).toThrow('configuration root');
+  });
+
+  test('failed first-run validation does not strand its empty reserved folder', async () => {
+    const documents = join(temp, 'Documents');
+    mkdirSync(documents);
+    process.env.INTERPRETER_HOME = documents;
+    setInterpreterHomeDir(documents);
+    await expect(getSimpleWorkspacePath(temp)).rejects.toThrow('configuration root');
+    expect(readdirSync(documents).filter((name) => name.startsWith('Interpreter'))).toEqual([]);
   });
 
   test('concurrent first-run windows share the one persisted workspace', async () => {
