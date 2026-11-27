@@ -474,6 +474,26 @@ describe('GoalAutoResume', () => {
     expect(h.pending()).toEqual([]);
   });
 
+  test('a late uncertain A resume does not exhaust a replacement B episode', async () => {
+    const replacementId = '00000000-0000-4000-8000-0000000000bb';
+    let nativeId = goalId;
+    let rejectA: ((error: Error) => void) | undefined;
+    const h = harness({ notificationGoalId: () => nativeId,
+      revision: () => ({ goalId: nativeId, status: 'blocked', missionRevision: 1, lifecycleRevision: 8 }),
+      resume: async () => new Promise<void>((_resolve, reject) => { rejectA = reject; }) });
+    await h.failTurn('old', 1_000);
+    await h.advance(30_000);
+    expect(rejectA).toBeDefined();
+    nativeId = replacementId;
+    await h.failTurn('replacement', 1_000);
+    expect(h.auto.state(thread)).toMatchObject({ state: 'scheduled', attempt: 1 });
+    rejectA!(new GoalMutationUnconfirmedError('late transport failure'));
+    await h.settle();
+    expect(h.auto.state(thread)).toMatchObject({ state: 'scheduled', attempt: 1 });
+    expect(h.auto.snapshot()).toMatchObject([{ goalId: replacementId, turnId: 'replacement',
+      phase: 'scheduled' }]);
+  });
+
   test('does not schedule when the Goal is no longer blocked or its revision is unavailable', async () => {
     const h = harness({ revision: () => ({ goalId, status: 'active', missionRevision: 1, lifecycleRevision: 9 }) });
     await h.failTurn('t1', 1_000);

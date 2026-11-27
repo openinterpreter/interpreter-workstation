@@ -525,8 +525,15 @@ export class GoalAutoResume {
     }
     try {
       await this.deps.resume(threadId, expected);
+      if (this.stopped || this.threads.get(threadId) !== entry || entry.generation !== generation) return;
       this.deps.log(`[goal-auto-resume] resumed threadId=${threadId} attempt=${attempt}`);
     } catch (error) {
+      // A native update may replace this episode while the CAS is in flight.
+      // Its late outcome belongs to A and must not exhaust or remove B.
+      if (this.stopped || this.threads.get(threadId) !== entry || entry.generation !== generation) {
+        this.deps.log(`[goal-auto-resume] ignored stale outcome threadId=${threadId} attempt=${attempt}`);
+        return;
+      }
       if (error instanceof GoalRevisionConflictError) {
         // The Goal changed after the block (a person resumed, paused, edited
         // or replaced it). Never override that decision.
