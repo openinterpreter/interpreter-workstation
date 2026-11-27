@@ -720,6 +720,11 @@ describe('outcome returns', () => {
       expect(await store.noticeGoal(thread, { unrouted: 'no_assigner' }, goal)).toBe(true);
       expect(await store.noticeGoal(thread, { sender }, { ...goal, inputId: '2'.repeat(64) })).toBe(true);
       expect(store.list().map(entry => entry.status)).toEqual(['unrouted', 'pending']);
+      const replacement = { ...goal, goalId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' };
+      expect(await store.noticeGoal(thread, { sender }, replacement)).toBe(true);
+      expect(await store.noticeGoal(thread, { unrouted: 'no_assigner' },
+        { ...replacement, inputId: '3'.repeat(64) })).toBe(true);
+      expect(store.list().map(entry => entry.status)).toEqual(['unrouted', 'pending', 'pending', 'unrouted']);
     } finally { await f.cleanup(); }
   });
 

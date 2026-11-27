@@ -225,6 +225,22 @@ function sameBoundRevision(a: GoalNotice, b: GoalNotice): boolean {
     a.lifecycleRevision !== undefined && a.lifecycleRevision === b.lifecycleRevision;
 }
 
+function sameGoalRecipient(entry: GoalNoticeReturn, route: { sender: SubmissionSender } |
+  { unrouted: GoalUnroutedReason }): boolean {
+  if ('sender' in route) return entry.sender?.computer === route.sender.computer &&
+    (entry.sender.thread ?? null) === (route.sender.thread ?? null);
+  return entry.status === 'unrouted' && entry.unrouted === route.unrouted;
+}
+
+function recipientGoalNoticeId(baseId: string, sender: SubmissionSender): string {
+  return createHash('sha256').update(`${baseId}:${JSON.stringify([sender.computer,
+    sender.thread ?? null])}`).digest('hex');
+}
+
+function unroutedBoundNoticeId(baseId: string, reason: GoalUnroutedReason): string {
+  return createHash('sha256').update(JSON.stringify(['goal-bound-unrouted-v1', baseId, reason])).digest('hex');
+}
+
 const GOAL_STATUS_WORDS: Record<GoalNoticeStatus, string> = { active: 'active again', paused: 'paused',
   blocked: 'blocked', usageLimited: 'stopped by a usage limit', budgetLimited: 'stopped by its token budget',
   complete: 'complete' };
@@ -404,7 +420,11 @@ function validEntry(value: unknown): value is StoredEntry {
     return typeof entry.threadId === 'string' && validGoalNotice(entry.goal) &&
       (entry.id === goalNoticeId(entry.threadId, entry.goal) ||
         entry.goal.reason === 'resume_bound_reached' &&
-        entry.id === legacyGoalNoticeId(entry.threadId, entry.goal)) && route &&
+        entry.id === legacyGoalNoticeId(entry.threadId, entry.goal) ||
+        entry.sender !== undefined && entry.id === recipientGoalNoticeId(
+          goalNoticeId(entry.threadId, entry.goal), entry.sender) ||
+        entry.goal.reason === 'resume_bound_reached' && entry.status === 'unrouted' &&
+          entry.id === unroutedBoundNoticeId(goalNoticeId(entry.threadId, entry.goal), entry.unrouted)) && route &&
       Number.isInteger(entry.attempts) && entry.attempts >= 0 &&
       (entry.nextAttemptAt === undefined || typeof entry.nextAttemptAt === 'string') &&
       typeof entry.createdAt === 'string' && typeof entry.updatedAt === 'string';
@@ -788,13 +808,17 @@ export class OutcomeReturns {
       throw new Error('Invalid Goal notice');
     }
     // One change told to several recipients needs one entry, and one ID, per recipient.
-    const id = options.perRecipient && checked
-      ? createHash('sha256').update(`${goalNoticeId(threadId, goal)}:${JSON.stringify([checked.computer,
-        checked.thread ?? null])}`).digest('hex')
-      : goalNoticeId(threadId, goal);
+    const boundRevision = goal.reason === 'resume_bound_reached' && goal.goalId !== undefined &&
+      Number.isInteger(goal.missionRevision) && Number.isInteger(goal.lifecycleRevision);
+    const id = checked && (options.perRecipient || boundRevision)
+      ? recipientGoalNoticeId(goalNoticeId(threadId, goal), checked)
+      : boundRevision && 'unrouted' in route
+        ? unroutedBoundNoticeId(goalNoticeId(threadId, goal), route.unrouted)
+        : goalNoticeId(threadId, goal);
     return this.exclusive(async () => {
       if (this.entries.some(entry => entry.id === id ||
-        entry.kind === 'goal' && entry.threadId === threadId && sameBoundRevision(entry.goal, goal))) return true;
+        entry.kind === 'goal' && entry.threadId === threadId && sameBoundRevision(entry.goal, goal) &&
+        sameGoalRecipient(entry, checked ? { sender: checked } : route))) return true;
       if (!this.makeRoom()) return false;
       const at = new Date(this.now()).toISOString();
       this.entries.push(checked
