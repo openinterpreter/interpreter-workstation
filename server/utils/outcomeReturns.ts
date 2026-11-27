@@ -733,6 +733,20 @@ export class OutcomeReturns {
     return threads;
   }
 
+  /** The thread's most recent distinct senders that named a thread, newest
+   * first, at most `limit`. Used only when a Goal's assigner is ambiguous. */
+  recentThreadedSenders(threadId: string, limit: number): SubmissionSender[] {
+    const senders = new Map<string, SubmissionSender>();
+    for (let index = this.entries.length - 1; index >= 0 && senders.size < limit; index--) {
+      const entry = this.entries[index]!;
+      if ((entry.kind !== undefined && entry.kind !== 'created_turn') || entry.threadId !== threadId ||
+          !entry.sender.thread) continue;
+      const key = JSON.stringify([entry.sender.computer, entry.sender.thread]);
+      if (!senders.has(key)) senders.set(key, { ...entry.sender });
+    }
+    return [...senders.values()];
+  }
+
   /** The last Goal notice recorded for a thread, delivered or not. */
   lastGoalNotice(threadId: string): GoalNotice | null {
     for (let index = this.entries.length - 1; index >= 0; index--) {
@@ -744,14 +758,19 @@ export class OutcomeReturns {
 
   /** Record a Goal notice: pending delivery to its assigner, or unrouted
    * (kept for visibility, never delivered). Idempotent on its ID; false when
-   * the store is full of undelivered entries. */
+   * the store is full of undelivered entries. `perRecipient` gives each
+   * recipient of the same change its own entry. */
   async noticeGoal(threadId: string, route: { sender: SubmissionSender } | { unrouted: GoalUnroutedReason },
-    goal: GoalNotice): Promise<boolean> {
+    goal: GoalNotice, options: { perRecipient?: boolean } = {}): Promise<boolean> {
     const checked = 'sender' in route ? parseSubmissionSender(route.sender) : null;
     if (('sender' in route ? !checked : !GOAL_UNROUTED_REASONS.includes(route.unrouted)) || !validGoalNotice(goal)) {
       throw new Error('Invalid Goal notice');
     }
-    const id = goalNoticeId(threadId, goal);
+    // One change told to several recipients needs one entry, and one ID, per recipient.
+    const id = options.perRecipient && checked
+      ? createHash('sha256').update(`${goalNoticeId(threadId, goal)}:${JSON.stringify([checked.computer,
+        checked.thread ?? null])}`).digest('hex')
+      : goalNoticeId(threadId, goal);
     return this.exclusive(async () => {
       if (this.entries.some(entry => entry.id === id)) return true;
       if (!this.makeRoom()) return false;
