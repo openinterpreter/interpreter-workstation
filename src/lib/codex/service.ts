@@ -295,6 +295,8 @@ type ResumeThreadOptions = {
    * applied only when the exact thread is verified not loaded; a loaded thread
    * keeps its live shell environment. */
   callerBoundShellPolicy?: boolean;
+  /** A verified unloaded caller carrier must be installed, not silently omitted. */
+  requireUnloadedShellPolicy?: boolean;
 };
 
 /** Whether a live thread owns an active Goal after it was resumed.
@@ -1085,6 +1087,9 @@ export class CodexService {
     // Loading a saved thread fixes its shell environment for every later turn,
     // including the runtime's own Goal continuations. Give it the existing
     // caller's policy when it is not loaded; never mint a carrier here.
+    if (options.requireUnloadedShellPolicy && isJsonObject(runConfig.shell_environment_policy)) {
+      return this.resumeExistingInputThread({ ...existing, unloadedShellPolicy: true });
+    }
     if (options.callerBoundShellPolicy && !options.coldShellPolicy &&
         isJsonObject(runConfig.shell_environment_policy)) {
       return this.resumeExistingThreadForInput(existing, true);
