@@ -153,7 +153,7 @@ export class GoalNotices {
     if (!goal) return;
     // Native IDs come from the event's own Goal, not a later read of the
     // thread, which may already refer to a replacement in the same second.
-    if (params && Object.hasOwn(params, 'goalId')) {
+    if (params && Object.prototype.hasOwnProperty.call(params, 'goalId')) {
       if (typeof params.goalId !== 'string' ||
           !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(params.goalId)) return;
       goal.goalId = params.goalId;
@@ -307,7 +307,8 @@ export class GoalNotices {
     from?: GoalNoticeStatus }, turnId: string | null, current: () => boolean = () => true,
     requireIdentity = false): Promise<void> {
     if (requireIdentity && !goal.goalId) {
-      const expected = this.deps.autoResumeState(threadId)?.expected;
+      const autoResume = this.deps.autoResumeState(threadId);
+      const expected = autoResume?.state === 'exhausted' ? autoResume.expected : undefined;
       if (!expected) return;
       try {
         const read = await this.deps.readRevision(threadId);
