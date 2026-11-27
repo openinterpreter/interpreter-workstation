@@ -60,7 +60,10 @@ export async function resumeBlockedGoalOnInput(admission: GoalInputAdmission,
   // it is only needed before mutating a blocked Goal, never for delivery.
   let custody: Custody;
   try { custody = await deps.custody(admission.threadId); }
-  catch { return true; }
+  // The admission is durable, but an unavailable custody read cannot prove
+  // whether its turn is live. Keep this input's hand-over pending for a later
+  // pass instead of silently losing its one opportunity to resume the Goal.
+  catch { return false; }
   if (custody.lastTurnId !== admission.turnId || custody.lastTurnStatus !== 'inProgress' ||
       custody.status !== 'active') return true;
   const intent = { goalId: revision.goalId, goalCreatedAt: goal.createdAt,
