@@ -31,7 +31,9 @@ const GOAL_ID = '11111111-2222-4333-8444-555555555555';
 type Timer = { at: number; callback: () => void; cleared: boolean };
 type Recorded = { threadId: string; sender?: SubmissionSender; unrouted?: GoalUnroutedReason; notice: GoalNotice };
 
-function harness(options: { sender?: SubmissionSender | null; settleMs?: number; store?: OutcomeReturns } = {}) {
+function harness(options: { sender?: SubmissionSender | null; settleMs?: number; store?: OutcomeReturns;
+  refreshTerminal?: (threadId: string, autoResume: Map<string, GoalAutoResumeState>) => Promise<void>;
+  revisionRead?: (revision: ThreadGoalRevision | null) => Promise<ThreadGoalRevision | null> } = {}) {
   let now = Date.parse('2026-11-16T00:00:00.000Z');
   let updatedAt = CREATED;
   const timers: Timer[] = [];
@@ -44,7 +46,7 @@ function harness(options: { sender?: SubmissionSender | null; settleMs?: number;
   const senders = new Map<string, SubmissionSender>();
   /** Assigner overrides; otherwise a thread's sender is its bound assigner. */
   const assigners = new Map<string, GoalAssigner>();
-  const binds: Array<{ threadId: string; goalCreatedAt: number; turnId: string | null }> = [];
+  const binds: Array<{ threadId: string; goalCreatedAt: number; turnId: string | null; goalId?: string }> = [];
   let revision: ThreadGoalRevision | null = null;
   if (options.sender !== null) senders.set(thread, options.sender ?? sender);
   const store = options.store;
@@ -56,9 +58,9 @@ function harness(options: { sender?: SubmissionSender | null; settleMs?: number;
       return timer;
     },
     clearTimer: handle => { (handle as Timer).cleared = true; },
-    bindAssigner: async (threadId, goalCreatedAt, turnId) => {
-      binds.push({ threadId, goalCreatedAt, turnId });
-      if (store) return store.bindGoalAssigner(threadId, goalCreatedAt, turnId);
+    bindAssigner: async (threadId, goalCreatedAt, turnId, goalId) => {
+      binds.push({ threadId, goalCreatedAt, turnId, ...(goalId && { goalId }) });
+      if (store) return store.bindGoalAssigner(threadId, goalCreatedAt, turnId, goalId);
       const known = assigners.get(threadId);
       if (known) return known;
       const to = senders.get(threadId);
@@ -73,8 +75,12 @@ function harness(options: { sender?: SubmissionSender | null; settleMs?: number;
     },
     ...(store && { recentSenders: async (threadId: string, limit: number) =>
       store.recentThreadedSenders(threadId, limit) }),
-    readRevision: async () => revision && { createdAt: CREATED, revision },
+    readRevision: async () => {
+      const read = options.revisionRead ? await options.revisionRead(revision) : revision;
+      return read && { createdAt: CREATED, revision: read };
+    },
     autoResumeState: threadId => autoResume.get(threadId) ?? null,
+    refreshAutoResumeIdentity: async threadId => { await options.refreshTerminal?.(threadId, autoResume); },
     recentSenderThreads: async limit => store ? store.recentSenderThreads(limit) : [...senders.keys()].slice(0, limit),
     readGoal: async threadId => {
       reads.push(threadId);
@@ -98,9 +104,9 @@ function harness(options: { sender?: SubmissionSender | null; settleMs?: number;
       await flush();
     },
     /** A native Goal update; objective text is present, as on the wire. */
-    goal: (status: string, turnId: string | null = null, threadId = thread) => {
+    goal: (status: string, turnId: string | null = null, threadId = thread, goalId?: string) => {
       updatedAt += 1;
-      send('thread/goal/updated', { threadId, turnId,
+      send('thread/goal/updated', { threadId, turnId, ...(goalId && { goalId }),
         goal: { threadId, objective: OBJECTIVE, status, tokenBudget: null, tokensUsed: 10, timeUsedSeconds: 5,
           createdAt: CREATED, updatedAt } });
     },
@@ -238,19 +244,96 @@ describe('goal notices', () => {
     await h.advance(30_000);
     expect(h.recorded).toHaveLength(1);
     // The resume gives up; the Goal's status and times are unchanged.
-    h.autoResume.set(thread, { state: 'exhausted', reason: 'model at capacity since …' });
+    h.setRevision({ goalId: GOAL_ID, status: 'blocked', missionRevision: 2, lifecycleRevision: 5 });
+    h.autoResume.set(thread, { state: 'exhausted', reason: 'model at capacity since …',
+      expected: { goalId: GOAL_ID, status: 'blocked', missionRevision: 2, lifecycleRevision: 5 } });
     await h.advance(150_000);
     expect(h.recorded.map(item => item.notice)).toEqual([
       { status: 'blocked', previousStatus: 'active', reason: 'capacity_retry_pending', createdAt: CREATED,
         updatedAt: blockedAt },
       { status: 'blocked', previousStatus: 'active', reason: 'model_capacity_exhausted', createdAt: CREATED,
-        updatedAt: blockedAt },
+        updatedAt: blockedAt, goalId: GOAL_ID, missionRevision: 2, lifecycleRevision: 5 },
     ]);
     const [transient, final] = h.recorded.map(item => goalNoticeId(thread, item.notice));
     expect(transient).not.toBe(final);
     // The final outcome is never reported twice.
     await h.advance(GOAL_NOTICE_SETTLE_MS * 4);
     expect(h.recorded).toHaveLength(2);
+  });
+
+  test('an ambiguous capacity CAS sends a fixed unconfirmed owner notice, not exhaustion', async () => {
+    const h = harness();
+    h.setRevision({ goalId: GOAL_ID, status: 'blocked', missionRevision: 2, lifecycleRevision: 5 });
+    h.goal('active');
+    h.failedTurn('turn_1');
+    h.goal('blocked', 'turn_1', thread, GOAL_ID);
+    h.autoResume.set(thread, { state: 'exhausted', outcome: 'unconfirmed',
+      reason: 'model capacity resume outcome unconfirmed',
+      expected: { goalId: GOAL_ID, status: 'blocked', missionRevision: 2, lifecycleRevision: 5 } });
+    await h.advance(GOAL_NOTICE_SETTLE_MS);
+    expect(h.recorded[0]?.notice.reason).toBe('resume_result_unconfirmed');
+    expect(h.recorded[0]?.notice.goalId).toBe(GOAL_ID);
+  });
+
+  test('a terminal identity read failure retries after restart and then sends the exact-Goal notice', async () => {
+    let reads = 0;
+    const expected = { goalId: GOAL_ID, status: 'blocked' as const, missionRevision: 2, lifecycleRevision: 5 };
+    const h = harness({ refreshTerminal: async (threadId, states) => {
+      reads += 1;
+      if (reads >= 2) states.set(threadId, { state: 'exhausted', reason: 'capacity bound', expected });
+    } });
+    h.setRevision(expected);
+    h.goals.set(thread, { status: 'blocked', createdAt: CREATED, updatedAt: CREATED + 9 });
+    h.autoResume.set(thread, { state: 'exhausted', reason: 'capacity bound', expected: undefined });
+    await h.notices.reconcile();
+    expect(h.recorded).toEqual([]);
+    await h.advance(5 * 60_000);
+    expect(reads).toBeGreaterThanOrEqual(2);
+    expect(h.recorded.map(item => item.notice)).toEqual([{
+      status: 'blocked', reason: 'model_capacity_exhausted', createdAt: CREATED,
+      updatedAt: CREATED + 9, goalId: GOAL_ID, missionRevision: 2, lifecycleRevision: 5,
+    }]);
+  });
+
+  test('a live replacement during startup identity refresh cannot be overwritten by the stale block', async () => {
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const h = harness({ refreshTerminal: async () => pending });
+    h.goals.set(thread, { status: 'blocked', createdAt: CREATED, updatedAt: CREATED + 1 });
+    h.autoResume.set(thread, { state: 'exhausted', reason: 'capacity bound', expected: undefined });
+    const startup = h.notices.reconcile();
+    await h.flush();
+    h.autoResume.delete(thread);
+    const replacementId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    h.setRevision({ goalId: replacementId, status: 'blocked', missionRevision: 1, lifecycleRevision: 1 });
+    h.goal('blocked', 'replacement-turn', thread, replacementId);
+    release();
+    await startup;
+    await h.advance(GOAL_NOTICE_SETTLE_MS);
+    expect(h.recorded.map(item => item.notice.goalId)).toEqual([replacementId]);
+  });
+
+  test('a live replacement during startup native revision failure keeps its own pending notice', async () => {
+    let rejectRead!: (error: Error) => void;
+    const pending = new Promise<ThreadGoalRevision | null>((_resolve, reject) => { rejectRead = reject; });
+    let first = true;
+    const h = harness({ revisionRead: async revision => {
+      if (first) { first = false; return pending; }
+      return revision;
+    } });
+    h.goals.set(thread, { status: 'blocked', createdAt: CREATED, updatedAt: CREATED + 1 });
+    h.autoResume.set(thread, { state: 'exhausted', reason: 'capacity bound',
+      expected: { goalId: GOAL_ID, status: 'blocked', missionRevision: 1, lifecycleRevision: 1 } });
+    const startup = h.notices.reconcile();
+    await h.flush();
+    h.autoResume.delete(thread);
+    const replacementId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    h.setRevision({ goalId: replacementId, status: 'blocked', missionRevision: 1, lifecycleRevision: 1 });
+    h.goal('blocked', 'replacement-turn', thread, replacementId);
+    rejectRead(Error('temporary native read failure'));
+    await startup;
+    await h.advance(GOAL_NOTICE_SETTLE_MS);
+    expect(h.recorded.map(item => item.notice.goalId)).toEqual([replacementId]);
   });
 
   test('a scheduled resume that never reverses the block is reported after it settles', async () => {
@@ -312,6 +395,22 @@ describe('goal notices', () => {
     expect(h.recorded).toHaveLength(3);
   });
 
+  test('restart terminal-capacity notice refuses a changed native Goal revision', async () => {
+    const h = harness();
+    const expected = { goalId: GOAL_ID, status: 'blocked' as const, missionRevision: 2, lifecycleRevision: 5 };
+    h.goals.set(thread, { status: 'blocked', createdAt: CREATED, updatedAt: CREATED + 9 });
+    h.autoResume.set(thread, { state: 'exhausted', reason: 'capacity retry bound reached', expected });
+    h.setRevision({ ...expected, lifecycleRevision: 6 });
+    await h.notices.reconcile();
+    expect(h.recorded).toEqual([]);
+    h.setRevision(expected);
+    await h.notices.reconcile();
+    expect(h.recorded.map(item => item.notice)).toEqual([{
+      status: 'blocked', reason: 'model_capacity_exhausted', createdAt: CREATED, updatedAt: CREATED + 9,
+      goalId: GOAL_ID, missionRevision: 2, lifecycleRevision: 5,
+    }]);
+  });
+
   test('reconciliation logs each thread whose Goal it cannot read, without the read error', async () => {
     const h = harness();
     const second = '00000000-0000-4000-8000-000000000002';
@@ -342,6 +441,12 @@ describe('goal notices', () => {
 
   test('the delivery ID is stable for one change and differs between changes', () => {
     const goal = { status: 'blocked' as const, createdAt: CREATED, updatedAt: CREATED + 5 };
+    expect(goalNoticeId(thread, { ...goal, goalId: GOAL_ID })).not.toBe(goalNoticeId(thread,
+      { ...goal, goalId: '00000000-0000-4000-8000-0000000000bb' }));
+    expect(goalNoticeDue({ ...goal, goalId: GOAL_ID },
+      { ...goal, reason: 'unknown', goalId: '00000000-0000-4000-8000-0000000000bb' })).toBe(true);
+    expect(goalNoticeDue({ status: 'active', createdAt: CREATED, goalId: GOAL_ID },
+      { ...goal, reason: 'unknown', goalId: '00000000-0000-4000-8000-0000000000bb' })).toBe(false);
     expect(goalNoticeId(thread, goal)).toBe(goalNoticeId(thread, { ...goal }));
     expect(goalNoticeId(thread, goal)).toMatch(/^[0-9a-f]{64}$/);
     expect(new Set([goal, { ...goal, status: 'paused' as const }, { ...goal, updatedAt: CREATED + 6 },
@@ -366,7 +471,7 @@ describe('goal notices', () => {
     const h = harness();
     h.setRevision({ goalId: GOAL_ID, status: 'blocked', missionRevision: 2, lifecycleRevision: 5 });
     h.goal('active');
-    h.goal('blocked');
+    h.goal('blocked', null, thread, GOAL_ID);
     await h.advance(GOAL_NOTICE_SETTLE_MS);
     const notice = h.recorded[0]!.notice;
     expect(notice).toEqual({ status: 'blocked', previousStatus: 'active', reason: 'changed_outside_turn',
@@ -386,6 +491,20 @@ describe('goal notices', () => {
     h.goal('active', 'turn_2');
     await h.flush();
     expect(h.binds).toEqual([{ threadId: thread, goalCreatedAt: CREATED, turnId: 'turn_1' }]);
+  });
+
+  test('same-second replacement uses its own event identity, not the old notice or a later Goal read', async () => {
+    const h = harness();
+    const replacement = '11111111-2222-4333-8444-666666666666';
+    h.setRevision({ goalId: replacement, status: 'blocked', missionRevision: 0, lifecycleRevision: 0 });
+    h.goal('blocked', 'turn_a', thread, GOAL_ID);
+    await h.advance(GOAL_NOTICE_SETTLE_MS);
+    expect(h.recorded[0]?.notice).not.toHaveProperty('goalId', replacement);
+    h.goal('blocked', 'turn_b', thread, replacement);
+    await h.advance(GOAL_NOTICE_SETTLE_MS);
+    expect(h.recorded.at(-1)?.notice.goalId).toBe(replacement);
+    expect(h.binds.some(item => item.goalId === GOAL_ID && item.turnId === 'turn_a')).toBe(true);
+    expect(h.binds.some(item => item.goalId === replacement && item.turnId === 'turn_b')).toBe(true);
   });
 });
 
@@ -436,9 +555,14 @@ describe('goal notices with the outcome-return store', () => {
           await store.watch(thread, `turn_${index}`, from, `handoff_${index}`);
         }
         h.goal('active');
-        for (const status of ['blocked', 'active', 'blocked']) {
+        for (const [index, status] of ['blocked', 'active', 'blocked'].entries()) {
           h.goal(status);
           await h.advance(GOAL_NOTICE_SETTLE_MS);
+          // A durable store write is asynchronous to the timer; wait for its
+          // receipt before advancing this synthetic clock to the next state.
+          for (let tries = 0; tries < 200 && goalEntries(store).length < index + 1; tries++) {
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
           h.goal(status);
           await h.advance(GOAL_NOTICE_SETTLE_MS);
         }

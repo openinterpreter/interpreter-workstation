@@ -45,6 +45,9 @@ describe('isTransientCapacityError', () => {
     const negatives: unknown[] = [
       { message: "You've hit your usage limit. Try again at 5 PM.", codexErrorInfo: 'usageLimitExceeded' },
       { message: 'Selected model is at capacity.', codexErrorInfo: 'usageLimitExceeded' },
+      { message: "You've hit your usage limit. Try again at 5 PM.", codexErrorInfo: 'serverOverloaded' },
+      { message: 'Quota exceeded while provider is overloaded.', codexErrorInfo: 'serverOverloaded' },
+      { message: 'Insufficient credits; service temporarily unavailable.', codexErrorInfo: 'serverOverloaded' },
       { message: 'Quota exceeded. Check your plan and billing details.', codexErrorInfo: null },
       { message: 'Rate limit reached', codexErrorInfo: 'rateLimitExceeded' },
       { message: '401 Unauthorized', codexErrorInfo: 'unauthorized' },
@@ -75,6 +78,8 @@ describe('goalAutoResumeDelayMs', () => {
 type Timer = { at: number; callback: () => void; cleared: boolean };
 
 function harness(options: { revision?: () => ThreadGoalRevision | null;
+  notificationGoalId?: string | null | (() => string | null);
+  verifyFailedTurn?: () => boolean;
   resume?: (expected: ThreadGoalRevision) => Promise<void> } = {}) {
   let now = Date.parse('2026-11-16T00:00:00.000Z');
   let lifecycle = 7;
@@ -91,6 +96,7 @@ function harness(options: { revision?: () => ThreadGoalRevision | null;
     },
     clearTimer: handle => { (handle as Timer).cleared = true; },
     readRevision: async () => (options.revision ?? blocked)(),
+    verifyFailedTurn: async () => (options.verifyFailedTurn ?? (() => true))(),
     resume: async (_threadId, expected) => {
       resumed.push(expected);
       if (options.resume) await options.resume(expected);
@@ -121,8 +127,11 @@ function harness(options: { revision?: () => ThreadGoalRevision | null;
       lifecycle += 1;
       const completed = () => send('turn/completed', { threadId: thread,
         turn: { id: turnId, status: 'failed', error, durationMs, items: [] } });
+      const notifiedId = typeof options.notificationGoalId === 'function'
+        ? options.notificationGoalId() : options.notificationGoalId;
       const goal = () => send('thread/goal/updated', { threadId: thread, turnId,
-        goal: { threadId: thread, objective: 'o', status: 'blocked' } });
+        ...(notifiedId === null ? {} : { goalId: notifiedId ?? goalId }),
+        goal: { threadId: thread, objective: 'o', status: 'blocked', createdAt: 1_700_000_000 } });
       if (order === 'turn-first') { completed(); goal(); } else { goal(); completed(); }
       await settle();
     },
@@ -132,6 +141,242 @@ function harness(options: { revision?: () => ThreadGoalRevision | null;
 }
 
 describe('GoalAutoResume', () => {
+  test('a new native Goal ID starts its own episode after A exhausted, never inheriting A bounds', async () => {
+    const replacementId = '00000000-0000-4000-8000-0000000000bb';
+    const original = harness();
+    await original.failTurn('old', 1_000);
+    const exhaustedA = original.auto.snapshot().map(item => ({ ...item, phase: 'exhausted' as const,
+      episodeStartedAt: item.episodeStartedAt - GOAL_AUTO_RESUME_WINDOW_MS,
+      attempts: 9, retryAt: item.retryAt - GOAL_AUTO_RESUME_WINDOW_MS }));
+    original.auto.stop();
+    let nativeId = goalId;
+    const h = harness({ notificationGoalId: () => nativeId,
+      revision: () => ({ goalId: nativeId, status: 'blocked', missionRevision: 1, lifecycleRevision: 8 }) });
+    await h.auto.restore(exhaustedA);
+    nativeId = replacementId;
+    await h.failTurn('replacement', 1_000);
+    expect(h.auto.state(thread)).toMatchObject({ state: 'scheduled', attempt: 1 });
+    expect(h.auto.snapshot()).toMatchObject([{ turnId: 'replacement', goalId: replacementId,
+      attempts: 0, phase: 'scheduled' }]);
+    await h.advance(30_000);
+    expect(h.resumed.map(item => item.goalId)).toEqual([replacementId]);
+  });
+
+  test('an unidentified replacement block does not reset A or issue a CAS for B', async () => {
+    const original = harness();
+    await original.failTurn('old', 1_000);
+    const saved = original.auto.snapshot();
+    original.auto.stop();
+    const h = harness({ notificationGoalId: null,
+      revision: () => ({ goalId: '00000000-0000-4000-8000-0000000000bb',
+        status: 'blocked', missionRevision: 1, lifecycleRevision: 8 }) });
+    await h.auto.restore(saved);
+    await h.failTurn('replacement', 1_000);
+    await h.advance(31_000);
+    expect(h.resumed).toEqual([]);
+    expect(h.auto.snapshot()).toMatchObject([{ turnId: 'replacement', phase: 'preflight',
+      observedGoalId: undefined }]);
+  });
+
+  test('a same-second replacement Goal cannot acquire the failed turn CAS', async () => {
+    const h = harness({ notificationGoalId: null, revision: () => ({ goalId: '00000000-0000-4000-8000-0000000000bb',
+      status: 'blocked', missionRevision: 1, lifecycleRevision: 8 }) });
+    // The native block notification contains the old Goal's seconds timestamp
+    // but no Goal ID. The immediate read can already observe its replacement.
+    await h.failTurn('t1', 1_000);
+    await h.advance(31_000);
+    expect(h.resumed).toEqual([]);
+  });
+
+  test('the native block Goal ID must match the subsequent CAS read', async () => {
+    const h = harness({ revision: () => ({ goalId: '00000000-0000-4000-8000-0000000000bb',
+      status: 'blocked', missionRevision: 1, lifecycleRevision: 8 }) });
+    await h.failTurn('t1', 1_000);
+    await h.advance(31_000);
+    expect(h.resumed).toEqual([]);
+    expect(h.auto.snapshot()).toMatchObject([{ turnId: 't1', phase: 'preflight' }]);
+  });
+
+  test('a failed pre-CAS native read with no event Goal ID never resumes an unbound Goal', async () => {
+    const h = harness({ notificationGoalId: null,
+      revision: () => { throw Error('transient Goal reader unavailable'); } });
+    await h.failTurn('t1', 1_000);
+    const saved = h.auto.snapshot();
+    expect(saved).toMatchObject([{ threadId: thread, turnId: 't1', phase: 'preflight',
+      goalCreatedAt: 1_700_000_000 }]);
+    expect(h.resumed).toEqual([]);
+    h.auto.stop();
+    // Native notifications carry no goalId, and createdAt is seconds
+    // precision: a replacement Goal in the same second must not be resumed.
+    const replacement = harness({ revision: () => ({ goalId: '00000000-0000-4000-8000-0000000000bb',
+      status: 'blocked', missionRevision: 1, lifecycleRevision: 1 }) });
+    await replacement.auto.restore(saved);
+    await replacement.advance(2 * GOAL_AUTO_RESUME_WINDOW_MS);
+    expect(replacement.resumed).toEqual([]);
+    expect(replacement.auto.snapshot()).toMatchObject([{ turnId: 't1', phase: 'preflight',
+      goalId: undefined, expected: undefined }]);
+  });
+
+  test('a failed pre-CAS read with exact event ID survives restart and retries only the original Goal', async () => {
+    const h = harness({ revision: () => { throw Error('transient Goal reader unavailable'); } });
+    await h.failTurn('t1', 1_000);
+    const saved = h.auto.snapshot();
+    expect(saved).toMatchObject([{ phase: 'preflight', observedGoalId: goalId, turnId: 't1' }]);
+    h.auto.stop();
+    const recovered = harness();
+    await recovered.auto.restore(saved);
+    expect(recovered.auto.state(thread)).toMatchObject({ state: 'scheduled', attempt: 1 });
+    await recovered.advance(31_000);
+    expect(recovered.resumed).toHaveLength(1);
+    const replaced = harness({ revision: () => ({ goalId: '00000000-0000-4000-8000-0000000000bb',
+      status: 'blocked', missionRevision: 1, lifecycleRevision: 8 }) });
+    await replaced.auto.restore(saved);
+    await replaced.advance(2 * GOAL_AUTO_RESUME_WINDOW_MS);
+    expect(replaced.resumed).toEqual([]);
+  });
+
+  test('a transient live preflight read retries within the window, but never after a changed turn', async () => {
+    let available = false;
+    const h = harness({ revision: () => {
+      if (!available) throw Error('temporary reader outage');
+      return { goalId, status: 'blocked', missionRevision: 1, lifecycleRevision: 8 };
+    } });
+    await h.failTurn('t1', 1_000);
+    expect(h.auto.snapshot()).toMatchObject([{ phase: 'preflight', observedGoalId: goalId,
+      preflightChecks: 1 }]);
+    available = true;
+    await h.advance(30_000);
+    await h.advance(0);
+    expect(h.resumed).toHaveLength(1);
+
+    let changedReadable = false;
+    const changed = harness({ revision: () => {
+      if (!changedReadable) throw Error('temporary reader outage');
+      return { goalId, status: 'blocked', missionRevision: 1, lifecycleRevision: 8 };
+    }, verifyFailedTurn: () => false });
+    await changed.failTurn('t1', 1_000);
+    changedReadable = true;
+    await changed.advance(2 * GOAL_AUTO_RESUME_WINDOW_MS);
+    expect(changed.resumed).toEqual([]);
+  });
+
+  test('restart preflight read failure stays durable and rechecks before the one CAS', async () => {
+    const source = harness({ revision: () => { throw Error('first outage'); } });
+    await source.failTurn('t1', 1_000);
+    const saved = source.auto.snapshot();
+    source.auto.stop();
+    let available = false;
+    const recovered = harness({ revision: () => {
+      if (!available) throw Error('second outage');
+      return { goalId, status: 'blocked', missionRevision: 1, lifecycleRevision: 8 };
+    } });
+    await recovered.auto.restore(saved);
+    expect(recovered.auto.snapshot()).toMatchObject([{ phase: 'preflight', observedGoalId: goalId,
+      preflightChecks: 2 }]);
+    expect(recovered.resumed).toEqual([]);
+    available = true;
+    await recovered.advance(60_000);
+    await recovered.advance(0);
+    expect(recovered.resumed).toHaveLength(1);
+    await recovered.advance(GOAL_AUTO_RESUME_WINDOW_MS);
+    expect(recovered.resumed).toHaveLength(1);
+  });
+
+  test('an exact-ID preflight never issues a late CAS after its bounded window', async () => {
+    const source = harness({ revision: () => { throw Error('reader outage'); } });
+    await source.failTurn('t1', 1_000);
+    const saved = source.auto.snapshot().map(item => ({ ...item,
+      episodeStartedAt: item.episodeStartedAt - GOAL_AUTO_RESUME_WINDOW_MS - 1 }));
+    const recovered = harness();
+    await recovered.auto.restore(saved);
+    await recovered.advance(60_000);
+    expect(recovered.resumed).toEqual([]);
+  });
+
+  test('a persisted scheduled episode survives restart without extending its deadline', async () => {
+    const h = harness();
+    await h.failTurn('t1', 1_000);
+    const saved = h.auto.snapshot();
+    expect(saved).toHaveLength(1);
+    h.auto.stop();
+    const recovered = harness({ revision: () => saved[0]!.expected });
+    await recovered.auto.restore(saved);
+    expect(recovered.auto.state(thread)).toMatchObject({ state: 'scheduled', attempt: 1 });
+    await recovered.advance(31_000);
+    expect(recovered.resumed).toHaveLength(1);
+  });
+
+  test('a persisted pre-CAS unknown is never retried after restart', async () => {
+    const h = harness({ resume: async () => { throw new GoalMutationUnconfirmedError('deadline'); } });
+    await h.failTurn('t1', 1_000);
+    await h.advance(30_000);
+    const saved = h.auto.snapshot();
+    const recovered = harness();
+    await recovered.auto.restore(saved);
+    await recovered.advance(2 * GOAL_AUTO_RESUME_WINDOW_MS);
+    expect(recovered.resumed).toHaveLength(0);
+    expect(recovered.auto.state(thread)).toMatchObject({ state: 'exhausted' });
+  });
+
+  test('a persisted episode never resumes when revision or failed turn changed', async () => {
+    const h = harness();
+    await h.failTurn('t1', 1_000);
+    const saved = h.auto.snapshot();
+    for (const changed of [
+      { goalId, status: 'blocked' as const, missionRevision: 1, lifecycleRevision: 99 },
+      { goalId, status: 'active' as const, missionRevision: 1, lifecycleRevision: 8 },
+    ]) {
+      const recovered = harness({ revision: () => changed });
+      await recovered.auto.restore(saved);
+      await recovered.advance(60_000);
+      expect(recovered.resumed).toEqual([]);
+      expect(recovered.auto.state(thread)).toMatchObject({ state: 'exhausted' });
+    }
+  });
+
+  test('an exhausted terminal episode binds a current native Goal only after its failed turn is verified', async () => {
+    const terminal = [{ threadId: thread, turnId: 'latest-failure', attempts: 9, goalId, missionRevision: 1,
+      episodeStartedAt: Date.parse('2026-11-16T00:00:00Z'),
+      retryAt: Date.parse('2026-11-16T01:00:00Z'), phase: 'exhausted' as const }];
+    const valid = harness();
+    await valid.auto.restore(terminal);
+    expect(valid.auto.state(thread)).toMatchObject({ state: 'exhausted',
+      expected: { goalId, status: 'blocked', missionRevision: 1, lifecycleRevision: 7 } });
+    const changed = harness({ verifyFailedTurn: () => false });
+    await changed.auto.restore(terminal);
+    expect(changed.auto.state(thread)).toMatchObject({ state: 'exhausted' });
+    const changedState = changed.auto.state(thread);
+    expect(changedState?.state === 'exhausted' ? changedState.expected : null).toBeUndefined();
+    expect(changed.resumed).toEqual([]);
+    const replaced = harness({ revision: () => ({ goalId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      status: 'blocked', missionRevision: 1, lifecycleRevision: 7 }) });
+    await replaced.auto.restore(terminal);
+    const replacedState = replaced.auto.state(thread);
+    expect(replacedState?.state === 'exhausted' ? replacedState.expected : null).toBeUndefined();
+  });
+  test('a terminal identity read failure can recover after restart without any late CAS', async () => {
+    const terminal = [{ threadId: thread, turnId: 'latest-failure', attempts: 9, goalId, missionRevision: 1,
+      episodeStartedAt: Date.parse('2026-11-16T00:00:00Z'),
+      retryAt: Date.parse('2026-11-16T01:00:00Z'), phase: 'exhausted' as const }];
+    let unavailable = true;
+    const h = harness({ revision: () => {
+      if (unavailable) throw Error('temporary native read failure');
+      return { goalId, status: 'blocked', missionRevision: 1, lifecycleRevision: 7 };
+    } });
+    await h.auto.restore(terminal);
+    expect(h.auto.state(thread)).toMatchObject({ state: 'exhausted', expected: undefined });
+    unavailable = false;
+    await h.auto.refreshExhaustedIdentity(thread);
+    expect(h.auto.state(thread)).toMatchObject({ state: 'exhausted',
+      expected: { goalId, status: 'blocked', missionRevision: 1, lifecycleRevision: 7 } });
+    expect(h.resumed).toEqual([]);
+    const replaced = harness({ revision: () => ({ goalId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      status: 'blocked', missionRevision: 1, lifecycleRevision: 7 }) });
+    await replaced.auto.restore(terminal);
+    await replaced.auto.refreshExhaustedIdentity(thread);
+    expect(replaced.auto.state(thread)).toMatchObject({ state: 'exhausted', expected: undefined });
+    expect(replaced.resumed).toEqual([]);
+  });
   test('resumes the exact blocked revision after 30 s, in either notification order', async () => {
     for (const order of ['turn-first', 'goal-first'] as const) {
       const h = harness();
@@ -229,13 +474,34 @@ describe('GoalAutoResume', () => {
     expect(h.pending()).toEqual([]);
   });
 
+  test('a late uncertain A resume does not exhaust a replacement B episode', async () => {
+    const replacementId = '00000000-0000-4000-8000-0000000000bb';
+    let nativeId = goalId;
+    let rejectA: ((error: Error) => void) | undefined;
+    const h = harness({ notificationGoalId: () => nativeId,
+      revision: () => ({ goalId: nativeId, status: 'blocked', missionRevision: 1, lifecycleRevision: 8 }),
+      resume: async () => new Promise<void>((_resolve, reject) => { rejectA = reject; }) });
+    await h.failTurn('old', 1_000);
+    await h.advance(30_000);
+    expect(rejectA).toBeDefined();
+    nativeId = replacementId;
+    await h.failTurn('replacement', 1_000);
+    expect(h.auto.state(thread)).toMatchObject({ state: 'scheduled', attempt: 1 });
+    rejectA!(new GoalMutationUnconfirmedError('late transport failure'));
+    await h.settle();
+    expect(h.auto.state(thread)).toMatchObject({ state: 'scheduled', attempt: 1 });
+    expect(h.auto.snapshot()).toMatchObject([{ goalId: replacementId, turnId: 'replacement',
+      phase: 'scheduled' }]);
+  });
+
   test('does not schedule when the Goal is no longer blocked or its revision is unavailable', async () => {
     const h = harness({ revision: () => ({ goalId, status: 'active', missionRevision: 1, lifecycleRevision: 9 }) });
     await h.failTurn('t1', 1_000);
     expect(h.pending()).toEqual([]);
     const u = harness({ revision: () => { throw new Error('old runtime'); } });
     await u.failTurn('t1', 1_000);
-    expect(u.pending()).toEqual([]);
+    expect(u.pending()).toHaveLength(1);
+    expect(u.resumed).toEqual([]);
     expect(u.logs.some(line => line.includes('reason=goal-revision-unavailable'))).toBe(true);
   });
 
@@ -315,7 +581,7 @@ describe('GoalAutoResume', () => {
     // A duplicate block notification for the same failure replaces, not adds.
     h.send('turn/completed', { threadId: thread, turn: { id: 't1', status: 'failed',
       error: { message: CAPACITY, codexErrorInfo: 'serverOverloaded' }, durationMs: 1_000, items: [] } });
-    h.send('thread/goal/updated', { threadId: thread, turnId: 't1', goal: { status: 'blocked' } });
+    h.send('thread/goal/updated', { threadId: thread, turnId: 't1', goalId, goal: { status: 'blocked' } });
     await h.settle();
     expect(h.pending().length).toBe(1);
     await h.advance(30_000);
