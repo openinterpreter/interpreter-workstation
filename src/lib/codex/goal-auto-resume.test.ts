@@ -45,6 +45,9 @@ describe('isTransientCapacityError', () => {
     const negatives: unknown[] = [
       { message: "You've hit your usage limit. Try again at 5 PM.", codexErrorInfo: 'usageLimitExceeded' },
       { message: 'Selected model is at capacity.', codexErrorInfo: 'usageLimitExceeded' },
+      { message: "You've hit your usage limit. Try again at 5 PM.", codexErrorInfo: 'serverOverloaded' },
+      { message: 'Quota exceeded while provider is overloaded.', codexErrorInfo: 'serverOverloaded' },
+      { message: 'Insufficient credits; service temporarily unavailable.', codexErrorInfo: 'serverOverloaded' },
       { message: 'Quota exceeded. Check your plan and billing details.', codexErrorInfo: null },
       { message: 'Rate limit reached', codexErrorInfo: 'rateLimitExceeded' },
       { message: '401 Unauthorized', codexErrorInfo: 'unauthorized' },
@@ -75,7 +78,7 @@ describe('goalAutoResumeDelayMs', () => {
 type Timer = { at: number; callback: () => void; cleared: boolean };
 
 function harness(options: { revision?: () => ThreadGoalRevision | null;
-  notificationGoalId?: string | null;
+  notificationGoalId?: string | null | (() => string | null);
   verifyFailedTurn?: () => boolean;
   resume?: (expected: ThreadGoalRevision) => Promise<void> } = {}) {
   let now = Date.parse('2026-11-16T00:00:00.000Z');
@@ -124,8 +127,10 @@ function harness(options: { revision?: () => ThreadGoalRevision | null;
       lifecycle += 1;
       const completed = () => send('turn/completed', { threadId: thread,
         turn: { id: turnId, status: 'failed', error, durationMs, items: [] } });
+      const notifiedId = typeof options.notificationGoalId === 'function'
+        ? options.notificationGoalId() : options.notificationGoalId;
       const goal = () => send('thread/goal/updated', { threadId: thread, turnId,
-        ...(options.notificationGoalId === null ? {} : { goalId: options.notificationGoalId ?? goalId }),
+        ...(notifiedId === null ? {} : { goalId: notifiedId ?? goalId }),
         goal: { threadId: thread, objective: 'o', status: 'blocked', createdAt: 1_700_000_000 } });
       if (order === 'turn-first') { completed(); goal(); } else { goal(); completed(); }
       await settle();
@@ -136,6 +141,43 @@ function harness(options: { revision?: () => ThreadGoalRevision | null;
 }
 
 describe('GoalAutoResume', () => {
+  test('a new native Goal ID starts its own episode after A exhausted, never inheriting A bounds', async () => {
+    const replacementId = '00000000-0000-4000-8000-0000000000bb';
+    const original = harness();
+    await original.failTurn('old', 1_000);
+    const exhaustedA = original.auto.snapshot().map(item => ({ ...item, phase: 'exhausted' as const,
+      episodeStartedAt: item.episodeStartedAt - GOAL_AUTO_RESUME_WINDOW_MS,
+      attempts: 9, retryAt: item.retryAt - GOAL_AUTO_RESUME_WINDOW_MS }));
+    original.auto.stop();
+    let nativeId = goalId;
+    const h = harness({ notificationGoalId: () => nativeId,
+      revision: () => ({ goalId: nativeId, status: 'blocked', missionRevision: 1, lifecycleRevision: 8 }) });
+    await h.auto.restore(exhaustedA);
+    nativeId = replacementId;
+    await h.failTurn('replacement', 1_000);
+    expect(h.auto.state(thread)).toMatchObject({ state: 'scheduled', attempt: 1 });
+    expect(h.auto.snapshot()).toMatchObject([{ turnId: 'replacement', goalId: replacementId,
+      attempts: 0, phase: 'scheduled' }]);
+    await h.advance(30_000);
+    expect(h.resumed.map(item => item.goalId)).toEqual([replacementId]);
+  });
+
+  test('an unidentified replacement block does not reset A or issue a CAS for B', async () => {
+    const original = harness();
+    await original.failTurn('old', 1_000);
+    const saved = original.auto.snapshot();
+    original.auto.stop();
+    const h = harness({ notificationGoalId: null,
+      revision: () => ({ goalId: '00000000-0000-4000-8000-0000000000bb',
+        status: 'blocked', missionRevision: 1, lifecycleRevision: 8 }) });
+    await h.auto.restore(saved);
+    await h.failTurn('replacement', 1_000);
+    await h.advance(31_000);
+    expect(h.resumed).toEqual([]);
+    expect(h.auto.snapshot()).toMatchObject([{ turnId: 'replacement', phase: 'preflight',
+      observedGoalId: undefined }]);
+  });
+
   test('a same-second replacement Goal cannot acquire the failed turn CAS', async () => {
     const h = harness({ notificationGoalId: null, revision: () => ({ goalId: '00000000-0000-4000-8000-0000000000bb',
       status: 'blocked', missionRevision: 1, lifecycleRevision: 8 }) });

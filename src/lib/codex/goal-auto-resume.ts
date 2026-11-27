@@ -21,6 +21,8 @@ import { GoalRevisionConflictError, type ThreadGoalRevision } from './goal-revis
 const TRANSIENT_HTTP_STATUSES = new Set([502, 503, 504, 529]);
 const CAPACITY_MESSAGE_RE =
   /\b(?:at capacity|overloaded|experiencing high demand|temporarily unavailable|service unavailable)\b/i;
+const ACCOUNT_LIMIT_MESSAGE_RE =
+  /\b(?:(?:usage|rate|subscription)\s+limits?|quota|billing|insufficient\s+credits?|(?:token|spending)\s+budget)\b/i;
 const HTTP_ERROR_VARIANTS = [
   'httpConnectionFailed',
   'responseStreamConnectionFailed',
@@ -38,6 +40,9 @@ const HTTP_ERROR_VARIANTS = [
 export function isTransientCapacityError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const { message, codexErrorInfo: info } = error as { message?: unknown; codexErrorInfo?: unknown };
+  // A contradictory structured overload code must not turn a genuine
+  // subscription, quota or billing refusal into an automatic retry.
+  if (typeof message === 'string' && ACCOUNT_LIMIT_MESSAGE_RE.test(message)) return false;
   const capacityMessage = typeof message === 'string' && CAPACITY_MESSAGE_RE.test(message);
   if (info === 'serverOverloaded') return true;
   // The runtime also reports unrelated internal failures with this code, so
@@ -330,12 +335,24 @@ export class GoalAutoResume {
     createdAt?: unknown, nativeGoalId?: unknown): void {
     if (status === 'blocked' && turnId) {
       // The runtime attributes its own turn-error block to the failed turn.
-      this.cancel(threadId, 'goal blocked again');
       const entry = this.entry(threadId);
+      const nextGoalId = typeof nativeGoalId === 'string' &&
+        /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(nativeGoalId)
+        ? nativeGoalId : undefined;
+      const priorGoalId = entry.goalId ?? entry.observedGoalId;
+      this.cancel(threadId, 'goal blocked again');
+      // A different immutable native Goal is a different retry episode, even
+      // if A exhausted its budget. Never infer replacement from a missing ID.
+      if (nextGoalId && priorGoalId && nextGoalId !== priorGoalId) {
+        entry.attempts = 0;
+        entry.episodeStartedAt = null;
+        entry.goalId = undefined;
+        entry.missionRevision = undefined;
+        entry.exhaustedReason = undefined;
+      }
       entry.blockedTurnId = turnId;
       entry.goalCreatedAt = typeof createdAt === 'number' && Number.isFinite(createdAt) ? createdAt : undefined;
-      entry.observedGoalId = typeof nativeGoalId === 'string' && /^[0-9a-f-]{36}$/i.test(nativeGoalId)
-        ? nativeGoalId : undefined;
+      entry.observedGoalId = nextGoalId;
       this.maybeSchedule(threadId);
       return;
     }
