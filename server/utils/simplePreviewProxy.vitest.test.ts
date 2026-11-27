@@ -222,9 +222,9 @@ describe('Simple preview proxy WebSocket upgrades', () => {
 
 const SIGNING_KEY = 'preview-signing-key-for-tests-0123456789';
 
-function get(port: number, path: string, headers: Record<string, string> = {}) {
+function get(port: number, path: string, headers: Record<string, string> = {}, method = 'GET') {
   return new Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }>((resolve, reject) => {
-    const request = http.request({ host: '127.0.0.1', port, path, headers, agent: false }, (response) => {
+    const request = http.request({ host: '127.0.0.1', port, path, method, headers, agent: false }, (response) => {
       const chunks: Buffer[] = [];
       response.on('data', (chunk: Buffer) => chunks.push(chunk));
       response.on('end', () => resolve({
@@ -255,6 +255,7 @@ async function protectedProxy(activeSubjects: Set<string>) {
     port: 0,
     upstream: () => ({ port: upstreamPort, cookieScope: 'testscope' }),
     access: { signingKey: SIGNING_KEY, isSubjectActive: (subject) => activeSubjects.has(subject) },
+    publicOrigin: 'https://preview.example',
   });
   closers.push(() => proxy.close());
   return { proxy, seen };
@@ -269,6 +270,7 @@ describe('Simple preview proxy access for a public origin', () => {
     const exchange = await get(proxy.port, `${ticketed.pathname}${ticketed.search}`);
     expect(exchange.status).toBe(302);
     expect(exchange.headers.location).toBe('/app?windowSessionKey=ws_1');
+    expect(exchange.headers['referrer-policy']).toBe('no-referrer');
     const setCookie = exchange.headers['set-cookie']?.[0] ?? '';
     expect(setCookie.startsWith(`${SIMPLE_PREVIEW_COOKIE}=`)).toBe(true);
     for (const attribute of ['HttpOnly', 'Secure', 'SameSite=None', 'Partitioned', 'Path=/']) {
@@ -288,6 +290,7 @@ describe('Simple preview proxy access for a public origin', () => {
       socket.on('error', reject);
       socket.on('connect', () => socket.write([
         'GET /_next/webpack-hmr HTTP/1.1', 'Host: preview.example', `Cookie: ${cookie}`,
+        'Origin: https://preview.example',
         'Connection: Upgrade', 'Upgrade: websocket', '', '',
       ].join('\r\n')));
       socket.once('data', (chunk: Buffer) => resolve(chunk.toString('latin1').split('\r\n')[0]));
@@ -318,12 +321,38 @@ describe('Simple preview proxy access for a public origin', () => {
       socket.on('error', reject);
       socket.on('connect', () => socket.write([
         'GET /_next/webpack-hmr HTTP/1.1', 'Host: preview.example',
+        'Origin: https://preview.example',
         'Connection: Upgrade', 'Upgrade: websocket', '', '',
       ].join('\r\n')));
       socket.once('data', (chunk: Buffer) => resolve(chunk.toString('latin1').split('\r\n')[0]));
     });
     expect(ws).toBe('HTTP/1.1 401 Unauthorized');
     expect(seen).toHaveLength(0);
+  });
+
+  test('rejects state-changing requests and upgrades without the exact preview Origin', async () => {
+    const { proxy, seen } = await protectedProxy(new Set(['device:dev_abcdefghijklmnop']));
+    const ticket = createSimplePreviewTicket('device:dev_abcdefghijklmnop', SIGNING_KEY);
+    const exchange = await get(proxy.port, `/?${SIMPLE_PREVIEW_TICKET_PARAM}=${ticket}`);
+    const cookie = (exchange.headers['set-cookie']?.[0] ?? '').split(';')[0];
+    for (const origin of [undefined, 'https://elsewhere.example']) {
+      const headers = { Cookie: cookie, ...(origin ? { Origin: origin } : {}) };
+      expect((await get(proxy.port, '/api/write', headers, 'POST')).status).toBe(403);
+      const result = await new Promise<string>((resolve, reject) => {
+        const socket = net.connect(proxy.port, '127.0.0.1');
+        closers.push(() => { socket.destroy(); });
+        socket.on('error', reject);
+        socket.on('connect', () => socket.write([
+          'GET /_next/webpack-hmr HTTP/1.1', 'Host: preview.example', `Cookie: ${cookie}`,
+          ...(origin ? [`Origin: ${origin}`] : []),
+          'Connection: Upgrade', 'Upgrade: websocket', '', '',
+        ].join('\r\n')));
+        socket.once('data', (chunk: Buffer) => resolve(chunk.toString('latin1').split('\r\n')[0]));
+      });
+      expect(result).toBe('HTTP/1.1 403 Forbidden');
+    }
+    expect((await get(proxy.port, '/api/write', { Cookie: cookie, Origin: 'https://preview.example' }, 'POST')).status).toBe(200);
+    expect(seen).toEqual(['/api/write']);
   });
 
   test('accepts a ticket once and only for thirty seconds', async () => {
@@ -363,6 +392,7 @@ describe('Simple preview proxy access for a public origin', () => {
       port: 0,
       upstream: () => ({ port: upstreamPort, cookieScope: 'testscope' }),
       access: { signingKey: SIGNING_KEY, isSubjectActive: () => true },
+      publicOrigin: 'https://preview.example',
       frameAncestorOrigin: 'https://workstation.example',
     });
     closers.push(() => proxy.close());

@@ -181,6 +181,11 @@ function respondUnauthorized(response: http.ServerResponse): void {
   response.end();
 }
 
+function exactOriginRequired(request: http.IncomingMessage, origin: string): boolean {
+  return request.method !== 'GET' && request.method !== 'HEAD' && request.method !== 'OPTIONS'
+    && request.headers.origin !== origin;
+}
+
 /**
  * The running project server: its loopback port and a cookie scope that is
  * stable for that project and differs between projects.
@@ -329,8 +334,15 @@ async function forwardRequest(
   upstream: SimplePreviewUpstream,
   access: SimplePreviewAccess | null,
   frameAncestor: string | null,
+  publicOrigin: string | null,
 ): Promise<void> {
   if (access) {
+    if (publicOrigin && exactOriginRequired(request, publicOrigin)) {
+      request.resume();
+      response.writeHead(403, { 'Cache-Control': 'no-store', 'Content-Length': '0' });
+      response.end();
+      return;
+    }
     const authorization = await authorizePreviewRequest(request, access);
     if (!authorization.allowed) {
       request.resume();
@@ -342,6 +354,7 @@ async function forwardRequest(
       response.writeHead(302, {
         Location: authorization.strippedUrl,
         'Cache-Control': 'no-store',
+        'Referrer-Policy': 'no-referrer',
         'Content-Length': '0',
         ...(authorization.cookie ? { 'Set-Cookie': previewCookieHeader(authorization.cookie) } : {}),
       });
@@ -386,9 +399,14 @@ async function forwardUpgrade(
   head: Buffer,
   upstream: SimplePreviewUpstream,
   access: SimplePreviewAccess | null,
+  publicOrigin: string | null,
 ): Promise<void> {
   socket.on('error', () => socket.destroy());
   if (access) {
+    if (request.headers.origin !== publicOrigin) {
+      socket.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n', () => socket.destroy());
+      return;
+    }
     const authorization = await authorizePreviewRequest(request, access);
     if (!authorization.allowed) {
       // Nothing reads this socket again, so close it once the refusal is
@@ -461,16 +479,20 @@ export async function startSimplePreviewProxy(options: {
   upstream: SimplePreviewUpstream;
   /** Required for a publicly reachable preview; omitted for loopback-only use. */
   access?: SimplePreviewAccess | null;
+  /** Exact origin required for state changes and connection upgrades. */
+  publicOrigin?: string | null;
   /** The only origin allowed to frame the preview (the device gateway's public origin). */
   frameAncestorOrigin?: string | null;
 }): Promise<SimplePreviewProxyHandle> {
   const access = options.access ?? null;
+  const publicOrigin = options.publicOrigin ?? null;
+  if (access && !publicOrigin) throw new Error('Public preview access requires its exact origin.');
   const frameAncestor = options.frameAncestorOrigin ?? null;
   const server = http.createServer((request, response) => {
-    void forwardRequest(request, response, options.upstream, access, frameAncestor);
+    void forwardRequest(request, response, options.upstream, access, frameAncestor, publicOrigin);
   });
   server.on('upgrade', (request, socket, head) => {
-    void forwardUpgrade(request, socket, head, options.upstream, access);
+    void forwardUpgrade(request, socket, head, options.upstream, access, publicOrigin);
   });
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
@@ -514,6 +536,7 @@ export async function startSimplePreviewProxyFromEnvironment(
     port,
     upstream,
     access: publicOrigin && access ? await access() : null,
+    publicOrigin,
     frameAncestorOrigin: publicOrigin
       ? parseDeviceGatewayPublicOrigin(environment[DEVICE_GATEWAY_PUBLIC_ORIGIN_ENV])
       : null,
