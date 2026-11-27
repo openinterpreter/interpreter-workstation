@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -634,7 +635,7 @@ describe('outcome returns', () => {
     } finally { await f.cleanup(); }
   });
 
-  test('input-resume and each bound refusal retain distinct fixed, text-free Goal notices', async () => {
+  test('replayed bound refusal is one notice per immutable Goal revision, but new transitions remain distinct', async () => {
     const f = await fixture();
     try {
       const store = await f.make(0);
@@ -644,15 +645,86 @@ describe('outcome returns', () => {
         missionRevision: 2, lifecycleRevision: 4 };
       const first = { ...base, inputId: '1'.repeat(64) };
       const second = { ...base, inputId: '2'.repeat(64) };
+      const revised = { ...base, lifecycleRevision: 5, inputId: '4'.repeat(64) };
+      const replacement = { ...base, goalId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+        inputId: '6'.repeat(64) };
+      const uncertain = { ...base, reason: 'resume_result_unconfirmed' as const, inputId: '5'.repeat(64) };
       const resumed = { ...base, status: 'active' as const, previousStatus: 'blocked' as const,
         reason: 'resumed_on_input' as const, inputId: '3'.repeat(64) };
       expect(await store.noticeGoal(thread, { unrouted: 'no_assigner' }, first)).toBe(true);
       expect(await store.noticeGoal(thread, { unrouted: 'no_assigner' }, second)).toBe(true);
+      expect(await store.noticeGoal(thread, { unrouted: 'no_assigner' }, revised)).toBe(true);
+      expect(await store.noticeGoal(thread, { unrouted: 'no_assigner' }, replacement)).toBe(true);
+      expect(await store.noticeGoal(thread, { unrouted: 'no_assigner' }, uncertain)).toBe(true);
       expect(await store.noticeGoal(thread, { unrouted: 'no_assigner' }, resumed)).toBe(true);
-      expect(new Set(store.list().map(entry => entry.id)).size).toBe(3);
+      expect(store.list().map(entry => [entry.kind, entry.goal?.reason, entry.goal?.lifecycleRevision]))
+        .toEqual([['goal', 'resume_bound_reached', 4], ['goal', 'resume_bound_reached', 5],
+          ['goal', 'resume_bound_reached', 4],
+          ['goal', 'resume_result_unconfirmed', 4], ['goal', 'resumed_on_input', 4]]);
       expect(JSON.stringify(store.list())).not.toContain('unreported project');
       await store.stop();
-      expect((await f.make(null)).list()).toHaveLength(3);
+      expect((await f.make(null)).list()).toHaveLength(5);
+    } finally { await f.cleanup(); }
+  });
+
+  test('a historical per-input bound refusal survives restart without replaying a new notice', async () => {
+    const f = await fixture();
+    try {
+      const goal = { status: 'blocked' as const, reason: 'resume_bound_reached' as const,
+        createdAt: 1_700_000_000, updatedAt: 1_700_000_500,
+        goalId: '11111111-2222-4333-8444-555555555555', missionRevision: 2,
+        lifecycleRevision: 4, inputId: '1'.repeat(64) };
+      const store = await f.make(null);
+      expect(await store.noticeGoal(thread, { sender }, goal)).toBe(true);
+      await store.stop();
+      const file = path.join(f.root, 'outcome-returns-2.json');
+      const persisted = JSON.parse(await readFile(file, 'utf8'));
+      persisted.entries[0].id = createHash('sha256').update(
+        `goal:${thread}:${goal.createdAt}:${goal.status}:${goal.updatedAt}:${goal.reason}:${goal.inputId}`)
+        .digest('hex');
+      await writeFile(file, JSON.stringify(persisted));
+      const restarted = await f.make(null);
+      expect(restarted.list()).toHaveLength(1);
+      expect(await restarted.noticeGoal(thread, { sender }, { ...goal, inputId: '2'.repeat(64) })).toBe(true);
+      expect(restarted.list()).toHaveLength(1);
+    } finally { await f.cleanup(); }
+  });
+
+  test('a bounded revision is delivered once per distinct recipient, even across restart', async () => {
+    const f = await fixture();
+    try {
+      const goal = { status: 'blocked' as const, reason: 'resume_bound_reached' as const,
+        createdAt: 1_700_000_000, updatedAt: 1_700_000_500,
+        goalId: '11111111-2222-4333-8444-555555555555', missionRevision: 2,
+        lifecycleRevision: 4, inputId: '1'.repeat(64) };
+      const store = await f.make(null);
+      expect(await store.noticeGoal(thread, { sender }, goal, { perRecipient: true })).toBe(true);
+      expect(await store.noticeGoal(thread, { sender: secondSender }, { ...goal, inputId: '2'.repeat(64) },
+        { perRecipient: true })).toBe(true);
+      expect(await store.noticeGoal(thread, { sender }, { ...goal, inputId: '3'.repeat(64) },
+        { perRecipient: true })).toBe(true);
+      expect(store.list().map(entry => entry.sender)).toEqual([sender, secondSender]);
+      await store.stop();
+      expect((await f.make(null)).list().map(entry => entry.sender)).toEqual([sender, secondSender]);
+    } finally { await f.cleanup(); }
+  });
+
+  test('an unrouted bounded revision cannot suppress its first later routed delivery', async () => {
+    const f = await fixture();
+    try {
+      const goal = { status: 'blocked' as const, reason: 'resume_bound_reached' as const,
+        createdAt: 1_700_000_000, updatedAt: 1_700_000_500,
+        goalId: '11111111-2222-4333-8444-555555555555', missionRevision: 2,
+        lifecycleRevision: 4, inputId: '1'.repeat(64) };
+      const store = await f.make(null);
+      expect(await store.noticeGoal(thread, { unrouted: 'no_assigner' }, goal)).toBe(true);
+      expect(await store.noticeGoal(thread, { sender }, { ...goal, inputId: '2'.repeat(64) })).toBe(true);
+      expect(store.list().map(entry => entry.status)).toEqual(['unrouted', 'pending']);
+      const replacement = { ...goal, goalId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' };
+      expect(await store.noticeGoal(thread, { sender }, replacement)).toBe(true);
+      expect(await store.noticeGoal(thread, { unrouted: 'no_assigner' },
+        { ...replacement, inputId: '3'.repeat(64) })).toBe(true);
+      expect(store.list().map(entry => entry.status)).toEqual(['unrouted', 'pending', 'pending', 'unrouted']);
     } finally { await f.cleanup(); }
   });
 
