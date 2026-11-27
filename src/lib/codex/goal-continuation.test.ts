@@ -77,13 +77,16 @@ describe('Goal resume continuation', () => {
       `[Goal continuation] ${JSON.stringify({ threadId, continuation: 'loaded' })}`]);
   });
 
-  test('a loaded idle thread is not resumed again; the runtime continues its Goal', async () => {
-    const { service, calls } = runtime({ state: 'idle' });
-    assert.equal((await service.resumeThreadGoalWithRevision(threadId, blocked)).continuation,
-      'already_loaded');
-    assert.deepEqual(calls.map(call => call[0]), ['goal/set', 'thread/read']);
-    assert.deepEqual(logged, []);
-  });
+  test.each(['idle', 'systemError'] as const)(
+    'a loaded %s thread is not resumed again; the runtime continues its Goal', async state => {
+      // systemError only says the last turn failed (for example on a usage
+      // limit); the thread is still loaded and idle.
+      const { service, calls } = runtime({ state });
+      assert.equal((await service.resumeThreadGoalWithRevision(threadId, blocked)).continuation,
+        'already_loaded');
+      assert.deepEqual(calls.map(call => call[0]), ['goal/set', 'thread/read']);
+      assert.deepEqual(logged, []);
+    });
 
   test('a thread already running a turn gets no second turn and no resume', async () => {
     const { service, calls } = runtime({ state: 'active' });
@@ -103,8 +106,7 @@ describe('Goal resume continuation', () => {
   });
 
   test('an unreadable or unusable thread state is not_started, never a guessed resume', async () => {
-    for (const [state, cause] of [['unreadable', 'thread_read_unavailable'],
-      ['systemError', 'thread_unavailable']] as const) {
+    for (const [state, cause] of [['unreadable', 'thread_read_unavailable']] as const) {
       logged.length = 0;
       const { service, calls } = runtime({ state });
       assert.equal((await service.resumeThreadGoalWithRevision(threadId, blocked)).continuation,

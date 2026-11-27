@@ -1933,6 +1933,77 @@ if(${padding})process.stdout.write('x'.repeat(${padding})+'\\n');`;
     } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
   });
 
+  test('a usage-limited Goal input reservation keeps its status across restart', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-goal-usage-'));
+    const receipts: string[] = [];
+    const seen: unknown[] = [];
+    const native = (reserve: boolean): WakeNative => ({
+      inspect: async () => ({ activeTurnId: 'turn-1', messages: [], clientIds: [...receipts],
+        clientTurns: receipts.map(clientId => ({ clientId, turnId: 'turn-1' })) }),
+      steer: async (_thread, _turn, _message, clientId) => { if (clientId) receipts.push(clientId); return 'turn-1'; },
+      start: async () => { throw Error('a live turn must be steered'); },
+      onGoalInput: async (_input, ledger) => {
+        if (reserve) await ledger.reserve({ goalId: 'goal-1', goalCreatedAt: 1, goalUpdatedAt: 2,
+          missionRevision: 1, lifecycleRevision: 3, goalStatus: 'usageLimited' });
+        seen.push(await ledger.lookup());
+        return !reserve;
+      },
+    });
+    let wake: WakeSources | undefined;
+    try {
+      wake = new WakeSources(native(true), root, 30_000, MANUAL);
+      await wake.initialize();
+      await wake.ingest('thread-1', 'peer', 'peer-1', 'input');
+      await wake.tick(); await wake.tick();
+      await settle(() => seen.length === 1);
+      await wake.stop();
+      wake = new WakeSources(native(false), root, 30_000, MANUAL);
+      await wake.initialize();
+      await settle(() => seen.length === 2);
+      expect(seen[1]).toEqual({ goalId: 'goal-1', goalCreatedAt: 1, goalUpdatedAt: 2, missionRevision: 1,
+        lifecycleRevision: 3, phase: 'reserved', goalStatus: 'usageLimited' });
+    } finally { await wake?.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
+  test('a resumed Goal releases only usage-limit backoff; inputs are offered once, in order', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'wake-usage-release-'));
+    const messages: string[] = [];
+    const ids: string[] = [];
+    let limited = true;
+    const wake = new WakeSources({
+      inspect: async () => ({ messages, clientIds: [...ids] }),
+      // A later input joins the turn the first one started.
+      steer: async (_thread, turn, message, id) => { messages.push(message); ids.push(id!); return turn; },
+      start: async (_thread, message, id) => {
+        if (limited) throw new WakeAdmissionFailure('preflight', new Error('usage limit reached'));
+        messages.push(message); ids.push(id!);
+        return `turn-${ids.length}`;
+      },
+    }, root, 30_000, MANUAL);
+    try {
+      await wake.initialize();
+      await wake.ingest('thread-1', 'external', 'event-1', 'first');
+      await wake.ingest('thread-1', 'external', 'event-2', 'second');
+      await wake.ingest('thread-2', 'external', 'event-3', 'other');
+      await wake.tick();
+      expect(wake.list('thread-1').events.map(e => [e.status, e.error])).toEqual([
+        ['pending', 'Usage limit reached; operator action required'], ['pending', undefined]]);
+      expect([...wake.threadInputs()]).toEqual([['thread-1', 2], ['thread-2', 1]]);
+      limited = false;
+      // Still in backoff: nothing is offered.
+      await wake.tick();
+      expect(ids).toEqual([]);
+      expect(await wake.releaseUsageLimitBackoff('thread-1')).toBe(1);
+      expect(await wake.releaseUsageLimitBackoff('thread-1')).toBe(0);
+      await wake.tick(); await wake.tick(); await wake.tick();
+      // Thread 1's inputs are offered in order, each once; thread 2 keeps its own backoff.
+      expect(messages).toEqual(['[Wake event external/event-1]\nfirst', '[Wake event external/event-2]\nsecond']);
+      expect(new Set(ids).size).toBe(2);
+      expect(wake.list('thread-2').events[0]?.status).toBe('pending');
+      expect(wake.list('thread-1').events.every(e => e.status === 'admitted')).toBe(true);
+    } finally { await wake.stop(); await rm(root, { recursive: true, force: true }); }
+  });
+
   test('resume rejection is durably diagnosed and may retry the same stable ID without another user turn', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'wake-resume-reject-'));
     let attempts = 0;

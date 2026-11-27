@@ -3298,11 +3298,14 @@ describe("CodexService", () => {
       threadId: id, path, cwd: '/workspace/projects/interpreter', archived: false,
     });
     assert.deepEqual(fake.calls.threadReadParams, [{ threadId: id, includeTurns: false }]);
+    // A thread whose last turn failed still has a durable identity: input must reach it.
+    native = { ...native, status: { type: 'systemError' } } as v2.Thread;
+    assert.equal((await service.readSavedThreadIdentity(id)).threadId, id);
+    native = { ...native, status: { type: 'idle' } } as v2.Thread;
     for (const changed of [
       { id: '00000000-0000-4000-8000-000000000002' },
       { path: `/workspace/home/archived_sessions/turn-${id}.jsonl` },
       { archived: true }, { status: { type: 'unrecognized' } },
-      { status: { type: 'systemError' } },
       { cwd: '/tmp/private' }, { ephemeral: true },
       { turns: [{ id: 'private', items: [{ text: 'PRIVATE TRANSCRIPT' }] }] },
     ]) {
