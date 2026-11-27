@@ -2,7 +2,8 @@ import { Wllama, LoggerWithoutDebug } from '@wllama/wllama';
 import type { ChatCompletionMessage, ChatCompletionTool } from '@wllama/wllama';
 import wasmUrl from '@wllama/wllama/esm/wasm/wllama.wasm?url';
 import type { Model } from '@earendil-works/pi-ai';
-import type { BrowserModelDescriptor, BrowserModelRuntime } from './modelCatalog';
+import { browserModelContextTokens, type BrowserModelDescriptor,
+  type BrowserModelRuntime } from './modelCatalog';
 import { createBrowserGgufStream, type BrowserChatEngine } from './wllamaStream';
 
 export function browserChatTemplateOptions(descriptor: BrowserModelDescriptor):
@@ -17,6 +18,7 @@ export async function createWllamaRuntime(descriptor: BrowserModelDescriptor, we
     { logger: LoggerWithoutDebug })): Promise<BrowserModelRuntime> {
   if (descriptor.assets.length !== 1 || !descriptor.assets[0].path.toLowerCase().endsWith('.gguf'))
     throw new Error('Browser GGUF engine requires one verified model asset');
+  const contextTokens = browserModelContextTokens(descriptor);
   let active: Wllama | null = null;
   let loading: Promise<Wllama> | null = null;
   let disposed = false;
@@ -29,7 +31,7 @@ export async function createWllamaRuntime(descriptor: BrowserModelDescriptor, we
       const stopLoad = () => { void instance.exit().catch(() => {}); };
       signal?.addEventListener('abort', stopLoad, { once: true });
       try {
-        await instance.loadModel([weights], { n_gpu_layers: 0, n_threads: 2, n_ctx: 2048 });
+        await instance.loadModel([weights], { n_gpu_layers: 0, n_threads: 2, n_ctx: contextTokens });
         if (signal?.aborted) throw new DOMException('Browser model load aborted', 'AbortError');
         if (disposed) throw new Error('Browser model session disposed');
         active = instance;
@@ -70,7 +72,7 @@ export async function createWllamaRuntime(descriptor: BrowserModelDescriptor, we
   const model = { id: descriptor.id, name: descriptor.name, provider: providerId,
     api: 'browser-local-gguf', baseUrl: '/', input: descriptor.inputModalities ?? ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, reasoning: false,
-    contextWindow: 2048, maxTokens: 384 } as Model<any>;
+    contextWindow: contextTokens, maxTokens: 384 } as Model<any>;
   return { model, streamFn: createBrowserGgufStream(engine), dispose: () => {
     if (disposed) return;
     disposed = true;
