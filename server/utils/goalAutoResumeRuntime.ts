@@ -99,6 +99,10 @@ export function goalAutoResumeState(threadId: string): GoalAutoResumeState | nul
   return autoResume?.state(threadId) ?? null;
 }
 
+export async function refreshGoalAutoResumeTerminalIdentity(threadId: string): Promise<void> {
+  await autoResume?.refreshExhaustedIdentity(threadId);
+}
+
 export function goalAutoResumeThreadIds(): string[] { return autoResume?.threadIds() ?? []; }
 
 export function stopGoalAutoResume(): void {

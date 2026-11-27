@@ -57,6 +57,9 @@ export type GoalNoticesDeps = {
   readRevision(threadId: string): Promise<{ createdAt: number; revision: ThreadGoalRevision } | null>;
   /** The automatic capacity resume's view of the thread. */
   autoResumeState(threadId: string): GoalAutoResumeState | null;
+  /** Recheck an exhausted episode's exact native Goal/failed-turn identity
+   * after a transient read failure; never submits or retries a Goal CAS. */
+  refreshAutoResumeIdentity?(threadId: string): Promise<void>;
   /** Startup only: threads with a known sender, most recent first. */
   recentSenderThreads(limit: number): Promise<string[]>;
   /** Persisted capacity episodes must not be omitted by the recent-sender cap. */
@@ -198,24 +201,44 @@ export class GoalNotices {
         }
         // A live notification since startup is newer than this read.
         if (!goal || this.stopped || this.threads.has(threadId)) continue;
-        const capacity = goal.status === 'blocked' ? this.deps.autoResumeState(threadId) : null;
+        let capacity = goal.status === 'blocked' ? this.deps.autoResumeState(threadId) : null;
         const terminalCapacity = capacity?.state === 'exhausted';
         if (terminalCapacity) {
+          if (capacity?.state === 'exhausted' && !capacity.expected) {
+            try { await this.deps.refreshAutoResumeIdentity?.(threadId); } catch { /* Keep the exact notice pending. */ }
+            capacity = this.deps.autoResumeState(threadId);
+            if (capacity?.state !== 'exhausted' || !capacity.expected) {
+              // A startup read may also fail. Keep this thread in the normal
+              // notice timer so the exact terminal outcome is not stranded.
+              const state = this.state(threadId);
+              state.pending = { goal, turnId: null, waitingChecks: 0 };
+              this.arm(threadId, state, Math.max(this.settleMs, 5 * 60_000));
+              continue;
+            }
+          }
           // A terminal capacity notice must carry the native identity, not
           // silently degrade into an unbound status when custody is down.
           try {
             const read = await this.deps.readRevision(threadId);
-            const expected = capacity.expected;
+            const expected = capacity?.state === 'exhausted' ? capacity.expected : undefined;
             if (!read || !expected || read.createdAt !== goal.createdAt ||
                 read.revision.goalId !== expected.goalId ||
                 read.revision.missionRevision !== expected.missionRevision ||
                 read.revision.lifecycleRevision !== expected.lifecycleRevision ||
                 read.revision.status !== 'blocked') continue;
-          } catch { continue; }
+          } catch {
+            // A transient post-rebind custody failure must not discard the
+            // startup terminal notice. The next settled check revalidates it.
+            const state = this.state(threadId);
+            state.pending = { goal, turnId: null, waitingChecks: 0 };
+            this.arm(threadId, state, Math.max(this.settleMs, 5 * 60_000));
+            continue;
+          }
         }
         try { await this.serialize(() => this.decide(threadId, goal,
           { reason: terminalCapacity
-            ? capacity.outcome === 'unconfirmed' ? 'resume_result_unconfirmed' : 'model_capacity_exhausted'
+            ? capacity?.state === 'exhausted' && capacity.outcome === 'unconfirmed'
+              ? 'resume_result_unconfirmed' : 'model_capacity_exhausted'
             : 'unknown' }, null, () => true,
           terminalCapacity)); }
         catch (error) { this.deps.log(`[goal-notices] failed threadId=${threadId} error=${String(error)}`); }
@@ -274,7 +297,7 @@ export class GoalNotices {
     if (this.stopped || state.generation !== generation || !pending) return;
     pending.timer = undefined;
     const { goal, turnId } = pending;
-    const autoResume = goal.status === 'blocked' ? this.deps.autoResumeState(threadId) : null;
+    let autoResume = goal.status === 'blocked' ? this.deps.autoResumeState(threadId) : null;
     if (autoResume?.state === 'scheduled' || (autoResume?.state === 'waiting' && pending.waitingChecks < 1)) {
       // The automatic resume acts first. Report the block once as pending
       // that resume, then look again after its attempt settles.
@@ -291,6 +314,11 @@ export class GoalNotices {
       return;
     }
     if (goal.status === 'blocked' && autoResume?.state === 'exhausted' && !autoResume.expected) {
+      try { await this.deps.refreshAutoResumeIdentity?.(threadId); } catch { /* Retry only the read later. */ }
+      if (this.stopped || state.generation !== generation || state.pending !== pending) return;
+      autoResume = this.deps.autoResumeState(threadId);
+    }
+    if (goal.status === 'blocked' && autoResume?.state === 'exhausted' && !autoResume.expected) {
       // The last capacity block's identity has not survived a native read
       // yet. Keep the same pending notice instead of recording an unbound
       // terminal outcome; a later settled check may bind it.
@@ -298,7 +326,9 @@ export class GoalNotices {
       return;
     }
     state.pending = undefined;
-    const reason = goalChangeReason(goal.status, turnId, !!turnId && state.failedTurns.includes(turnId), autoResume);
+    const reason = autoResume?.state === 'exhausted' && goal.status === 'blocked'
+      ? autoResume.outcome === 'unconfirmed' ? 'resume_result_unconfirmed' : 'model_capacity_exhausted'
+      : goalChangeReason(goal.status, turnId, !!turnId && state.failedTurns.includes(turnId), autoResume);
     await this.decide(threadId, goal, { reason, from: pending.from }, turnId,
       () => state.generation === generation, reason === 'model_capacity_exhausted');
   }

@@ -31,7 +31,8 @@ const GOAL_ID = '11111111-2222-4333-8444-555555555555';
 type Timer = { at: number; callback: () => void; cleared: boolean };
 type Recorded = { threadId: string; sender?: SubmissionSender; unrouted?: GoalUnroutedReason; notice: GoalNotice };
 
-function harness(options: { sender?: SubmissionSender | null; settleMs?: number; store?: OutcomeReturns } = {}) {
+function harness(options: { sender?: SubmissionSender | null; settleMs?: number; store?: OutcomeReturns;
+  refreshTerminal?: (threadId: string, autoResume: Map<string, GoalAutoResumeState>) => Promise<void> } = {}) {
   let now = Date.parse('2026-11-16T00:00:00.000Z');
   let updatedAt = CREATED;
   const timers: Timer[] = [];
@@ -75,6 +76,7 @@ function harness(options: { sender?: SubmissionSender | null; settleMs?: number;
       store.recentThreadedSenders(threadId, limit) }),
     readRevision: async () => revision && { createdAt: CREATED, revision },
     autoResumeState: threadId => autoResume.get(threadId) ?? null,
+    refreshAutoResumeIdentity: async threadId => { await options.refreshTerminal?.(threadId, autoResume); },
     recentSenderThreads: async limit => store ? store.recentSenderThreads(limit) : [...senders.keys()].slice(0, limit),
     readGoal: async threadId => {
       reads.push(threadId);
@@ -267,6 +269,26 @@ describe('goal notices', () => {
     await h.advance(GOAL_NOTICE_SETTLE_MS);
     expect(h.recorded[0]?.notice.reason).toBe('resume_result_unconfirmed');
     expect(h.recorded[0]?.notice.goalId).toBe(GOAL_ID);
+  });
+
+  test('a terminal identity read failure retries after restart and then sends the exact-Goal notice', async () => {
+    let reads = 0;
+    const expected = { goalId: GOAL_ID, status: 'blocked' as const, missionRevision: 2, lifecycleRevision: 5 };
+    const h = harness({ refreshTerminal: async (threadId, states) => {
+      reads += 1;
+      if (reads >= 2) states.set(threadId, { state: 'exhausted', reason: 'capacity bound', expected });
+    } });
+    h.setRevision(expected);
+    h.goals.set(thread, { status: 'blocked', createdAt: CREATED, updatedAt: CREATED + 9 });
+    h.autoResume.set(thread, { state: 'exhausted', reason: 'capacity bound', expected: undefined });
+    await h.notices.reconcile();
+    expect(h.recorded).toEqual([]);
+    await h.advance(5 * 60_000);
+    expect(reads).toBeGreaterThanOrEqual(2);
+    expect(h.recorded.map(item => item.notice)).toEqual([{
+      status: 'blocked', reason: 'model_capacity_exhausted', createdAt: CREATED,
+      updatedAt: CREATED + 9, goalId: GOAL_ID, missionRevision: 2, lifecycleRevision: 5,
+    }]);
   });
 
   test('a scheduled resume that never reverses the block is reported after it settles', async () => {

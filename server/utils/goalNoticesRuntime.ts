@@ -1,5 +1,6 @@
 import { getCodexService, subscribeCodexNotifications } from '../../src/lib/codex/service';
-import { goalAutoResumeState, goalAutoResumeThreadIds } from './goalAutoResumeRuntime';
+import { goalAutoResumeState, goalAutoResumeThreadIds,
+  refreshGoalAutoResumeTerminalIdentity } from './goalAutoResumeRuntime';
 import { GoalNotices, type ObservedGoal } from './goalNotices';
 import { outcomeReturns, readyOutcomeReturns } from './outcomeReturnsRuntime';
 
@@ -41,6 +42,7 @@ export function startGoalNotices(): void {
       return goal && revision ? { createdAt: goal.createdAt, revision } : null;
     },
     autoResumeState: goalAutoResumeState,
+    refreshAutoResumeIdentity: refreshGoalAutoResumeTerminalIdentity,
     capacityThreads: goalAutoResumeThreadIds,
     recentSenderThreads: async limit => { await readyOutcomeReturns(); return outcomeReturns.recentSenderThreads(limit); },
     // One bounded native Goal read per recently attributed thread, at startup only.

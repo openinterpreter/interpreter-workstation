@@ -354,6 +354,29 @@ describe('GoalAutoResume', () => {
     const replacedState = replaced.auto.state(thread);
     expect(replacedState?.state === 'exhausted' ? replacedState.expected : null).toBeUndefined();
   });
+  test('a terminal identity read failure can recover after restart without any late CAS', async () => {
+    const terminal = [{ threadId: thread, turnId: 'latest-failure', attempts: 9, goalId, missionRevision: 1,
+      episodeStartedAt: Date.parse('2026-11-16T00:00:00Z'),
+      retryAt: Date.parse('2026-11-16T01:00:00Z'), phase: 'exhausted' as const }];
+    let unavailable = true;
+    const h = harness({ revision: () => {
+      if (unavailable) throw Error('temporary native read failure');
+      return { goalId, status: 'blocked', missionRevision: 1, lifecycleRevision: 7 };
+    } });
+    await h.auto.restore(terminal);
+    expect(h.auto.state(thread)).toMatchObject({ state: 'exhausted', expected: undefined });
+    unavailable = false;
+    await h.auto.refreshExhaustedIdentity(thread);
+    expect(h.auto.state(thread)).toMatchObject({ state: 'exhausted',
+      expected: { goalId, status: 'blocked', missionRevision: 1, lifecycleRevision: 7 } });
+    expect(h.resumed).toEqual([]);
+    const replaced = harness({ revision: () => ({ goalId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      status: 'blocked', missionRevision: 1, lifecycleRevision: 7 }) });
+    await replaced.auto.restore(terminal);
+    await replaced.auto.refreshExhaustedIdentity(thread);
+    expect(replaced.auto.state(thread)).toMatchObject({ state: 'exhausted', expected: undefined });
+    expect(replaced.resumed).toEqual([]);
+  });
   test('resumes the exact blocked revision after 30 s, in either notification order', async () => {
     for (const order of ['turn-first', 'goal-first'] as const) {
       const h = harness();

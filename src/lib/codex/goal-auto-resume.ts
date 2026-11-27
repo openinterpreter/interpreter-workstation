@@ -200,15 +200,8 @@ export class GoalAutoResume {
           // A preceding attempt's revision cannot identify the final failed
           // turn. Recover the terminal notice identity from this turn only.
           entry.expected = undefined;
-          const generation = ++entry.generation;
-          try {
-            const current = await this.deps.readRevision(item.threadId);
-            const sameTurn = await this.deps.verifyFailedTurn?.(item.threadId, item.turnId);
-            if (!this.stopped && entry.generation === generation &&
-                this.threads.get(item.threadId) === entry && current?.status === 'blocked' && sameTurn === true &&
-                current.goalId === entry.goalId && current.missionRevision === entry.missionRevision)
-              entry.expected = current;
-          } catch { /* No unverified identity or retry from a failed native read. */ }
+          ++entry.generation;
+          await this.refreshExhaustedIdentity(item.threadId);
         }
         continue;
       }
@@ -248,6 +241,25 @@ export class GoalAutoResume {
       return { state: 'scheduled', attempt: entry.attempts + 1, retryAt: entry.retryAt };
     }
     return entry.episodeStartedAt === null ? null : { state: 'waiting', attempt: entry.attempts };
+  }
+
+  /** Rebind a terminal notice after a transient native read failure. This
+   * never reserves a new intent or issues a Goal mutation. */
+  async refreshExhaustedIdentity(threadId: string): Promise<void> {
+    const entry = this.threads.get(threadId);
+    if (this.stopped || !entry?.exhaustedReason || entry.uncertain || entry.preflight || entry.expected ||
+        !entry.sourceTurnId || !entry.goalId || entry.missionRevision === undefined) return;
+    const generation = entry.generation;
+    const turnId = entry.sourceTurnId;
+    try {
+      const current = await this.deps.readRevision(threadId);
+      const sameTurn = await this.deps.verifyFailedTurn?.(threadId, turnId);
+      if (this.stopped || entry.generation !== generation || this.threads.get(threadId) !== entry ||
+          current?.status !== 'blocked' || sameTurn !== true || current.goalId !== entry.goalId ||
+          current.missionRevision !== entry.missionRevision) return;
+      entry.expected = current;
+      this.persist();
+    } catch { this.deps.log(`[goal-auto-resume] terminal identity unavailable threadId=${threadId}`); }
   }
 
   /** Cancel every pending resume; later notifications are ignored. */
@@ -540,15 +552,7 @@ export class GoalAutoResume {
     entry.sourceTurnId = turnId;
     entry.exhaustedReason = reason;
     this.persist();
-    const generation = entry.generation;
-    void this.deps.readRevision(threadId).then(async revision => {
-      if (!revision || revision.status !== 'blocked' || revision.goalId !== entry.goalId ||
-          revision.missionRevision !== entry.missionRevision ||
-          !await this.deps.verifyFailedTurn?.(threadId, turnId)) return;
-      if (this.stopped || this.threads.get(threadId) !== entry || entry.generation !== generation) return;
-      entry.expected = revision;
-      this.persist();
-    }).catch(() => this.deps.log(`[goal-auto-resume] terminal identity unavailable threadId=${threadId}`));
+    void this.refreshExhaustedIdentity(threadId);
     this.deps.log(`[goal-auto-resume] gave up threadId=${threadId} turnId=${turnId} reason="${reason}"`);
   }
 
