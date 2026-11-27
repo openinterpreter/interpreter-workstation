@@ -2,6 +2,7 @@ import { render, screen, within } from '@testing-library/react';
 import { describe, expect, test, vi } from 'vitest';
 
 import { ComposerArea } from './ComposerArea';
+import type { ComposerVoiceAdapter } from './composerVoiceAdapter';
 import { MAIN_COMPOSER_SEND_BUTTON_ID, MAIN_COMPOSER_VOICE_BUTTON_ID } from '../../shared/element-ids';
 
 // The composer reads its workspace, sandbox mode, speech settings and skill
@@ -59,9 +60,11 @@ const STOP_TITLE = 'Stop';
 function renderComposer({
   isStreaming,
   withOverride,
+  withAdapter = false,
 }: {
   isStreaming: boolean;
   withOverride: boolean;
+  withAdapter?: boolean;
 }) {
   return render(
     <ComposerArea
@@ -69,6 +72,7 @@ function renderComposer({
       agentId="agent-voice-while-working"
       messageCount={1}
       isStreaming={isStreaming}
+      voiceAdapter={withAdapter ? ({} as ComposerVoiceAdapter) : undefined}
       onAgentSend={() => {}}
       showSuggestionChips={false}
       showQueuedMessages={false}
@@ -87,6 +91,19 @@ async function settle() {
 }
 
 describe('ComposerArea voice override while a turn runs', () => {
+  test('does not offer native voice when the embedder omits the adapter', async () => {
+    renderComposer({ isStreaming: false, withOverride: false });
+    await settle();
+    expect(screen.queryByTestId(MAIN_COMPOSER_VOICE_BUTTON_ID)).not.toBeInTheDocument();
+    expect(screen.getByTestId(MAIN_COMPOSER_SEND_BUTTON_ID)).toBeDisabled();
+  });
+
+  test('retains the desktop voice affordance when its adapter is supplied', async () => {
+    renderComposer({ isStreaming: false, withOverride: false, withAdapter: true });
+    await settle();
+    expect(screen.getByTestId(MAIN_COMPOSER_VOICE_BUTTON_ID)).toBeInTheDocument();
+  });
+
   test('keeps the replacement voice control beside the stop control while streaming with an empty composer', async () => {
     renderComposer({ isStreaming: true, withOverride: true });
 

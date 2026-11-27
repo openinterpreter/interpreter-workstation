@@ -71,6 +71,7 @@ export const CLIENT_METHOD = {
   interpreterHarnessList: "interpreter/harness/list",
   interpreterHarnessSet: "interpreter/harness/set",
   accountRead: "account/read",
+  accountRateLimitsRead: "account/rateLimits/read",
   accountLogout: "account/logout",
   accountLoginCancel: "account/login/cancel",
 } as const satisfies Record<string, ClientMethod>;
@@ -329,6 +330,10 @@ export type RequestMap = {
   [CLIENT_METHOD.accountRead]: {
     params: v2.GetAccountParams;
     result: v2.GetAccountResponse;
+  };
+  [CLIENT_METHOD.accountRateLimitsRead]: {
+    params: v2.GetAccountRateLimitsParams;
+    result: v2.GetAccountRateLimitsResponse;
   };
   [CLIENT_METHOD.accountLogout]: {
     params: undefined;

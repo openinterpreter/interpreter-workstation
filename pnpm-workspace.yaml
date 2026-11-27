@@ -1,6 +1,7 @@
 packages:
   - apps/server
   - apps/web
+  - packages/browser-agent-core
 
 onlyBuiltDependencies:
   - '@vscode/ripgrep'

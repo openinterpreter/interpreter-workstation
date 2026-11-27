@@ -23,6 +23,7 @@ import {
 import { prefixToolName } from '../../shared/utils/mcpToolName';
 import { INTERPRETER_CALLER_TOKEN_ENV, INTERPRETER_CLI_SERVER_CONNECTION_ENV } from '../utils/interpreterCliRuntime';
 import { WORKSTATION_NODE_PACKAGE, WORKSTATION_NODE_PACKAGE_MANIFEST } from './simpleWorkstationNodePackage';
+import { classifySimpleProjectDiagnostic } from '../../shared/simpleInterfaceProblem';
 
 const CORE_DEPENDENCIES: Record<string, string> = {
   '@interpreter/interface': 'file:.interpreter/packages/interface',
@@ -356,7 +357,18 @@ async function refreshProject(workstationOrigin: string): Promise<SimpleAppStatu
   const installed = await readInstallMarker(project.path);
   if (installed !== fingerprint || !await hasCoreDependencies(project.path)) {
     await trustedProjectRunner.stop(project.path);
-    await installDependencies(project.path, fingerprint);
+    try {
+      await installDependencies(project.path, fingerprint);
+    } catch (error) {
+      // Preserve the two actionable bundle errors, but do not return filesystem
+      // diagnostics from a failed copy or dependency operation to the client.
+      if (error instanceof Error && (
+        error.message === 'The bundled Simple interface runtime is missing. Reinstall or rebuild Interpreter.'
+        || error.message.startsWith('The bundled Simple interface runtime is for ')
+        || error.message === 'This project uses custom core package versions. Install its dependencies in the project before starting it.'
+      )) throw error;
+      throw new Error('The interface project dependencies could not be installed.');
+    }
   }
   const result = await trustedProjectRunner.start(project.path, {
     INTERPRETER_WORKSTATION_ORIGIN: workstationOrigin,
@@ -370,6 +382,7 @@ async function refreshProject(workstationOrigin: string): Promise<SimpleAppStatu
     sourceRevision: fingerprint,
     assetRevision: await getSimpleAssetRevision(project.path),
     diagnostic: result.success ? null : (result.error ?? 'The project dev server failed to start.'),
+    problemKind: result.success ? null : classifySimpleProjectDiagnostic(result.error ?? ''),
     ready: result.success && result.state.status === 'running' && typeof result.state.url === 'string',
     runtimeUrl: result.state.url ?? null,
   };
@@ -394,6 +407,7 @@ export async function readSimpleProjectAppStatus(): Promise<SimpleAppStatus> {
     sourceRevision: fingerprint,
     assetRevision: await getSimpleAssetRevision(project.path),
     diagnostic: result.state.status === 'error' ? (result.state.error ?? 'The project dev server failed.') : null,
+    problemKind: result.state.status === 'error' ? classifySimpleProjectDiagnostic(result.state.error ?? '') : null,
     ready: result.state.status === 'running' && typeof result.state.url === 'string',
     runtimeUrl: result.state.url ?? null,
   };

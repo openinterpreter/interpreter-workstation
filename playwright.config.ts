@@ -186,7 +186,7 @@ export default defineConfig({
   timeout: 30000, // 30 seconds - DO NOT INCREASE
   outputDir: path.join(testRunDir, "test-results"),
   use: {
-    trace: "on-first-retry",
+    trace: "retain-on-failure", // Capture the first attempt; retain traces only for failed tests.
     screenshot: "only-on-failure", // Screenshot on failure
     video: "retain-on-failure", // Video recording on failure
   },

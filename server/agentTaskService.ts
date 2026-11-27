@@ -112,7 +112,7 @@ function buildMessagePreview(message: string | undefined): string {
   return `${normalized.slice(0, 137)}...`;
 }
 
-function notifyProgrammaticTaskStarted(options: StartAgentTaskOptions, mode: AgentTaskMode): void {
+export function notifyProgrammaticTaskStarted(options: StartAgentTaskOptions, mode: AgentTaskMode): void {
   const timestamp = new Date().toISOString();
   broadcastEvent(IPC_CHANNELS.PROGRAMMATIC_TASK_STARTED, {
     mode,
@@ -160,47 +160,61 @@ export async function resumeAgentTaskThread(
   // A loaded native thread keeps its original shell environment. A newly
   // minted caller here would be registered in Workstation but absent from the
   // native shell; a failed resume would also leave that false binding behind.
-  const binding = agentTabManager.getBindingForThread(options.threadId);
+  const service = getCodexService();
+  let binding = agentTabManager.getBindingForThread(options.threadId);
+  let recovered: ReturnType<typeof prepareColdCallerCarrier> | undefined;
+  if (!binding) {
+    // Following an app restart the old native thread can be saved but its
+    // in-memory caller binding is gone. Never rotate a loaded shell: only the
+    // exact unloaded thread in its original workspace gets a scoped carrier.
+    const thread = await service.readThreadShell(options.threadId).catch(() => {
+      throw new Error('Existing thread caller is unavailable or its owner scope differs; use guarded cold bind only when eligible');
+    });
+    if (thread.id !== options.threadId || thread.cwd !== workspace ||
+        thread.status !== 'notLoaded' || thread.archived || thread.ephemeral) {
+      throw new Error('Existing thread caller is unavailable or its owner scope differs; use guarded cold bind only when eligible');
+    }
+    recovered = prepareColdCallerCarrier(options.threadId, workspace);
+    binding = agentTabManager.getBindingForThread(options.threadId);
+  }
   if (!binding || binding.workspacePath !== workspace ||
       (binding.modelConfig && (binding.modelConfig.provider !== modelConfig.provider ||
         binding.modelConfig.modelId !== modelConfig.modelId))) {
+    recovered?.rollback();
     throw new Error('Existing thread caller is unavailable or its owner scope differs; use guarded cold bind only when eligible');
   }
-  const service = getCodexService();
-  await ensureOpenAIOAuthAccountReady(
-    service,
-    modelConfig.provider === 'openai-oauth',
-  );
-  // A resumed thread can outlive this request through native OIX features such
-  // as Goal. Provision the provider in OIX first so those later turns retain
-  // environment-backed auth after the request-scoped resume overrides are gone.
-  await service.ensureProvider(profile, true);
-  // Loading a saved thread fixes its shell environment for every later turn,
-  // including Goal continuations the runtime starts on its own. Carry the
-  // thread's own existing caller and the current app CLI connection so those
-  // turns can reach `interpreter-app`. The service applies this only when the
-  // exact thread is not loaded; a loaded thread keeps its live environment.
-  // Delegated callers keep their owner's ordinary path.
-  const shellPolicy = binding.parentOwner
-    ? undefined
-    : buildCallerShellPolicy(binding.callerToken, workspace);
-  const threadId = await service.resumeThread({
-    threadId: options.threadId,
-    model: modelConfig.modelId,
-    modelProvider: profile.modelProvider,
-    providerConfig: profile.providerConfig,
-    cwd: workspace,
-    config: {
-      ...(modelConfig.reasoningEffort
-        ? { model_reasoning_effort: modelConfig.reasoningEffort }
-        : {}),
-      mcp_servers: {},
-      ...(shellPolicy ? { shell_environment_policy: shellPolicy as unknown as JsonValue } : {}),
-    },
-    ...(shellPolicy ? { callerBoundShellPolicy: true } : {}),
-  });
-
-  return { threadId };
+  try {
+    await ensureOpenAIOAuthAccountReady(service, modelConfig.provider === 'openai-oauth');
+    // A resumed thread can outlive this request through native OIX features
+    // such as Goal. Provision its provider before resuming it.
+    await service.ensureProvider(profile, true);
+    // A saved unloaded thread fixes this policy for all later turns. A loaded
+    // thread retains its existing shell; delegated callers retain their owner.
+    const shellPolicy = recovered?.shellPolicy ?? (binding.parentOwner
+      ? undefined
+      : buildCallerShellPolicy(binding.callerToken, workspace));
+    const threadId = await service.resumeThread({
+      threadId: options.threadId,
+      model: modelConfig.modelId,
+      modelProvider: profile.modelProvider,
+      providerConfig: profile.providerConfig,
+      cwd: workspace,
+      config: {
+        ...(modelConfig.reasoningEffort
+          ? { model_reasoning_effort: modelConfig.reasoningEffort }
+          : {}),
+        mcp_servers: {},
+        ...(shellPolicy ? { shell_environment_policy: shellPolicy as unknown as JsonValue } : {}),
+      },
+      ...(shellPolicy ? { callerBoundShellPolicy: true } : {}),
+      ...(recovered ? { requireUnloadedShellPolicy: true } : {}),
+    });
+    recovered?.commit();
+    return { threadId };
+  } catch (error) {
+    recovered?.rollback();
+    throw error;
+  }
 }
 
 const COLD_BIND_CUSTODY_ERROR =

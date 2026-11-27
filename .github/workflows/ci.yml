@@ -41,11 +41,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
+      - run: node --test scripts/ci/e2e-diagnostics.test.mjs
       - run: node --test scripts/ci/release-workflow.test.mjs
+      - run: node --test scripts/ci/wait-for-published-manifest.test.mjs
       - run: node --test scripts/electron-builder/startup-url-dependencies.test.cjs
       - run: node --test scripts/ci/select-ubuntu-apt-mirror.test.mjs
       - run: node --test scripts/ci/windows-install-path.test.mjs
       - run: node --test scripts/ci/retry-transient-download.test.mjs
+      - run: node --test scripts/ci/publish-stable-aliases.test.mjs
+      - run: node --test scripts/ci/verify-alias-digest.test.mjs
       - run: node scripts/ci/retry-transient-download.mjs node_modules/electron/install.js
       - run: pnpm run test:unit
       - run: pnpm run test:vitest
@@ -123,6 +127,15 @@ jobs:
             .cache/trycua-cua-driver
             .cache/native-builds
           key: native-builds-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.cache/trycua-cua-driver/*/build-info.json', '.cache/native-builds/**') }}
+      - name: Upload Electron E2E failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: electron-e2e-diagnostics-shard-${{ matrix.shard }}
+          path: |
+            test-runs/**/logs
+            test-runs/**/test-results
+          if-no-files-found: warn
 
   # One stable result for the whole Electron suite: it passes only when every
   # shard passed.
@@ -231,6 +244,9 @@ jobs:
           restore-keys: native-builds-${{ runner.os }}-${{ runner.arch }}-
       - run: pnpm run build
       - run: node scripts/ci/retry-transient-download.mjs node_modules/electron/install.js
+      - name: Verify Windows PowerShell CLI launcher
+        if: runner.os == 'Windows'
+        run: pnpm exec bun test --test-name-pattern 'writes a Windows PowerShell fallback that safely interpolates toolName before query params' server/utils/interpreterCliRuntime.test.ts
       # Exercise the distribution wrapper on every supported runner. This is
       # especially important on Windows, where package-manager shims require
       # platform-shell resolution.

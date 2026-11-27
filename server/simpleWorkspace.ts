@@ -2,7 +2,7 @@
  * Simple mode's own workspace, independent of the Advanced file explorer.
  * This is a user-owned directory, never the application source or its config home.
  */
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmdirSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { getSimpleWorkspaceSetting, setSimpleWorkspaceSetting } from './configStore';
@@ -52,7 +52,7 @@ function isStrictChild(root: string, candidate: string): boolean {
 }
 
 /** Reject broad/private roots, missing paths, and symlink workspace selections. */
-export function validateSimpleWorkspacePath(inputPath: string): string {
+export function validateSimpleWorkspacePath(inputPath: string, userHomePath: string = homedir()): string {
   if (typeof inputPath !== 'string' || !inputPath.trim() || inputPath.includes('\0') || !isAbsolute(inputPath)) {
     throw new Error('Choose an absolute workspace folder.');
   }
@@ -63,7 +63,7 @@ export function validateSimpleWorkspacePath(inputPath: string): string {
   if (!statSync(requested).isDirectory()) throw new Error('The Simple workspace must be a directory.');
 
   const canonical = realpathSync(requested);
-  const home = realpathSync(homedir());
+  const home = realpathSync(userHomePath);
   if (canonical === home || isStrictChild(canonical, home)) {
     throw new Error('Choose a dedicated folder, not your home or a filesystem ancestor.');
   }
@@ -77,7 +77,10 @@ export function validateSimpleWorkspacePath(inputPath: string): string {
     ? realpathSync(process.resourcesPath) : null;
   if (canonical === configPath
     || isStrictChild(canonical, configPath)
-    || isStrictChild(configPath, canonical)
+    // An explicit config home can be the user's home. In that case its
+    // dedicated descendants are valid, while selecting home itself or any
+    // ancestor remains forbidden above. A distinct config tree stays closed.
+    || (configPath !== home && isStrictChild(configPath, canonical))
     || (appCwd && (canonical === appCwd || isStrictChild(appCwd, canonical)))
     || (appResources && (canonical === appResources || isStrictChild(appResources, canonical)))) {
     throw new Error('Choose a dedicated folder, not your home, app, or configuration root.');
@@ -93,8 +96,8 @@ export function validateSimpleWorkspacePath(inputPath: string): string {
  * as symlinks inside it. Call at the point of each file operation, not only when
  * accepting the selected workspace path.
  */
-export function assertSimpleWorkspaceChildPath(workspacePath: string, candidatePath: string): string {
-  const root = validateSimpleWorkspacePath(workspacePath);
+export function assertSimpleWorkspaceChildPath(workspacePath: string, candidatePath: string, userHomePath: string = homedir()): string {
+  const root = validateSimpleWorkspacePath(workspacePath, userHomePath);
   if (typeof candidatePath !== 'string' || !candidatePath || candidatePath.includes('\0')) {
     throw new Error('Invalid Simple workspace child path.');
   }
@@ -115,8 +118,8 @@ export function assertSimpleWorkspaceChildPath(workspacePath: string, candidateP
   return target;
 }
 
-function seedWorkspaceGuidance(workspacePath: string): void {
-  const guidancePath = assertSimpleWorkspaceChildPath(workspacePath, 'AGENTS.md');
+function seedWorkspaceGuidance(workspacePath: string, userHomePath: string = homedir()): void {
+  const guidancePath = assertSimpleWorkspaceChildPath(workspacePath, 'AGENTS.md', userHomePath);
   try {
     writeFileSync(guidancePath, SIMPLE_WORKSPACE_GUIDANCE, { encoding: 'utf8', flag: 'wx' });
   } catch (error) {
@@ -151,8 +154,8 @@ async function resolveSimpleWorkspacePath(defaultHomePath: string): Promise<stri
     // startup error. Recover to the safe default; still reject an existing
     // unsafe path (including a symlink) rather than following it.
     if (existsSync(saved)) {
-      const path = validateSimpleWorkspacePath(saved);
-      seedWorkspaceGuidance(path);
+      const path = validateSimpleWorkspacePath(saved, defaultHomePath);
+      seedWorkspaceGuidance(path, defaultHomePath);
       return path;
     }
     console.warn('[Simple workspace] Saved folder is unavailable; selecting the default workspace.');
@@ -178,8 +181,16 @@ async function resolveSimpleWorkspacePath(defaultHomePath: string): Promise<stri
     }
   }
   if (!firstRunPath) throw new Error('Could not reserve a new Simple workspace folder.');
-  const path = validateSimpleWorkspacePath(firstRunPath);
-  seedWorkspaceGuidance(path);
+  let path: string;
+  try {
+    path = validateSimpleWorkspacePath(firstRunPath, defaultHomePath);
+  } catch (error) {
+    // Remove only our still-empty reservation; never delete contents another
+    // process may have created after the exclusive mkdir.
+    try { rmdirSync(firstRunPath); } catch { /* preserve the validation error */ }
+    throw error;
+  }
+  seedWorkspaceGuidance(path, defaultHomePath);
   await setSimpleWorkspaceSetting(path);
   return path;
 }

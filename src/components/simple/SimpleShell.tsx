@@ -22,6 +22,7 @@ import { AgentThread } from "../../../agent/components/AgentThread";
 import { Approvals } from "../Approvals";
 import { getApprovalsSnapshot, refreshApprovals, subscribeApprovals } from "../../stores/approvalsStore";
 import { ComposerArea } from "../../../agent/components/ComposerArea";
+import type { ComposerVoiceAdapter } from '../../../agent/components/composerVoiceAdapter';
 import type { BaseTiptapComposerRef } from "../../../agent/components/composer/BaseTiptapComposer";
 import { AgentMetadataProvider, type AgentMetadata } from "../../../agent/contexts/AgentMetadataContext";
 import { AgentErrorProvider } from "../../../agent/contexts/AgentErrorContext";
@@ -30,6 +31,7 @@ import { isWorkstationReadOnly } from "../../remote/workstationConnection";
 import { ExperienceSectionContent } from "../settings/ExperienceSection";
 import { ProfilesSectionContent } from "../settings/ProfilesSection";
 import {
+  getHostCapabilities,
   openFolderDialog,
   quickActions,
   simplePrimaryThread,
@@ -104,6 +106,8 @@ export function sendSimpleMessage(
 }
 
 interface SimpleShellProps {
+  /** Desktop injects native voice; embedded browser projects may omit it. */
+  voiceAdapter?: ComposerVoiceAdapter;
   firstRunSession?: boolean;
   workspacePath: string;
   initialThreadId: string | null;
@@ -119,6 +123,7 @@ interface SimpleShellProps {
 
 /** Simple is a separate surface: no explorer, tabs, sidebars, or second-chat affordances. */
 export function SimpleShell({
+  voiceAdapter,
   firstRunSession = false,
   workspacePath,
   initialThreadId,
@@ -198,7 +203,7 @@ export function SimpleShell({
     },
     [workspacePath],
   );
-  const live = useSimpleLive({ onDelegate: handleLiveDelegate });
+  const live = useSimpleLive({ onDelegate: handleLiveDelegate, enabled: Boolean(voiceAdapter) });
 
   useEffect(() => {
     setThreadId(initialThreadId);
@@ -563,6 +568,7 @@ export function SimpleShell({
   const composer = (expanded: boolean) =>
     !readOnly && !persistenceError && modelConfig ? (
       <ComposerArea
+        voiceAdapter={voiceAdapter}
         ref={composerRef}
         isTerminal={false}
         agentId={SIMPLE_PRIMARY_AGENT_ID}
@@ -578,7 +584,7 @@ export function SimpleShell({
         initialDraft={initialDraft}
         onDraftChange={persistComposerDraft}
         conciseStreamingActions={true}
-        voiceButtonOverride={
+        voiceButtonOverride={voiceAdapter ? (
           <button
             type="button"
             aria-label={
@@ -612,7 +618,7 @@ export function SimpleShell({
               <AudioLines className="size-[18px]" />
             )}
           </button>
-        }
+        ) : undefined}
         settingsContent={<></>}
         onAgentSend={(text, options) => {
           window.dispatchEvent(
@@ -1186,7 +1192,8 @@ export function SimpleShell({
                           onLeaveFeedback();
                         }}
                       />
-                      <SimpleChannelsSettings threadId={threadId} />
+                      {getHostCapabilities().onboardingSteps.whatsapp &&
+                        <SimpleChannelsSettings threadId={threadId} />}
                       <div className="mt-7 border-t border-foreground/[0.08] pt-5">
                         <SimpleConnectionsSettings />
                         {live.error && (

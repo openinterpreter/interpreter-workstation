@@ -19,7 +19,9 @@ export type BundledPnpmCommand = {
  * manager. Electron supplies Node and Workstation supplies pnpm on every OS.
  */
 export function resolveBundledPnpmCli(
-  resolver: NodeRequire = createRequire(path.join(__dirname, '..', '..', 'package.json')),
+  resolver: NodeRequire = createRequire(
+    typeof __filename === 'string' && __filename ? __filename : import.meta.url,
+  ),
 ): string {
   const manifestPath = resolver.resolve('pnpm');
   const manifest = resolver(manifestPath) as { bin?: { pnpm?: string } };

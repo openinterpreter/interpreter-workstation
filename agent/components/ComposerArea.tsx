@@ -74,19 +74,12 @@ import { Button } from '../../src/components/ui/button';
 import { OnboardingModal } from '../../src/components/onboarding/components/OnboardingModal';
 import { ExperimentalBadge } from '../../src/components/onboarding/components/ExperimentalBadge';
 import { useToast } from '../../src/contexts/ToastContext';
-import { trackVoiceModeStarted, trackVoiceModeStopped, trackVoiceModeChanged } from '../../src/utils/telemetry';
-import {
-  MICROPHONE_CAPTURE_REQUEST,
-  QwenStreamingCaptureSession,
-  checkEndOfTurn,
-  getAdaptiveVoiceSilenceTimeoutMs,
-  shouldUseMoonshineVoiceBackend,
-  finishVoiceStreamSession,
-  warmVoiceStreamSession,
-} from '../utils/voiceCapture';
-import { QwenVoiceStreamBridge } from '../utils/qwenVoiceStreamBridge';
-import { loadMoonshineModule, warmMoonshineModel, type MoonshineMicrophoneTranscriber } from '../utils/moonshine';
-import { emitVoiceLatencyEvent } from '../utils/voiceLatency';
+import { resolveBrowserProjectWorkspace, useBrowserProjectHost } from '../../src/browser-project/host';
+import { shouldUseMoonshineVoiceBackend } from '../utils/voiceBackend';
+import type { QwenStreamingCaptureSession } from '../utils/voiceCapture';
+import type { QwenVoiceStreamBridge } from '../utils/qwenVoiceStreamBridge';
+import type { MoonshineMicrophoneTranscriber } from '../utils/moonshine';
+import type { ComposerVoiceAdapter } from './composerVoiceAdapter';
 import { isComposerFileDrag, resolveComposerFileDropData } from '../../src/utils/composerDrop';
 import { markActiveFileDragHandled } from '../../src/utils/fileDragData';
 import {
@@ -171,6 +164,8 @@ export interface ComposerAreaProps {
   conciseStreamingActions?: boolean;
   /** Replaces Advanced mode's transcription control (used by Simple GPT Live). */
   voiceButtonOverride?: React.ReactNode;
+  /** Desktop voice behavior is supplied by app-owned entry points, never by an embedder import. */
+  voiceAdapter?: ComposerVoiceAdapter;
   initialDraft?: string;
   onDraftChange?: (text: string) => void;
 }
@@ -200,6 +195,23 @@ const EMPTY_COMPOSER_SUBMISSION: SerializedComposerSubmission = {
   text: '',
   attachments: [],
 };
+
+const unavailableVoice = (): never => { throw new Error('Voice is unavailable in this host'); };
+const unavailableVoiceAdapter = {
+  microphoneCaptureRequest: { audio: true },
+  QwenStreamingCaptureSession: unavailableVoice,
+  QwenVoiceStreamBridge: unavailableVoice,
+  checkEndOfTurn: unavailableVoice,
+  getAdaptiveVoiceSilenceTimeoutMs: () => 2000,
+  finishVoiceStreamSession: unavailableVoice,
+  warmVoiceStreamSession: unavailableVoice,
+  loadMoonshineModule: unavailableVoice,
+  warmMoonshineModel: unavailableVoice,
+  emitVoiceLatencyEvent: () => {},
+  trackVoiceModeStarted: () => {},
+  trackVoiceModeStopped: () => {},
+  trackVoiceModeChanged: () => {},
+} as unknown as ComposerVoiceAdapter;
 
 function hasSubmissionContent(submission: SerializedComposerSubmission): boolean {
   return submission.text.trim().length > 0 || submission.attachments.length > 0;
@@ -302,14 +314,32 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
   composerPlaceholder,
   conciseStreamingActions = false,
   voiceButtonOverride,
+  voiceAdapter,
   initialDraft,
   onDraftChange,
 }: ComposerAreaProps, forwardedRef) {
   "use no memo";
 
+  const {
+    microphoneCaptureRequest: MICROPHONE_CAPTURE_REQUEST,
+    QwenStreamingCaptureSession,
+    QwenVoiceStreamBridge,
+    checkEndOfTurn,
+    getAdaptiveVoiceSilenceTimeoutMs,
+    finishVoiceStreamSession,
+    warmVoiceStreamSession,
+    loadMoonshineModule,
+    warmMoonshineModel,
+    emitVoiceLatencyEvent,
+    trackVoiceModeStarted,
+    trackVoiceModeStopped,
+    trackVoiceModeChanged,
+  } = voiceAdapter ?? unavailableVoiceAdapter;
+
   const { t, i18n } = useTranslation();
   const layout = useContext(LayoutContext);
   const { showToast } = useToast();
+  const browserProjectHost = useBrowserProjectHost();
   const marketingDemoMode = !isTerminal && isMarketingDemoMode();
   const marketingDemoPromptOptions = marketingDemoMode ? getMarketingDemoPromptOptions() : [];
   const marketingDemoPromptOptionsById = useRef<Map<string, MarketingDemoPromptOption>>(new Map());
@@ -376,7 +406,7 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
   const wrapperRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (isTerminal) return;
+    if (isTerminal || browserProjectHost) return;
     let cancelled = false;
 
     workspaceIpc.get()
@@ -399,10 +429,10 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
       cancelled = true;
       unsubscribe();
     };
-  }, [isTerminal]);
+  }, [browserProjectHost, isTerminal]);
 
   useEffect(() => {
-    if (isTerminal) return;
+    if (isTerminal || !voiceAdapter) return;
     if (!shouldUseMoonshineVoiceBackend(sttSettingsForUi.backend)) return;
     if (!window.electron?.voiceExtension?.checkInstalled) return;
 
@@ -576,6 +606,7 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
 
   useEffect(() => {
     let canceled = false;
+    if (browserProjectHost || !voiceAdapter) return;
 
     void stt.getSettings()
       .then((response: { settings: SttSettings }) => {
@@ -594,9 +625,10 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
       canceled = true;
       unsubscribe();
     };
-  }, [applySttSettings]);
+  }, [applySttSettings, browserProjectHost, voiceAdapter]);
 
   const loadVoiceModelRequirement = useCallback(async (): Promise<VoiceModelRequirementStatus | null> => {
+    if (!voiceAdapter) return null;
     if (!window.electron?.voiceExtension?.checkInstalled) {
       return null;
     }
@@ -773,6 +805,7 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
   const findExistingWorkspacePickerPath = useCallback(async (
     candidatePath?: string | null,
   ): Promise<string | undefined> => {
+    if (browserProjectHost) return undefined;
     let currentPath = candidatePath ?? windowWorkspacePath ?? null;
 
     while (currentPath) {
@@ -793,12 +826,13 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
     }
 
     return undefined;
-  }, [windowWorkspacePath]);
+  }, [browserProjectHost, windowWorkspacePath]);
 
   const promptForWorkspacePath = useCallback(async (
     title: string,
     candidatePath?: string | null,
   ): Promise<string | null> => {
+    if (browserProjectHost) return null;
     if (!onWorkspacePathChange) {
       return null;
     }
@@ -819,7 +853,7 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
 
     onWorkspacePathChange(nextWorkspacePath);
     return nextWorkspacePath;
-  }, [findExistingWorkspacePickerPath, onWorkspacePathChange, refocusComposer]);
+  }, [browserProjectHost, findExistingWorkspacePickerPath, onWorkspacePathChange, refocusComposer]);
 
   const ensureAgentWorkspaceReady = useCallback(async (): Promise<{
     ok: true;
@@ -828,6 +862,10 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
     ok: false;
   }> => {
     try {
+      if (browserProjectHost) {
+        const browserPath = workspacePath || browserProjectHost.workspacePath;
+        return { ok: true, workspacePath: await resolveBrowserProjectWorkspace(browserProjectHost, browserPath) };
+      }
       const nextWorkspacePath = getEffectiveComposerWorkspacePath({
         workspacePath,
         windowWorkspacePath,
@@ -858,6 +896,10 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
       }
       return { ok: true, workspacePath: selectedWorkspacePath };
     } catch (error) {
+      if (browserProjectHost) {
+        showToast(error instanceof Error ? error.message : 'Browser project workspace unavailable', 'error', 7000);
+        return { ok: false };
+      }
       console.error('[ComposerArea] Failed to resolve workspace before send', {
         agentId,
         error,
@@ -865,7 +907,7 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
       showToast('Failed to verify the selected folder. Pick a folder and try again.', 'error', 7000);
       return { ok: false };
     }
-  }, [agentId, promptForWorkspacePath, showToast, windowWorkspacePath, workspacePath]);
+  }, [agentId, browserProjectHost, promptForWorkspacePath, showToast, windowWorkspacePath, workspacePath]);
 
   // Resize handlers
   const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
@@ -1920,7 +1962,7 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
   ) => {
     const resumeAfterInstall = options?.resumeAfterInstall === true;
     const resolvedVoiceMode = requestedVoiceMode ?? sttSettingsRef.current.voiceMode ?? 'conversational';
-    if (isTerminal || isVoiceModeActiveRef.current || isVoiceModelInstallPending) return;
+    if (!voiceAdapter || isTerminal || isVoiceModeActiveRef.current || isVoiceModelInstallPending) return;
     if (isVoiceModeStarting && !resumeAfterInstall) return;
 
     setIsVoiceModeStarting(true);
@@ -3024,7 +3066,7 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
   ]);
 
   const handleInstallVoiceModels = useCallback(async () => {
-    if (!voiceModelRequirement || isVoiceModelInstallPending) {
+    if (!voiceAdapter || !voiceModelRequirement || isVoiceModelInstallPending) {
       return;
     }
 
@@ -3097,7 +3139,7 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
 
   useEffect(() => {
     if (isTerminal) return;
-    if (!autoStartVoiceMode) return;
+    if (!autoStartVoiceMode || !voiceAdapter) return;
     if (hasAutoStartedVoiceRef.current) return;
     hasAutoStartedVoiceRef.current = true;
     onVoiceModeAutoStartConsumed?.();
@@ -3491,7 +3533,7 @@ export const ComposerArea = React.forwardRef<BaseTiptapComposerRef, ComposerArea
     }
 
     // Voice mode starting or idle (no input, not streaming) — show a direct voice start button
-    const showVoiceControls = isBusy || (!isStreaming && disabled);
+    const showVoiceControls = Boolean(voiceAdapter) && (isBusy || (!isStreaming && disabled));
 
     if (showVoiceControls) {
       const currentVoiceMode = sttSettingsForUi.voiceMode ?? 'conversational';

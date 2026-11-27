@@ -3,6 +3,7 @@ import { lstat, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { assertSimpleProjectChildPath, getActiveSimpleProject } from '../simpleProjects';
+import type { SimpleInterfaceProblemKind } from '../../shared/simpleInterfaceProblem';
 
 const MAX_STATE_BYTES = 512 * 1024;
 const MAX_UI_STATE_BYTES = 256 * 1024;
@@ -12,6 +13,7 @@ export type SimpleAppStatus = {
   sourceRevision: string;
   assetRevision?: number;
   diagnostic: string | null;
+  problemKind?: SimpleInterfaceProblemKind | null;
   ready: boolean;
   runtimeUrl?: string | null;
 };

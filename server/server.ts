@@ -49,6 +49,7 @@ if (process.env.NODE_ENV === 'test') {
 import { convertHeicToJpeg } from './utils/heicConverter';
 import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import { join as pathJoin, dirname, normalize as pathNormalize, resolve as pathResolve, sep as pathSep } from "node:path";
+import { fileURLToPath } from 'node:url';
 import os from "node:os";
 import agentRouter from "./routes/agent";
 import { createSupervisorPeerRouter } from './routes/supervisorPeer';
@@ -60,6 +61,7 @@ import { readyWakeSources, startWakeSources, wakeSources } from './utils/wakeSou
 import { THREAD_INPUT_SOURCE, threadInputCustody } from './utils/wakeSources';
 import { startOutcomeReturns } from './utils/outcomeReturnsRuntime';
 import { startGoalAutoResume } from './utils/goalAutoResumeRuntime';
+import { startUsageLimitResume } from './utils/usageLimitResumeRuntime';
 import { startGoalNotices } from './utils/goalNoticesRuntime';
 import authRouter from "./routes/auth";
 import { ENTERPRISE_READINESS } from './enterprise/controlPlane';
@@ -91,6 +93,8 @@ if (process.env.NODE_ENV !== 'test') startWakeSources();
 if (process.env.NODE_ENV !== 'test') startOutcomeReturns();
 // Resume Goals that a temporary model-capacity refusal blocked.
 if (process.env.NODE_ENV !== 'test') startGoalAutoResume();
+// Resume Goals stopped by a usage limit once the account's allowance is back.
+if (process.env.NODE_ENV !== 'test') startUsageLimitResume();
 // Tell a thread's most recent sender when its Goal stops, completes or resumes.
 if (process.env.NODE_ENV !== 'test') startGoalNotices();
 // normalizePath intentionally not used here - it converts Unicode chars to ASCII,
@@ -217,8 +221,11 @@ if (serveBuiltRendererFromServer) {
   const configuredRendererPath = process.env.INTERPRETER_WORKSTATION_RENDERER_DIR?.trim();
   const sourceRendererPath = pathJoin(process.cwd(), 'dist');
   const binaryRendererPath = dirname(process.execPath);
+  const moduleDirectory = dirname(
+    typeof __filename === 'string' && __filename ? __filename : fileURLToPath(import.meta.url),
+  );
   const distPath = process.versions.electron
-    ? pathJoin(__dirname, '../../dist')
+    ? pathJoin(moduleDirectory, '../../dist')
     : configuredRendererPath
       ? pathResolve(configuredRendererPath)
       : existsSync(pathJoin(sourceRendererPath, 'index.html'))

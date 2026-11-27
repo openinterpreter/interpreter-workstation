@@ -5,6 +5,7 @@ type SimpleLiveState = 'idle' | 'connecting' | 'active' | 'error';
 
 type UseSimpleLiveOptions = {
   onDelegate: (text: string, delegationId: string) => void;
+  enabled?: boolean;
 };
 
 const MAX_RECENT_TRANSCRIPT_CHARACTERS = 4_000;
@@ -26,7 +27,7 @@ export function delegatedRequestText(
   return currentInput.trim();
 }
 
-export function useSimpleLive({ onDelegate }: UseSimpleLiveOptions) {
+export function useSimpleLive({ onDelegate, enabled = true }: UseSimpleLiveOptions) {
   const [state, setState] = useState<SimpleLiveState>('idle');
   const [error, setError] = useState<string | null>(null);
   const [level, setLevel] = useState(0);
@@ -69,6 +70,7 @@ export function useSimpleLive({ onDelegate }: UseSimpleLiveOptions) {
   useEffect(() => stop, [stop]);
 
   useEffect(() => {
+    if (!enabled) return;
     let cancelled = false;
     const refresh = () => void simpleLive.status().then((status) => {
       if (!cancelled) setConfigured(status.configured);
@@ -81,9 +83,10 @@ export function useSimpleLive({ onDelegate }: UseSimpleLiveOptions) {
       cancelled = true;
       window.removeEventListener('simple-live:configuration-changed', refresh);
     };
-  }, []);
+  }, [enabled]);
 
   const start = useCallback(async () => {
+    if (!enabled) return;
     if (state === 'connecting' || state === 'active') return;
     setError(null);
     setState('connecting');
@@ -175,7 +178,7 @@ export function useSimpleLive({ onDelegate }: UseSimpleLiveOptions) {
       setState('error');
       setError(cause instanceof Error ? cause.message : 'GPT Live could not start.');
     }
-  }, [cleanup, onDelegate, state]);
+  }, [cleanup, enabled, onDelegate, state]);
 
   const sendResult = useCallback((content: string) => {
     const channel = channelRef.current;

@@ -596,6 +596,7 @@ function createFakeClient(overrides: {
   forkThread?: (...args: Parameters<CodexClient["forkThread"]>) => Promise<string>;
   threadRead?: (params: Parameters<CodexClient["threadRead"]>[0]) => Promise<v2.ThreadReadResponse>;
   threadTurnsList?: (params: v2.ThreadTurnsListParams) => Promise<v2.ThreadTurnsListResponse>;
+  threadList?: (params: v2.ThreadListParams) => Promise<v2.ThreadListResponse>;
   configValueWrite?: (keyPath: string, value: JsonValue) => Promise<void>;
   configRead?: () => Promise<v2.ConfigReadResponse>;
 } = {}) {
@@ -796,6 +797,7 @@ function createFakeClient(overrides: {
     },
     async threadList(params) {
       calls.threadListParams.push(params ?? {});
+      if (overrides.threadList) return overrides.threadList(params ?? {});
       return { data: [], nextCursor: null };
     },
     async threadLoadedList() {
@@ -2239,6 +2241,19 @@ describe("CodexService", () => {
     assert.equal(fake.calls.startTurn, 0);
   });
 
+  test('strict unloaded resume refuses a loaded thread without replacing its shell', async () => {
+    const id = '00000000-0000-4000-8000-000000000135';
+    const fake = createFakeClient({
+      async threadRead() { return { thread: { id, cwd: '/workspace', status: { type: 'idle' },
+        turns: [] } as v2.Thread }; },
+    });
+    const service = new CodexService(fake.client);
+    await assert.rejects(service.resumeThread({ threadId: id, model: null, cwd: '/workspace',
+      config: { shell_environment_policy: { set: { INTERPRETER_CALLER_TOKEN: 'agtok_prior' } } },
+      requireUnloadedShellPolicy: true }), /Thread is loaded/);
+    assert.equal(fake.calls.resumeThread, 0);
+  });
+
   test('unloaded existing-thread input without a registered carrier keeps the ordinary resume', async () => {
     const id = '00000000-0000-4000-8000-000000000126';
     const fake = createFakeClient({
@@ -3258,6 +3273,23 @@ describe("CodexService", () => {
     assert.equal(fake.calls.threadListParams[0]?.archived, false);
   });
 
+  test('native thread-list deadline fails closed and does not accept a late page', async () => {
+    let finish!: (value: v2.ThreadListResponse) => void;
+    const client = createFakeClient({ threadList: () => new Promise((resolve) => { finish = resolve; }) });
+    const service = new CodexService(client.client);
+    await assert.rejects(service.listThreads({}, 10), (error: unknown) =>
+      error instanceof NativeCustodyPhaseError && error.phase === 'thread_list' && error.category === 'deadline');
+    finish({ data: [], nextCursor: null });
+  });
+
+  test('native thread-list error never becomes an empty success page or exposes native prose', async () => {
+    const client = createFakeClient({ threadList: async () => { throw new Error('PRIVATE native failure'); } });
+    const service = new CodexService(client.client);
+    await assert.rejects(service.listThreads({}, 100), (error: unknown) =>
+      error instanceof NativeCustodyPhaseError && error.phase === 'thread_list' &&
+      error.category === 'native_unavailable' && !error.message.includes('PRIVATE'));
+  });
+
   test("should_pass_readThread_params_to_client", async () => {
     const fake = createFakeClient();
     const service = new CodexService(fake.client);
@@ -3279,11 +3311,14 @@ describe("CodexService", () => {
       threadId: id, path, cwd: '/workspace/projects/interpreter', archived: false,
     });
     assert.deepEqual(fake.calls.threadReadParams, [{ threadId: id, includeTurns: false }]);
+    // A thread whose last turn failed still has a durable identity: input must reach it.
+    native = { ...native, status: { type: 'systemError' } } as v2.Thread;
+    assert.equal((await service.readSavedThreadIdentity(id)).threadId, id);
+    native = { ...native, status: { type: 'idle' } } as v2.Thread;
     for (const changed of [
       { id: '00000000-0000-4000-8000-000000000002' },
       { path: `/workspace/home/archived_sessions/turn-${id}.jsonl` },
       { archived: true }, { status: { type: 'unrecognized' } },
-      { status: { type: 'systemError' } },
       { cwd: '/tmp/private' }, { ephemeral: true },
       { turns: [{ id: 'private', items: [{ text: 'PRIVATE TRANSCRIPT' }] }] },
     ]) {

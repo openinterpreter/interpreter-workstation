@@ -1,14 +1,20 @@
 import { describe, expect, test } from 'bun:test';
 
 import { applyChatEvent, createInitialChatState } from '../../src/hooks/use-chat-reducer';
+import { createdTurnOutcome } from '../utils/outcomeReturnsRuntime';
 import {
   createAgentStreamErrorPayload,
+  createdTurnMissingIdError,
   getAgentServiceTierConfig,
   getProgrammaticTaskHttpError,
   getProgrammaticClientIdError,
   getProgrammaticSenderError,
   getUnacknowledgedTaskError,
   parseProgrammaticTaskBody,
+  rememberCreatedThreadId,
+  settledCreatedTurnWatch,
+  shouldRecordMissingCreatedTurn,
+  shouldWatchFirstCreatedTurn,
   resolveTestModelRuntime,
   toProgrammaticTaskProgressSseEvents,
   withSenderHeader,
@@ -24,6 +30,54 @@ describe('Simple mode service tier', () => {
 });
 
 describe('programmatic task HTTP transport', () => {
+  test('only the first native turn of a create receives the outcome watch', () => {
+    let first: string | null = null;
+    const watched: string[] = [];
+    for (const turnId of ['first', 'second', 'second']) {
+      const event = { kind: 'turn' as const, threadId: 'created_thread', turnId, status: 'inProgress' };
+      if (shouldWatchFirstCreatedTurn(event, first)) {
+        first = `${event.threadId}:${event.turnId}`;
+        watched.push(first);
+      }
+    }
+    expect(watched).toEqual(['created_thread:first']);
+  });
+  test('an unacknowledged create reports unknown, never completed', () => {
+    expect(createdTurnMissingIdError(true)).toEqual({ success: false, outcome: 'unknown',
+      error: 'Created task ended without a native turn ID.' });
+    expect(createdTurnMissingIdError(false).outcome).toBe('unknown');
+  });
+  test('both create routes handle an early rejected watch before native start settles', async () => {
+    for (const route of ['tasks', 'tasks/stream']) {
+      const watches: Promise<boolean>[] = [];
+      watches.push(settledCreatedTurnWatch(Promise.reject(new Error(`${route} durable write failed`))));
+      await new Promise(resolve => setTimeout(resolve, 0)); // Native task still running.
+      expect(await Promise.all(watches)).toEqual([false]);
+    }
+  });
+  test('pre-native rejection cannot fabricate an unknown notice for either create route', () => {
+    for (const route of ['tasks', 'tasks/stream']) {
+      let observed: string | null = null;
+      expect(shouldRecordMissingCreatedTurn(observed !== null, false)).toBe(false); // pre-native rejection
+      observed = rememberCreatedThreadId(observed,
+        { kind: 'thread', threadId: 'created_native_1' } as Parameters<typeof rememberCreatedThreadId>[1]);
+      // startAgentTask now rejects before any turn or result. The route must
+      // retain this actual ID for its one ID-only unknown notice.
+      expect(observed).toBe('created_native_1');
+      expect(shouldRecordMissingCreatedTurn(observed !== null, false)).toBe(true);
+      observed = rememberCreatedThreadId(observed,
+        { kind: 'thread', threadId: 'continuation_native_2' } as Parameters<typeof rememberCreatedThreadId>[1]);
+      expect(observed).toBe('created_native_1');
+      expect(shouldRecordMissingCreatedTurn(observed !== null, true)).toBe(false);
+      expect(route).toBeTruthy();
+    }
+  });
+  test('recognizes usage limits only from structured failed-turn errors', () => {
+    expect(createdTurnOutcome('failed', { codexErrorInfo: 'usageLimitExceeded' })).toBe('usageLimited');
+    expect(createdTurnOutcome('failed', { codexErrorInfo: { usageLimitReached: {} } })).toBe('usageLimited');
+    expect(createdTurnOutcome('failed', { message: 'usageLimitExceeded' })).toBe('failed');
+    expect(createdTurnOutcome('completed', { codexErrorInfo: 'usageLimitExceeded' })).toBe('completed');
+  });
   test('accepts a native client ID in the wake event ID alphabet and rejects malformed values before admission', () => {
     expect(parseProgrammaticTaskBody({ message: 'task', clientUserMessageId: 'origin_01' }).clientUserMessageId)
       .toBe('origin_01');
@@ -59,9 +113,14 @@ describe('programmatic task HTTP transport', () => {
     }
     const sender = { computer: 'host' };
     expect(getProgrammaticSenderError({ message: 'task', clientUserMessageId: 'c1', sender }))
-      .toBe('sender requires threadId.');
+      .toBe('sender requires a source thread for created tasks.');
     expect(getProgrammaticSenderError({ message: 'task', threadId: '  ', clientUserMessageId: 'c1', sender }))
-      .toBe('sender requires threadId.');
+      .toBe('sender requires a source thread for created tasks.');
+    expect(getProgrammaticSenderError({ message: 'task', clientUserMessageId: 'c1',
+      sender: { computer: 'host', thread: 'source_1' } })).toBeNull();
+    expect(getProgrammaticSenderError({ message: 'task',
+      sender: { computer: 'host', thread: 'source_1' } }))
+      .toBe('clientUserMessageId is required for sender-attributed create.');
     // The sender check covers only the sender; the task routes require a
     // client ID for any input to an existing thread.
     expect(getProgrammaticSenderError({ message: 'task', threadId: base.threadId, sender })).toBeNull();

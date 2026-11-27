@@ -1,5 +1,6 @@
 import { app, BrowserWindow, protocol, nativeTheme, net, nativeImage, dialog, session, Tray, Menu, screen } from 'electron';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import http from 'node:http';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
@@ -28,7 +29,7 @@ import {
   buildWindowBootstrapLayoutArg,
   buildWindowSessionKeyArg,
 } from './windowSessionArgs';
-import { isTrustedAppRendererUrl } from './ipc/trustedRenderer';
+import { isTrustedMediaRequest } from './ipc/trustedRenderer';
 import {
   shouldTrackOoEditorsMainRendererGone,
 } from './services/office-extension-exit';
@@ -997,17 +998,17 @@ let cachedFileTree: CachedFileTree | null = null;
 let tray: Tray | null = null;
 
 function configureTrustedMediaSession(targetSession: Electron.Session): void {
-  targetSession.setPermissionRequestHandler((webContents, permission, callback) => {
-    const rendererUrl = webContents.getURL();
-    const isTrustedRenderer = isTrustedAppRendererUrl(rendererUrl);
-
-    if (isTrustedRenderer && permission === 'media') {
-      callback(true);
-      return;
-    }
-
-    callback(false);
+  const rendererFileUrl = pathToFileURL(path.join(__dirname, '../../dist/index.html')).href;
+  targetSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    // The WebContents URL alone identifies the top frame, not necessarily the
+    // frame requesting camera/microphone access. Never grant an embedded page.
+    callback(permission === 'media' && isTrustedMediaRequest(webContents.getURL(),
+      details.requestingUrl, rendererFileUrl, !app.isPackaged));
   });
+  targetSession.setPermissionCheckHandler((webContents, permission, _requestingOrigin, details) =>
+    permission === 'media' && webContents !== null && details.isMainFrame === true &&
+    isTrustedMediaRequest(webContents.getURL(), details.requestingUrl ?? '',
+      rendererFileUrl, !app.isPackaged));
 }
 
 function resolveIconPath(): string {

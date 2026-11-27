@@ -157,6 +157,7 @@ const TOOL_DISPLAY_INTERNAL = {
   interpreter_wake_schedule: { category: 'workstation', verb: { active: 'Managing schedule', past: 'Managed schedule' } },
   interpreter_goal_revision_get: { category: 'workstation', verb: { active: 'Inspecting Goal revision', past: 'Inspected Goal revision' } },
   interpreter_task_current: { category: 'workstation', verb: { active: 'Inspecting current task', past: 'Inspected current task' } },
+  interpreter_thread_inventory: { category: 'workstation', verb: { active: 'Inspecting local threads', past: 'Inspected local threads' } },
   interpreter_goal_resume: { category: 'workstation', verb: { active: 'Resuming Goal', past: 'Resumed Goal' } },
   interpreter_goal_document_get: { category: 'workstation', verb: { active: 'Reading Goal document', past: 'Read Goal document' } },
   interpreter_goal_document_create: { category: 'workstation', verb: { active: 'Creating Goal document', past: 'Created Goal document' } },

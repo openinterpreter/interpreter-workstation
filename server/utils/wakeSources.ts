@@ -22,6 +22,8 @@ export type WakeSource = {
   dailyAt?: string;
   timeZone?: string;
   argv?: string[];
+  /** Command only: delay between ordinary polls, at least 2 seconds (default 30 seconds). */
+  rearmMs?: number;
   status: 'waiting' | 'running' | 'delivered' | 'error' | 'cancelled';
   nextAt?: string;
   error?: string;
@@ -31,10 +33,41 @@ export type WakeSource = {
   /** Command only: the last run emitted events (or reported more), so the
    * source runs again as soon as its last input is admitted. */
   moreAvailable?: boolean;
-  /** Why an errored source stays stopped until it is saved again: the runtime
-   * refused direct input to its thread. A restart does not re-arm it. */
-  stopped?: 'refusal';
+  /** An operator decision or runtime refusal is not cleared by a later
+   * event receipt or restart; reconfiguration requires explicit recovery. */
+  stopped?: 'refusal' | 'operator_review';
 };
+
+/** A content-free receipt for one stored schedule definition. This is not
+ * a handler identity or an authorization to resume a paused source. */
+export function scheduleDefinitionMetadata(source: Pick<WakeSource,
+  'id' | 'threadId' | 'kind' | 'at' | 'everyMs' | 'dailyAt' | 'timeZone' | 'message' | 'error'>) {
+  const errorCategory = source.error !== undefined && source.error !== ''
+    ? 'unclassified-native-error' as const : 'none' as const;
+  const unavailable = (category: 'oversized' | 'invalid_definition') => ({
+    definitionDigest: { version: 1 as const, available: false as const, category }, errorCategory,
+  });
+  const fields = [source.threadId, source.id, source.at, source.dailyAt, source.timeZone, source.message];
+  if (source.kind !== 'schedule' || typeof source.threadId !== 'string' || !ID.test(source.threadId) ||
+      typeof source.id !== 'string' || !ID.test(source.id) ||
+      typeof source.message !== 'string' ||
+      [source.at, source.dailyAt, source.timeZone].some(value => value !== undefined && typeof value !== 'string') ||
+      (source.everyMs !== undefined && (!Number.isSafeInteger(source.everyMs) || source.everyMs < MIN_INTERVAL)))
+    return unavailable('invalid_definition');
+  if (fields.some(value => typeof value === 'string' &&
+      (value.length > 65_536 || Buffer.byteLength(value, 'utf8') > 65_536)))
+    return unavailable('oversized');
+  if (!source.message.trim() ||
+      (source.dailyAt === undefined && (typeof source.at !== 'string' || !Number.isFinite(Date.parse(source.at)))) ||
+      (source.dailyAt !== undefined && (typeof source.timeZone !== 'string' || source.at !== undefined ||
+        source.everyMs !== undefined)))
+    return unavailable('invalid_definition');
+  const serialized = JSON.stringify(['wake-schedule-definition-v1', source.threadId, source.id, 'schedule',
+    source.at ?? null, source.everyMs ?? null, source.dailyAt ?? null, source.timeZone ?? null, source.message]);
+  if (Buffer.byteLength(serialized, 'utf8') > 65_536) return unavailable('oversized');
+  return { definitionDigest: { version: 1 as const, sha256: createHash('sha256').update(serialized).digest('hex') },
+    errorCategory };
+}
 export type WakeSourceDrain = {
   drained: true;
   commandInFlight: false;
@@ -75,6 +108,8 @@ export type WakeEvent = {
   offerAttempts?: number;
   /** A sender-attributed input admitted without a known turn: no outcome can be returned for it. */
   outcomeReturn?: 'turn_unknown';
+  /** Durable handoff for the input-triggered Goal check, never inferred for older events. */
+  goalInputPending?: boolean;
 };
 /** An accepted offer: the runtime returned a turn for the steer or start and
  * that turn is saved, but the input's receipt is not yet in thread history. */
@@ -91,10 +126,32 @@ export function threadInputCustody(event: WakeEvent) {
 /** An admitted, sender-attributed input, handed to `WakeNative.onAdmitted`. */
 export type WakeAdmission = { threadId: string; sourceId: string; eventId: string; turnId: string;
   sender: SubmissionSender };
+export type GoalInputAdmission = Pick<WakeEvent, 'threadId' | 'sourceId' | 'eventId' | 'turnId'> &
+  { turnId: string };
+export type GoalInputIntent = { goalId: string; goalCreatedAt: number; goalUpdatedAt: number;
+  missionRevision: number; lifecycleRevision: number;
+  /** The stopped status the input found; absent in entries that predate it (blocked). */
+  goalStatus?: 'blocked' | 'usageLimited';
+  phase: 'reserved' | 'confirmed' | 'bounded' | 'rejected'; resultUpdatedAt?: number };
+export type GoalInputLedger = {
+  lookup(): Promise<GoalInputIntent | undefined>;
+  reserve(intent: Omit<GoalInputIntent, 'phase' | 'resultUpdatedAt'>):
+    Promise<'reserved' | 'bounded' | 'duplicate'>;
+  confirm(goalId: string, resultUpdatedAt: number): Promise<void>;
+  reject(goalId: string): Promise<void>;
+};
 export class WakeAdmissionFailure extends Error {
   constructor(readonly phase: 'preflight' | 'resume' | 'start', readonly original: unknown) {
     super('Native wake admission failed');
     this.name = 'WakeAdmissionFailure';
+  }
+}
+/** Bounded operator diagnostics; never include native messages or tool input. */
+export class HistoricalHoldConflict extends Error {
+  constructor(readonly code: 'BUSY' | 'CUSTODY_MISMATCH' | 'CUSTODY_CHANGED' |
+    'RECEIPT_EXISTS' | 'INSPECTION_UNAVAILABLE', message: string) {
+    super(message);
+    this.name = 'HistoricalHoldConflict';
   }
 }
 export class WakeRecoveryError extends Error {
@@ -133,7 +190,8 @@ function nativeFailure(error: unknown, phase: NonNullable<WakeEvent['failure']>[
   return { phase: error instanceof WakeAdmissionFailure ? error.phase : phase, name, category,
     ...(code ? { code } : {}), messageSha256 };
 }
-type State = { sources: WakeSource[]; events: WakeEvent[] };
+type GoalResumeAttempt = { threadId: string; goalId: string; inputKey: string; at: number } & GoalInputIntent;
+type State = { sources: WakeSource[]; events: WakeEvent[]; goalResumeAttempts?: GoalResumeAttempt[] };
 const EMPTY: State = { sources: [], events: [] };
 type NativeView = Awaited<ReturnType<WakeNative['inspect']>>;
 /** What one delivery step means for the later inputs of its thread in this pass:
@@ -171,6 +229,13 @@ const MIN_INTERVAL = 60_000;
 // Leave room for a hyphen and the full decimal safe-integer sequence.
 const MAX_SCHEDULE_ID = 143;
 const COMMAND_REARM_MS = 30_000;
+const MIN_COMMAND_REARM_MS = 2_000;
+// Keep persisted delays inside both the JS timer range and Date's future range.
+const MAX_COMMAND_REARM_MS = 2_147_483_647;
+const commandRearmMs = (source: WakeSource): number =>
+  Number.isSafeInteger(source.rearmMs) && source.rearmMs! >= MIN_COMMAND_REARM_MS &&
+    source.rearmMs! <= MAX_COMMAND_REARM_MS
+    ? source.rearmMs! : COMMAND_REARM_MS;
 // A short follow-up pass after a pass that changed something while accepted
 // inputs await their receipts, so a burst is not paced by the 2 s interval.
 const FOLLOW_UP_MS = 250;
@@ -246,6 +311,7 @@ export const wakeInput = (event: WakeEvent) => `${marker(event.sourceId, event.e
 // steered input is persisted independently of the turn that accepted the RPC.
 export const wakeClientId = (event: Pick<WakeEvent, 'threadId' | 'sourceId' | 'eventId'>) =>
   `wake_${createHash('sha256').update(JSON.stringify([event.threadId, event.sourceId, event.eventId])).digest('hex')}`;
+const USAGE_LIMIT_ERROR = 'Usage limit reached; operator action required';
 function safeError(error: unknown): string {
   const message = error instanceof Error ? error.message.toLowerCase() : '';
   // A supervising SIGKILL/oversized stdout is not a subscription allowance.
@@ -258,7 +324,7 @@ function safeError(error: unknown): string {
   // A full local backlog is not a subscription allowance either.
   if (error instanceof WakeBacklogFull) return error.message;
   if (error instanceof WakeUnsavedError) return 'Wake state could not be saved; retrying';
-  if (/usage|quota|credit|billing|limit/.test(message)) return 'Usage limit reached; operator action required';
+  if (/usage|quota|credit|billing|limit/.test(message)) return USAGE_LIMIT_ERROR;
   if (/oauth|token|credential|authentication|unauthoriz|login/.test(message)) return 'Authentication unavailable; operator action required';
   if (/overload|capacity|unavailable|timeout|disconnect/.test(message)) return 'Runtime temporarily unavailable';
   if (/command exited/.test(message)) return 'Command exited nonzero or exceeded limits';
@@ -329,6 +395,9 @@ export interface WakeNative {
    * leaves it to be offered again on the retry interval and at the next
    * start. Must be idempotent. */
   onAdmitted?(admission: WakeAdmission): Promise<boolean>;
+  /** A confirmed, live native input. Returning or failing never changes its admission. */
+  onGoalInput?(admission: GoalInputAdmission,
+    ledger: GoalInputLedger): Promise<boolean>;
 }
 
 /** One owner per application process; all transitions use an atomic, mode-0600 replace. */
@@ -389,6 +458,7 @@ export class WakeSources {
   private readonly turnsUnsaved = new Set<WakeEvent>();
   /** Running onAdmitted hand-overs, by thread, source and event. */
   private readonly admissionHandOvers = new Map<string, Promise<void>>();
+  private readonly goalInputHandOvers = new Set<string>();
 
   constructor(private readonly native: WakeNative, root = getInterpreterAppDataDir(),
     private readonly inspectTimeoutMs = 30_000,
@@ -416,6 +486,17 @@ export class WakeSources {
     try {
       const raw = JSON.parse(await readFile(this.file, 'utf8')) as State;
       if (!Array.isArray(raw.sources) || !Array.isArray(raw.events)) throw new Error('Invalid wake source state');
+      if (raw.goalResumeAttempts !== undefined && (!Array.isArray(raw.goalResumeAttempts) ||
+          raw.goalResumeAttempts.some(item => !item || typeof item.threadId !== 'string' ||
+            typeof item.goalId !== 'string' || typeof item.inputKey !== 'string' ||
+            !Number.isSafeInteger(item.at) || item.at < 0 ||
+            !['reserved', 'confirmed', 'bounded', 'rejected'].includes(item.phase) ||
+            ![item.goalCreatedAt, item.goalUpdatedAt].every(Number.isFinite) ||
+            ![item.missionRevision, item.lifecycleRevision].every(value => Number.isSafeInteger(value) && value >= 0) ||
+            (item.goalStatus !== undefined && item.goalStatus !== 'blocked' && item.goalStatus !== 'usageLimited') ||
+            (item.phase === 'confirmed' && !Number.isFinite(item.resultUpdatedAt))))) {
+        throw new Error('Invalid wake Goal resume ledger');
+      }
       this.state = raw;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -431,18 +512,20 @@ export class WakeSources {
         delete event.nextAttemptAt;
       }
     }
-    // Never launch a second command when it has an unadmitted output event.
+    // Recover an interrupted command without resubmitting its durable IDs.
+    // A waiting command can poll for later IDs while older ones are unadmitted.
     for (const source of this.state.sources) {
       if (source.status === 'running') {
         source.status = 'waiting';
-        if (!source.paused) source.nextAt = new Date(Date.now() + COMMAND_REARM_MS).toISOString();
+        if (!source.paused) source.nextAt = new Date(Date.now() + commandRearmMs(source)).toISOString();
       }
       // Older command sources stopped permanently on a transient source
       // error. Keep the diagnostic visible, but recover on a bounded timer
       // after a restart without creating a second consumer. A source stopped
-      // because the runtime refused its thread's input stays stopped.
+      // by a runtime refusal or operator review stays stopped.
       if (source.kind === 'command' && source.status === 'error' && !source.nextAt &&
-          source.stopped !== 'refusal') {
+          !source.stopped && !this.state.events.some(event => event.threadId === source.threadId &&
+            event.sourceId === source.id && event.status === 'held')) {
         source.nextAt = new Date(Date.now() + 300_000).toISOString();
       }
       if (source.kind === 'schedule' && source.status === 'waiting') {
@@ -486,7 +569,10 @@ export class WakeSources {
    * watch is recorded, however long that takes. */
   private retryHandOvers(): void {
     if (this.stopping) return;
-    for (const event of this.state.events) this.handOverAdmission(event);
+    for (const event of this.state.events) {
+      this.handOverAdmission(event);
+      this.handOverGoalInput(event);
+    }
   }
 
   /** Mark admissions that carry no admission time and still await their
@@ -596,7 +682,9 @@ export class WakeSources {
 
   /** The wake-sources listing, with the accepted command output format. */
   view(threadId: string) {
-    return { ...this.list(threadId), commandOutput: WAKE_COMMAND_OUTPUT };
+    const result = this.list(threadId);
+    return { ...result, sources: result.sources.map(source => source.kind === 'schedule'
+      ? { ...source, ...scheduleDefinitionMetadata(source) } : source), commandOutput: WAKE_COMMAND_OUTPUT };
   }
 
   /** A copy of one event, or undefined. */
@@ -604,6 +692,39 @@ export class WakeSources {
     const event = this.state.events.find(e => e.threadId === threadId && e.sourceId === sourceId &&
       e.eventId === eventId);
     return event && this.copy(event);
+  }
+
+  /** Threads this queue serves (a live source or an input awaiting
+   * admission), each with the number of inputs still pending or offered. */
+  threadInputs(): Map<string, number> {
+    const threads = new Map<string, number>();
+    for (const source of this.state.sources) {
+      if (source.status !== 'cancelled' && !threads.has(source.threadId)) threads.set(source.threadId, 0);
+    }
+    for (const event of this.state.events) {
+      if (event.status !== 'pending' && event.status !== 'offered') continue;
+      threads.set(event.threadId, (threads.get(event.threadId) ?? 0) + 1);
+    }
+    return threads;
+  }
+
+  /** The thread's Goal became active again after a usage limit: pending
+   * inputs that are only waiting out a usage-limit backoff may be offered on
+   * the next pass instead of minutes later. Nothing is offered, replayed or
+   * removed here; order, receipts and every other backoff are unchanged. */
+  async releaseUsageLimitBackoff(threadId: string): Promise<number> {
+    if (this.stopping) return 0;
+    return this.exclusive(async () => {
+      let released = 0;
+      for (const event of this.state.events) {
+        if (event.threadId !== threadId || event.status !== 'pending' || !event.nextAttemptAt ||
+            event.error !== USAGE_LIMIT_ERROR) continue;
+        delete event.nextAttemptAt;
+        released += 1;
+      }
+      if (released) await this.save();
+      return released;
+    });
   }
 
   /** Nothing in memory differs from disk: no write is outstanding and the last one succeeded. */
@@ -684,12 +805,12 @@ export class WakeSources {
    * saved only after the hook confirms a durable record, so a restart in
    * between offers it again (the hook is idempotent) and a watch is never
    * lost; once saved it is never offered again. Never throws. */
-  private handOverAdmission(event: WakeEvent): void {
+  private handOverAdmission(event: WakeEvent): Promise<void> | undefined {
     const hook = this.native.onAdmitted;
     if (!hook || this.stopping || event.status !== 'admitted' || !event.sender || !event.turnId ||
         event.outcomeWatched) return;
     const key = `${event.threadId}:${event.sourceId}:${event.eventId}`;
-    if (this.admissionHandOvers.has(key)) return;
+    if (this.admissionHandOvers.has(key)) return this.admissionHandOvers.get(key);
     const admission: WakeAdmission = { threadId: event.threadId, sourceId: event.sourceId,
       eventId: event.eventId, turnId: event.turnId, sender: { ...event.sender } };
     const task = (async () => {
@@ -706,6 +827,85 @@ export class WakeSources {
       }
     })().finally(() => { this.admissionHandOvers.delete(key); });
     this.admissionHandOvers.set(key, task);
+    return task;
+  }
+
+  /** Reserve before native CAS: an uncertain mutation after a crash must not
+   * produce an unbounded series of retries from a chatty source. */
+  private reserveGoalInput(admission: GoalInputAdmission,
+    intent: Omit<GoalInputIntent, 'phase' | 'resultUpdatedAt'>):
+    Promise<'reserved' | 'bounded' | 'duplicate'> {
+    return this.exclusive(async () => {
+      const now = Date.now();
+      const inputKey = eventKey(admission.threadId, admission.sourceId, admission.eventId);
+      const attempts = this.state.goalResumeAttempts ??= [];
+      if (attempts.some(item => item.inputKey === inputKey)) return 'duplicate';
+      const withinHour = attempts.filter(item => item.threadId === admission.threadId &&
+        item.goalId === intent.goalId && item.phase !== 'bounded' &&
+        item.at > now - 3_600_000 && item.at <= now);
+      const bounded = withinHour.length >= 3;
+      attempts.push({ threadId: admission.threadId, inputKey, at: now, ...intent,
+        phase: bounded ? 'bounded' : 'reserved' });
+      // Retain the per-input token after the hour: a crash between a native
+      // mutation and handoff completion must never mutate the same Goal twice.
+      await this.save();
+      return bounded ? 'bounded' : 'reserved';
+    });
+  }
+
+  private goalInputLedger(admission: GoalInputAdmission): GoalInputLedger {
+    const key = eventKey(admission.threadId, admission.sourceId, admission.eventId);
+    return {
+      lookup: async () => {
+        const attempt = this.state.goalResumeAttempts?.find(item => item.inputKey === key);
+        return attempt ? { goalId: attempt.goalId, goalCreatedAt: attempt.goalCreatedAt,
+          goalUpdatedAt: attempt.goalUpdatedAt, missionRevision: attempt.missionRevision,
+          lifecycleRevision: attempt.lifecycleRevision, phase: attempt.phase,
+          ...(attempt.goalStatus !== undefined && { goalStatus: attempt.goalStatus }),
+          ...(attempt.resultUpdatedAt !== undefined && { resultUpdatedAt: attempt.resultUpdatedAt }) } : undefined;
+      },
+      reserve: intent => this.reserveGoalInput(admission, intent),
+      confirm: (goalId, resultUpdatedAt) => this.exclusive(async () => {
+        const attempt = this.state.goalResumeAttempts?.find(item => item.inputKey === key &&
+          item.goalId === goalId && item.phase === 'reserved');
+        if (!attempt) throw new Error('Goal input reservation unavailable');
+        attempt.phase = 'confirmed'; attempt.resultUpdatedAt = resultUpdatedAt;
+        await this.save();
+      }),
+      reject: goalId => this.exclusive(async () => {
+        const attempt = this.state.goalResumeAttempts?.find(item => item.inputKey === key &&
+          item.goalId === goalId && item.phase === 'reserved');
+        if (!attempt) throw new Error('Goal input reservation unavailable');
+        attempt.phase = 'rejected';
+        await this.save();
+      }),
+    };
+  }
+
+  private handOverGoalInput(event: WakeEvent): void {
+    const hook = this.native.onGoalInput;
+    if (!hook || this.stopping || event.status !== 'admitted' || !event.turnId ||
+        !event.goalInputPending) return;
+    const key = eventKey(event.threadId, event.sourceId, event.eventId);
+    if (this.goalInputHandOvers.has(key)) return;
+    const admission: GoalInputAdmission = { threadId: event.threadId, sourceId: event.sourceId,
+      eventId: event.eventId, turnId: event.turnId };
+    this.goalInputHandOvers.add(key);
+    const task = (async () => {
+      // Goal custody is independent of the input's outcome-return store.
+      // Notices use only an already-bound Goal assigner, never this retry's
+      // sender, so a full outcome-return store cannot suppress the resume.
+      if (!await hook.call(this.native, admission, this.goalInputLedger(admission))) return;
+      await this.exclusive(async () => {
+        if (!this.state.events.includes(event) || this.released) return;
+        event.goalInputPending = false;
+        await this.save();
+      });
+    })();
+    void this.track(task).catch(error => {
+      console.error('[Goal input resume] Admission preserved; resume unavailable.',
+        error instanceof Error ? error.name : 'UnknownError');
+    }).finally(() => { this.goalInputHandOvers.delete(key); });
   }
 
   /** A content-free, deterministic CAS token for one source and its unadmitted
@@ -793,6 +993,7 @@ export class WakeSources {
       this.admitObserved(owned, Date.now());
       await this.save();
       this.handOverAdmission(owned);
+      this.handOverGoalInput(owned);
       return this.recoverySnapshot(threadId, id);
     });
   }
@@ -800,11 +1001,18 @@ export class WakeSources {
   private admitObserved(event: WakeEvent, now: number): void {
     this.forgetEvent(event);
     event.status = 'admitted'; event.message = ''; event.admittedAt = new Date().toISOString();
+    if (event.turnId) event.goalInputPending = true;
     delete event.error; delete event.failure; delete event.offeredAt; delete event.nextAttemptAt;
     // Without its turn no outcome can be watched: say so instead of staying silent.
     if (event.sender && !event.turnId) event.outcomeReturn = 'turn_unknown';
     const source =this.state.sources.find(s => s.id === event.sourceId && s.threadId === event.threadId);
-    if (source && source.status !== 'cancelled') {
+    // A command still in flight owns its own re-arm. Admission may settle
+    // during that run, but must not overwrite the running or stopped state.
+    if (source && source.status !== 'cancelled' && !source.stopped &&
+        !this.inFlight.has(sourceKey(source.threadId, source.id)) &&
+        !(source.kind === 'command' && source.status === 'error' && !source.nextAt &&
+          this.state.events.some(item => item.threadId === source.threadId &&
+            item.sourceId === source.id && (item.status === 'pending' || item.status === 'offered')))) {
       delete source.error;
       delete source.stopped;
       source.status = 'delivered';
@@ -815,11 +1023,12 @@ export class WakeSources {
       } else if (source.kind === 'command') {
         // Once the last input of a run that produced events is admitted, run
         // again at once: the command may have more ready input. While inputs
-        // remain, the pending fence keeps the source from running anyway.
+        // remain, their stable IDs stay in the durable ledger while the next
+        // command poll may discover later input without resubmitting them.
         const remaining = this.state.events.some(e => e.threadId === source.threadId &&
           e.sourceId === source.id && (e.status === 'pending' || e.status === 'offered'));
         const immediate = source.moreAvailable === true && !remaining;
-        source.nextAt = new Date(now + (immediate ? 0 : COMMAND_REARM_MS)).toISOString(); source.status = 'waiting';
+        source.nextAt = new Date(now + (immediate ? 0 : commandRearmMs(source))).toISOString(); source.status = 'waiting';
         if (immediate) this.requestTick();
       }
     }
@@ -950,11 +1159,12 @@ export class WakeSources {
     if (!ID.test(source.threadId) || !ID.test(source.id)) throw new Error('Invalid thread or source ID');
     if (source.id === THREAD_INPUT_SOURCE) throw new Error('Reserved wake source ID');
     if (source.kind !== 'schedule' && source.kind !== 'command') throw new Error('Unknown wake source kind');
-    if (Object.keys(source).some(key => !['id', 'threadId', 'kind', 'message', 'at', 'everyMs', 'dailyAt', 'timeZone', 'argv'].includes(key))) {
+    if (Object.keys(source).some(key => !['id', 'threadId', 'kind', 'message', 'at', 'everyMs', 'dailyAt', 'timeZone', 'argv', 'rearmMs'].includes(key))) {
       throw new Error('Unknown wake source field');
     }
     const civil = source.kind === 'schedule' && (source.dailyAt !== undefined || source.timeZone !== undefined);
     if (source.kind === 'schedule') {
+      if (source.rearmMs !== undefined) throw new Error('Only a command may set rearmMs');
       if (source.id.length > MAX_SCHEDULE_ID) throw new Error('Schedule ID is too long');
       if (!source.message?.trim() || source.message.length > MAX_MESSAGE ||
           (civil && (typeof source.dailyAt !== 'string' || typeof source.timeZone !== 'string' ||
@@ -966,6 +1176,8 @@ export class WakeSources {
       if (civil) nextCivilDaily(Date.now(), source.timeZone!, source.dailyAt!);
     } else if (source.dailyAt !== undefined || source.timeZone !== undefined || source.at !== undefined ||
       source.everyMs !== undefined || source.message !== undefined ||
+      (source.rearmMs !== undefined && (!Number.isSafeInteger(source.rearmMs) ||
+        source.rearmMs < MIN_COMMAND_REARM_MS || source.rearmMs > MAX_COMMAND_REARM_MS)) ||
       !Array.isArray(source.argv) || !source.argv.length || source.argv.length > 32 ||
       source.argv.some(arg => typeof arg !== 'string' || !arg || arg.length > 4096) ||
       !path.isAbsolute(source.argv[0])) {
@@ -974,7 +1186,11 @@ export class WakeSources {
     return this.exclusive(async () => {
       const old = this.state.sources.find(s => s.id === source.id && s.threadId === source.threadId);
       if (old?.paused) throw new Error('Resume the paused source before editing it');
-      if (old?.status === 'running') throw new Error('Wait for the running command before changing it');
+      const key = sourceKey(source.threadId, source.id);
+      const taskKey = `${source.threadId}:${source.id}`;
+      if (old?.status === 'running' || this.inFlight.has(key) ||
+          this.commands.has(taskKey) || this.commandTasksBySource.has(taskKey))
+        throw new Error('Wait for the running command before changing it');
       if (old && this.state.events.some(e => e.sourceId === old.id && e.threadId === old.threadId &&
         (e.status === 'pending' || e.status === 'offered'))) {
         throw new Error('Cannot change a source while its input awaits native admission');
@@ -1241,6 +1457,7 @@ export class WakeSources {
         source.status = 'error';
         source.nextAt = undefined;
         source.error = 'Operator-held ambiguous native offer; review source before rearming';
+        source.stopped = 'operator_review';
       }
       await this.save();
       return structuredClone(current);
@@ -1253,11 +1470,12 @@ export class WakeSources {
    */
   async holdHistoricalOffered(threadId: string, sourceId: string, eventId: string,
     expectedClientId: string, expectedLatestTurnId: string, decisionRef: string): Promise<WakeEvent> {
-    if (this.stopping) throw new Error('Wake admission is draining for restart');
+    if (this.stopping) throw new HistoricalHoldConflict('BUSY', 'Wake admission is draining for restart');
     if (![threadId, sourceId, eventId, expectedLatestTurnId, decisionRef].every(x => ID.test(x)))
-      throw new Error('Invalid wake custody ID');
+      throw new HistoricalHoldConflict('CUSTODY_MISMATCH', 'Invalid wake custody ID');
     const key = eventKey(threadId, sourceId, eventId);
-    if (this.ticking || this.inFlight.has(key)) throw new Error('Wake inspection in progress');
+    if (this.ticking || this.inFlight.has(key))
+      throw new HistoricalHoldConflict('BUSY', 'Wake inspection in progress');
     this.inFlight.add(key);
     return this.track(this.holdHistoricalOwned(threadId, sourceId, eventId, expectedClientId,
       expectedLatestTurnId, decisionRef).finally(() => { this.inFlight.delete(key); this.proofSeenAt.delete(key); }));
@@ -1270,20 +1488,29 @@ export class WakeSources {
     if (!found || found.status !== 'offered' || found.turnId || !found.offeredAt ||
         !Number.isFinite(Date.parse(found.offeredAt)) || Date.now() - Date.parse(found.offeredAt) < 60_000 ||
         wakeClientId(found) !== expectedClientId || !custodyOf)
-      throw new Error('Historical offer custody mismatch');
+      throw new HistoricalHoldConflict('CUSTODY_MISMATCH', 'Historical offer custody mismatch');
     const event = structuredClone(found);
     // Bounded native reads outside the exclusive section; see holdOfferedOwned.
-    const [state, custody] = await Promise.all([
-      this.inspectWithDeadline(threadId, inspectSince(event.createdAt), true),
-      this.withDeadline(custodyOf.call(this.native, threadId, expectedLatestTurnId), 'Native custody timeout')]);
+    let state: Awaited<ReturnType<WakeNative['inspect']>>;
+    let custody: NonNullable<Awaited<ReturnType<NonNullable<WakeNative['custody']>>>>;
+    try {
+      [state, custody] = await Promise.all([
+        this.inspectWithDeadline(threadId, inspectSince(event.createdAt), true),
+        this.withDeadline(custodyOf.call(this.native, threadId, expectedLatestTurnId), 'Native custody timeout')]);
+    } catch {
+      throw new HistoricalHoldConflict('INSPECTION_UNAVAILABLE', 'Native custody inspection unavailable');
+    }
     if (state.activeTurnId || custody.queuedSubmissionCount !== 0 ||
         custody.lastTurnId !== expectedLatestTurnId ||
         !TERMINAL_TURN.includes(custody.turnStatus ?? '') ||
         !['idle', 'systemError', 'notLoaded'].includes(custody.threadStatus ?? ''))
-      throw new Error('Historical offer requires terminal queue-empty native custody');
-    if (this.hasReceipt(event, state)) throw new Error('Native receipt exists; reconcile admission instead');
+      throw new HistoricalHoldConflict('CUSTODY_CHANGED', 'Historical offer requires terminal queue-empty native custody');
+    if (this.hasReceipt(event, state))
+      throw new HistoricalHoldConflict('RECEIPT_EXISTS', 'Native receipt exists; reconcile admission instead');
     return this.exclusive(async () => {
-      const current = this.sameOffer(threadId, sourceId, eventId, event);
+      let current: WakeEvent;
+      try { current = this.sameOffer(threadId, sourceId, eventId, event); }
+      catch { throw new HistoricalHoldConflict('CUSTODY_CHANGED', 'Historical offer changed during inspection'); }
       this.forgetEvent(current);
       current.status = 'held';
       current.error = `Operator-held historical ambiguous native offer; decision ${decisionRef}; latest terminal turn ${expectedLatestTurnId}; not admitted or replayed`;
@@ -1292,6 +1519,7 @@ export class WakeSources {
       if (source && source.status !== 'cancelled') {
         source.status = 'error'; source.nextAt = undefined;
         source.error = 'Operator-held historical ambiguous native offer; review source before rearming';
+        source.stopped = 'operator_review';
       }
       await this.save();
       return structuredClone(current);
@@ -1319,10 +1547,12 @@ export class WakeSources {
       if (this.stopping) break;
       if (source.paused || !(source.status === 'waiting' || (source.kind === 'command' && source.status === 'error')) ||
           !source.nextAt || Date.parse(source.nextAt) > now ||
-          // A held terminal offer is retained for audit, not an admission fence.
-          // Re-arm of that same source must still be explicit through put().
-          this.state.events.some(e => e.threadId === source.threadId && e.sourceId === source.id &&
-            (e.status === 'pending' || e.status === 'offered'))) continue;
+          // A waiting command may collect later input while an older event
+          // awaits admission. Schedules and errored commands retain their
+          // original admission fence (including operator-held errors).
+          ((source.kind === 'schedule' || source.status === 'error') &&
+            this.state.events.some(e => e.threadId === source.threadId && e.sourceId === source.id &&
+              (e.status === 'pending' || e.status === 'offered')))) continue;
       if (source.kind === 'schedule') {
         await this.exclusive(async () => {
           // Commit event custody and its sequence in the same atomic replace.
@@ -1516,6 +1746,7 @@ export class WakeSources {
           await this.saveTransition();
         });
         this.handOverAdmission(event);
+        this.handOverGoalInput(event);
         return 'ok';
       }
       if (event.status === 'offered') {
@@ -1847,10 +2078,15 @@ export class WakeSources {
   private async runCommand(source: WakeSource): Promise<void> {
     const key = `${source.threadId}:${source.id}`;
     const inFlightKey = sourceKey(source.threadId, source.id);
+    let transitioned = false;
     this.inFlight.add(inFlightKey);
     try {
       const shouldRun = await this.exclusive(async () => {
-        if (source.paused || source.status === 'cancelled') return false;
+        if (source.paused || source.stopped ||
+            !(source.status === 'waiting' || (source.status === 'error' && !!source.nextAt)) ||
+            (source.status === 'error' && this.state.events.some(event =>
+              event.threadId === source.threadId && event.sourceId === source.id &&
+              (event.status === 'pending' || event.status === 'offered')))) return false;
         source.status = 'running';
         await this.save();
         return true;
@@ -1880,11 +2116,14 @@ export class WakeSources {
       const output = parseCommandOutput(stdout);
       if (output.waiting) {
         await this.exclusive(async () => {
-          if (source.status !== 'cancelled') {
+          if (source.status === 'running') {
             source.status = 'waiting';
+            transitioned = true;
             delete source.error;
-            source.moreAvailable = false;
-            source.nextAt = new Date(Date.now() + COMMAND_REARM_MS).toISOString();
+            const outstanding = this.state.events.some(event => event.threadId === source.threadId &&
+              event.sourceId === source.id && (event.status === 'pending' || event.status === 'offered'));
+            source.moreAvailable = source.moreAvailable === true && outstanding;
+            source.nextAt = new Date(Date.now() + commandRearmMs(source)).toISOString();
           }
           await this.save();
         });
@@ -1896,28 +2135,28 @@ export class WakeSources {
       const added = await this.exclusive(async () => {
         if (source.status === 'cancelled') return 0;
         const { fresh } = this.addEvents(source.threadId, source.id, output.events);
-        source.status = 'waiting';
-        delete source.error;
-        // Only a run that produced new input earns an immediate re-run. A
-        // command that repeats inputs which already have receipts waits the
-        // minimum interval, whatever it reports.
-        source.moreAvailable = fresh.length > 0;
-        // Admission of the last new input re-arms the source. A batch with
-        // nothing new (every ID already has a receipt) waits the minimum
-        // interval instead of re-running at once.
-        source.nextAt = this.state.events.some(e => e.threadId === source.threadId && e.sourceId === source.id &&
-          (e.status === 'pending' || e.status === 'offered'))
-          ? undefined : new Date(Date.now() + COMMAND_REARM_MS).toISOString();
+        if (source.status === 'running') {
+          source.status = 'waiting';
+          transitioned = true;
+          delete source.error;
+          const outstanding = this.state.events.some(event => event.threadId === source.threadId &&
+            event.sourceId === source.id && (event.status === 'pending' || event.status === 'offered'));
+          // An empty or duplicate-only re-poll cannot erase an earlier fresh
+          // batch's immediate drain before its last admission.
+          source.moreAvailable = fresh.length > 0 || (source.moreAvailable === true && outstanding);
+          source.nextAt = new Date(Date.now() + commandRearmMs(source)).toISOString();
+        }
         // On a failed write the batch stays in memory, unsaved: nothing is
-        // offered until a later write succeeds, and the catch below records
-        // the source error. A re-emitted batch finds the same IDs.
+        // offered until a later write succeeds. The catch records this run's
+        // error even after its status transition; re-emitted IDs stay stable.
         await this.saveForAcknowledgement();
         return fresh.length;
       });
       if (added) this.requestTick();
     } catch (error) {
       await this.exclusive(async () => {
-        if (source.status === 'cancelled') return;
+        if (source.status !== 'running' &&
+            !(transitioned && source.status === 'waiting' && !source.stopped)) return;
         source.status = 'error';
         source.error = safeError(error);
         source.nextAt = new Date(Date.now() + (/operator action/.test(source.error) ? 300_000 : 60_000)).toISOString();

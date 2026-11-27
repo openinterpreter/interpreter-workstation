@@ -22,6 +22,12 @@ import type {
   ApiPreset,
 } from '../shared/types/provider';
 import type { ProfileSetupStatus } from '../shared/types/profile';
+import type { Profile } from '../shared/types/profile';
+import { createDefaultOnboardingState, type OnboardingState } from '../shared/types/onboardingState';
+import type { HostCapabilities } from '../shared/types/hostCapabilities';
+import { DESKTOP_HOST_CAPABILITIES } from '../shared/types/hostCapabilities';
+import { CLIENT_METHOD } from './lib/codex/protocol';
+import type { RequestMap } from './lib/codex/protocol';
 import type { ApiProviderModelOption } from './utils/apiProviderModelOptions';
 import type { v2 } from '../server/handlers/codex-generated-types/index';
 import type { InterpreterOverlaySettings } from '../apps/interpreter-overlay/shared/settings';
@@ -182,9 +188,203 @@ type EventCallback = (data: unknown) => void;
 const sseListeners = new Map<string, Set<EventCallback>>();
 let sseConnection: EventSource | null = null;
 let sseReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let browserProjectNativeEventsDisabled = false;
+let browserProjectLocalProfile: Profile | null = null;
+const browserProjectDefaultProfileListeners = new Set<() => void>();
+let browserProjectId: string | null = null;
+let browserProjectActivation = 0;
+let browserProjectCapabilities: HostCapabilities | null = null;
+let browserProjectDownload: ((providerId: string, modelId: string,
+  onProgress: (progress: { total?: number; completed?: number; status?: string;
+    done?: boolean; error?: string }) => void, signal?: AbortSignal) => Promise<void>) | undefined;
+let browserProjectRequest: (<M extends keyof RequestMap>(method: M,
+  params: RequestMap[M]['params']) => Promise<RequestMap[M]['result']>) | null = null;
+
+export function getHostCapabilities(): HostCapabilities {
+  return browserProjectCapabilities ?? DESKTOP_HOST_CAPABILITIES;
+}
+
+export function getBrowserProjectModelDownload() {
+  return browserProjectNativeEventsDisabled ? browserProjectDownload : undefined;
+}
+
+export function registerBrowserProjectHostCapabilities(capabilities: HostCapabilities,
+  download?: typeof browserProjectDownload,
+  request?: typeof browserProjectRequest): void {
+  if (isElectron) throw new Error('Browser project host cannot replace desktop capabilities');
+  browserProjectCapabilities = capabilities;
+  browserProjectDownload = download;
+  browserProjectRequest = request ?? null;
+}
+
+function browserProjectStoreKey(namespace: string): string {
+  if (!browserProjectNativeEventsDisabled || !browserProjectId)
+    throw new IpcUnavailableError(`browserProject.${namespace}`);
+  const scope = ['onboardingState', 'userName', 'telemetryEnabled'].includes(namespace)
+    ? 'origin' : `browser-${browserProjectId}`;
+  return `workstation:browser-project:${scope}:${namespace}`;
+}
+
+function browserProjectStored<T>(namespace: string, fallback: T): T {
+  try {
+    const value = localStorage.getItem(browserProjectStoreKey(namespace));
+    if (value === null) return fallback;
+    if (value.length > 256 * 1024) throw new Error('Browser store exceeds size limit');
+    const parsed: unknown = JSON.parse(value);
+    if (Array.isArray(fallback)) {
+      if (!Array.isArray(parsed) || parsed.length > 32 || parsed.some(item =>
+        !item || typeof item !== 'object' || typeof item.id !== 'string' ||
+        typeof item.modelId !== 'string' || typeof item.name !== 'string' ||
+        item.provider !== 'local')) throw new Error('Invalid browser profile store');
+      parsed.forEach(item => validateBrowserProjectProfile(item as Profile));
+    } else if (fallback === null) {
+      if (parsed !== null && typeof parsed !== 'string') throw new Error('Invalid browser text store');
+    } else if (typeof fallback === 'boolean') {
+      if (typeof parsed !== 'boolean') throw new Error('Invalid browser setting store');
+    } else if (namespace === 'onboardingState') {
+      const state = parsed as Partial<OnboardingState> | null;
+      if (!state || typeof state !== 'object' || state.version !== 1 ||
+          typeof state.completed !== 'boolean' || !Array.isArray(state.completedStepIds) ||
+          state.completedStepIds.length > 32 ||
+          state.completedStepIds.some((id: unknown) => typeof id !== 'string' || id.length > 160) ||
+          typeof state.interviewDraft !== 'string' ||
+          !state.extensionDecisions || typeof state.extensionDecisions !== 'object' ||
+          Array.isArray(state.extensionDecisions) ||
+          state.interviewResult !== null && (
+            !state.interviewResult || typeof state.interviewResult !== 'object' ||
+            typeof state.interviewResult.summary !== 'string' ||
+            !Array.isArray(state.interviewResult.modelPreferences) ||
+            !Array.isArray(state.interviewResult.workingPreferences) ||
+            typeof state.interviewResult.customInstructionsDraft !== 'string' ||
+            typeof state.interviewResult.updatedAt !== 'string') ||
+          !state.importedToolSummary || typeof state.importedToolSummary !== 'object' ||
+          !Array.isArray(state.importedToolSummary.sources) ||
+          typeof state.importedToolSummary.summary !== 'string' ||
+          state.importedToolSummary.generatedAt !== null &&
+          typeof state.importedToolSummary.generatedAt !== 'string')
+        throw new Error('Invalid browser onboarding store');
+    }
+    return parsed as T;
+  } catch (error) {
+    console.error(`[BrowserProject] Cannot read ${namespace}; using default`, error);
+    return fallback;
+  }
+}
+
+function browserProjectSave(namespace: string, value: unknown): void {
+  const serialized = JSON.stringify(value);
+  if (serialized.length > 256 * 1024)
+    throw new Error(`Browser project ${namespace} exceeds local storage limit`);
+  localStorage.setItem(browserProjectStoreKey(namespace), serialized);
+}
+
+function validateBrowserProjectProfile(profile: Profile): void {
+  if (profile.provider !== 'local' || !profile.modelId || profile.modelId.length > 160 ||
+      !profile.id || profile.id.length > 160 || !profile.name || profile.name.length > 160 ||
+      profile.apiKey || profile.environmentKey || profile.baseURL)
+    throw new Error('Browser project profile must reference a local model');
+}
+
+const browserProjectLocalNamespaces: Record<string, Record<string, (...args: any[]) => unknown>> = {
+  onboardingState: {
+    get: async () => ({ state: browserProjectStored('onboardingState', createDefaultOnboardingState()) }),
+    set: async (state) => {
+      const previous = browserProjectStored('onboardingState', createDefaultOnboardingState());
+      const next = { ...state, completed: previous.completed || state.completed,
+        completedStepIds: Array.from(new Set([
+          ...previous.completedStepIds, ...state.completedStepIds,
+        ])) };
+      browserProjectSave('onboardingState', next);
+      return { success: true, state: next };
+    },
+    reset: async () => { const state = createDefaultOnboardingState();
+      browserProjectSave('onboardingState', state); return { success: true, state }; },
+  },
+  userName: {
+    get: async () => ({ userName: browserProjectStored<string | null>('userName', null) }),
+    set: async (name: string) => { browserProjectSave('userName', name); return { success: true, userName: name }; },
+    clear: async () => { browserProjectSave('userName', null); return { success: true }; },
+  },
+  telemetry: {
+    get: async () => ({ enabled: browserProjectStored('telemetryEnabled', false) }),
+    set: async (enabled: boolean) => { browserProjectSave('telemetryEnabled', enabled); return { success: true, enabled }; },
+    track: async () => ({ success: true }),
+    trackOnboarding: async () => ({ success: true }),
+  },
+  providers: {
+    listInterpreterProviders: async (includeUnconfigured?: boolean) => {
+      if (!browserProjectRequest) throw new IpcUnavailableError('providers.listInterpreterProviders');
+      const result = await browserProjectRequest(CLIENT_METHOD.interpreterProviderList,
+        { includeUnconfigured });
+      return { providers: result.data };
+    },
+    listInterpreterModels: async (providerId?: string, includeHidden?: boolean) => {
+      if (!browserProjectRequest) throw new IpcUnavailableError('providers.listInterpreterModels');
+      const result = await browserProjectRequest(CLIENT_METHOD.interpreterModelList,
+        { modelProvider: providerId, includeHidden });
+      return { models: result.data.filter(model => includeHidden || !model.hidden).map(model => ({
+        id: model.id, name: model.displayName, isDefault: model.isDefault,
+      })) };
+    },
+  },
+  uiSettings: {
+    getAdvancedMode: async () => ({ enabled: browserProjectStored('advancedMode', false) }),
+    setAdvancedMode: async (enabled: boolean) => { browserProjectSave('advancedMode', enabled);
+      return { success: true, enabled }; },
+    onAdvancedModeChanged: () => NOOP_UNSUBSCRIBE,
+    getShowSimpleFeedback: async () => ({ enabled: browserProjectStored('showSimpleFeedback', false) }),
+    setShowSimpleFeedback: async (enabled: boolean) => {
+      browserProjectSave('showSimpleFeedback', enabled); return { success: true, enabled }; },
+    onShowSimpleFeedbackChanged: () => NOOP_UNSUBSCRIBE,
+  },
+};
+
+/** A genuinely injected browser-local Pi model, not a desktop/hosted profile fallback. */
+export function registerBrowserProjectLocalProfile(projectId: string, modelId: string, name: string): void {
+  if (isElectron || !/^[a-zA-Z0-9_-]{1,64}$/.test(projectId) ||
+      !modelId || modelId.length > 160 || !name || name.length > 160)
+    throw new Error('Invalid browser project local model profile');
+  browserProjectLocalProfile = { id: `browser-${projectId}`, name, modelId,
+    provider: 'local', isBuiltin: true };
+  browserProjectId = projectId;
+}
+
+/** Activate the browser host before there is a selected model or session. */
+export function registerBrowserProjectIdentity(projectId: string): number {
+  if (isElectron || !/^[a-zA-Z0-9_-]{1,64}$/.test(projectId))
+    throw new Error('Invalid browser project identity');
+  browserProjectId = projectId;
+  browserProjectLocalProfile = null;
+  return ++browserProjectActivation;
+}
+
+/** Call before mounting a browser-project host; this does not affect desktop IPC. */
+export function disableBrowserProjectNativeEvents(): void {
+  if (isElectron) return;
+  browserProjectNativeEventsDisabled = true;
+  sseConnection?.close();
+  sseConnection = null;
+  if (sseReconnectTimer) clearTimeout(sseReconnectTimer);
+  sseReconnectTimer = null;
+  // Existing desktop subscriptions remain registered while the browser host
+  // suppresses native events. Reconnect them on restoration without polling.
+}
+
+/** Undo only this host's browser-local gate when its React provider unmounts. */
+export function restoreBrowserProjectNativeEvents(projectId: string, activation?: number): void {
+  if (isElectron || browserProjectId !== projectId ||
+      activation !== undefined && activation !== browserProjectActivation) return;
+  browserProjectLocalProfile = null;
+  browserProjectId = null;
+  browserProjectCapabilities = null;
+  browserProjectDownload = undefined;
+  browserProjectRequest = null;
+  browserProjectNativeEventsDisabled = false;
+  if (sseListeners.size) initSSE();
+}
 
 function initSSE(): void {
-  if (sseConnection || isElectron || isMarketingDemoMode()) return;
+  if (sseConnection || isElectron || isMarketingDemoMode() || browserProjectNativeEventsDisabled) return;
 
   console.log('[IPC] Initializing SSE connection');
   sseConnection = new EventSource(resolveWorkstationApiUrl('/api/events'), {
@@ -230,6 +430,7 @@ function initSSE(): void {
 }
 
 function subscribeSSE(channel: string, callback: EventCallback): () => void {
+  if (browserProjectNativeEventsDisabled) return NOOP_UNSUBSCRIBE;
   initSSE();
 
   if (!sseListeners.has(channel)) {
@@ -258,6 +459,9 @@ async function httpCall<T = unknown>(
   method: string,
   args: unknown[]
 ): Promise<T> {
+  if (browserProjectNativeEventsDisabled) {
+    throw new IpcUnavailableError(`${namespace}.${method}`);
+  }
   const response = await workstationFetch(`/api/ipc/${namespace}/${method}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -389,6 +593,10 @@ function createBrowserProxy(): any {
           {},
           {
             get(_, method: string) {
+              if (browserProjectNativeEventsDisabled) {
+                const local = browserProjectLocalNamespaces[namespace]?.[method];
+                if (local) return local;
+              }
               // Event subscription methods (start with 'on')
               if (method.startsWith('on') && method.length > 2) {
                 const channel = methodToChannel(namespace, method);
@@ -770,7 +978,67 @@ export const computerUseSetup: ComputerUseSetupIpc = {
     return response.data as { success: boolean };
   },
 };
-export const profiles = isMarketingDemoMode() ? marketingDemoProfilesIpc : client.profiles;
+const browserProjectProfiles = {
+  list: async () => {
+    const profile = browserProjectLocalProfile;
+    const saved = browserProjectStored<Profile[]>('profiles', []);
+    const all = profile && saved.length === 0
+      ? [structuredClone(profile), ...saved] : saved;
+    const requestedDefault = browserProjectStored<string | null>('defaultProfileId', null);
+    return { profiles: all,
+      defaultProfileId: all.some(item => item.id === requestedDefault)
+        ? requestedDefault : all[0]?.id ?? null, fastProfileId: null };
+  },
+  get: async (id: string) => {
+    const stored = browserProjectStored<Profile[]>('profiles', [])
+      .find(item => item.id === id);
+    const profile = browserProjectLocalProfile;
+    if (!stored && profile?.id !== id) throw new Error('Browser project model profile unavailable');
+    return structuredClone(stored ?? profile!);
+  },
+  create: async (profile: Profile) => {
+    validateBrowserProjectProfile(profile);
+    const saved = browserProjectStored<Profile[]>('profiles', []);
+    if (saved.length >= 32) throw new Error('Browser project profile limit reached');
+    if (saved.some(item => item.id === profile.id)) throw new Error('Browser profile already exists');
+    browserProjectSave('profiles', [...saved, profile]);
+    return { success: true, profile };
+  },
+  update: async (id: string, updates: Partial<Profile>) => {
+    const saved = browserProjectStored<Profile[]>('profiles', []);
+    const existing = saved.find(profile => profile.id === id);
+    if (!existing) throw new Error('Browser project profile unavailable');
+    const profile = { ...existing, ...updates, id };
+    validateBrowserProjectProfile(profile);
+    browserProjectSave('profiles', saved.map(item => item.id === id ? profile : item));
+    return { success: true, profile };
+  },
+  setDefault: async (id: string) => {
+    if (id !== browserProjectLocalProfile?.id && !browserProjectStored<Profile[]>('profiles', [])
+      .some(item => item.id === id))
+      throw new Error('Browser project profile unavailable');
+    browserProjectSave('defaultProfileId', id);
+    for (const listener of browserProjectDefaultProfileListeners) listener();
+    return { success: true, defaultProfileId: id, fastProfileId: null };
+  },
+  onChanged: () => NOOP_UNSUBSCRIBE,
+  onDefaultChanged: (listener: () => void) => {
+    browserProjectDefaultProfileListeners.add(listener);
+    return () => browserProjectDefaultProfileListeners.delete(listener);
+  },
+  onConfigRecovered: () => NOOP_UNSUBSCRIBE,
+};
+const browserProjectProfileProxy = new Proxy(client.profiles, {
+  get(target, method: string) {
+    if (browserProjectNativeEventsDisabled) {
+      const supported = (browserProjectProfiles as Record<string, unknown>)[method];
+      if (supported) return supported;
+      return async () => { throw new IpcUnavailableError(`profiles.${method}`); };
+    }
+    return Reflect.get(target, method);
+  },
+});
+export const profiles = isMarketingDemoMode() ? marketingDemoProfilesIpc : browserProjectProfileProxy;
 export const settings = client.settings;
 export const servers = isMarketingDemoMode() ? marketingDemoServersIpc : client.servers;
 export const pdf = isMarketingDemoMode() ? marketingDemoPdfIpc : client.pdf;
@@ -1004,6 +1272,10 @@ export async function apiRequest(request: {
   body?: unknown;
 }): Promise<{ ok: boolean; status: number; data: unknown }> {
   if (!isElectron) {
+    if (browserProjectNativeEventsDisabled) {
+      return { ok: false, status: 501,
+        data: { error: 'Browser project native API capability unavailable' } };
+    }
     if (isMarketingDemoMode()) {
       return {
         ok: false,

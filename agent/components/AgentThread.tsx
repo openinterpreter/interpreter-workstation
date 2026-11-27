@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { tr } from '../../src/i18n';
 import { AgentModelConfig } from '../../shared/types/model';
 import { ThreadWakeIndicator } from './ThreadWakeSources';
@@ -17,7 +17,9 @@ import {
   textContent,
   type ChatMessage,
   type PlanChecklistState,
+  type UseChatReturn,
 } from '../../src/hooks/use-chat';
+import { useBrowserProjectHost, type BrowserProjectHost } from '../../src/browser-project/host';
 import { agentTabs, getApiUrl, tts as ttsIpc } from '../../src/ipc';
 import { useAgentNotifications } from '../hooks/useAgentNotifications';
 import { ThreadMessages } from './prompt-kit/thread-messages';
@@ -265,14 +267,16 @@ export function AgentThread({
   readOnly = false,
   allowConversationRestart = true,
 }: AgentThreadProps) {
+  const browserProjectHost = useBrowserProjectHost();
   const runtimeKey = useMemo(
     () => getAgentThreadRuntimeKey({ agentId, conversationId: providedConversationId }),
     [agentId, providedConversationId],
   );
 
   return (
-    <AgentThreadWithRuntime
+    <AgentThreadRuntimeBridge
       key={runtimeKey}
+      browserProjectHost={browserProjectHost}
       agentId={agentId}
       isVisible={isVisible}
       callerToken={callerToken}
@@ -299,10 +303,74 @@ export function AgentThread({
   );
 }
 
+const AgentThreadChatContext = createContext<UseChatReturn | null>(null);
+const AgentThreadCreditsContext = createContext<{
+  isAuthenticated: boolean;
+  userId: string | null;
+  cachedInterpreterCredits: number | null;
+}>({ isAuthenticated: false, userId: null, cachedInterpreterCredits: null });
+type AgentThreadRuntimeProps = Parameters<typeof AgentThreadWithRuntime>[0];
+
+function AgentThreadRuntimeBridge({ browserProjectHost, ...props }: AgentThreadRuntimeProps & {
+  browserProjectHost: BrowserProjectHost | null;
+}) {
+  return browserProjectHost
+    ? <BrowserProjectChatBridge {...props} browserProjectHost={browserProjectHost} />
+    : <DesktopChatBridge {...props} />;
+}
+
+function BrowserProjectChatBridge({ browserProjectHost, ...props }: AgentThreadRuntimeProps & {
+  browserProjectHost: BrowserProjectHost;
+}) {
+  if (props.codexThreadId && props.codexThreadId !== browserProjectHost.session.threadId)
+    throw new Error('Browser project chat thread does not match the active session');
+  const chat = useChat(props.modelConfig.profileId || '', {
+    agentId: props.agentId,
+    callerToken: props.callerToken,
+    browserSession: browserProjectHost.session,
+    initialThreadId: browserProjectHost.session.threadId,
+    workspacePath: browserProjectHost.workspacePath,
+  });
+  return <AgentThreadChatContext.Provider value={chat}>
+    <AgentThreadWithRuntime {...props} browserProject />
+  </AgentThreadChatContext.Provider>;
+}
+
+function DesktopChatBridge(props: AgentThreadRuntimeProps) {
+  const { isAuthenticated, user } = useAuth();
+  const { totalCredits: cachedInterpreterCredits } = useInterpreterTokenUsage();
+  const handleCommittedUserMessage = useCallback(({ text }: { text: string }) => {
+    const pendingInput = findAgentPendingInputBySubmittedText(
+      props.agentId, text, ['afterNextTool', 'interrupting'],
+    );
+    if (!pendingInput) return false;
+    removeAgentPendingInput(props.agentId, pendingInput.id);
+    setLastSentContext(props.agentId, pendingInput.contextSnapshot);
+    return true;
+  }, [props.agentId]);
+  const chat = useChat(props.modelConfig.profileId || '', {
+    agentId: props.agentId,
+    callerToken: props.callerToken,
+    model: props.modelConfig.modelId,
+    codexProfileId: props.modelConfig.codexProfileId,
+    customEndpoint: props.modelConfig.baseURL,
+    customApiKey: props.modelConfig.apiKey,
+    reasoningEffort: props.modelConfig.reasoningEffort,
+    initialThreadId: props.codexThreadId,
+    workspacePath: props.workspacePath,
+    system: props.systemPrompt,
+    onCommittedUserMessage: handleCommittedUserMessage,
+  });
+  return <AgentThreadCreditsContext.Provider value={{
+    isAuthenticated, userId: user?.id ?? null, cachedInterpreterCredits,
+  }}><AgentThreadChatContext.Provider value={chat}>
+      <AgentThreadWithRuntime {...props} />
+    </AgentThreadChatContext.Provider></AgentThreadCreditsContext.Provider>;
+}
+
 function AgentThreadWithRuntime({
   agentId,
   isVisible,
-  callerToken,
   onLabelUpdate,
   onMessageCountChange,
   onLatestAssistantMessage,
@@ -310,7 +378,6 @@ function AgentThreadWithRuntime({
   didSwitchRuntimeDuringConversation,
   codexThreadId,
   onCodexThreadIdAssigned,
-  workspacePath,
   startupId,
   requestId,
   initialMessage,
@@ -322,6 +389,7 @@ function AgentThreadWithRuntime({
   onSuggestionOverlayOpacityChange,
   readOnly,
   allowConversationRestart,
+  browserProject = false,
 }: {
   agentId: string;
   isVisible: boolean;
@@ -345,22 +413,9 @@ function AgentThreadWithRuntime({
   onSuggestionOverlayOpacityChange?: (opacity: number) => void;
   readOnly: boolean;
   allowConversationRestart: boolean;
+  browserProject?: boolean;
 }) {
   const { showToast } = useToast();
-  const handleCommittedUserMessage = useCallback(({ text }: { text: string }) => {
-    const pendingInput = findAgentPendingInputBySubmittedText(
-      agentId,
-      text,
-      ['afterNextTool', 'interrupting'],
-    );
-    if (!pendingInput) {
-      return false;
-    }
-
-    removeAgentPendingInput(agentId, pendingInput.id);
-    setLastSentContext(agentId, pendingInput.contextSnapshot);
-    return true;
-  }, [agentId]);
   const {
     messages,
     streamingMessage,
@@ -380,19 +435,7 @@ function AgentThreadWithRuntime({
     stopBackgroundProcess,
     threadId,
     observedActiveTurnId,
-  } = useChat(modelConfig.profileId || '', {
-    agentId,
-    callerToken,
-    model: modelConfig.modelId,
-    codexProfileId: modelConfig.codexProfileId,
-    customEndpoint: modelConfig.baseURL,
-    customApiKey: modelConfig.apiKey,
-    reasoningEffort: modelConfig.reasoningEffort,
-    initialThreadId: codexThreadId,
-    workspacePath,
-    system: systemPrompt,
-    onCommittedUserMessage: handleCommittedUserMessage,
-  });
+  } = useContext(AgentThreadChatContext)!;
   const previousErrorForToastRef = useRef<string | null>(null);
   const reportedAssistantMessageRef = useRef<string | null>(null);
   const pendingInputs = useSyncExternalStore(
@@ -412,8 +455,7 @@ function AgentThreadWithRuntime({
 
   const layout = useContext(LayoutContext);
   const layoutRef = useRef(layout);
-  const { isAuthenticated, user } = useAuth();
-  const { totalCredits: cachedInterpreterCredits } = useInterpreterTokenUsage();
+  const { isAuthenticated, userId, cachedInterpreterCredits } = useContext(AgentThreadCreditsContext);
 
   const voiceResetRef = useRef<{ enabled: boolean; phrase: string }>({
     enabled: false,
@@ -432,6 +474,7 @@ function AgentThreadWithRuntime({
 
   useEffect(() => {
     let canceled = false;
+    if (browserProject) return;
 
     void ttsIpc.getSettings()
       .then((response: TtsGetSettingsResponse) => {
@@ -454,7 +497,7 @@ function AgentThreadWithRuntime({
       canceled = true;
       unsubscribe();
     };
-  }, []);
+  }, [browserProject]);
 
   useEffect(() => {
     if (startupCompletionRequestIdRef.current && isStreaming) {
@@ -495,6 +538,7 @@ function AgentThreadWithRuntime({
   }, [agentId, error, isStreaming, messages, threadId]);
 
   const enrichMessageWithRuntimeContext = useCallback((text: string) => {
+    if (browserProject) return text;
     const ctx = layoutRef.current?.getWorkstationContext();
     if (!ctx) {
       return text;
@@ -502,7 +546,7 @@ function AgentThreadWithRuntime({
 
     const formatted = formatWorkstationContext(ctx);
     return `<${WORKSTATION_CONTEXT_TAG}>\n${formatted}\n</${WORKSTATION_CONTEXT_TAG}>\n${text}`;
-  }, []);
+  }, [browserProject]);
 
   const isHostedInterpreterProfile = modelConfig.provider === 'hosted'
     && modelConfig.providerId === BUILTIN_PROVIDER_IDS.HOSTED;
@@ -512,7 +556,7 @@ function AgentThreadWithRuntime({
       return true;
     }
 
-    if (!isAuthenticated || !user?.id) {
+    if (browserProject || !isAuthenticated || !userId) {
       return true;
     }
 
@@ -525,7 +569,7 @@ function AgentThreadWithRuntime({
       const { data, error } = await supabase
         .from('desktop_user_tokens')
         .select('monthly_tokens, purchased_tokens')
-        .eq('user_id', user.id)
+        .eq('user_id', userId)
         .maybeSingle();
 
       if (error) {
@@ -553,7 +597,7 @@ function AgentThreadWithRuntime({
     cachedInterpreterCredits,
     isAuthenticated,
     isHostedInterpreterProfile,
-    user,
+    userId,
   ]);
 
   const dispatchRuntimeMessage = useCallback((
@@ -565,6 +609,10 @@ function AgentThreadWithRuntime({
       messageSource?: MessageSendSource | null;
     },
   ) => {
+    if (browserProject && options?.attachments?.length) {
+      showChatError('Browser project image attachments are unavailable');
+      return;
+    }
     const { enabled, phrase } = voiceResetRef.current;
     console.log('[VoiceReset] check:', { enabled, phrase, textSnippet: plainText.slice(0, 100), agentId });
     if (enabled && phrase && plainText.toLowerCase().includes(phrase.toLowerCase())) {
@@ -573,7 +621,7 @@ function AgentThreadWithRuntime({
       return;
     }
 
-    if (!isHostedInterpreterProfile || (typeof cachedInterpreterCredits === 'number' && cachedInterpreterCredits > 0)) {
+    if (browserProject || !isHostedInterpreterProfile || (typeof cachedInterpreterCredits === 'number' && cachedInterpreterCredits > 0)) {
       rawSendMessage(runtimeText, options);
       return;
     }
@@ -588,6 +636,7 @@ function AgentThreadWithRuntime({
     });
   }, [
     agentId,
+    browserProject,
     cachedInterpreterCredits,
     hasAvailableInterpreterCredits,
     isHostedInterpreterProfile,
@@ -768,6 +817,7 @@ function AgentThreadWithRuntime({
 
   useEffect(() => {
     let canceled = false;
+    if (browserProject) return;
 
     void ttsIpc.getSettings()
       .then((response: TtsGetSettingsResponse) => {
@@ -786,7 +836,7 @@ function AgentThreadWithRuntime({
       canceled = true;
       unsubscribe();
     };
-  }, []);
+  }, [browserProject]);
 
   useEffect(() => {
     if (readAssistantMessages) return;
@@ -1025,6 +1075,10 @@ function AgentThreadWithRuntime({
       const attachments = e.detail.attachments ?? [];
       if (!text && attachments.length === 0) return;
       if (isStreaming) {
+        if (browserProject) {
+          showToast('Wait for the browser project response before sending again.', 'error', 6000);
+          return;
+        }
         if (attachments.length > 0) {
           showToast(tr('thread.toast.imageFollowUpAfterResponse'), 'error', 7000);
           return;
@@ -1070,7 +1124,7 @@ function AgentThreadWithRuntime({
       window.removeEventListener('agent-runtime:get-state', handleGetState as EventListener);
       window.removeEventListener('agent-runtime:cancel', handleCancel as EventListener);
     };
-  }, [agentId, isStreaming, queuePendingInput, sendMessage, showToast, steerPendingInput, stopGeneration]);
+  }, [agentId, browserProject, isStreaming, queuePendingInput, sendMessage, showToast, steerPendingInput, stopGeneration]);
 
   useEffect(() => {
     if (isStreaming) {
@@ -1195,14 +1249,14 @@ function AgentThreadWithRuntime({
       messageCount: messages.length,
       unreadCount,
     });
-    void agentTabs.reportActivity({
+    if (!browserProject) void agentTabs.reportActivity({
       agentId,
       activity: {
         messageCount: messages.length,
         unreadCount,
       },
     });
-  }, [agentId, historyLoaded, isVisible, messages.length]);
+  }, [agentId, browserProject, historyLoaded, isVisible, messages.length]);
 
   useEffect(() => {
     const last = allMessages.length > 0 ? allMessages[allMessages.length - 1] : null;
@@ -1218,7 +1272,7 @@ function AgentThreadWithRuntime({
       lastMessagePreview,
       updatedAt,
     });
-    void agentTabs.reportActivity({
+    if (!browserProject) void agentTabs.reportActivity({
       agentId,
       activity: {
         label,
@@ -1230,7 +1284,7 @@ function AgentThreadWithRuntime({
 
     if (!onLabelUpdate) return;
     onLabelUpdate(agentId, label, isStreaming);
-  }, [allMessages, agentId, emptyLabel, onLabelUpdate, isStreaming]);
+  }, [allMessages, agentId, browserProject, emptyLabel, onLabelUpdate, isStreaming]);
 
   useEffect(() => {
     return () => {
@@ -1284,7 +1338,7 @@ function AgentThreadWithRuntime({
       data-agent-id={agentId}
       data-read-only={readOnly ? 'true' : undefined}
     >
-      {threadId ? <ThreadWakeIndicator threadId={threadId} /> : null}
+      {threadId && !browserProject ? <ThreadWakeIndicator threadId={threadId} /> : null}
       <ThreadMessages
         agentId={agentId}
         messages={messages}
@@ -1299,7 +1353,7 @@ function AgentThreadWithRuntime({
         loadingOlderHistory={loadingOlderHistory}
         onLoadOlderHistory={loadOlderHistory}
         activeThreadId={threadId}
-        onStopBackgroundProcess={readOnly ? undefined : stopBackgroundProcess}
+        onStopBackgroundProcess={readOnly || browserProject ? undefined : stopBackgroundProcess}
         isEditorPane={isEditorPane}
         openSettings={readOnly ? undefined : openSettings}
         onStartNewChatWithHistory={readOnly || !allowConversationRestart ? undefined : startNewChatWithHistory}

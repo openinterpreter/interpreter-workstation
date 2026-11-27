@@ -66,11 +66,13 @@ function harness(options: { sender?: SubmissionSender | null; settleMs?: number;
     },
     lastNotice: async threadId => store ? store.lastGoalNotice(threadId)
       : [...recorded].reverse().find(item => item.threadId === threadId)?.notice ?? null,
-    record: async (threadId, assigner, notice) => {
-      if (store) { await store.noticeGoal(threadId, assigner, notice); return; }
+    record: async (threadId, assigner, notice, recordOptions) => {
+      if (store) { await store.noticeGoal(threadId, assigner, notice, recordOptions); return; }
       recorded.push('sender' in assigner ? { threadId, sender: assigner.sender, notice }
         : { threadId, unrouted: assigner.unrouted, notice });
     },
+    ...(store && { recentSenders: async (threadId: string, limit: number) =>
+      store.recentThreadedSenders(threadId, limit) }),
     readRevision: async () => revision && { createdAt: CREATED, revision },
     autoResumeState: threadId => autoResume.get(threadId) ?? null,
     recentSenderThreads: async limit => store ? store.recentSenderThreads(limit) : [...senders.keys()].slice(0, limit),
@@ -455,6 +457,38 @@ describe('goal notices with the outcome-return store', () => {
       }, [process.execPath, '-e', 'process.exit(1)']);
     }
   }, 30_000);
+
+  test('a usage-limit stop with an ambiguous assigner, and its resume, go to each recent sender', async () => {
+    const senders = [{ computer: 'first-host', thread: 'first_thread' },
+      { computer: 'second-host', thread: 'second_thread' }, { computer: 'first-host', thread: 'first_thread' },
+      { computer: 'plain-host' }];
+    await withStore(async store => {
+      const h = harness({ store });
+      for (const [index, from] of senders.entries()) {
+        await store.watch(thread, `turn_${index}`, from, `handoff_${index}`);
+      }
+      h.goal('active');
+      for (const [status, total] of [['usageLimited', 2], ['active', 4], ['blocked', 5]] as const) {
+        h.goal(status);
+        await h.advance(GOAL_NOTICE_SETTLE_MS);
+        // Each decision's durable writes finish before the next change.
+        for (let tries = 0; tries < 200 && goalEntries(store).length < total; tries++) {
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+      }
+      const entries = goalEntries(store);
+      expect(entries.map(entry => [entry.goal.status, entry.status,
+        'sender' in entry && entry.sender ? entry.sender.computer : (entry as { unrouted?: string }).unrouted]))
+        .toEqual([['usageLimited', 'pending', 'first-host'], ['usageLimited', 'pending', 'second-host'],
+          ['active', 'pending', 'first-host'], ['active', 'pending', 'second-host'],
+          ['blocked', 'unrouted', 'ambiguous_assigner']]);
+      // One delivery ID per recipient and change.
+      expect(new Set(entries.map(entry => entry.id)).size).toBe(5);
+      expect(h.logs.filter(line => line.includes('ambiguous assigner'))).toEqual([
+        `[goal-notices] ambiguous assigner threadId=${thread} status=usageLimited reason=usage_limit recipients=2`,
+        `[goal-notices] ambiguous assigner threadId=${thread} status=active reason=changed_outside_turn recipients=2`]);
+    });
+  });
 
   test('a purely local Goal stays silent', async () => {
     await withStore(async store => {

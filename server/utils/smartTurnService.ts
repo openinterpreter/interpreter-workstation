@@ -12,6 +12,7 @@
 
 import path from 'path';
 import fs from 'fs';
+import { fileURLToPath } from 'node:url';
 
 // Lazy-loaded onnxruntime-node
 let ort: typeof import('onnxruntime-node') | null = null;
@@ -41,8 +42,11 @@ function resolveModelPath(): string {
     : null;
   if (packagedResourcePath && fs.existsSync(packagedResourcePath)) return packagedResourcePath;
 
-  // In packaged app: look relative to __dirname
-  const prodPath = path.join(__dirname, '..', '..', 'resources', 'smart-turn', 'smart-turn-v3.2-cpu.onnx');
+  // In packaged app or standalone Node: look relative to this module.
+  const moduleDirectory = path.dirname(
+    typeof __filename === 'string' && __filename ? __filename : fileURLToPath(import.meta.url),
+  );
+  const prodPath = path.join(moduleDirectory, '..', '..', 'resources', 'smart-turn', 'smart-turn-v3.2-cpu.onnx');
   if (fs.existsSync(prodPath)) return prodPath;
 
   throw new Error(`Smart Turn model not found at ${[devPath, packagedResourcePath, prodPath].filter(Boolean).join(' or ')}`);

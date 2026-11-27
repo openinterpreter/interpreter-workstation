@@ -95,6 +95,7 @@ jobs:
         run: bun scripts/ci/set-version.ts --version "${{ needs.authorize.outputs.version }}"
       - run: pnpm typecheck
       - run: node --test scripts/ci/release-workflow.test.mjs
+      - run: node --test scripts/ci/wait-for-published-manifest.test.mjs
       - run: node --test scripts/ci/recover-published-aliases.test.mjs
       - run: node --test scripts/ci/select-ubuntu-apt-mirror.test.mjs
       - run: node --test scripts/ci/release-platform-mode.test.mjs
@@ -436,31 +437,9 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           RELEASE_PLATFORM_MODE: ${{ steps.platforms.outputs.mode }}
         run: |
-          mkdir release-aliases
-          aliases=(
-            "Interpreter-win-x64-${RELEASE_VERSION}.exe:Interpreter-x64.exe"
-            "Interpreter-linux-x86_64-${RELEASE_VERSION}.AppImage:Interpreter-latest.AppImage"
-            "Interpreter-linux-amd64-${RELEASE_VERSION}.deb:Interpreter-linux-amd64.deb"
-          )
-          if [[ "$RELEASE_PLATFORM_MODE" == all ]]; then
-            aliases+=(
-              "Interpreter-arm64-${RELEASE_VERSION}.dmg:Interpreter-arm64.dmg"
-              "Interpreter-x64-${RELEASE_VERSION}.dmg:Interpreter-x64.dmg"
-            )
-          fi
-          for mapping in "${aliases[@]}"; do
-            source="release/${mapping%%:*}"
-            target="release-aliases/${mapping#*:}"
-            test -s "$source"
-            ln "$source" "$target"
-          done
-          bash scripts/ci/upload_and_verify.sh \
-            --bucket workstationupdater \
-            --prefix releases \
-            --endpoint-url "$AWS_ENDPOINT_URL" \
-            --region "$AWS_REGION" \
-            --concurrency 1 \
-            release-aliases/*
+          node scripts/ci/publish-stable-aliases.mjs \
+            "$RELEASE_VERSION" "$RELEASE_PLATFORM_MODE" \
+            workstationupdater releases "$AWS_ENDPOINT_URL" "$AWS_REGION" release
       - name: Publish auto-update manifests last
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}

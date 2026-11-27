@@ -10,6 +10,8 @@ const workflow = await readFile('.github/workflows/release.yml', 'utf8');
 const signedTestWorkflow = await readFile('.github/workflows/signed-macos-test-build.yml', 'utf8');
 const electronBuilderConfig = await readFile('electron-builder.yml', 'utf8');
 const publishedVerifier = await readFile('scripts/ci/verify-published-release.mjs', 'utf8');
+const draftReconciler = await readFile('scripts/ci/reconcile-release-draft.mjs', 'utf8');
+const aliasPublisher = await readFile('scripts/ci/publish-stable-aliases.mjs', 'utf8');
 const licensePolicy = JSON.parse(await readFile('licenses/release-policy.json', 'utf8'));
 
 test('release notes are written for the version being released', async () => {
@@ -176,8 +178,11 @@ test('installed clients discover a release only after GitHub publication', () =>
     'Interpreter-latest.AppImage',
     'Interpreter-linux-amd64.deb',
   ]) {
-    assert.match(publish, new RegExp(filename.replaceAll('.', '\\.')));
+    assert.match(aliasPublisher, new RegExp(filename.replaceAll('.', '\\.')));
   }
+  assert.match(publish, /node scripts\/ci\/publish-stable-aliases\.mjs/);
+  assert.match(aliasPublisher, /'copy-object'/);
+  assert.match(aliasPublisher, /Immutable source digest mismatch/);
 });
 
 test('partial publication requires verified current-run Windows and Linux jobs, not macOS assets', () => {
@@ -199,13 +204,14 @@ test('partial publication requires verified current-run Windows and Linux jobs, 
   assert.match(publishedVerifier, /Partial release unexpectedly includes macOS package/);
 });
 
-test('a failed publication can reuse only its exact unpublished commit and immutable assets', () => {
+test('a new dispatch refuses a published tag; an exact-run publish can resume only matching assets', () => {
   const authorize = section('  authorize:', '  verify:');
   const publish = section('  publish:');
   assert.match(authorize, /--json isDraft,targetCommitish/);
   assert.match(authorize, /"\$target" != "\$GITHUB_SHA"/);
   assert.match(authorize, /"\$draft" != true/);
   assert.match(publish, /node scripts\/ci\/reconcile-release-draft\.mjs release/);
+  assert.match(draftReconciler, /publishedPlan\(expected, draft\)/);
   assert.match(publish, /node scripts\/ci\/reconcile-immutable-uploads\.mjs/);
   assert.match(publish, /--checksums release\/SHA256SUMS/);
   assert.doesNotMatch(publish, /--clobber/);

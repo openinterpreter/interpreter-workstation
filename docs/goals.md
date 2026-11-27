@@ -62,9 +62,9 @@ one class of failure (model at capacity or overloaded, or the provider
 temporarily unavailable), the Workstation sidecar resumes the Goal on its own:
 after about 30 seconds, then 2, 5 and 10 minutes, then every 15 minutes, for at
 most two hours from the first such block. A turn that completes or runs for at
-least five minutes starts the schedule over. Usage and quota limits, rate
-limits, authorization, context-length, policy and interrupted turns are never
-resumed automatically.
+least five minutes starts the schedule over. Usage and quota limits are
+handled by the usage-limit resume below; rate limits, authorization,
+context-length, policy and interrupted turns are never resumed automatically.
 
 The resume uses the same exact four-field revision transition as a manual
 resume, so a Goal that someone resumed, paused, edited, cleared or replaced in
@@ -74,6 +74,29 @@ scheduled, cancelled, completed or abandoned attempt is written to the sidecar
 log with a `[goal-auto-resume]` prefix. The schedule is kept in memory only: a
 Goal that is still blocked when the sidecar restarts stays blocked until it is
 resumed.
+
+### Automatic resume after a usage limit
+
+OIX sets a Goal to `usageLimited` when a turn fails on the account's usage
+limit, and never sets it back by itself. While any Goal is usage-limited, the
+sidecar reads the account's current allowance every 5 minutes
+(`INTERPRETER_USAGE_RESUME_INTERVAL_MINUTES`, at least 1) through the runtime's
+`account/rateLimits/read`, a usage read that does not run the model. The
+allowance counts as available when ordinary usage is allowed, or when the
+account has credits and its spend control is not reached, even if every
+included limit is used up. When it is available, the sidecar resumes up to 2
+Goals per poll (`INTERPRETER_USAGE_RESUME_STEP`), threads with inputs waiting
+first, then the longest stopped, with the same exact revision transition as a
+manual resume (expected status `usageLimited`). When the allowance cannot be
+read, it tries anyway after 5, 10 and 20 minutes and then every 30 minutes; a
+resumed Goal that hits the limit again follows the same backoff. A Goal that
+someone changed in the meantime is never overridden. The same Goal and thread
+continue: inputs waiting only for a usage-limit backoff are offered on the
+next wake pass, and nothing is replayed or dropped. An input admitted into a
+running turn of a usage-limited thread also resumes its Goal once, under the
+same bound of three resumes per Goal per hour as for a blocked Goal. Usage-limited
+Goals are found again at startup from threads with wake sources or recent
+senders. Each poll and attempt is logged with a `[usage-resume]` prefix.
 
 ### Notices to the agent that assigned the work
 
@@ -86,8 +109,11 @@ Goal, when the Goal is first observed: the one sender with a thread among the
 inputs of the turn in which the Goal appeared, otherwise the thread's only
 sender with a thread. Later senders to the thread never replace it. When no
 sender named a thread, or several did, the Goal is unrouted: its notices are
-recorded and listed but not delivered. A Goal on a thread that never received
-attributed work is not reported.
+recorded and listed but not delivered. The exception is a usage limit, which
+stops every agent of the account at once: when several senders named a thread,
+the `usageLimited` notice and the following `active` notice go to each of the
+three most recent of them. A Goal on a thread that never received attributed
+work is not reported.
 
 A change must stay settled for 25 seconds, so a flapping Goal produces at most
 one notice per settled state. A model-capacity block that the automatic resume

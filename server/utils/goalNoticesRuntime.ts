@@ -27,9 +27,13 @@ export function startGoalNotices(): void {
       return outcomeReturns.bindGoalAssigner(threadId, goalCreatedAt, turnId);
     },
     lastNotice: async threadId => { await readyOutcomeReturns(); return outcomeReturns.lastGoalNotice(threadId); },
-    record: async (threadId, assigner, notice) => {
+    record: async (threadId, route, notice, options) => {
       await readyOutcomeReturns();
-      await outcomeReturns.noticeGoal(threadId, assigner, notice);
+      await outcomeReturns.noticeGoal(threadId, route, notice, options);
+    },
+    recentSenders: async (threadId, limit) => {
+      await readyOutcomeReturns();
+      return outcomeReturns.recentThreadedSenders(threadId, limit);
     },
     // Bounded, and never reconnects the runtime; an old runtime has no revision.
     readRevision: async threadId => {

@@ -2,6 +2,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect } from "react";
 import { describe, expect, test, vi } from "vitest";
+import type { ComposerVoiceAdapter } from '../../../agent/components/composerVoiceAdapter';
 
 const ipcMocks = vi.hoisted(() => ({
   openFolderDialog: vi.fn(async () => ({
@@ -14,6 +15,10 @@ const ipcMocks = vi.hoisted(() => ({
     sessionKey: "simple-2",
   })),
   setComposerState: vi.fn(async () => ({ success: true })),
+  browserHost: false,
+  channelSettingsMounted: vi.fn(),
+  apiRequest: vi.fn(async (_request: { method: string; path: string }) => (
+    { ok: true, status: 200, data: {} })),
   focusChanged: null as null | ((event: { focused: boolean }) => void),
 }));
 const simpleClientMocks = vi.hoisted(() => ({
@@ -48,7 +53,12 @@ vi.mock('./SimpleWhatsNew', () => ({ SimpleWhatsNew: ({ onVisibilityChange }: { 
   useEffect(() => onVisibilityChange(noticeMocks.visible), [onVisibilityChange]);
   return noticeMocks.visible ? <section aria-label="What's New">Update note</section> : null;
 } }));
-vi.mock('./SimpleChannelsSettings', () => ({ SimpleChannelsSettings: () => null }));
+vi.mock('./SimpleChannelsSettings', () => ({ SimpleChannelsSettings: () => {
+  ipcMocks.channelSettingsMounted();
+  useEffect(() => { void ipcMocks.apiRequest({ method: 'GET',
+    path: '/api/servers/whatsapp/thread-binding' }); }, []);
+  return <section aria-label="Native channel settings" />;
+} }));
 vi.mock('../../stores/approvalsStore', () => ({
   getApprovalsSnapshot: () => [],
   refreshApprovals: async () => {},
@@ -113,6 +123,8 @@ vi.mock("../../remote/workstationConnection", () => ({
   isWorkstationReadOnly: () => false,
 }));
 vi.mock("@/ipc", () => ({
+  getHostCapabilities: () => ({ onboardingSteps: { whatsapp: !ipcMocks.browserHost } }),
+  apiRequest: ipcMocks.apiRequest,
   theme: { get: async () => ({ theme: 'system' }), set: async () => ({ success: true }), onChanged: () => () => {} },
   openFolderDialog: ipcMocks.openFolderDialog,
   profiles: { onChanged: () => () => {}, onDefaultChanged: () => () => {} },
@@ -191,6 +203,38 @@ const props = {
 };
 
 describe("Simple shell", () => {
+  test('embedded shell without desktop voice adapter has no voice control', () => {
+    render(<SimpleShell {...props} />);
+    expect(screen.queryByRole('button', { name: 'Start GPT Live' })).toBeNull();
+  });
+  test('browser project settings do not mount native channels or request a thread binding', async () => {
+    ipcMocks.browserHost = true;
+    ipcMocks.channelSettingsMounted.mockClear();
+    ipcMocks.apiRequest.mockClear();
+    try {
+      render(<SimpleShell {...props} settingsOpen />);
+      expect(screen.queryByRole('region', { name: 'Native channel settings' })).not.toBeInTheDocument();
+      expect(ipcMocks.channelSettingsMounted).not.toHaveBeenCalled();
+      expect(ipcMocks.apiRequest).not.toHaveBeenCalledWith(expect.objectContaining({
+        path: '/api/servers/whatsapp/thread-binding',
+      }));
+    } finally {
+      ipcMocks.browserHost = false;
+    }
+  });
+
+  test('desktop settings still mount native channels and request the thread binding', async () => {
+    ipcMocks.browserHost = false;
+    ipcMocks.channelSettingsMounted.mockClear();
+    ipcMocks.apiRequest.mockClear();
+    render(<SimpleShell {...props} settingsOpen />);
+    expect(await screen.findByRole('region', { name: 'Native channel settings' })).toBeInTheDocument();
+    expect(ipcMocks.channelSettingsMounted).toHaveBeenCalled();
+    await waitFor(() => expect(ipcMocks.apiRequest).toHaveBeenCalledWith({
+      method: 'GET', path: '/api/servers/whatsapp/thread-binding',
+    }));
+  });
+
   test("one top handle closes and reopens the entire drawer, including update notices", async () => {
     noticeMocks.visible = true;
     try {
@@ -422,7 +466,7 @@ describe("Simple shell", () => {
 
   test("keeps the GPT Live control icon-only and focuses model setup when no Realtime key is available", async () => {
     const user = userEvent.setup();
-    render(<SimpleShell {...props} />);
+    render(<SimpleShell {...props} voiceAdapter={{} as ComposerVoiceAdapter} />);
     const liveButton = await screen.findByRole("button", {
       name: "Start GPT Live",
     });

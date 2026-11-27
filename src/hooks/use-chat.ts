@@ -42,6 +42,8 @@ import { tr } from "@/i18n";
 import { classifyToolOutcome } from "@/lib/codex/errors";
 import { parseToolName } from "../../shared/utils/mcpToolName";
 import type { SseStreamEvent } from "@/lib/codex/event-mapper";
+import type { BrowserProjectSession } from "@/browser-project/host";
+import { CLIENT_METHOD } from "@/lib/codex/protocol";
 import { isThreadReadResponse } from "@/lib/codex/thread-history-guards";
 import { mapThreadToChatMessages } from "@/lib/codex/thread-history-mapper";
 import type { v2 } from "../../server/handlers/codex-generated-types/index";
@@ -477,7 +479,7 @@ export type ChatMessage = {
   attachments?: StreamImageAttachment[];
 };
 
-type SendMessageOverrides = {
+export type SendMessageOverrides = {
   workspacePath?: string | null;
   attachments?: StreamImageAttachment[];
   messageSource?: MessageSendSource | null;
@@ -813,6 +815,8 @@ export type UseChatReturn = {
 };
 
 export type UseChatOptions = {
+  /** Optional browser-local implementation of the existing app-server SSE contract. */
+  browserSession?: BrowserProjectSession;
   agentId: string;
   callerToken: string;
   model?: string;
@@ -1153,7 +1157,7 @@ export function useChat(
 ): UseChatReturn {
   "use no memo";
 
-  const marketingDemoMode = isMarketingDemoMode();
+  const marketingDemoMode = isMarketingDemoMode() && !options.browserSession;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamingMessage, setStreamingMessage] = useState<ChatMessage | null>(
     null,
@@ -1172,7 +1176,7 @@ export function useChat(
   const [threadId, setThreadId] = useState<string | null>(
     options?.initialThreadId ?? null,
   );
-  const [historyLoaded, setHistoryLoaded] = useState(!options.initialThreadId);
+  const [historyLoaded, setHistoryLoaded] = useState(!options.initialThreadId || !!options.browserSession);
   const [hasOlderHistory, setHasOlderHistory] = useState(false);
   const [loadingOlderHistory, setLoadingOlderHistory] = useState(false);
   const [observedActiveTurnId, setObservedActiveTurnId] = useState<string | null>(null);
@@ -1275,6 +1279,23 @@ export function useChat(
   }, [clearMarketingDemoTimers]);
 
   useEffect(() => {
+    if (options.browserSession) {
+      if (options.initialThreadId !== options.browserSession.threadId)
+        throw new Error('Browser project thread identity mismatch');
+      if (messages.length > 0) { setHistoryLoaded(true); return; }
+      let cancelled = false;
+      void options.browserSession.appServer.request(CLIENT_METHOD.threadRead,
+        { threadId: options.browserSession.threadId, includeTurns: true }).then(({ thread }) => {
+          if (cancelled) return;
+          const restored = mapThreadToChatMessages(thread);
+          stateRef.current = { ...createInitialChatState(), messages: restored,
+            threadId: options.browserSession!.threadId };
+          setMessages(restored);
+        }).catch(error => {
+          if (!cancelled) showError(error instanceof Error ? error.message : 'Browser thread history unavailable');
+        }).finally(() => { if (!cancelled) setHistoryLoaded(true); });
+      return () => { cancelled = true; };
+    }
     const initialThreadId = options?.initialThreadId?.trim();
     if (!initialThreadId) {
       setHistoryLoaded(true);
@@ -1418,6 +1439,7 @@ export function useChat(
     };
   }, [
     marketingDemoMode,
+    options.browserSession,
     messages.length,
     options?.initialThreadId,
     showError,
@@ -1425,6 +1447,7 @@ export function useChat(
   ]);
 
   const loadOlderHistory = useCallback(async () => {
+    if (options.browserSession) throw new Error('Browser project older history is unavailable');
     const activeThreadId = stateRef.current.threadId ?? threadId;
     const cursor = olderHistoryCursorRef.current;
     if (!activeThreadId || !cursor || loadingOlderHistory || marketingDemoMode) {
@@ -1473,9 +1496,10 @@ export function useChat(
     } finally {
       setLoadingOlderHistory(false);
     }
-  }, [loadingOlderHistory, marketingDemoMode, showError, threadId]);
+  }, [loadingOlderHistory, marketingDemoMode, options.browserSession, showError, threadId]);
 
   useEffect(() => {
+    if (options.browserSession) return;
     const activeThreadId = options.initialThreadId?.trim();
     if (!activeThreadId || !historyLoaded || marketingDemoMode) {
       return;
@@ -1575,7 +1599,7 @@ export function useChat(
       window.clearInterval(intervalId);
       inFlight?.abort();
     };
-  }, [historyLoaded, marketingDemoMode, options.initialThreadId]);
+  }, [historyLoaded, marketingDemoMode, options.initialThreadId, options.browserSession]);
 
   const handleParsedEvent = useCallback(
     (chunk: SseStreamEvent) => {
@@ -2128,7 +2152,9 @@ export function useChat(
           // handles reconnection/partial chunks/event boundaries for free (battle-tested
           // by Vercel AI SDK, OpenAI SDK), and the real bottleneck is token generation
           // speed, not transport. Electron IPC would add complexity without perceptible gain.
-          const response = await fetch(
+          const response = options.browserSession
+            ? options.browserSession.stream(requestBody, abortController.signal)
+            : await fetch(
             await getApiUrl("/api/agent/chat/stream"),
             {
               method: "POST",
@@ -2348,6 +2374,7 @@ export function useChat(
       profileId,
       options?.model,
       options?.codexProfileId,
+      options?.browserSession,
       options?.customEndpoint,
       options?.customApiKey,
       options?.reasoningEffort,
@@ -2397,7 +2424,7 @@ export function useChat(
     abortRef.current?.abort();
 
     const targetThreadId = threadIdOverride ?? threadId;
-    if (targetThreadId) {
+    if (targetThreadId && !options.browserSession) {
       getApiUrl("/api/agent/chat/stop")
         .then((stopUrl) =>
           fetch(stopUrl, {
@@ -2422,7 +2449,7 @@ export function useChat(
     setStreamingMessage(null);
     setMessages(nextMessages);
     setIsStreaming(false);
-  }, [clearMarketingDemoTimers, marketingDemoMode, threadId]);
+  }, [clearMarketingDemoTimers, marketingDemoMode, options.browserSession, threadId]);
 
   useEffect(() => {
     const unsubscribeRestarting = runtime.onRestarting(() => {

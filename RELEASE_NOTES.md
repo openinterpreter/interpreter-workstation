@@ -1,9 +1,8 @@
-<!-- release-notes-for: 0.2.254 -->
+<!-- release-notes-for: 0.2.266 -->
 ## What's new
 
-- Aligns the bundled Simple project runtime and generated projects on Next.js 16.4.5.
-- Allows voice input while an agent response is in progress without replacing the stop control.
-- Refreshes application dependencies and their lockfile.
+- Sends Linux window clicks, keys, shortcuts, and text through foreground input delivery so Chromium controls receive the actions.
+- Corrects the first-run workspace default when the configuration root is the home directory.
 
 ## Distribution
 

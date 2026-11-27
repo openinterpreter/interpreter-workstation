@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 import { clearConfigCache, setConfigOverride } from './configStore';
 import {
@@ -38,9 +39,14 @@ describe('resumeAgentTaskThread caller ownership', () => {
     apiFormat: 'openai' as const, baseURL: 'https://example.test/v1' };
 
   test('does not manufacture a binding for an existing native thread with no retained caller', async () => {
-    await assert.rejects(resumeAgentTaskThread({ threadId: 'thr_unbound',
-      workspace: '/tmp/owned-workspace', modelConfig }), /caller is unavailable/);
-    assert.equal(agentTabManager.getBindingForThread('thr_unbound'), undefined);
+    const service = getCodexService();
+    const original = service.readThreadShell;
+    service.readThreadShell = async () => { throw new Error('native thread absent'); };
+    try {
+      await assert.rejects(resumeAgentTaskThread({ threadId: 'thr_unbound',
+        workspace: '/tmp/owned-workspace', modelConfig }), /caller is unavailable/);
+      assert.equal(agentTabManager.getBindingForThread('thr_unbound'), undefined);
+    } finally { service.readThreadShell = original; }
   });
 
   test('preserves the original binding when workspace or model scope differs', async () => {
@@ -67,9 +73,11 @@ describe('resumeAgentTaskThread shell environment', () => {
     run: (resumes: Array<Parameters<CodexService['resumeThread']>[0]>) => Promise<T>,
   ): Promise<T> {
     const service = getCodexService();
-    const original = { ensureProvider: service.ensureProvider, resumeThread: service.resumeThread };
+    const original = { ensureProvider: service.ensureProvider, resumeThread: service.resumeThread,
+      readThreadShell: service.readThreadShell };
     const resumes: Array<Parameters<CodexService['resumeThread']>[0]> = [];
     service.ensureProvider = async () => {};
+    service.readThreadShell = async () => { throw new Error('native thread absent'); };
     service.resumeThread = async (options) => {
       resumes.push(options);
       return options.threadId;
@@ -79,6 +87,71 @@ describe('resumeAgentTaskThread shell environment', () => {
   }
 
   afterEach(() => setServerPort(0));
+
+  test('recovers an older unloaded thread with a scoped, executable CLI on the same identity', async () => {
+    setServerPort(43_212);
+    const olderThreadId = '00000000-0000-4000-8000-0000000000e8';
+    const service = getCodexService();
+    const original = { ensureProvider: service.ensureProvider, resumeThread: service.resumeThread,
+      readThreadShell: service.readThreadShell };
+    let resumed: Parameters<CodexService['resumeThread']>[0] | undefined;
+    service.ensureProvider = async () => {};
+    service.readThreadShell = async () => ({ id: olderThreadId, cwd: workspace,
+      status: 'notLoaded' } as Awaited<ReturnType<CodexService['readThreadShell']>>);
+    service.resumeThread = async options => { resumed = options; return options.threadId; };
+    try {
+      assert.deepEqual(await resumeAgentTaskThread({ threadId: olderThreadId,
+        workspace, modelConfig }), { threadId: olderThreadId });
+      assert.equal(resumed?.threadId, olderThreadId);
+      assert.equal(resumed?.requireUnloadedShellPolicy, true);
+      const binding = agentTabManager.getBindingForThread(olderThreadId);
+      const policy = resumed?.config?.shell_environment_policy as { set: Record<string, string> };
+      assert.equal(policy.set[INTERPRETER_CALLER_TOKEN_ENV], binding?.callerToken);
+      assert.equal(policy.set[INTERPRETER_CLI_SERVER_CONNECTION_ENV],
+        buildInterpreterCliServerConnection(43_212, {
+          transport: resolveAgentInterpreterCliTransport(process.platform),
+        }));
+      if (process.platform !== 'win32') {
+        const result = spawnSync('/bin/sh', ['-c', 'interpreter-app --help'], {
+          env: { ...process.env, ...policy.set }, encoding: 'utf8', timeout: 5_000,
+        });
+        assert.equal(result.status, 0, result.stderr);
+        assert.match(result.stderr, /interpreter-app tools/);
+      }
+    } finally { Object.assign(service, original); }
+  });
+
+  test('does not leave a caller behind when an unloaded resume refuses its CLI policy', async () => {
+    const olderThreadId = '00000000-0000-4000-8000-0000000000e9';
+    const service = getCodexService();
+    const original = { ensureProvider: service.ensureProvider, resumeThread: service.resumeThread,
+      readThreadShell: service.readThreadShell };
+    service.ensureProvider = async () => {};
+    service.readThreadShell = async () => ({ id: olderThreadId, cwd: workspace,
+      status: 'notLoaded' } as Awaited<ReturnType<CodexService['readThreadShell']>>);
+    service.resumeThread = async () => { throw new Error('native policy refused'); };
+    try {
+      await assert.rejects(resumeAgentTaskThread({ threadId: olderThreadId,
+        workspace, modelConfig }), /native policy refused/);
+      assert.equal(agentTabManager.getBindingForThread(olderThreadId), undefined);
+    } finally { Object.assign(service, original); }
+  });
+
+  test('does not rotate the caller or resume an older loaded thread', async () => {
+    const olderThreadId = '00000000-0000-4000-8000-0000000000ea';
+    const service = getCodexService();
+    const original = { readThreadShell: service.readThreadShell, resumeThread: service.resumeThread };
+    let resumed = false;
+    service.readThreadShell = async () => ({ id: olderThreadId, cwd: workspace,
+      status: 'active' } as Awaited<ReturnType<CodexService['readThreadShell']>>);
+    service.resumeThread = async () => { resumed = true; return olderThreadId; };
+    try {
+      await assert.rejects(resumeAgentTaskThread({ threadId: olderThreadId,
+        workspace, modelConfig }), /caller is unavailable/);
+      assert.equal(agentTabManager.getBindingForThread(olderThreadId), undefined);
+      assert.equal(resumed, false);
+    } finally { Object.assign(service, original); }
+  });
 
   test('carries the thread\'s existing caller and the current app CLI connection', async () => {
     setServerPort(43_211);

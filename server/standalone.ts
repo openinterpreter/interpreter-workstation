@@ -61,6 +61,7 @@ import {
 import { stopWakeSources } from "./utils/wakeSourcesRuntime";
 import { stopOutcomeReturns } from "./utils/outcomeReturnsRuntime";
 import { stopGoalAutoResume } from "./utils/goalAutoResumeRuntime";
+import { stopUsageLimitResume } from "./utils/usageLimitResumeRuntime";
 import { stopGoalNotices } from "./utils/goalNoticesRuntime";
 import { getServerLocalOrigin, setServerHost } from "./utils/serverPort";
 import {
@@ -104,6 +105,7 @@ async function shutdownServer(
   stopGoalNotices();
   await stopOutcomeReturns();
   stopGoalAutoResume();
+  stopUsageLimitResume();
 
   await deps.cleanupFileWatcher();
   await deps.cleanupSandbox();
