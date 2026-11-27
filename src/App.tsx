@@ -617,6 +617,20 @@ function AppContent() {
     animateSidebars(leftTarget, rightTarget);
   }, [state.leftSidebar.isOpen, state.rightSidebar.isOpen, animateSidebars, state.leftSidebar.width, state.rightSidebar.width]);
 
+  // The Advanced workspace shell (and the sidebar/center elements whose widths
+  // are written imperatively above) only mounts when advancedMode is true.
+  // advancedMode starts as null and resolves asynchronously, and switching
+  // modes at runtime mounts fresh elements; neither changes sidebar state, so
+  // the effects above would leave the new elements at their natural width.
+  // Re-apply the current widths whenever the shell mounts.
+  const workspaceShellMounted = advancedMode === true;
+  useLayoutEffect(() => {
+    if (!workspaceShellMounted) return;
+    const leftWidth = state.leftSidebar.isOpen ? state.leftSidebar.width || 300 : 0;
+    const rightWidth = state.rightSidebar.isOpen ? state.rightSidebar.width || 400 : 0;
+    applyValues(leftWidth, rightWidth);
+  }, [workspaceShellMounted]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Recompute tab spacers when titlebar controls resize (Windows menu + right controls).
   useEffect(() => {
     const handleTitlebarLayoutChanged = () => {
