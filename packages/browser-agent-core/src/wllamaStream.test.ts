@@ -5,6 +5,7 @@ import { MemoryPiTranscriptStore } from './piTranscript';
 import { createBrowserGgufStream, type BrowserChatEngine } from './wllamaStream';
 import { mapNotificationToUiEvents } from '../../../src/lib/codex/event-mapper';
 import { mapBrowserNotificationToUiEvents } from './protocolWire';
+import { presentationCandidate } from './presentationGate';
 import type { AppServerNotification } from '../../../src/lib/codex/protocol';
 
 const model = { id: 'org/local-gguf', name: 'Local', api: 'browser-local-gguf',
@@ -39,19 +40,83 @@ test('generic Pi stream retains two different model-selected numeric calls, tool
   session.subscribeNotifications(notification => notifications.push(notification));
   await session.send({ workspacePath: 'browser-project:project_gguf', message: 'First experiment' });
   await session.send({ workspacePath: 'browser-project:project_gguf', message: 'Different experiment' });
-  const restored = await BrowserPiAppServerSession.open(options, storage);
+  const restored = await BrowserPiAppServerSession.open({ ...options,
+    streamFn: createBrowserGgufStream(engine) }, storage);
   const turns = restored.historyThread().turns;
   expect(turns.map(turn => turn.status)).toEqual(['completed', 'completed']);
   expect(turns.map(turn => turn.items.filter(item => item.type === 'mcpToolCall')
     .map(item => item.arguments))).toEqual([[{ value: 2 }], [{ value: 5 }]]);
   expect(restored.agent.state.messages.filter(message => message.role === 'toolResult'))
     .toHaveLength(2);
+  const transcript = await storage.read('project_gguf', 'thread_gguf');
+  expect(transcript).not.toBeNull();
+  const userIndices = transcript!.messages.flatMap((message, index) =>
+    message.role === 'user' ? [index] : []);
+  const first = presentationCandidate(transcript!, userIndices[0]!, userIndices[1]!, 'first');
+  const second = presentationCandidate(transcript!, userIndices[1]!, transcript!.messages.length, 'second');
+  expect(first.tools).toHaveLength(1);
+  expect(second.tools).toHaveLength(1);
+  expect(first.tools[0]!.id).not.toBe(second.tools[0]!.id);
+  expect(second.priorTranscript.messages.some(message => message.role === 'toolResult' &&
+    message.toolCallId === first.tools[0]!.id)).toBe(true);
+  expect(inputs.at(-1)).toContain(second.tools[0]!.id);
   expect(inputs.at(-1)).toContain('15');
   for (const notification of notifications)
     expect(mapBrowserNotificationToUiEvents(notification))
       .toEqual(mapNotificationToUiEvents(notification));
+  await restored.send({ workspacePath: 'browser-project:project_gguf', message: 'Experiment after reload' });
+  const afterReload = await storage.read('project_gguf', 'thread_gguf');
+  const thirdUser = afterReload!.messages.findIndex((message, index) =>
+    index > userIndices[1]! && message.role === 'user');
+  const third = presentationCandidate(afterReload!, thirdUser, afterReload!.messages.length, 'third');
+  expect(third.tools).toHaveLength(1);
+  expect(new Set([first.tools[0]!.id, second.tools[0]!.id, third.tools[0]!.id]).size).toBe(3);
+  expect(restored.historyThread().turns.map(turn => turn.status))
+    .toEqual(['completed', 'completed', 'completed']);
   session.dispose();
   restored.dispose();
+});
+
+test('two model calls with the same raw ID in one turn retain distinct paired identities after reload', async () => {
+  const storage = new MemoryPiTranscriptStore();
+  let passes = 0;
+  const inputs: string[] = [];
+  const options = { projectId: 'project_repeated_ids', threadId: 'thread_repeated_ids', model,
+    systemPrompt: 'Measure twice.', storage,
+    streamFn: createBrowserGgufStream({ async complete(messages, _tools, _signal, onChunk) {
+      inputs.push(JSON.stringify(messages));
+      passes++;
+      if (passes === 3) onChunk({ choices: [{ delta: { content: 'Measured both results.' },
+        finish_reason: 'stop' }] });
+      else onChunk({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_0',
+        function: { name: 'measure', arguments: JSON.stringify({ value: passes }) } }] },
+      finish_reason: 'tool_calls' }] });
+    } }),
+    tools: [{ name: 'measure', label: 'Measure', description: 'Measure',
+      parameters: { type: 'object', properties: { value: { type: 'number' } } },
+      execute: async (_id: string, args: { value: number }) =>
+        ({ content: [{ type: 'text' as const, text: String(args.value * 3) }], details: null }) }] };
+  const session = await BrowserPiAppServerSession.open(options, storage);
+  try {
+    await session.send({ workspacePath: 'browser-project:project_repeated_ids', message: 'Measure twice' });
+    expect(passes).toBe(3);
+    expect(session.historyThread().turns[0]?.status).toBe('completed');
+    const transcript = await storage.read(options.projectId, options.threadId);
+    const start = transcript!.messages.findIndex(message => message.role === 'user');
+    const candidate = presentationCandidate(transcript!, start, transcript!.messages.length, 'verified');
+    expect(candidate.tools).toHaveLength(2);
+    const ids = candidate.tools.map(tool => tool.id);
+    expect(new Set(ids).size).toBe(2);
+    expect(ids.every(id => /^[a-zA-Z0-9_-]{1,128}$/.test(id))).toBe(true);
+    expect(candidate.tools.map(tool => tool.success)).toEqual([true, true]);
+    expect(inputs[2]).toContain(ids[0]!);
+    expect(inputs[2]).toContain(ids[1]!);
+    const restored = await BrowserPiAppServerSession.open(options, storage);
+    try {
+      expect(restored.historyThread().turns[0]?.items.filter(item => item.type === 'mcpToolCall'))
+        .toHaveLength(2);
+    } finally { restored.dispose(); }
+  } finally { session.dispose(); }
 });
 
 test('a model completion with no text or tool call fails instead of completing an empty turn', async () => {
