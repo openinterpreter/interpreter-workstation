@@ -52,13 +52,24 @@ describe('device pairing codes', () => {
     expect(await registry.claim(code)).toBeNull();
   });
 
-  test('stay valid however many wrong codes are tried', async () => {
-    const { registry } = memoryRegistry();
+  test('limits wrong-code guesses, then permits a fresh claim after the cooldown', async () => {
+    const { registry, advance } = memoryRegistry();
     const { id, code } = registry.createPairingCode();
-    for (let attempt = 0; attempt < 1000; attempt += 1) {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
       expect(await registry.claim(`wrong-${attempt}`)).toBeNull();
     }
     expect(registry.isPairingCodePending(id)).toBe(true);
+    expect(registry.isClaimRateLimited()).toBe(true);
+    expect(await registry.claim(code)).toBeNull();
+    advance(10 * 60 * 1000);
+    expect(registry.isClaimRateLimited()).toBe(false);
+    const fresh = registry.createPairingCode();
+    expect(await registry.claim(fresh.code)).not.toBeNull();
+  });
+
+  test('does not count a successful claim against subsequent pairing codes', async () => {
+    const { registry } = memoryRegistry();
+    const { id, code } = registry.createPairingCode();
     expect(await registry.claim(code)).not.toBeNull();
     expect(registry.isPairingCodePending(id)).toBe(false);
     const fresh = registry.createPairingCode();

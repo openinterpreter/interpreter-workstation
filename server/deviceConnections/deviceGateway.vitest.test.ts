@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import http from 'node:http';
 import net from 'node:net';
+import { runInNewContext } from 'node:vm';
 import { http as mockHttp, passthrough } from 'msw';
 import { server as mockServer } from '../../tests/setup/msw-server';
 import {
@@ -172,6 +173,41 @@ describe('device gateway pairing', () => {
     expect(script.status).toBe(200);
     expect(script.body).toContain('location.hash');
     expect(script.body).toContain('/api/device-connections/claim');
+    expect(page.body).toContain('type="button"');
+    expect(script.body).toContain("addEventListener('click'");
+    expect(script.body.indexOf("addEventListener('click'")).toBeLessThan(script.body.indexOf('await fetch('));
+  });
+
+  test('does not exchange a pairing code until the person presses Connect', async () => {
+    const { gateway } = await startTestGateway();
+    const script = (await send(gateway.port, { path: '/pair.js' })).body;
+    let click: (() => Promise<void>) | undefined;
+    const requests: unknown[] = [];
+    const status = { textContent: '' };
+    const confirm = {
+      hidden: true, disabled: false,
+      addEventListener: (event: string, listener: () => Promise<void>) => {
+        expect(event).toBe('click');
+        click = listener;
+      },
+    };
+    let path = '';
+    runInNewContext(script, {
+      document: { getElementById: (id: string) => id === 'confirm' ? confirm : status },
+      location: { hash: '#code=one-time-example', pathname: '/pair', replace: (value: string) => { path = value; } },
+      history: { replaceState: () => undefined },
+      URLSearchParams,
+      fetch: async (...args: unknown[]) => {
+        requests.push(args);
+        return { ok: true, json: async () => ({ location: '/?surface=workstation' }) };
+      },
+    });
+    expect(confirm.hidden).toBe(false);
+    expect(requests).toHaveLength(0);
+    expect(click).toBeDefined();
+    await click!();
+    expect(requests).toHaveLength(1);
+    expect(path).toBe('/?surface=workstation');
   });
 
   test('exchanges a code once for a long-lived HttpOnly, Secure, SameSite=Lax device cookie', async () => {
@@ -205,6 +241,22 @@ describe('device gateway pairing', () => {
     });
     expect(response.status).toBe(403);
     expect(await registry.claim(code)).not.toBeNull();
+  });
+
+  test('limits repeated wrong-code claims without consuming the pending code', async () => {
+    const { gateway, registry } = await startTestGateway();
+    const { id } = registry.createPairingCode();
+    let response;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      response = await send(gateway.port, {
+        method: 'POST', path: '/api/device-connections/claim',
+        headers: { Origin: PUBLIC_ORIGIN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: `incorrect-${attempt}` }),
+      });
+    }
+    expect(response!.status).toBe(429);
+    expect(response!.headers['set-cookie']).toBeUndefined();
+    expect(registry.isPairingCodePending(id)).toBe(true);
   });
 });
 

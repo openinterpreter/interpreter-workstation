@@ -7,9 +7,9 @@
  * revoking a device takes effect immediately.
  *
  * Pairing codes live only in memory: random (144 bits), single use,
- * short-lived, and compared by hash in constant time. Wrong codes never lock
- * out or discard valid ones: guessing 144 bits is not feasible, while a
- * lockout would let anyone who can reach the claim endpoint block pairing.
+ * short-lived, and compared by hash in constant time. Repeated wrong codes
+ * temporarily block claims; an administrator can issue a fresh code after
+ * the cooldown without restarting the gateway.
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { isDeviceId } from './gatewayTrust';
@@ -42,6 +42,9 @@ const MAX_PENDING_CODES = 20;
 const LAST_SEEN_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_LABEL_LENGTH = 80;
 const MAX_CODE_LENGTH = 128;
+const MAX_FAILED_CLAIMS = 5;
+const FAILED_CLAIM_WINDOW_MS = 60 * 1000;
+const CLAIM_COOLDOWN_MS = 10 * 60 * 1000;
 
 function sha256(value: string): Buffer {
   return createHash('sha256').update(value).digest();
@@ -88,6 +91,9 @@ export class DeviceRegistry {
   private writes: Promise<void> = Promise.resolve();
   private readonly lastSeenWrittenAt = new Map<string, number>();
   private readonly revokeListeners = new Set<(id: string) => void>();
+  private failedClaimWindowStartedAt: number | null = null;
+  private failedClaims = 0;
+  private blockedUntil = 0;
 
   constructor(persistence: DevicePersistence, options: { now?: () => number } = {}) {
     this.persistence = persistence;
@@ -117,6 +123,11 @@ export class DeviceRegistry {
     return this.pending.some((entry) => entry.id === id);
   }
 
+  /** Whether claim requests must be refused until the wrong-code cooldown ends. */
+  isClaimRateLimited(): boolean {
+    return this.now() < this.blockedUntil;
+  }
+
   /** Calls `listener` with a device id whenever that device is revoked. */
   onRevoke(listener: (id: string) => void): () => void {
     this.revokeListeners.add(listener);
@@ -127,6 +138,7 @@ export class DeviceRegistry {
   async claim(code: unknown): Promise<{ device: DeviceSummary; credential: string } | null> {
     const now = this.now();
     this.prune(now);
+    if (now < this.blockedUntil) return null;
     const supplied = typeof code === 'string' && code.length > 0 && code.length <= MAX_CODE_LENGTH
       ? sha256(code)
       : null;
@@ -137,7 +149,20 @@ export class DeviceRegistry {
         matchIndex = index;
       }
     }
-    if (matchIndex < 0) return null;
+    if (matchIndex < 0) {
+      if (this.failedClaimWindowStartedAt === null || now - this.failedClaimWindowStartedAt >= FAILED_CLAIM_WINDOW_MS) {
+        this.failedClaimWindowStartedAt = now;
+        this.failedClaims = 0;
+      }
+      if (++this.failedClaims >= MAX_FAILED_CLAIMS) {
+        this.blockedUntil = now + CLAIM_COOLDOWN_MS;
+        this.failedClaimWindowStartedAt = null;
+        this.failedClaims = 0;
+      }
+      return null;
+    }
+    this.failedClaimWindowStartedAt = null;
+    this.failedClaims = 0;
     const [pending] = this.pending.splice(matchIndex, 1);
     const secret = randomBytes(32).toString('base64url');
     const device: PairedDevice = {

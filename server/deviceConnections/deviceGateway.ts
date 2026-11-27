@@ -52,6 +52,7 @@ const CLIENT_SUPPLIED_HEADERS = new Set([
 
 export type DeviceGatewayDevices = {
   claim: (code: unknown) => Promise<{ device: DeviceSummary; credential: string } | null>;
+  isClaimRateLimited: () => boolean;
   authenticate: (credential: string | null) => Promise<DeviceSummary | null>;
   revoke: (id: string) => Promise<boolean>;
   /** Subscribes to revocations from anywhere (tool, bridge, sign-out); returns an unsubscribe. */
@@ -148,20 +149,26 @@ p{max-width:22rem;text-align:center;line-height:1.5}
 </style>
 </head>
 <body>
-<p id="status" role="status">Connecting this device…</p>
+<div><p id="status" role="status">Review this device connection before continuing.</p>
+<button id="confirm" type="button" hidden>Connect this device</button></div>
 <script src="/pair.js"></script>
 </body>
 </html>
 `;
 
-const PAIR_SCRIPT = `(async () => {
+const PAIR_SCRIPT = `(() => {
   const status = document.getElementById('status');
+  const confirm = document.getElementById('confirm');
   const code = new URLSearchParams(location.hash.slice(1)).get('code');
   history.replaceState(null, '', location.pathname);
   if (!code) {
     status.textContent = 'This link is incomplete. Ask your Workstation for a new link.';
     return;
   }
+  confirm.hidden = false;
+  confirm.addEventListener('click', async () => {
+  confirm.disabled = true;
+  status.textContent = 'Connecting this device…';
   try {
     const response = await fetch(${JSON.stringify(DEVICE_CLAIM_PATH)}, {
       method: 'POST',
@@ -177,7 +184,9 @@ const PAIR_SCRIPT = `(async () => {
     location.replace(payload.location);
   } catch {
     status.textContent = 'Could not reach your Workstation. Check the connection and open the link again.';
+    confirm.disabled = false;
   }
+  });
 })();
 `;
 
@@ -448,7 +457,7 @@ async function handleClaim(
   }
   const claimed = await options.devices.claim(code);
   if (!claimed) {
-    send(response, 401);
+    send(response, options.devices.isClaimRateLimited() ? 429 : 401);
     return;
   }
   sendJson(response, 200, { location: deviceShellPath(options.access()) }, {
@@ -588,6 +597,7 @@ export async function startDeviceGateway(options: DeviceGatewayOptions): Promise
   // Revocation through this gateway (sign-out) also closes the device's streams.
   const devices: DeviceGatewayDevices = {
     claim: (code) => options.devices.claim(code),
+    isClaimRateLimited: () => options.devices.isClaimRateLimited(),
     authenticate: (credential) => options.devices.authenticate(credential),
     revoke: async (id) => {
       const revoked = await options.devices.revoke(id);
