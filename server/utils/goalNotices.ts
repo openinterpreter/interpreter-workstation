@@ -35,7 +35,7 @@ const STOPPED: ReadonlySet<GoalNoticeStatus> = new Set(['paused', 'blocked', 'us
 export const AMBIGUOUS_USAGE_NOTICE_RECIPIENTS = 3;
 
 /** The native Goal fields a notice uses. */
-export type ObservedGoal = { status: GoalNoticeStatus; createdAt: number; updatedAt: number };
+export type ObservedGoal = { status: GoalNoticeStatus; createdAt: number; updatedAt: number; goalId?: string };
 
 export type GoalNoticesDeps = {
   now(): number;
@@ -43,7 +43,8 @@ export type GoalNoticesDeps = {
   clearTimer(handle: unknown): void;
   /** The Goal's assigner record, bound on first call and immutable after;
    * null for a thread with no recorded attributed input. */
-  bindAssigner(threadId: string, goalCreatedAt: number, turnId: string | null): Promise<GoalAssigner | null>;
+  bindAssigner(threadId: string, goalCreatedAt: number, turnId: string | null,
+    goalId?: string): Promise<GoalAssigner | null>;
   /** The last notice recorded for the thread, or null. */
   lastNotice(threadId: string): Promise<GoalNotice | null>;
   /** Durably queue a notice for delivery to the assigner, or record it unrouted.
@@ -58,6 +59,8 @@ export type GoalNoticesDeps = {
   autoResumeState(threadId: string): GoalAutoResumeState | null;
   /** Startup only: threads with a known sender, most recent first. */
   recentSenderThreads(limit: number): Promise<string[]>;
+  /** Persisted capacity episodes must not be omitted by the recent-sender cap. */
+  capacityThreads?(): string[];
   /** Startup only: the thread's current Goal, or null when it has none. */
   readGoal(threadId: string): Promise<ObservedGoal | null>;
   log(line: string): void;
@@ -68,8 +71,9 @@ export type GoalNoticesDeps = {
  * reported only to correct an earlier stopped notice; a completed Goal stays
  * reported as complete. After a notice that an automatic resume is pending,
  * the same block is reported again once with its final reason. */
-export function goalNoticeDue(current: Pick<ObservedGoal, 'status' | 'createdAt'> & { reason?: GoalNoticeReason },
+export function goalNoticeDue(current: Pick<ObservedGoal, 'status' | 'createdAt' | 'goalId'> & { reason?: GoalNoticeReason },
   last: GoalNotice | null): boolean {
+  if (last && 'goalId' in current && current.goalId !== last.goalId) return current.status !== 'active';
   if (current.status === 'active') return !!last && STOPPED.has(last.status);
   if (!last || last.status !== current.status || last.createdAt !== current.createdAt) return true;
   return last.reason === CAPACITY_RETRY_PENDING && current.reason !== undefined &&
@@ -82,7 +86,9 @@ export function goalChangeReason(status: GoalNoticeStatus, turnId: string | null
   if (status === 'usageLimited') return 'usage_limit';
   if (status === 'budgetLimited') return 'budget_limit';
   if (status === 'blocked' && turnId && turnFailed) {
-    return autoResume?.state === 'exhausted' ? 'model_capacity_exhausted' : 'turn_error';
+    return autoResume?.state === 'exhausted'
+      ? autoResume.outcome === 'unconfirmed' ? 'resume_result_unconfirmed' : 'model_capacity_exhausted'
+      : 'turn_error';
   }
   return turnId ? 'changed_during_turn' : 'changed_outside_turn';
 }
@@ -105,7 +111,7 @@ type Pending = {
 };
 type ThreadState = { lastSeen?: GoalNoticeStatus; failedTurns: string[]; pending?: Pending; generation: number;
   /** Creation time of the Goal whose assigner record is known to exist. */
-  boundGoal?: number };
+  boundGoal?: string };
 
 export class GoalNotices {
   private readonly threads = new Map<string, ThreadState>();
@@ -145,13 +151,22 @@ export class GoalNotices {
     if (method !== 'thread/goal/updated') return;
     const goal = observedGoal(params?.goal);
     if (!goal) return;
+    // Native IDs come from the event's own Goal, not a later read of the
+    // thread, which may already refer to a replacement in the same second.
+    if (params && Object.hasOwn(params, 'goalId')) {
+      if (typeof params.goalId !== 'string' ||
+          !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(params.goalId)) return;
+      goal.goalId = params.goalId;
+    }
     const turnId = typeof params?.turnId === 'string' ? params.turnId : null;
     const state = this.state(threadId);
-    if (state.boundGoal !== goal.createdAt) this.bind(threadId, state, goal.createdAt, turnId);
+    const goalKey = JSON.stringify([goal.createdAt, goal.goalId ?? null]);
+    if (state.boundGoal !== goalKey) this.bind(threadId, state, goal, turnId);
     const previous = state.lastSeen;
     state.lastSeen = goal.status;
     if (state.pending) {
-      const statusChanged = state.pending.goal.status !== goal.status;
+      const statusChanged = state.pending.goal.status !== goal.status ||
+        state.pending.goal.goalId !== goal.goalId;
       state.pending.goal = goal;
       // Usage accounting refreshes an unchanged status; only a real change restarts the settle delay.
       if (!statusChanged) return;
@@ -161,7 +176,7 @@ export class GoalNotices {
       this.arm(threadId, state, this.settleMs);
       return;
     }
-    if (previous === goal.status) return;
+    if (previous === goal.status && state.boundGoal === goalKey) return;
     state.pending = { goal, turnId, from: previous, waitingChecks: 0 };
     this.arm(threadId, state, this.settleMs);
   }
@@ -169,7 +184,8 @@ export class GoalNotices {
   /** Once at startup: report a Goal that stopped, completed or resumed while
    * this server was not running and was never reported. */
   async reconcile(): Promise<void> {
-    const threads = await this.deps.recentSenderThreads(GOAL_NOTICE_RECONCILE_LIMIT);
+    const threads = [...new Set([...(this.deps.capacityThreads?.() ?? []),
+      ...await this.deps.recentSenderThreads(GOAL_NOTICE_RECONCILE_LIMIT)])].slice(0, 500);
     let next = 0;
     const worker = async () => {
       while (!this.stopped && next < threads.length) {
@@ -182,7 +198,26 @@ export class GoalNotices {
         }
         // A live notification since startup is newer than this read.
         if (!goal || this.stopped || this.threads.has(threadId)) continue;
-        try { await this.serialize(() => this.decide(threadId, goal, { reason: 'unknown' }, null)); }
+        const capacity = goal.status === 'blocked' ? this.deps.autoResumeState(threadId) : null;
+        const terminalCapacity = capacity?.state === 'exhausted';
+        if (terminalCapacity) {
+          // A terminal capacity notice must carry the native identity, not
+          // silently degrade into an unbound status when custody is down.
+          try {
+            const read = await this.deps.readRevision(threadId);
+            const expected = capacity.expected;
+            if (!read || !expected || read.createdAt !== goal.createdAt ||
+                read.revision.goalId !== expected.goalId ||
+                read.revision.missionRevision !== expected.missionRevision ||
+                read.revision.lifecycleRevision !== expected.lifecycleRevision ||
+                read.revision.status !== 'blocked') continue;
+          } catch { continue; }
+        }
+        try { await this.serialize(() => this.decide(threadId, goal,
+          { reason: terminalCapacity
+            ? capacity.outcome === 'unconfirmed' ? 'resume_result_unconfirmed' : 'model_capacity_exhausted'
+            : 'unknown' }, null, () => true,
+          terminalCapacity)); }
         catch (error) { this.deps.log(`[goal-notices] failed threadId=${threadId} error=${String(error)}`); }
       }
     };
@@ -211,10 +246,11 @@ export class GoalNotices {
 
   /** Bind the Goal's assigner when it is first observed, in the turn that
    * shows it, before any later decision about that Goal. */
-  private bind(threadId: string, state: ThreadState, goalCreatedAt: number, turnId: string | null): void {
+  private bind(threadId: string, state: ThreadState, goal: ObservedGoal, turnId: string | null): void {
+    const goalKey = JSON.stringify([goal.createdAt, goal.goalId ?? null]);
     void this.serialize(async () => {
-      if (this.stopped || state.boundGoal === goalCreatedAt) return;
-      if (await this.deps.bindAssigner(threadId, goalCreatedAt, turnId)) state.boundGoal = goalCreatedAt;
+      if (this.stopped || state.boundGoal === goalKey) return;
+      if (await this.deps.bindAssigner(threadId, goal.createdAt, turnId, goal.goalId)) state.boundGoal = goalKey;
     }).catch(error => this.deps.log(`[goal-notices] failed threadId=${threadId} error=${String(error)}`));
   }
 
@@ -254,14 +290,35 @@ export class GoalNotices {
       }
       return;
     }
+    if (goal.status === 'blocked' && autoResume?.state === 'exhausted' && !autoResume.expected) {
+      // The last capacity block's identity has not survived a native read
+      // yet. Keep the same pending notice instead of recording an unbound
+      // terminal outcome; a later settled check may bind it.
+      this.arm(threadId, state, Math.max(this.settleMs, 5 * 60_000));
+      return;
+    }
     state.pending = undefined;
     const reason = goalChangeReason(goal.status, turnId, !!turnId && state.failedTurns.includes(turnId), autoResume);
-    await this.decide(threadId, goal, { reason, from: pending.from }, turnId, () => state.generation === generation);
+    await this.decide(threadId, goal, { reason, from: pending.from }, turnId,
+      () => state.generation === generation, reason === 'model_capacity_exhausted');
   }
 
   private async decide(threadId: string, goal: ObservedGoal, cause: { reason: GoalNoticeReason;
-    from?: GoalNoticeStatus }, turnId: string | null, current: () => boolean = () => true): Promise<void> {
-    const assigner = await this.deps.bindAssigner(threadId, goal.createdAt, turnId);
+    from?: GoalNoticeStatus }, turnId: string | null, current: () => boolean = () => true,
+    requireIdentity = false): Promise<void> {
+    if (requireIdentity && !goal.goalId) {
+      const expected = this.deps.autoResumeState(threadId)?.expected;
+      if (!expected) return;
+      try {
+        const read = await this.deps.readRevision(threadId);
+        if (!read || read.createdAt !== goal.createdAt || read.revision.goalId !== expected.goalId ||
+            read.revision.missionRevision !== expected.missionRevision ||
+            read.revision.lifecycleRevision !== expected.lifecycleRevision ||
+            read.revision.status !== goal.status) return;
+        goal = { ...goal, goalId: expected.goalId };
+      } catch { return; }
+    }
+    const assigner = await this.deps.bindAssigner(threadId, goal.createdAt, turnId, goal.goalId);
     if (!assigner || this.stopped || !current()) return;
     const last = await this.deps.lastNotice(threadId);
     const due = goalNoticeDue({ ...goal, reason: cause.reason }, last);
@@ -269,6 +326,7 @@ export class GoalNotices {
     const notice: GoalNotice = { status: goal.status, reason: cause.reason, createdAt: goal.createdAt,
       updatedAt: goal.updatedAt, ...(cause.from && cause.from !== goal.status && { previousStatus: cause.from }),
       ...await this.identity(threadId, goal) };
+    if (requireIdentity && !notice.goalId) return;
     if (this.stopped || !current()) return;
     // A usage limit stops every agent on the account at once and nothing in
     // the thread resumes it, so its stop (and the later resume) is not left
@@ -295,9 +353,11 @@ export class GoalNotices {
    * same Goal (creation time) in this same status. */
   private async identity(threadId: string, goal: ObservedGoal):
     Promise<Pick<GoalNotice, 'goalId' | 'missionRevision' | 'lifecycleRevision'>> {
+    if (!goal.goalId) return {};
     try {
       const read = await this.deps.readRevision(threadId);
-      if (!read || read.createdAt !== goal.createdAt || read.revision.status !== goal.status) return {};
+      if (!read || read.createdAt !== goal.createdAt || read.revision.status !== goal.status ||
+          (goal.goalId && read.revision.goalId !== goal.goalId)) return {};
       const { goalId, missionRevision, lifecycleRevision } = read.revision;
       return { goalId, missionRevision, lifecycleRevision };
     } catch {

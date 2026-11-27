@@ -1,5 +1,5 @@
 import { getCodexService, subscribeCodexNotifications } from '../../src/lib/codex/service';
-import { goalAutoResumeState } from './goalAutoResumeRuntime';
+import { goalAutoResumeState, goalAutoResumeThreadIds } from './goalAutoResumeRuntime';
 import { GoalNotices, type ObservedGoal } from './goalNotices';
 import { outcomeReturns, readyOutcomeReturns } from './outcomeReturnsRuntime';
 
@@ -22,9 +22,9 @@ export function startGoalNotices(): void {
       return timer;
     },
     clearTimer: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
-    bindAssigner: async (threadId, goalCreatedAt, turnId) => {
+    bindAssigner: async (threadId, goalCreatedAt, turnId, goalId) => {
       await readyOutcomeReturns();
-      return outcomeReturns.bindGoalAssigner(threadId, goalCreatedAt, turnId);
+      return outcomeReturns.bindGoalAssigner(threadId, goalCreatedAt, turnId, goalId);
     },
     lastNotice: async threadId => { await readyOutcomeReturns(); return outcomeReturns.lastGoalNotice(threadId); },
     record: async (threadId, route, notice, options) => {
@@ -41,18 +41,22 @@ export function startGoalNotices(): void {
       return goal && revision ? { createdAt: goal.createdAt, revision } : null;
     },
     autoResumeState: goalAutoResumeState,
+    capacityThreads: goalAutoResumeThreadIds,
     recentSenderThreads: async limit => { await readyOutcomeReturns(); return outcomeReturns.recentSenderThreads(limit); },
     // One bounded native Goal read per recently attributed thread, at startup only.
     readGoal: async threadId => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const goal = await Promise.race([
-          getCodexService().getThreadGoal(threadId),
+        const read = await Promise.race([
+          getCodexService().getThreadGoalWithRevision(threadId).catch(async () =>
+            ({ goal: await getCodexService().getThreadGoal(threadId), revision: null })),
           new Promise<never>((_, reject) => {
             timer = setTimeout(() => reject(new Error('Goal read timed out')), READ_GOAL_TIMEOUT_MS);
           }),
         ]);
-        return goal ? { status: goal.status, createdAt: goal.createdAt, updatedAt: goal.updatedAt } as ObservedGoal : null;
+        const { goal, revision } = read;
+        return goal ? { status: goal.status, createdAt: goal.createdAt, updatedAt: goal.updatedAt,
+          ...(revision && { goalId: revision.goalId }) } as ObservedGoal : null;
       } finally { if (timer) clearTimeout(timer); }
     },
     log: line => console.info(line),
