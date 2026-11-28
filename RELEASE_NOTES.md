@@ -1,8 +1,8 @@
-<!-- release-notes-for: 0.2.266 -->
+<!-- release-notes-for: 0.2.267 -->
 ## What's new
 
-- Sends Linux window clicks, keys, shortcuts, and text through foreground input delivery so Chromium controls receive the actions.
-- Corrects the first-run workspace default when the configuration root is the home directory.
+- Stabilizes keyboard reopening of the settings popover during profile-switch flows.
+- Includes the protected profile-switch Electron test stability fix from the current main branch.
 
 ## Distribution
 
