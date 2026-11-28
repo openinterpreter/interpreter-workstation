@@ -171,10 +171,12 @@ export class OidcIntegration {
     return { authorizationUrl: url.toString(), state, browserBinding };
   }
 
-  async complete(input: Readonly<{ code: string; state: string; browserBinding: string }>): Promise<{ token: string; expiresAt: number; recoveryOnly?: true }> {
+  async complete(input: Readonly<{ code: string; state: string; browserBinding: string }>,
+    options?: Readonly<{ allowDomainRecovery?: boolean }>): Promise<{ token: string; expiresAt: number; recoveryOnly?: true }> {
     if (!input.code || input.code.length > 2048 || !input.state || !input.browserBinding) throw new Error('Invalid OIDC callback');
     const attempt = await this.directory.takeAttempt(input.state, input.browserBinding);
     if (!attempt || attempt.organizationId !== this.config.organizationId || attempt.issuer !== this.config.issuer) throw new Error('OIDC state invalid or expired');
+    if (attempt.purpose === 'domain-recovery' && options?.allowDomainRecovery !== true) throw new Error('Domain recovery unavailable');
     await this.verifyProvider(); // Recheck before exchanging the one-time code; an outage consumes the attempt.
     const confidential = this.config.tokenEndpointAuthMethod === 'client_secret_basic';
     const headers: Record<string, string> = { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' };

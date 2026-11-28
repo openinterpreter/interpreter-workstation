@@ -11,6 +11,9 @@ type HttpOptions = Readonly<{
   /** Exact application origin and callback URI are installation-time pins, not request-derived. */
   applicationOrigin: string;
   successPath: string;
+  /** Optional, separate, operator-pinned renewal UX path. This router is
+   * itself unmounted by the desktop server; absence leaves recovery 404. */
+  recoverySuccessPath?: string;
 }>;
 
 function exactOrigin(req: Request, origin: URL, loopback: boolean): boolean {
@@ -53,10 +56,11 @@ function cookie(req: Request, name: string): string | null {
 }
 
 /** Not mounted by the desktop server. Requires a separately reviewed HTTPS deployment. */
-export function createOidcHttpRouter({ config, integration, applicationOrigin, successPath }: HttpOptions): Router {
+export function createOidcHttpRouter({ config, integration, applicationOrigin, successPath, recoverySuccessPath }: HttpOptions): Router {
   const origin = new URL(applicationOrigin);
   const callback = new URL(config.redirectUri);
   const successDestination = new URL(successPath, origin);
+  const recoveryDestination = recoverySuccessPath === undefined ? null : new URL(recoverySuccessPath, origin);
   const loopback = config.allowInsecureLoopbackForTests === true;
   if (loopback && process.env.NODE_ENV !== 'test') throw new Error('Insecure OIDC loopback requires an isolated test process');
   if (!loopback &&
@@ -68,6 +72,10 @@ export function createOidcHttpRouter({ config, integration, applicationOrigin, s
       !successPath.startsWith('/') || successPath.startsWith('//') || successPath.includes('\\') ||
       successDestination.origin !== origin.origin || successDestination.pathname !== successPath ||
       successDestination.search || successDestination.hash ||
+      (recoverySuccessPath !== undefined && (!config.accountDomain || !recoverySuccessPath.startsWith('/') ||
+        recoverySuccessPath.startsWith('//') || recoverySuccessPath.includes('\\') ||
+        recoverySuccessPath === successPath || recoveryDestination?.origin !== origin.origin ||
+        recoveryDestination.pathname !== recoverySuccessPath || recoveryDestination.search || recoveryDestination.hash)) ||
       !callback.pathname.startsWith('/enterprise/') || callback.search || callback.hash ||
       (loopback ? !(origin.protocol === 'http:' && origin.hostname === '127.0.0.1') : origin.protocol !== 'https:')) {
     throw new Error('Invalid application origin or exact OIDC callback');
@@ -94,6 +102,23 @@ export function createOidcHttpRouter({ config, integration, applicationOrigin, s
     }
   });
 
+  if (recoverySuccessPath) router.get('/organizations/:organizationId/domain-recovery/login', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    if (!exactOrigin(req, origin, loopback) || req.params.organizationId !== config.organizationId) {
+      return void res.status(403).end();
+    }
+    const client = loginClientNetwork(req.socket.remoteAddress);
+    if (!client) return void res.status(503).end();
+    try {
+      const flow = await integration.beginDomainRecovery(client);
+      res.cookie(bindingName, flow.browserBinding, { ...cookieOptions, maxAge: 5 * 60_000 });
+      return void res.redirect(302, flow.authorizationUrl);
+    } catch {
+      return void res.status(503).end();
+    }
+  });
+
   router.get(callback.pathname, async (req: Request, res: Response) => {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Referrer-Policy', 'no-referrer');
@@ -111,10 +136,11 @@ export function createOidcHttpRouter({ config, integration, applicationOrigin, s
         url.searchParams.size !== 2 || !binding) return void res.status(400).end();
     res.clearCookie(bindingName, cookieOptions);
     try {
-      const result = await integration.complete({ code: code[0]!, state: state[0]!, browserBinding: binding });
-      if (result.expiresAt <= Date.now()) return void res.status(401).end();
+      const result = await integration.complete({ code: code[0]!, state: state[0]!, browserBinding: binding },
+        { allowDomainRecovery: Boolean(recoverySuccessPath) });
+      if (result.expiresAt <= Date.now() || (result.recoveryOnly && !recoverySuccessPath)) return void res.status(401).end();
       res.cookie(sessionName, result.token, { ...cookieOptions, maxAge: Math.max(0, result.expiresAt - Date.now()) });
-      return void res.redirect(303, successPath);
+      return void res.redirect(303, result.recoveryOnly ? recoverySuccessPath! : successPath);
     } catch {
       // Do not expose an IdP error, verifier details or any token in URLs/logs.
       return void res.status(401).end();

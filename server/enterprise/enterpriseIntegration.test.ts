@@ -263,15 +263,20 @@ describe('server-owned directory and local OIDC fixture', () => {
     claimed = false;
     await expect(valid.begin(true)).rejects.toThrow('Domain recovery unavailable');
     claimed = true;
+    const notEnabled = await valid.begin(true);
+    const beforeExchange = valid.requests();
+    await expect(valid.integration.complete({ code: 'synthetic', state: notEnabled.state,
+      browserBinding: notEnabled.browserBinding })).rejects.toThrow('Domain recovery unavailable');
+    expect(valid.requests()).toBe(beforeExchange); // Consumes one-time state before the IdP exchange.
     const recovery = await valid.begin(true);
     const recovered = await valid.integration.complete({ code: 'synthetic', state: recovery.state,
-      browserBinding: recovery.browserBinding });
+      browserBinding: recovery.browserBinding }, { allowDomainRecovery: true });
     expect(recovered.recoveryOnly).toBe(true);
     expect(recovered.expiresAt).toBeLessThanOrEqual(Date.now() + 10 * 60_000);
     expect(await scopedDirectory.verifySession(recovered.token)).toBeNull();
     expect((await scopedDirectory.verifyBoundSessionForDomainRenewal(recovered.token, 'acme.example'))?.subject).toBe('alice');
     await expect(valid.integration.complete({ code: 'synthetic', state: recovery.state,
-      browserBinding: recovery.browserBinding })).rejects.toThrow('OIDC state invalid or expired');
+      browserBinding: recovery.browserBinding }, { allowDomainRecovery: true })).rejects.toThrow('OIDC state invalid or expired');
     for (const claims of [
       { email: 'alice@acme.example', email_verified: false },
       { email: 'alice@other.example', email_verified: true },
@@ -279,22 +284,22 @@ describe('server-owned directory and local OIDC fixture', () => {
       const wrong = await mockIdP(scopedDirectory, claims, undefined, pinned);
       const flow = await wrong.begin(true);
       await expect(wrong.integration.complete({ code: 'synthetic', state: flow.state,
-        browserBinding: flow.browserBinding })).rejects.toThrow('Verified account domain required');
+        browserBinding: flow.browserBinding }, { allowDomainRecovery: true })).rejects.toThrow('Verified account domain required');
     }
     const interrupted = await valid.begin(true);
     claimOutage = true;
     await expect(valid.integration.complete({ code: 'synthetic', state: interrupted.state,
-      browserBinding: interrupted.browserBinding })).rejects.toThrow('Registry unavailable');
+      browserBinding: interrupted.browserBinding }, { allowDomainRecovery: true })).rejects.toThrow('Registry unavailable');
     claimOutage = false;
     const prior = await valid.begin(true);
     state.organizations['org-a']!.members.alice.active = false;
     await expect(valid.integration.complete({ code: 'synthetic', state: prior.state,
-      browserBinding: prior.browserBinding })).rejects.toThrow('Domain recovery is unavailable');
+      browserBinding: prior.browserBinding }, { allowDomainRecovery: true })).rejects.toThrow('Domain recovery is unavailable');
     state.organizations['org-a']!.members.alice.active = true;
     const killed = await valid.begin(true);
     state.organizations['org-a']!.authEpoch = 1;
     await expect(valid.integration.complete({ code: 'synthetic', state: killed.state,
-      browserBinding: killed.browserBinding })).rejects.toThrow('OIDC state invalid or expired');
+      browserBinding: killed.browserBinding }, { allowDomainRecovery: true })).rejects.toThrow('OIDC state invalid or expired');
   });
   test('provider discovery binds path issuer, endpoints, public client, S256 and algorithms before login and code exchange', async () => {
     expect(providerMetadataUri(config.issuer)).toBe('http://127.0.0.1:39393/tenant/.well-known/openid-configuration');
