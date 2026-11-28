@@ -14,6 +14,11 @@ type HttpOptions = Readonly<{
   /** Optional, separate, operator-pinned renewal UX path. This router is
    * itself unmounted by the desktop server; absence leaves recovery 404. */
   recoverySuccessPath?: string;
+  /** Deployment-owned, shared across all HTTP hosts, fail-closed admission
+   * before anonymous IdP discovery, tenant writes or callback verification.
+   * A single-process bucket is insufficient for a multi-host installation. */
+  ingress?: Readonly<{ admit(organizationId: string, clientNetwork: string,
+    operation: 'login' | 'domain-recovery' | 'callback'): Promise<boolean> }>;
 }>;
 
 function exactOrigin(req: Request, origin: URL, loopback: boolean): boolean {
@@ -33,7 +38,7 @@ function exactOrigin(req: Request, origin: URL, loopback: boolean): boolean {
  * X-Forwarded-For and other headers are never trusted. An IPv6 peer is
  * grouped by its /64, which one host normally controls in full. Behind a
  * proxy that does not preserve the peer address, every client shares one
- * bucket, which bounds them together but still never refuses a start. */
+ * bucket; the required shared ingress gate must account for that topology. */
 export function loginClientNetwork(address: string | undefined): string | null {
   if (!address) return null;
   const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(address)?.[1];
@@ -56,7 +61,7 @@ function cookie(req: Request, name: string): string | null {
 }
 
 /** Not mounted by the desktop server. Requires a separately reviewed HTTPS deployment. */
-export function createOidcHttpRouter({ config, integration, applicationOrigin, successPath, recoverySuccessPath }: HttpOptions): Router {
+export function createOidcHttpRouter({ config, integration, applicationOrigin, successPath, recoverySuccessPath, ingress }: HttpOptions): Router {
   const origin = new URL(applicationOrigin);
   const callback = new URL(config.redirectUri);
   const successDestination = new URL(successPath, origin);
@@ -66,6 +71,9 @@ export function createOidcHttpRouter({ config, integration, applicationOrigin, s
   if (!loopback &&
       (!config.accountDomain || verifiedDomainName(config.accountDomain) !== config.accountDomain)) {
     throw new Error('Production OIDC requires a pinned account domain');
+  }
+  if (!loopback && typeof ingress?.admit !== 'function') {
+    throw new Error('Production OIDC requires shared anonymous ingress admission');
   }
   if (origin.origin !== callback.origin || origin.username || origin.password || callback.username || callback.password ||
       origin.pathname !== '/' || origin.search || origin.hash ||
@@ -84,6 +92,16 @@ export function createOidcHttpRouter({ config, integration, applicationOrigin, s
   const sessionName = loopback ? 'interpreter-enterprise-session' : '__Host-interpreter-enterprise-session';
   const router = Router();
   const cookieOptions = { httpOnly: true, secure: !loopback, sameSite: 'lax' as const, path: '/' };
+  async function admitted(req: Request, res: Response, operation: 'login' | 'domain-recovery' | 'callback'): Promise<string | null> {
+    const client = loginClientNetwork(req.socket.remoteAddress);
+    if (!client) { res.status(503).end(); return null; }
+    if (!ingress) return client; // Only isolated loopback tests may omit the deployment gate.
+    try {
+      if (await ingress.admit(config.organizationId, client, operation) === true) return client;
+      res.status(429).end();
+    } catch { res.status(503).end(); }
+    return null;
+  }
 
   router.get('/organizations/:organizationId/login', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -91,8 +109,8 @@ export function createOidcHttpRouter({ config, integration, applicationOrigin, s
     if (!exactOrigin(req, origin, loopback) || req.params.organizationId !== config.organizationId) {
       return void res.status(403).end();
     }
-    const client = loginClientNetwork(req.socket.remoteAddress);
-    if (!client) return void res.status(503).end();
+    const client = await admitted(req, res, 'login');
+    if (!client) return;
     try {
       const flow = await integration.begin(client);
       res.cookie(bindingName, flow.browserBinding, { ...cookieOptions, maxAge: 5 * 60_000 });
@@ -108,8 +126,8 @@ export function createOidcHttpRouter({ config, integration, applicationOrigin, s
     if (!exactOrigin(req, origin, loopback) || req.params.organizationId !== config.organizationId) {
       return void res.status(403).end();
     }
-    const client = loginClientNetwork(req.socket.remoteAddress);
-    if (!client) return void res.status(503).end();
+    const client = await admitted(req, res, 'domain-recovery');
+    if (!client) return;
     try {
       const flow = await integration.beginDomainRecovery(client);
       res.cookie(bindingName, flow.browserBinding, { ...cookieOptions, maxAge: 5 * 60_000 });
@@ -123,6 +141,7 @@ export function createOidcHttpRouter({ config, integration, applicationOrigin, s
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Referrer-Policy', 'no-referrer');
     if (!exactOrigin(req, origin, loopback)) return void res.status(403).end();
+    if (!await admitted(req, res, 'callback')) return;
     // Reject duplicated response parameters, errors, fragments and malformed values.
     const url = new URL(req.originalUrl, origin);
     const code = url.searchParams.getAll('code');

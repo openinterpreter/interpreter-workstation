@@ -863,8 +863,9 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
           authorizationEndpoint: `${issuer}/authorize`, tokenEndpoint: `${issuer}/token`, jwksUri: `${issuer}/keys`,
           redirectUri: `${origin}/enterprise/callback`, accountDomain: 'network.test' };
         expectedRedirectUri = config.redirectUri;
+        // Test-only admitted transport; this fixture does not prove a deployed shared rate limiter.
         app.use(createOidcHttpRouter({ config, integration: new OidcIntegration(config, directory, pinnedFetch),
-          applicationOrigin: origin, successPath: '/settings' }));
+          applicationOrigin: origin, successPath: '/settings', ingress: { admit: async () => true } }));
         expect(mountEnterpriseAdminRoutes(app, { enabled: true, applicationOrigin: origin, organizationId: 'network-org', issuer,
           accountDomain: 'network.test', oidc: config,
           directory: verifier, verifySession: (token) => verifier.verifySession(token) })).toBe(true);
@@ -1097,8 +1098,9 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
             .setIssuedAt().setExpirationTime('5m').sign(privateKey);
           return Response.json({ id_token: token });
         };
+        // Test-only admission; production needs a separately proven shared ingress limiter.
         app.use(createOidcHttpRouter({ config, integration: new OidcIntegration(config, directory, idp),
-          applicationOrigin: origin, successPath: '/settings' }));
+          applicationOrigin: origin, successPath: '/settings', ingress: { admit: async () => true } }));
         const adminOptions = { enabled: true as const, applicationOrigin: origin,
           organizationId: 'https-org', issuer, accountDomain: 'https.test', oidc: config, directory: verifier,
           // A permissive supplied verifier cannot authorize an unbound
