@@ -160,4 +160,38 @@ describe('domain lease renewal keeps domain-bound sessions usable', () => {
     claim(false);
     expect(await directory.verifyBoundSessionForDomainRenewal(bound.token, domain)).toBeNull();
   });
+  test('a recovery-only administrator session cannot become an ordinary admin cookie', async () => {
+    const { directory, bound, editProof, dns, proof, claim } = await fixture();
+    await directory.revokeSession(bound.identity);
+    editProof((value) => { value.verifiedUntil = Date.now() - 1; });
+    const recovery = await directory.createDomainRecoverySession(issuer, 'org-a', 'alice',
+      Date.now() + 60_000, 0, domain);
+    expect(await directory.verifySession(recovery.token)).toBeNull();
+    expect(await directory.verifyBoundSession(recovery.token, domain)).toBeNull();
+    expect(await directory.sessionIsActive(recovery.identity)).toBe(false);
+    expect(await directory.readAdmin(recovery.identity, 'members')).toBeNull();
+    expect((await directory.verifyBoundSessionForDomainRenewal(recovery.token, domain))?.subject).toBe('alice');
+    await expect(directory.beginDomainProof(recovery.identity, 'other.example')).rejects.toThrow('Access denied');
+    const next = await directory.beginDomainProof(recovery.identity, domain);
+    dns([[next.value]]);
+    await directory.confirmDomainProof(recovery.identity, domain);
+    expect(proof().verifiedUntil).toBeGreaterThan(Date.now());
+    expect(await directory.verifySession(recovery.token)).toBeNull();
+    expect((await directory.createSession(issuer, 'org-a', 'alice', Date.now() + 60_000, 0, domain)).identity.subject).toBe('alice');
+    claim(false);
+    expect(await directory.verifyBoundSessionForDomainRenewal(recovery.token, domain)).toBeNull();
+  });
+  test('recovery requires expired prior proof, current admin, epoch and held domain claim', async () => {
+    const { directory, bound, editProof, claim } = await fixture();
+    const attempt = () => directory.createDomainRecoverySession(issuer, 'org-a', 'alice', Date.now() + 60_000, 0, domain);
+    await expect(attempt()).rejects.toThrow('Domain recovery is unavailable');
+    editProof((value) => { value.verifiedUntil = Date.now() - 1; });
+    await expect(directory.createDomainRecoverySession(issuer, 'org-a', 'alice', Date.now() + 60_000, 1, domain))
+      .rejects.toThrow('Domain recovery is unavailable');
+    await expect(directory.createDomainRecoverySession(issuer, 'org-a', 'alice', Date.now() + 11 * 60_000, 0, domain))
+      .rejects.toThrow('Invalid recovery identity');
+    claim(false);
+    await expect(attempt()).rejects.toThrow('Verified account domain required');
+    expect(await directory.verifySession(bound.token)).toBeNull();
+  });
 });

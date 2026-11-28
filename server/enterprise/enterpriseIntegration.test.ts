@@ -63,8 +63,8 @@ async function mockIdP(directory: ServerDirectory, overrides: Record<string, unk
     return Response.json({ id_token: token });
   };
   const integration = new OidcIntegration(pinned, directory, fetchMock);
-  const begin = async () => {
-    const flow = await integration.begin();
+  const begin = async (recovery = false) => {
+    const flow = recovery ? await integration.beginDomainRecovery() : await integration.begin();
     const url = new URL(flow.authorizationUrl);
     authorizeNonce = url.searchParams.get('nonce')!;
     authorizeChallenge = url.searchParams.get('code_challenge')!;
@@ -207,6 +207,12 @@ describe('server-owned directory and local OIDC fixture', () => {
         }
         return fn(state);
       },
+      probeDomainRecovery: async (org, issuer, domain) => {
+        const tenant = state.organizations[org];
+        const proof = tenant?.domainProofs?.[domain];
+        return Boolean(org === 'org-a' && issuer === tenant?.issuer && proof?.issuer === issuer &&
+          proof.verifiedUntil && proof.verifiedUntil <= Date.now());
+      },
     };
     const scopedDirectory = new ServerDirectory(store, async () => dns);
     await scopedDirectory.bootstrap('org-a', 'Acme', config.issuer,
@@ -249,6 +255,46 @@ describe('server-owned directory and local OIDC fixture', () => {
       browserBinding: accepted.browserBinding });
     expect((await scopedDirectory.verifySession(session.token))?.organizationId).toBe('org-a');
     expect((await scopedDirectory.auditSummary('org-a')).eventCount).toBeGreaterThan(1);
+
+    // A lapsed prior proof is recoverable through a *different* durable
+    // purpose, never by weakening the ordinary login requirement.
+    state.organizations['org-a']!.domainProofs!['acme.example']!.verifiedUntil = Date.now() - 1;
+    await expect(valid.begin()).rejects.toThrow('Account domain unavailable');
+    claimed = false;
+    await expect(valid.begin(true)).rejects.toThrow('Domain recovery unavailable');
+    claimed = true;
+    const recovery = await valid.begin(true);
+    const recovered = await valid.integration.complete({ code: 'synthetic', state: recovery.state,
+      browserBinding: recovery.browserBinding });
+    expect(recovered.recoveryOnly).toBe(true);
+    expect(recovered.expiresAt).toBeLessThanOrEqual(Date.now() + 10 * 60_000);
+    expect(await scopedDirectory.verifySession(recovered.token)).toBeNull();
+    expect((await scopedDirectory.verifyBoundSessionForDomainRenewal(recovered.token, 'acme.example'))?.subject).toBe('alice');
+    await expect(valid.integration.complete({ code: 'synthetic', state: recovery.state,
+      browserBinding: recovery.browserBinding })).rejects.toThrow('OIDC state invalid or expired');
+    for (const claims of [
+      { email: 'alice@acme.example', email_verified: false },
+      { email: 'alice@other.example', email_verified: true },
+    ]) {
+      const wrong = await mockIdP(scopedDirectory, claims, undefined, pinned);
+      const flow = await wrong.begin(true);
+      await expect(wrong.integration.complete({ code: 'synthetic', state: flow.state,
+        browserBinding: flow.browserBinding })).rejects.toThrow('Verified account domain required');
+    }
+    const interrupted = await valid.begin(true);
+    claimOutage = true;
+    await expect(valid.integration.complete({ code: 'synthetic', state: interrupted.state,
+      browserBinding: interrupted.browserBinding })).rejects.toThrow('Registry unavailable');
+    claimOutage = false;
+    const prior = await valid.begin(true);
+    state.organizations['org-a']!.members.alice.active = false;
+    await expect(valid.integration.complete({ code: 'synthetic', state: prior.state,
+      browserBinding: prior.browserBinding })).rejects.toThrow('Domain recovery is unavailable');
+    state.organizations['org-a']!.members.alice.active = true;
+    const killed = await valid.begin(true);
+    state.organizations['org-a']!.authEpoch = 1;
+    await expect(valid.integration.complete({ code: 'synthetic', state: killed.state,
+      browserBinding: killed.browserBinding })).rejects.toThrow('OIDC state invalid or expired');
   });
   test('provider discovery binds path issuer, endpoints, public client, S256 and algorithms before login and code exchange', async () => {
     expect(providerMetadataUri(config.issuer)).toBe('http://127.0.0.1:39393/tenant/.well-known/openid-configuration');

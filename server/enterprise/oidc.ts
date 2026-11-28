@@ -133,7 +133,21 @@ export class OidcIntegration {
   /** `clientNetwork` is the transport-level client network chosen by the
    * HTTP boundary; it only selects a login-start quota bucket. */
   async begin(clientNetwork = ''): Promise<{ authorizationUrl: string; state: string; browserBinding: string }> {
-    if (this.config.accountDomain && !await this.directory.domainClaimVerifiedForLogin(
+    return this.beginForPurpose(clientNetwork);
+  }
+
+  /** Not mounted: this is exclusively for a previously verified, now lapsed
+   * tenant lease with a retained global claim. An IdP login cannot grant
+   * normal admin authority through this path. */
+  async beginDomainRecovery(clientNetwork = ''): Promise<{ authorizationUrl: string; state: string; browserBinding: string }> {
+    if (!this.config.accountDomain || !await this.directory.domainClaimHeldForRecovery(
+      this.config.organizationId, this.config.issuer, this.config.accountDomain)) throw new Error('Domain recovery unavailable');
+    return this.beginForPurpose(clientNetwork, 'domain-recovery');
+  }
+
+  private async beginForPurpose(clientNetwork: string, purpose?: 'domain-recovery'):
+    Promise<{ authorizationUrl: string; state: string; browserBinding: string }> {
+    if (this.config.accountDomain && !purpose && !await this.directory.domainClaimVerifiedForLogin(
       this.config.organizationId, this.config.issuer, this.config.accountDomain)) throw new Error('Account domain unavailable');
     await this.verifyProviderForLogin();
     const state = randomBytes(32).toString('base64url');
@@ -143,6 +157,7 @@ export class OidcIntegration {
     await this.directory.putAttempt(state, {
       organizationId: this.config.organizationId, issuer: this.config.issuer, nonce, verifier,
       bindingHash: createHash('sha256').update(browserBinding).digest('hex'), expiresAt: Date.now() + 5 * 60_000,
+      ...(purpose ? { purpose } : {}),
     }, clientNetwork);
     const url = new URL(this.config.authorizationEndpoint);
     url.searchParams.set('response_type', 'code');
@@ -156,7 +171,7 @@ export class OidcIntegration {
     return { authorizationUrl: url.toString(), state, browserBinding };
   }
 
-  async complete(input: Readonly<{ code: string; state: string; browserBinding: string }>): Promise<{ token: string; expiresAt: number }> {
+  async complete(input: Readonly<{ code: string; state: string; browserBinding: string }>): Promise<{ token: string; expiresAt: number; recoveryOnly?: true }> {
     if (!input.code || input.code.length > 2048 || !input.state || !input.browserBinding) throw new Error('Invalid OIDC callback');
     const attempt = await this.directory.takeAttempt(input.state, input.browserBinding);
     if (!attempt || attempt.organizationId !== this.config.organizationId || attempt.issuer !== this.config.issuer) throw new Error('OIDC state invalid or expired');
@@ -193,14 +208,22 @@ export class OidcIntegration {
       if (payload.email_verified !== true || typeof email !== 'string' ||
           !/^[^@\s]+@[^@\s]+$/.test(email) ||
           email.slice(email.lastIndexOf('@') + 1).toLowerCase() !== this.config.accountDomain ||
-          !await this.directory.domainClaimVerifiedForLogin(
-            this.config.organizationId, this.config.issuer, this.config.accountDomain)) {
+          !(attempt.purpose === 'domain-recovery'
+            ? await this.directory.domainClaimHeldForRecovery(this.config.organizationId, this.config.issuer, this.config.accountDomain)
+            : await this.directory.domainClaimVerifiedForLogin(this.config.organizationId, this.config.issuer, this.config.accountDomain))) {
         throw new Error('Verified account domain required');
       }
     }
     // The token's organization/group claims are intentionally not authority.
     // Membership is provisioned independently in the server-owned directory.
     const expiresAt = Math.min(payload.exp * 1000, Date.now() + 8 * 60 * 60_000);
+    if (attempt.purpose === 'domain-recovery') {
+      if (!this.config.accountDomain) throw new Error('Domain recovery unavailable');
+      const recoveryExpiresAt = Math.min(expiresAt, Date.now() + 10 * 60_000);
+      const session = await this.directory.createDomainRecoverySession(this.config.issuer, this.config.organizationId,
+        payload.sub, recoveryExpiresAt, attempt.authEpoch ?? 0, this.config.accountDomain);
+      return { token: session.token, expiresAt: recoveryExpiresAt, recoveryOnly: true };
+    }
     const session = await this.directory.createSession(this.config.issuer, this.config.organizationId, payload.sub, expiresAt,
       attempt.authEpoch ?? 0, this.config.accountDomain);
     return { token: session.token, expiresAt };

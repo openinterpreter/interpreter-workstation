@@ -305,6 +305,24 @@ export class TenantPostgresDirectoryStore implements EnterpriseStateStore {
     } finally { client.release(); }
   }
 
+  /** Bounded negative-only tenant snapshot: anonymous recovery start must
+   * not count or hydrate the historical ledger. This never creates a
+   * session; the claim and proof are rechecked under a locked write. */
+  async probeDomainRecovery(organizationId: string, issuer: string, domain: string): Promise<boolean> {
+    if (organizationId !== this.organizationId || this.table !== 'public.interpreter_enterprise_rls_directory') return false;
+    const client = await this.pool.connect();
+    try {
+      await this.assertRlsBoundary(client);
+      const state = this.state(await client.query(`SELECT content FROM ${this.table}
+        WHERE organization_id = $1`, [this.organizationId]));
+      if (this.ledgerOnly && state.audit.length !== 0) throw new Error('Tenant audit checkpoint is out of sync');
+      const org = state.organizations[organizationId];
+      const proof = org?.domainProofs?.[domain];
+      return Boolean(org?.issuer === issuer && proof?.issuer === issuer && proof.verifiedUntil &&
+        proof.verifiedUntil <= Date.now());
+    } finally { client.release(); }
+  }
+
   async read(): Promise<DirectoryState> {
     if (this.table === 'public.interpreter_enterprise_rls_directory') {
       const client = await this.pool.connect();

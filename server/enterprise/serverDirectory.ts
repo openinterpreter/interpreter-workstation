@@ -16,10 +16,11 @@ type Audit = { organizationId: string; subject: string; targetSubject?: string; 
    * target when multiple values were attempted. */
   firstAt?: string; count?: number; targetDigest?: string; targetKind?: AuditTargetKind; mixedTargets?: boolean };
 type Attempt = { organizationId: string; issuer: string; nonce: string; verifier: string; bindingHash: string; expiresAt: number; authEpoch?: number;
+  purpose?: 'domain-recovery';
   /** Truncated digest of the starting client's network; quota bucket only. */
   clientHash?: string };
 type Session = { organizationId: string; issuer: string; subject: string; expiresAt: number; revoked: boolean;
-  accountDomain?: string };
+  accountDomain?: string; recoveryOnly?: true };
 type DomainProof = { issuer: string; challengeHash: string; expiresAt: number; verifiedUntil?: number };
 type WorkspaceRecord = { id: string; name: string; active: boolean; grants?: Record<string, RuntimeAction[]> };
 export type DirectoryState = { version: 1 | 2; organizations: Record<string, { name: string; issuer: string;
@@ -65,6 +66,7 @@ export interface EnterpriseStateStore {
   /** A negative-only preflight: it must never authorize a callback. A found
    * attempt is always rechecked under the store's locked change boundary. */
   probeAttempt?(stateKey: string): Promise<DirectoryState['attempts'][string] | undefined>;
+  probeDomainRecovery?(organizationId: string, issuer: string, domain: string): Promise<boolean>;
   readAuditPage?(identity: VerifiedIdentity, afterId: number, upperId?: number, limit?: number,
     purpose?: 'view' | 'export'): Promise<TenantAuditPage>;
   /** Optional database-wide claim check; tenant-only stores fail closed here. */
@@ -268,6 +270,7 @@ export function validateDirectoryState(data: Data): void {
         typeof attempt.bindingHash !== 'string' || !/^[a-f0-9]{64}$/.test(attempt.bindingHash) ||
         typeof attempt.expiresAt !== 'number' || !Number.isFinite(attempt.expiresAt) ||
         (attempt.clientHash !== undefined && (typeof attempt.clientHash !== 'string' || !/^[a-f0-9]{32}$/.test(attempt.clientHash))) ||
+        (attempt.purpose !== undefined && attempt.purpose !== 'domain-recovery') ||
         (attempt.authEpoch !== undefined && (!Number.isSafeInteger(attempt.authEpoch) || attempt.authEpoch < 0))) throw new Error('Directory attempt is invalid');
   }
   for (const [hash, session] of Object.entries(data.sessions)) {
@@ -276,7 +279,8 @@ export function validateDirectoryState(data: Data): void {
         !subjectIdentifier(session.subject) || !Object.prototype.hasOwnProperty.call(
           data.organizations[session.organizationId as string]?.members ?? {}, session.subject as string) ||
         typeof session.expiresAt !== 'number' || !Number.isFinite(session.expiresAt) || typeof session.revoked !== 'boolean' ||
-        (session.accountDomain !== undefined && verifiedDomainName(session.accountDomain as string) !== session.accountDomain)) {
+        (session.accountDomain !== undefined && verifiedDomainName(session.accountDomain as string) !== session.accountDomain) ||
+        (session.recoveryOnly !== undefined && (session.recoveryOnly !== true || !session.accountDomain))) {
       throw new Error('Directory session is invalid');
     }
   }
@@ -589,6 +593,18 @@ export class ServerDirectory implements EnterpriseDirectory {
   async domainClaimVerifiedForLogin(organizationId: string, issuer: string, inputDomain: string): Promise<boolean> {
     if (!this.store?.domainClaimStatus || !this.store.changeWithDomainClaim) return false;
     return this.domainVerified(organizationId, issuer, inputDomain);
+  }
+
+  /** Negative-only anonymous preflight for an expired *previously proven*
+   * domain. No ordinary login or authorization is granted by this probe;
+   * the eventual session write rechecks membership, epoch and the locked
+   * global claim. File, pilot and unknown stores fail closed. */
+  async domainClaimHeldForRecovery(organizationId: string, issuer: string, inputDomain: string): Promise<boolean> {
+    const domain = verifiedDomainName(inputDomain);
+    if (!domain || domain !== inputDomain || !this.store?.probeDomainRecovery ||
+        !this.store.domainClaimStatus || !this.store.changeWithDomainClaim) return false;
+    if (!await this.store.probeDomainRecovery(organizationId, issuer, domain)) return false;
+    return this.store.domainClaimStatus(organizationId, issuer, domain);
   }
 
   /** Admin-only, audited status read. This exposes no challenge digest or
@@ -1062,6 +1078,43 @@ export class ServerDirectory implements EnterpriseDirectory {
     return { token, identity: { issuer, organizationId, subject, sessionId } };
   }
 
+  /** A server-verified IdP administrator identity may obtain only a short
+   * domain-proof renewal session after its existing lease lapses. This is
+   * not an HTTP route or an OIDC credential exchange. The caller must bind
+   * issuer, subject, verified email domain and one-time login epoch before
+   * invoking it; the RLS claim is locked through the atomic write. */
+  async createDomainRecoverySession(issuer: string, organizationId: string, subject: string,
+    expiry: number, expectedAuthEpoch: number, accountDomain: string): Promise<{ token: string; identity: VerifiedIdentity }> {
+    if (!key(organizationId) || !subjectIdentifier(subject) || !issuer ||
+        verifiedDomainName(accountDomain) !== accountDomain || !this.store?.changeWithDomainClaim ||
+        !Number.isSafeInteger(expectedAuthEpoch) || expectedAuthEpoch < 0 ||
+        expiry <= Date.now() || expiry > Date.now() + 10 * 60_000) throw new Error('Invalid recovery identity');
+    const token = randomBytes(32).toString('base64url');
+    const sessionId = digest(token);
+    await this.store.changeWithDomainClaim(organizationId, issuer, accountDomain, this.bounded((data) => {
+      const org = data.organizations[organizationId];
+      const member = org?.members[subject];
+      const proof = org?.domainProofs?.[accountDomain];
+      if (org?.issuer !== issuer || !member?.active || member.role !== 'admin' ||
+          member.organizationId !== organizationId || member.subject !== subject ||
+          (org.authEpoch ?? 0) !== expectedAuthEpoch || proof?.issuer !== issuer ||
+          !proof.verifiedUntil || proof.verifiedUntil > Date.now() ||
+          otherActiveDomainClaim(data, organizationId, accountDomain, Date.now())) {
+        throw new Error('Domain recovery is unavailable');
+      }
+      for (const session of Object.values(data.sessions)) {
+        if (session.organizationId === organizationId && session.subject === subject && session.recoveryOnly) {
+          session.revoked = true;
+        }
+      }
+      data.sessions[sessionId] = { issuer, organizationId, subject, expiresAt: expiry, revoked: false,
+        accountDomain, recoveryOnly: true };
+      appendScopedAudit(data, { organizationId, subject, action: 'session.domain-recovery.create',
+        outcome: 'allowed', at: new Date().toISOString() });
+    }, () => true)); // Admin recovery remains possible near the snapshot cap.
+    return { token, identity: { issuer, organizationId, subject, sessionId } };
+  }
+
   async verifySession(token: string): Promise<VerifiedIdentity | null> {
     if (!/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
     const sessionId = digest(token);
@@ -1119,6 +1172,7 @@ export class ServerDirectory implements EnterpriseDirectory {
       session.subject === identity.subject && session.organizationId === identity.organizationId &&
       org?.issuer === identity.issuer && member?.active && member.organizationId === identity.organizationId &&
       member.subject === identity.subject &&
+      (!session.recoveryOnly || renewalDomain === session.accountDomain) &&
       (!session.accountDomain || (proof?.issuer === identity.issuer && (session.accountDomain === renewalDomain ||
         (proof.verifiedUntil && proof.verifiedUntil > Date.now())))));
   }
