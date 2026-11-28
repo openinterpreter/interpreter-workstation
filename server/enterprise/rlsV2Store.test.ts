@@ -263,6 +263,36 @@ describe('unmounted RLS v2 store protocol, synthetic only', () => {
     await expect(store.read()).rejects.toThrow('Tenant audit checkpoint is out of sync');
   });
 
+  test('export fixes one upper cursor and exposes remaining denial windows until a new pass closes them', async () => {
+    const pool = syntheticRlsPool();
+    pool.provision('org-a');
+    const store = new TenantPostgresDirectoryStore(pool, 'org-a', 'rls-v2');
+    const directory = new ServerDirectory(store);
+    await directory.bootstrap('org-a', 'Alpha', 'https://idp.invalid/a',
+      { organizationId: 'org-a', subject: 'alice', displayName: 'Alice', role: 'admin', active: true });
+    const row = pool.rows.get('org-a')!;
+    const state = JSON.parse(row.content);
+    state.organizations['org-a'].domainProofs = { 'tenant.example': { issuer: 'https://idp.invalid/a',
+      challengeHash: 'a'.repeat(64), expiresAt: Date.now() + 60_000, verifiedUntil: Date.now() + 60_000 } };
+    const at = new Date().toISOString();
+    state.pendingAudit = Array.from({ length: 101 }, (_, index) => ({ position: state.auditCursor.count,
+      event: { organizationId: 'org-a', subject: 'alice', action: `test.denial.${index}`,
+        outcome: 'denied', at, firstAt: at, count: 1 } }));
+    row.content = JSON.stringify(state); // Disposable fixture only; no production row is edited.
+    const admin = await directory.createSession('https://idp.invalid/a', 'org-a', 'alice',
+      Date.now() + 60_000, 0, 'tenant.example');
+    const first = await store.readAuditPage(admin.identity, 0, undefined, 2, 'export');
+    expect(first.pendingCount).toBe(1);
+    expect(first.upperId).toBeGreaterThan(100);
+    const continuation = await store.readAuditPage(admin.identity, first.nextId!, first.upperId, 2, 'export');
+    expect(continuation.upperId).toBe(first.upperId);
+    expect(continuation.pendingCount).toBe(1);
+    const nextPass = await store.readAuditPage(admin.identity, 0, undefined, 100, 'export');
+    expect(nextPass.upperId).toBeGreaterThan(first.upperId);
+    expect(nextPass.pendingCount).toBe(0);
+    expect(pool.rows.get('org-a')!.ledger.some(({ content }) => content.includes('test.denial.100'))).toBe(true);
+  });
+
   test('permitted member audit grows past the former snapshot cap while the directory stays bounded', async () => {
     const pool = syntheticRlsPool();
     pool.provision('org-a'); pool.provision('org-b');
