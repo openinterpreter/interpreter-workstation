@@ -298,6 +298,51 @@ describe("Simple executable interface", () => {
     expect(screen.getByRole("status")).not.toHaveTextContent(/alice|secret/);
   });
 
+  test("reloads a frame whose interface never reports ready, a bounded number of times", async () => {
+    vi.useFakeTimers();
+    render(<SimpleInterface onMessage={() => {}} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const firstFrame = screen.getByTitle("Interpreter interface") as HTMLIFrameElement;
+    // A failed or stalled first load never runs the bridge, so no ready arrives.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    const secondFrame = screen.getByTitle("Interpreter interface") as HTMLIFrameElement;
+    expect(screen.getAllByTitle("Interpreter interface")).toHaveLength(1);
+    expect(secondFrame).not.toBe(firstFrame);
+    expect(secondFrame.src).toBe(firstFrame.src);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    const thirdFrame = screen.getByTitle("Interpreter interface");
+    expect(thirdFrame).not.toBe(secondFrame);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(screen.getByTitle("Interpreter interface")).toBe(thirdFrame);
+    vi.useRealTimers();
+  });
+
+  test("keeps a frame whose interface reported ready", async () => {
+    vi.useFakeTimers();
+    render(<SimpleInterface onMessage={() => {}} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const frame = screen.getByTitle("Interpreter interface") as HTMLIFrameElement;
+    await act(async () => {
+      window.dispatchEvent(new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: { protocol: "interpreter-interface-v1", type: "ready" },
+      }));
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(screen.getByTitle("Interpreter interface")).toBe(frame);
+    vi.useRealTimers();
+  });
+
   test("keeps one stable iframe while Next Fast Refresh updates source", async () => {
     vi.useFakeTimers();
     client.refresh

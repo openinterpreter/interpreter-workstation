@@ -222,6 +222,8 @@ export async function resolveSimpleAppFile(inputPath: unknown): Promise<{ path: 
 
 export async function recordSimpleAppRuntimeError(message: unknown): Promise<{ success: true }> {
   const text = String(message ?? 'Interface runtime error').slice(0, 4000);
+  // The only record of a frame that failed to mount; keep it in the log too.
+  console.warn(`[simpleApp] interface runtime error: ${text.slice(0, 300)}`);
   const { runtimePath } = await appPaths();
   await atomicWrite(join(runtimePath, 'runtime-error.json'), `${JSON.stringify({ error: text, at: new Date().toISOString() }, null, 2)}\n`);
   return { success: true };
