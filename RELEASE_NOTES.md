@@ -1,8 +1,9 @@
-<!-- release-notes-for: 0.2.266 -->
+<!-- release-notes-for: 0.2.267 -->
 ## What's new
 
-- Sends Linux window clicks, keys, shortcuts, and text through foreground input delivery so Chromium controls receive the actions.
-- Corrects the first-run workspace default when the configuration root is the home directory.
+- Adds confirmed, revocable device pairing with tighter session and origin protections.
+- Makes Goal retry and notification delivery more reliable under transient capacity errors.
+- Stabilizes the profile-switch interaction test when reopening settings.
 
 ## Distribution
 
