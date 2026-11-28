@@ -39,6 +39,7 @@ afterEach(async () => {
 async function createRunnableProject(options?: {
   launcher?: boolean;
   startupDelayMs?: number;
+  respond?: boolean;
 }): Promise<string> {
   const projectDir = await mkdtemp(path.join(tmpdir(), 'interpreter-project-runner-'));
   tempDirs.push(projectDir);
@@ -57,6 +58,7 @@ import http from 'node:http';
 const port = Number(process.env.PORT);
 await new Promise((resolve) => setTimeout(resolve, ${options?.startupDelayMs ?? 0}));
 const server = http.createServer((_request, response) => {
+  if (${options?.respond === false}) return;
   response.statusCode = 200;
   response.end('ok');
 });
@@ -163,6 +165,17 @@ describe('projectRunner', () => {
     expect(longer.success).toBe(true);
     expect(longer.state.status).toBe('running');
     await trustedProjectRunner.stop(projectDir);
+  }, 15_000);
+
+  test('the startup budget bounds a readiness request the project never answers', async () => {
+    // A dev server can accept the connection and then hold the first request,
+    // for example while it compiles. The budget must still end the startup.
+    const projectDir = await createRunnableProject({ respond: false });
+    const startedAt = Date.now();
+    const result = await trustedProjectRunner.start(projectDir, {}, 5000);
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+    expect(result.success).toBe(false);
+    expect(result.state.status).toBe('error');
   }, 15_000);
 
   // Startup and shutdown each have their own 5 s readiness check; Bun's
