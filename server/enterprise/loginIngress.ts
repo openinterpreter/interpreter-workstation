@@ -6,7 +6,8 @@ import type { Pool } from 'pg';
  * by an anonymous request. For each tenant and operation at most 4096 slots
  * can exist; a collision denies rather than evicting another live client.
  * Grant each tenant role SELECT, INSERT, UPDATE(network_digest,window_bucket,hits)
- * only. Do not grant DELETE, TRUNCATE, table ownership or BYPASSRLS. */
+ * only. Revoke CREATE on the public schema from PUBLIC and tenant roles; do
+ * not grant DELETE, TRUNCATE, table ownership or BYPASSRLS. */
 export const ENTERPRISE_RLS_LOGIN_INGRESS_SCHEMA = `CREATE TABLE public.interpreter_enterprise_rls_login_ingress (
   organization_id text NOT NULL REFERENCES public.interpreter_enterprise_rls_directory(organization_id),
   database_role name NOT NULL,
@@ -52,6 +53,7 @@ export class PostgresEnterpriseLoginIngress {
       pg_get_userbyid(limiter.relowner) = current_user AS table_owner,
       has_table_privilege(current_user, '${TABLE}', 'DELETE') AS can_delete,
       has_table_privilege(current_user, '${TABLE}', 'TRUNCATE') AS can_truncate,
+      has_schema_privilege(current_user, 'public', 'CREATE') AS can_create_public,
       has_table_privilege(current_user, '${TABLE}', 'SELECT') AS can_select,
       has_table_privilege(current_user, '${TABLE}', 'INSERT') AS can_insert,
       has_column_privilege(current_user, '${TABLE}', 'network_digest', 'UPDATE') AS can_update_digest,
@@ -69,7 +71,8 @@ export class PostgresEnterpriseLoginIngress {
         row?.rolreplication !== false ||
         row?.organization_id !== organizationId || row?.directory_rls !== true || row?.directory_force !== true ||
         row?.limiter_rls !== true || row?.limiter_force !== true || row?.table_owner !== false ||
-        row?.can_delete !== false || row?.can_truncate !== false || row?.can_select !== true ||
+        row?.can_delete !== false || row?.can_truncate !== false || row?.can_create_public !== false ||
+        row?.can_select !== true ||
         row?.can_insert !== true || row?.can_update_digest !== true ||
         row?.can_update_window !== true || row?.can_update_hits !== true) {
       throw new Error('Tenant ingress RLS and TLS boundary is unsafe');

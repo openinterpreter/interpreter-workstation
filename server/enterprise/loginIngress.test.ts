@@ -5,7 +5,7 @@ import { ENTERPRISE_RLS_LOGIN_INGRESS_SCHEMA, PostgresEnterpriseLoginIngress } f
 const role = { ssl: true, rolsuper: false, rolbypassrls: false, rolinherit: false,
   rolcreaterole: false, rolcreatedb: false, rolreplication: false, organization_id: 'org-a',
   directory_rls: true, directory_force: true, limiter_rls: true, limiter_force: true,
-  table_owner: false, can_delete: false, can_truncate: false,
+  table_owner: false, can_delete: false, can_truncate: false, can_create_public: false,
   can_select: true, can_insert: true, can_update_digest: true, can_update_window: true, can_update_hits: true };
 const tls = { options: { host: '127.0.0.1', ssl: { servername: '127.0.0.1', rejectUnauthorized: true,
   ca: '-----BEGIN CERTIFICATE-----fixture' } } };
@@ -14,7 +14,7 @@ describe('separately operator-provisioned bounded tenant ingress', () => {
   test('requires scoped FORCE RLS, pinned TLS, a non-owner tenant role and a private shared key', async () => {
     expect(ENTERPRISE_RLS_LOGIN_INGRESS_SCHEMA).toContain('FORCE ROW LEVEL SECURITY');
     expect(ENTERPRISE_RLS_LOGIN_INGRESS_SCHEMA).toContain('slot BETWEEN 0 AND 4095');
-    for (const override of [{ ssl: false }, { rolbypassrls: true }, { can_delete: true },
+    for (const override of [{ ssl: false }, { rolbypassrls: true }, { can_delete: true }, { can_create_public: true },
       { limiter_force: false }, { organization_id: null }, { table_owner: true }]) {
       const pool = { ...tls, query: async () => ({ rowCount: 1, rows: [{ ...role, ...override }] }) } as unknown as Pool;
       await expect(PostgresEnterpriseLoginIngress.connect(pool, 'org-a', Buffer.alloc(32, 1)))
