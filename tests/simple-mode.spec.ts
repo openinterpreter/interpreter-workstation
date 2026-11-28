@@ -54,6 +54,18 @@ async function waitForInterfaceFrame(
     }, { timeout: 120_000 }).toBe(true);
   } catch (error) {
     const frameCount = await page.locator('iframe[data-simple-interface-frame]').count().catch(() => -1);
+    // What each mounted frame actually holds: an error page, a blank or
+    // still-loading document, or another project's interface.
+    const frames = await Promise.all((await page.locator('iframe[data-simple-interface-frame]').all()).map(async (element) => {
+      const frame = await (await element.elementHandle())?.contentFrame().catch(() => null);
+      if (!frame) return { attached: false };
+      const content = await frame.evaluate(() => ({
+        readyState: document.readyState,
+        rootChildren: document.getElementById('root')?.childNodes.length ?? null,
+        text: (document.body?.innerText ?? '').replace(/\s+/g, ' ').slice(0, 160),
+      })).catch((failure: unknown) => ({ error: String(failure).slice(0, 160) }));
+      return { attached: true, url: frame.url().replace(/windowSessionKey=[^&]+/, 'windowSessionKey=…'), ...content };
+    })).catch(() => []);
     const status = await page.evaluate(async () => {
       const response = await (window as any).electron.apiRequest({
         method: 'GET', path: '/api/simple-interface/',
@@ -65,7 +77,7 @@ async function waitForInterfaceFrame(
         runtimeUrlPresent: Boolean(response.data?.runtimeUrl),
       };
     }).catch(() => ({ httpStatus: -1, ready: null, diagnosticPresent: false, runtimeUrlPresent: false }));
-    throw new Error(`Simple frame did not appear: ${JSON.stringify({ frameCount, status, waitFailed: Boolean(error) })}`);
+    throw new Error(`Simple frame did not appear: ${JSON.stringify({ frameCount, frames, status, waitFailed: Boolean(error) })}`);
   }
   if (!active) throw new Error('The active Simple interface frame did not appear.');
   return active;

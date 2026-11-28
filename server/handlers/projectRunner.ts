@@ -58,6 +58,11 @@ function pushRuntimeLog(runtime: ProjectRuntime, chunk: string): void {
   }
 
   runtime.logs.push(line);
+  // Startup output (for example a dev server's compilation progress) is the
+  // only evidence of why a start is slow or fails, so record it in the log.
+  if (runtime.status === 'starting') {
+    console.log(`[projectRunner] startup output port=${runtime.port}: ${line}`);
+  }
   if (runtime.logs.length > 120) {
     runtime.logs.shift();
   }
@@ -265,7 +270,12 @@ async function waitForProject(runtime: ProjectRuntime, startupTimeoutMs: number)
     }
 
     try {
-      const response = await fetch(runtime.url);
+      // A dev server can accept the connection and hold the request, for
+      // example during its first compilation. Bound each request by the
+      // remaining budget so the startup deadline always holds.
+      const remainingMs = Math.max(1, startupTimeoutMs - (Date.now() - start));
+      const response = await fetch(runtime.url, { signal: AbortSignal.timeout(remainingMs) });
+      await response.body?.cancel().catch(() => undefined);
       if (response.status === 200) {
         return true;
       }
@@ -437,7 +447,9 @@ async function startProjectAtResolvedPath(
   emitProjectRunnerChanged(toProjectRunnerState(runtime), broadcastScope);
 
   runtime.startupPromise = (async () => {
+    const startedAt = Date.now();
     const ready = await waitForProject(runtime, startupTimeoutMs);
+    console.log(`[projectRunner] startup ${ready ? 'ready' : 'failed'} port=${port} durationMs=${Date.now() - startedAt} budgetMs=${startupTimeoutMs}`);
     if (!ready) {
       throw new Error(getRuntimeError(runtime));
     }

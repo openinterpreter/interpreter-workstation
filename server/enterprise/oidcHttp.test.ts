@@ -36,6 +36,98 @@ function fixture() {
 }
 
 describe('unmounted HTTP boundary, deterministic local callback fixture', () => {
+  test('anonymous ingress rejects starts and callbacks before IdP or tenant work, and fails closed on outage', async () => {
+    const calls: string[] = [];
+    const admissions: Array<[string, string, string]> = [];
+    let mode: 'deny' | 'outage' | 'allow' = 'deny';
+    const app = express();
+    app.use(createOidcHttpRouter({ config: { ...config, accountDomain: 'acme.example' },
+      integration: {
+        begin: async () => { calls.push('begin'); return { authorizationUrl: config.authorizationEndpoint, state, browserBinding: binding }; },
+        beginDomainRecovery: async () => { calls.push('recovery'); return { authorizationUrl: config.authorizationEndpoint, state, browserBinding: binding }; },
+        complete: async () => { calls.push('complete'); return { token: session, expiresAt: Date.now() + 60_000 }; },
+      } as OidcIntegration, applicationOrigin: origin, successPath: '/settings',
+      recoverySuccessPath: '/settings/enterprise/domain-recovery', ingress: {
+        admit: async (organizationId, clientNetwork, operation) => {
+          admissions.push([organizationId, clientNetwork, operation]);
+          if (mode === 'outage') throw new Error('synthetic ingress outage');
+          return mode === 'allow';
+        },
+      } }));
+    const started = () => request(app).get('/organizations/org-a/login').set('Host', host).set('X-Forwarded-For', '198.51.100.12');
+    const recovering = () => request(app).get('/organizations/org-a/domain-recovery/login').set('Host', host);
+    const callback = () => request(app).get(`/enterprise/callback?code=one&state=${state}`)
+      .set('Host', host).set('Cookie', `interpreter-oidc-binding=${binding}`);
+    for (const response of [await started(), await recovering(), await callback()]) {
+      expect(response.status).toBe(429);
+      expect(response.headers['set-cookie']).toBeUndefined();
+      expect(response.headers.location).toBeUndefined();
+      expect(response.headers['cache-control']).toBe('no-store');
+    }
+    expect(calls).toEqual([]);
+    expect(admissions.map((entry) => entry[2])).toEqual(['login', 'domain-recovery', 'callback']);
+    expect(admissions.every(([tenant, network]) => tenant === 'org-a' && network === '127.0.0.1')).toBe(true);
+    mode = 'outage';
+    expect((await started()).status).toBe(503);
+    expect((await callback()).status).toBe(503);
+    expect(calls).toEqual([]);
+    mode = 'allow';
+    expect((await started()).status).toBe(302);
+    expect((await callback()).status).toBe(303);
+    expect(calls).toEqual(['begin', 'complete']);
+  });
+  test('domain recovery is absent by default and opt-in callback stays on its pinned renewal destination', async () => {
+    const pinned = { ...config, accountDomain: 'acme.example' };
+    const recoveryPath = '/settings/enterprise/domain-recovery';
+    const calls: string[] = [];
+    const integration = {
+      begin: async () => ({ authorizationUrl: config.authorizationEndpoint, state, browserBinding: binding }),
+      beginDomainRecovery: async () => {
+        calls.push('recovery-start');
+        return { authorizationUrl: config.authorizationEndpoint, state, browserBinding: binding };
+      },
+      complete: async (input: { code: string }, options: { allowDomainRecovery?: boolean }) => {
+        calls.push(options.allowDomainRecovery ? 'callback-opted-in' : 'callback-disabled');
+        return input.code === 'normal' ? { token: session, expiresAt: Date.now() + 60_000 }
+          : { token: session, expiresAt: Date.now() + 60_000, recoveryOnly: true as const };
+      },
+    } as unknown as OidcIntegration;
+    const start = '/organizations/org-a/domain-recovery/login';
+    const callback = `/enterprise/callback?code=fixture-code&state=${state}`;
+    const defaults = express();
+    defaults.use(createOidcHttpRouter({ config: pinned, integration, applicationOrigin: origin, successPath: '/settings' }));
+    expect((await request(defaults).get(start).set('Host', host)).status).toBe(404);
+    const disabled = await request(defaults).get(callback).set('Host', host)
+      .set('Cookie', `interpreter-oidc-binding=${binding}`);
+    expect(disabled.status).toBe(401);
+    expect(String(disabled.headers['set-cookie'])).not.toContain(`interpreter-enterprise-session=${session}`);
+    expect(calls).toEqual(['callback-disabled']);
+    for (const unsafe of ['//untrusted.test', '/settings?recovery=1', '/settings', '/\\untrusted.test']) {
+      expect(() => createOidcHttpRouter({ config: pinned, integration, applicationOrigin: origin,
+        successPath: '/settings', recoverySuccessPath: unsafe })).toThrow('Invalid application origin');
+    }
+    const enabled = express();
+    enabled.use(createOidcHttpRouter({ config: pinned, integration, applicationOrigin: origin,
+      successPath: '/settings', recoverySuccessPath: recoveryPath }));
+    expect((await request(enabled).get(start).set('Host', 'untrusted.test')).status).toBe(403);
+    expect((await request(enabled).get('/organizations/org-b/domain-recovery/login').set('Host', host)).status).toBe(403);
+    expect(calls).toEqual(['callback-disabled']);
+    const login = await request(enabled).get(start).set('Host', host);
+    expect(login.status).toBe(302);
+    expect(String(login.headers['set-cookie'])).toContain(`interpreter-oidc-binding=${binding}`);
+    const result = await request(enabled).get(callback).set('Host', host)
+      .set('Cookie', `interpreter-oidc-binding=${binding}`);
+    expect(result.status).toBe(303);
+    expect(result.headers.location).toBe(recoveryPath);
+    expect(String(result.headers['set-cookie'])).toContain(`interpreter-enterprise-session=${session}`);
+    expect(String(result.headers['set-cookie'])).toContain('HttpOnly');
+    expect(String(result.headers['set-cookie'])).toContain('SameSite=Lax');
+    const normal = await request(enabled).get(`/enterprise/callback?code=normal&state=${state}`)
+      .set('Host', host).set('Cookie', `interpreter-oidc-binding=${binding}`);
+    expect(normal.status).toBe(303);
+    expect(normal.headers.location).toBe('/settings');
+    expect(calls).toEqual(['callback-disabled', 'recovery-start', 'callback-opted-in', 'callback-opted-in']);
+  });
   test('production cannot opt into the plaintext test bypass at any independent seam', () => {
     const prior = process.env.NODE_ENV;
     try {
@@ -185,6 +277,9 @@ describe('unmounted HTTP boundary, deterministic local callback fixture', () => 
     expect(() => createOidcHttpRouter({ config: { ...productionConfig, accountDomain: undefined },
       integration: {} as OidcIntegration, applicationOrigin: 'https://enterprise.example', successPath: '/settings' }))
       .toThrow('pinned account domain');
+    expect(() => createOidcHttpRouter({ config: productionConfig, integration: {} as OidcIntegration,
+      applicationOrigin: 'https://enterprise.example', successPath: '/settings' }))
+      .toThrow('shared anonymous ingress admission');
     expect(() => new OidcIntegration({ ...productionConfig, accountDomain: undefined,
       issuer: 'https://issuer.example/tenant', authorizationEndpoint: 'https://issuer.example/tenant/authorize',
       tokenEndpoint: 'https://issuer.example/tenant/token', jwksUri: 'https://issuer.example/tenant/keys' }, {} as ServerDirectory))
@@ -192,7 +287,8 @@ describe('unmounted HTTP boundary, deterministic local callback fixture', () => 
     const app = express();
     app.use(createOidcHttpRouter({ config: productionConfig, integration: {
       begin: async () => { started++; throw new Error('must not run'); },
-    } as OidcIntegration, applicationOrigin: 'https://enterprise.example', successPath: '/settings' }));
+    } as OidcIntegration, applicationOrigin: 'https://enterprise.example', successPath: '/settings',
+    ingress: { admit: async () => true } }));
     const response = await request(app).get('/organizations/org-a/login').set('Host', 'enterprise.example')
       .set('X-Forwarded-Proto', 'https').set('X-Forwarded-Host', 'enterprise.example');
     expect(response.status).toBe(403);

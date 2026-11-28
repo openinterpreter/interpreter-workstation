@@ -47,6 +47,13 @@ type HostView = {
 };
 
 const PROTOCOL = "interpreter-interface-v1";
+/**
+ * A mounted interface reports ready through the bridge once its document has
+ * rendered. A frame whose first load failed or stalled never does, and nothing
+ * else would replace it while its URL is unchanged, so remount it.
+ */
+const FRAME_READY_TIMEOUT_MS = 20_000;
+const MAX_FRAME_RELOADS = 2;
 
 const RECOVERY_ADVICE: Record<SimpleInterfaceProblemKind, string> = {
   'project-code': "Fix the interface project's code; Next.js will refresh it automatically.",
@@ -103,6 +110,8 @@ export function SimpleInterface({ onMessage }: Props) {
   const [hostViews, setHostViews] = useState<Record<string, HostView>>({});
   const authorizedDropRootsRef = useRef<Set<string>>(new Set());
   const projectPathRef = useRef<string | null>(null);
+  const [frameLoad, setFrameLoad] = useState({ url: null as string | null, attempt: 0 });
+  const frameReadyRef = useRef(false);
 
   const postHostEvent = useCallback((name: string, detail: unknown) => {
     iframeRef.current?.contentWindow?.postMessage({ protocol: PROTOCOL, type: "host-event", name, detail }, "*");
@@ -265,7 +274,10 @@ export function SimpleInterface({ onMessage }: Props) {
       )
         return;
       const source = event.source as Window;
-      if (request.type === "ready") return;
+      if (request.type === "ready") {
+        frameReadyRef.current = true;
+        return;
+      }
       if (request.type === "interaction") {
         window.dispatchEvent(new CustomEvent("simple-interface:interaction"));
         return;
@@ -510,15 +522,29 @@ export function SimpleInterface({ onMessage }: Props) {
     return () => window.removeEventListener("message", onBridgeMessage);
   }, [onMessage, postHostEvent]);
 
+  const frameShown = Boolean(status?.ready && status.revision && runtimeUrl);
+  const frameAttempt = frameLoad.url === runtimeUrl ? frameLoad.attempt : 0;
+  useEffect(() => {
+    if (!frameShown) return;
+    frameReadyRef.current = false;
+    if (frameAttempt >= MAX_FRAME_RELOADS) return;
+    const timer = window.setTimeout(() => {
+      if (frameReadyRef.current) return;
+      console.warn(`[SimpleInterface] interface frame did not report ready within ${FRAME_READY_TIMEOUT_MS}ms; reloading (attempt ${frameAttempt + 1} of ${MAX_FRAME_RELOADS})`);
+      setFrameLoad({ url: runtimeUrl, attempt: frameAttempt + 1 });
+    }, FRAME_READY_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [frameShown, runtimeUrl, frameAttempt]);
+
   return (
     <main
       ref={rootRef}
       aria-label="Interpreter interface"
       className="absolute inset-0 overflow-hidden bg-background text-foreground"
     >
-      {status?.ready && status.revision && runtimeUrl ? (
+      {frameShown && runtimeUrl ? (
         <motion.div
-          key={runtimeUrl}
+          key={`${runtimeUrl}#${frameAttempt}`}
           className="absolute inset-0"
           initial={{ opacity: 0, scale: 0.998, filter: "blur(3px)" }}
           animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
