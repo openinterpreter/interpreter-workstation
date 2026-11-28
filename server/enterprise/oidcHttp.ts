@@ -179,6 +179,71 @@ export function createEnterpriseBrowserRouter(options: Readonly<{
   return router;
 }
 
+/** Separately constructed audit page route for the experimental v2 ledger.
+ * It is NOT mounted by the desktop or the opt-in admin composition. The
+ * legacy full-history endpoint deliberately fails closed for v2 stores. */
+export function createEnterpriseAuditPageRouter(options: Readonly<{
+  applicationOrigin: string;
+  allowInsecureLoopbackForTests?: boolean;
+  verifySession: (token: string) => Promise<VerifiedIdentity | null>;
+  directory: Pick<ServerDirectory, 'listAuditPage' | 'recordTenantDenial'>;
+}>): Router {
+  const origin = new URL(options.applicationOrigin);
+  const loopback = options.allowInsecureLoopbackForTests === true;
+  if (loopback && process.env.NODE_ENV !== 'test') throw new Error('Insecure enterprise audit page requires an isolated test process');
+  if (origin.origin !== options.applicationOrigin ||
+      (loopback ? !(origin.protocol === 'http:' && origin.hostname === '127.0.0.1') : origin.protocol !== 'https:')) {
+    throw new Error('Invalid audit page origin');
+  }
+  const sessionName = loopback ? 'interpreter-enterprise-session' : '__Host-interpreter-enterprise-session';
+  const router = Router();
+  router.get('/organizations/:organizationId/activity/page', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Vary', 'Origin, Sec-Fetch-Site');
+    if (!exactOrigin(req, origin, loopback) ||
+        (req.get('origin') && req.get('origin') !== origin.origin) ||
+        (req.get('sec-fetch-site') && !['same-origin', 'none'].includes(req.get('sec-fetch-site')!)) ||
+        req.get('authorization')) return void res.status(403).end();
+    const url = new URL(req.originalUrl, origin);
+    const keys = [...url.searchParams.keys()].sort();
+    if (keys.some((key) => !['after', 'upper', 'limit', 'purpose'].includes(key)) ||
+        new Set(keys).size !== keys.length) return void res.status(403).end();
+    const integer = (key: string, fallback?: number) => {
+      const value = url.searchParams.get(key);
+      if (value === null) return fallback;
+      if (!/^(?:0|[1-9]\d*)$/.test(value)) return NaN;
+      return Number(value);
+    };
+    const after = integer('after', 0);
+    const upper = integer('upper');
+    const limit = integer('limit', 100);
+    const purpose = url.searchParams.get('purpose') ?? 'view';
+    if (!Number.isSafeInteger(after) || after! < 0 ||
+        (upper !== undefined && (!Number.isSafeInteger(upper) || upper < after!)) ||
+        !Number.isSafeInteger(limit) || limit! < 1 || limit! > 100 ||
+        (purpose !== 'view' && purpose !== 'export')) return void res.status(403).end();
+    const token = cookie(req, sessionName);
+    if (!token) return void res.status(401).end();
+    try {
+      const identity = await options.verifySession(token);
+      if (!identity?.sessionId || !identity.issuer || !identity.subject) return void res.status(403).end();
+      if (identity.organizationId !== req.params.organizationId) {
+        await options.directory.recordTenantDenial(identity, req.params.organizationId, 'activity');
+        return void res.status(403).end();
+      }
+      const page = await options.directory.listAuditPage(identity, after!, upper, limit!, purpose);
+      if (purpose === 'export') {
+        res.setHeader('Content-Disposition', 'attachment; filename="organization-audit-page.json"');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+      }
+      return void res.json({ organizationId: identity.organizationId, ...page });
+    } catch (error) {
+      return void res.status(error instanceof EnterpriseAccessDenied ? 403 : 503).end();
+    }
+  });
+  return router;
+}
+
 /** Separate, unmounted admin mutation seam. Must share the exact HTTPS origin
  * and server-owned session verifier with the read-only browser router. */
 export function createEnterpriseAdminMutationRouter(options: Readonly<{

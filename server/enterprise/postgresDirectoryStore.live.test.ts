@@ -41,6 +41,8 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
       expect((await poolB.query('SELECT organization_id FROM interpreter_enterprise_rls_directory')).rows.map((row) => row.organization_id)).toEqual(['rls-b']);
       const role = await poolA.query('SELECT rolsuper, rolbypassrls, rolinherit FROM pg_roles WHERE rolname = current_user');
       expect(role.rows[0]).toMatchObject({ rolsuper: false, rolbypassrls: false, rolinherit: false });
+      expect((await poolA.query(`SELECT 1 FROM pg_catalog.pg_auth_members m
+        JOIN pg_catalog.pg_roles r ON r.oid = m.member WHERE r.rolname = current_user`)).rowCount).toBe(0);
       await expect(poolA.query('SELECT pg_sleep(7)')).rejects.toThrow(/statement timeout|query read timeout/i);
       expect((await poolA.query('UPDATE interpreter_enterprise_rls_directory SET content = $1 WHERE organization_id = $2',
         ['{}', 'rls-b'])).rowCount).toBe(0);
@@ -411,6 +413,12 @@ describe.skipIf(!live)('actual TLS PostgreSQL: tenant isolation, revocation and 
         ['{}', 'rls-a'])).rejects.toThrow(/permission denied/i);
       await expect(poolA.query('DELETE FROM public.interpreter_enterprise_rls_audit WHERE organization_id = $1', ['rls-a']))
         .rejects.toThrow(/permission denied/i);
+      // FORCE RLS filters rows for SELECT/UPDATE/DELETE, but not TRUNCATE.
+      // None of the tenant roles may clear any tenant's directory, audit or claims.
+      for (const table of ['interpreter_enterprise_rls_directory', 'interpreter_enterprise_rls_audit',
+        'interpreter_enterprise_rls_domain_claim']) {
+        await expect(poolA.query(`TRUNCATE public.${table}`)).rejects.toThrow(/permission denied/i);
+      }
       await expect(new TenantPostgresDirectoryStore(poolA, 'rls-a', 'rls').change((state) => {
         state.audit[0]!.action = 'forged-history';
       })).rejects.toThrow('audit history cannot be rewritten');

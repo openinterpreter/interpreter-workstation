@@ -79,8 +79,12 @@ describe('unmounted same-origin member deactivation', () => {
     expect((await directory.getMember('org-a', 'dave'))?.active).toBe(true);
     expect(await directory.verifySession(second.token)).toBeNull();
     expect(await directory.verifySession(admin)).not.toBeNull();
-    expect((await directory.auditSummary('org-a')).eventCount).toBe(before + 7);
+    // Two denied member demotions count in one window; successful demotion
+    // remains a separate committed audit event.
+    expect((await directory.auditSummary('org-a')).eventCount).toBe(before + 6);
     const events = await directory.listAudit(identity);
+    expect(events.find((event) => event.subject === 'carol' && event.action === 'organization.member.demote'))
+      .toMatchObject({ outcome: 'denied', count: 2 });
     expect(events.at(-1)).toMatchObject({ action: 'organization.member.demote',
       subject: 'alice', targetSubject: 'dave', outcome: 'allowed' });
     const subsequent = await directory.createSession(issuer, 'org-a', 'dave', Date.now() + 60_000);
@@ -98,12 +102,33 @@ describe('unmounted same-origin member deactivation', () => {
     expect((await directory.auditSummary('org-b')).eventCount).toBe(foreign);
     const events = await directory.listAudit(identity);
     expect(events.slice(-3).map((event) => [event.subject, event.targetSubject, event.outcome]))
-      .toEqual([['carol', 'carol', 'denied'], ['alice', 'alice', 'denied'], ['alice', 'alice', 'denied']]);
+      .toEqual([['carol', undefined, 'denied'], ['alice', 'alice', 'denied'], ['alice', 'alice', 'denied']]);
+    expect(events.at(-3)?.targetDigest).toBe(`member:${createHash('sha256').update('carol').digest('hex').slice(0, 16)}`);
     await directory.revokeSession(identity);
     const after = (await directory.auditSummary('org-a')).eventCount;
     expect((await post(path, admin)).status).toBe(403);
     expect((await directory.auditSummary('org-a')).eventCount).toBe(after);
   });
+  test('repeatable member HTTP denials cannot starve an administrator mutation or write into another tenant', async () => {
+    const { directory, admin, member, identity, path, post } = await fixture();
+    const before = (await directory.auditSummary('org-a')).eventCount;
+    const foreignBefore = (await directory.auditSummary('org-b')).eventCount;
+    for (let i = 0; i < 128; i++) expect((await post(path, member)).status).toBe(403);
+    expect((await directory.auditSummary('org-a')).eventCount).toBe(before + 1);
+    expect((await directory.auditSummary('org-b')).eventCount).toBe(foreignBefore);
+    const events = await directory.listAudit(identity);
+    const denial = events.find((event) => event.action === 'organization.member.deactivate' &&
+      event.subject === 'carol' && event.outcome === 'denied');
+    expect(denial).toMatchObject({
+        count: 128,
+        targetDigest: `member:${createHash('sha256').update('carol').digest('hex').slice(0, 16)}`,
+      });
+    expect(denial?.targetSubject).toBeUndefined();
+    expect((await post(path, admin)).status).toBe(204);
+    expect((await directory.getMember('org-a', 'carol'))?.active).toBe(false);
+    expect(await directory.verifySession(member)).toBeNull();
+    expect((await directory.auditSummary('org-b')).eventCount).toBe(foreignBefore);
+  }, 60_000);
   test('cross-tenant admin URL probes are denied and audited only to an active actor tenant', async () => {
     const { directory, app, admin, identity, post } = await fixture();
     const before = (await directory.auditSummary('org-a')).eventCount;

@@ -9,6 +9,7 @@ export function EnterpriseDomainSetup({ organizationId }: { organizationId: stri
   const [domain, setDomain] = useState('');
   const [challenge, setChallenge] = useState<Challenge | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
+  const [clock, setClock] = useState(() => Date.now());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const request = useRef<AbortController | null>(null);
@@ -16,6 +17,13 @@ export function EnterpriseDomainSetup({ organizationId }: { organizationId: stri
     setDomain(''); setChallenge(null); setStatus(null); setError(null); setBusy(false);
     return () => request.current?.abort();
   }, [organizationId]);
+  useEffect(() => {
+    const deadlines = [status?.verifiedUntil, status?.challengeExpiresAt, challenge?.expiresAt]
+      .filter((value): value is number => typeof value === 'number' && value > clock);
+    if (!deadlines.length) return;
+    const timer = setTimeout(() => setClock(Date.now()), Math.max(1, Math.min(...deadlines) - Date.now() + 1));
+    return () => clearTimeout(timer);
+  }, [status, challenge, clock]);
 
   async function act(action: 'challenge' | 'verify' | 'status') {
     if (busy || !organizationId || !domain || (action === 'verify' && !challenge)) return;
@@ -37,7 +45,7 @@ export function EnterpriseDomainSetup({ organizationId }: { organizationId: stri
         if (data?.domain !== domain || !validTime(data.challengeExpiresAt) || !validTime(data.verifiedUntil)) {
           throw new Error('Invalid status');
         }
-        if (!controller.signal.aborted) setStatus(data);
+        if (!controller.signal.aborted) { setClock(Date.now()); setStatus(data); }
       };
       if (action === 'status') {
         await loadStatus();
@@ -53,7 +61,7 @@ export function EnterpriseDomainSetup({ organizationId }: { organizationId: stri
             !/^interpreter-workstation-verification=[A-Za-z0-9_-]{43}$/.test(data.value) ||
             !Number.isSafeInteger(data.expiresAt) || data.expiresAt <= Date.now() ||
             data.expiresAt > Date.now() + 10 * 60_000) throw new Error('Invalid challenge');
-        if (!controller.signal.aborted) setChallenge(data);
+        if (!controller.signal.aborted) { setClock(Date.now()); setChallenge(data); }
       } else {
         if (response.status !== 204) throw new Error('Verification denied');
         if (!controller.signal.aborted) setChallenge(null);
@@ -90,16 +98,20 @@ export function EnterpriseDomainSetup({ organizationId }: { organizationId: stri
         Refresh DNS status
       </button>
     </div>
-    {challenge && <div className="mt-4 space-y-2 rounded-lg border border-border bg-background p-3 text-xs">
+    {challenge && challenge.expiresAt > clock && <div className="mt-4 space-y-2 rounded-lg border border-border bg-background p-3 text-xs">
       <p className="font-medium">Add one TXT record before {new Date(challenge.expiresAt).toLocaleString()}:</p>
       <p>Host <code className="select-all break-all font-mono">{challenge.name}</code></p>
       <p>Value <code className="select-all break-all font-mono">{challenge.value}</code></p>
       <button type="button" disabled={busy} onClick={() => void act('verify')}
         className="rounded-md border border-border px-3 py-2 font-medium hover:bg-muted disabled:opacity-50">Verify DNS record</button>
     </div>}
-    {status && <p role="status" className="mt-3 text-sm text-foreground">{status.verifiedUntil
+    {challenge && challenge.expiresAt <= clock && <p role="status" className="mt-3 text-sm text-foreground">The DNS challenge expired. Create a new challenge before retrying verification.</p>}
+    {status && <p role="status" className="mt-3 text-sm text-foreground">{status.verifiedUntil && status.verifiedUntil > clock
       ? `DNS proof observed; valid until ${new Date(status.verifiedUntil).toLocaleString()}. SSO remains off until the other identity and deployment checks pass.`
-      : status.challengeExpiresAt ? `A DNS challenge expires ${new Date(status.challengeExpiresAt).toLocaleString()}. Create a new challenge if you no longer have the TXT value.`
+      : status.verifiedUntil ? `DNS proof expired ${new Date(status.verifiedUntil).toLocaleString()}. Create a new challenge to renew it; ordinary administration remains unavailable until verification succeeds.`
+      : status.challengeExpiresAt && status.challengeExpiresAt > clock
+        ? `A DNS challenge expires ${new Date(status.challengeExpiresAt).toLocaleString()}. Create a new challenge if you no longer have the TXT value.`
+      : status.challengeExpiresAt ? 'The DNS challenge expired. Create a new challenge before retrying verification.'
         : 'No current DNS confirmation is recorded for this domain. SSO remains off.'}</p>}
     {error && <p role="alert" className="mt-3 text-sm text-destructive">{error}</p>}
   </section>;

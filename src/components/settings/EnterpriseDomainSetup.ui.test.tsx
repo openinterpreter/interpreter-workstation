@@ -73,4 +73,27 @@ describe('opt-in domain setup flow', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refresh DNS status' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('status is unavailable');
   });
+  test('a lapsed lease and challenge display recovery, not a valid proof badge', async () => {
+    const fetchMock = vi.fn(async () => ({ status: 200, json: async () => ({ domain: 'example.test',
+      challengeExpiresAt: Date.now() - 120_000, verifiedUntil: Date.now() - 60_000 }) }));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<EnterpriseDomainSetup organizationId="org-a" />);
+    fireEvent.change(screen.getByLabelText('Organization domain'), { target: { value: 'example.test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh DNS status' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('DNS proof expired');
+    expect(screen.getByRole('status')).toHaveTextContent('ordinary administration remains unavailable');
+    expect(screen.getByRole('status')).not.toHaveTextContent('DNS proof observed; valid until');
+    expect(fetchMock).toHaveBeenCalledWith('/api/enterprise/organizations/org-a/domains/status?domain=example.test',
+      expect.objectContaining({ credentials: 'same-origin', cache: 'no-store' }));
+  });
+  test('a proof expiring while the setup page stays open loses its valid badge', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ status: 200, json: async () => ({ domain: 'example.test',
+      challengeExpiresAt: null, verifiedUntil: Date.now() + 700 }) })));
+    render(<EnterpriseDomainSetup organizationId="org-a" />);
+    fireEvent.change(screen.getByLabelText('Organization domain'), { target: { value: 'example.test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh DNS status' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('DNS proof observed; valid until');
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('DNS proof expired'), { timeout: 3000 });
+    expect(screen.getByRole('status')).not.toHaveTextContent('DNS proof observed');
+  });
 });

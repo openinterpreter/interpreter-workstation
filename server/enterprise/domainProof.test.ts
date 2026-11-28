@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -75,9 +76,10 @@ describe('unmounted operator domain-proof boundary', () => {
     expect(await first.domainVerified('org-a', issuerA, 'ACME.EXAMPLE')).toBe(true);
     expect(await first.domainVerified('org-a', issuerB, 'acme.example')).toBe(false);
     expect(await second.domainVerified('org-b', issuerB, 'acme.example')).toBe(false);
+    const deniedTarget = `domain:${createHash('sha256').update('acme.example').digest('hex').slice(0, 16)}`;
     expect((await first.listAudit(admin.identity)).filter((event) => event.action.startsWith('organization.domain.'))
-      .map((event) => [event.targetDomain, event.outcome])).toEqual([
-        ['acme.example', 'allowed'], ['acme.example', 'denied'], ['acme.example', 'denied'], ['acme.example', 'allowed'],
+      .map((event) => [event.targetDomain ?? event.targetDigest, event.outcome])).toEqual([
+        ['acme.example', 'allowed'], [deniedTarget, 'denied'], [deniedTarget, 'denied'], ['acme.example', 'allowed'],
       ]);
     expect((await second.auditSummary('org-b')).eventCount).toBe(2); // Bootstrap and login only.
     await expect(first.confirmDomainProof({ ...foreign.identity, organizationId: 'org-a' }, 'acme.example'))

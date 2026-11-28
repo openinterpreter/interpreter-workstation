@@ -145,4 +145,19 @@ describe('domain lease renewal keeps domain-bound sessions usable', () => {
     expect(await directory.verifyBoundSessionForDomainRenewal(bound.token, domain)).toBeNull();
     await expect(directory.beginDomainProof(bound.identity, domain)).rejects.toThrow();
   });
+
+  test('a lapsed lease with no surviving bound administrator session needs operator recovery', async () => {
+    const { directory, bound, editProof, claim, queries } = await fixture();
+    const priorQueries = queries.length;
+    await directory.revokeSession(bound.identity);
+    editProof((value) => { value.verifiedUntil = Date.now() - 1; });
+    expect(await directory.verifyBoundSessionForDomainRenewal(bound.token, domain)).toBeNull();
+    expect(await directory.domainClaimVerifiedForLogin('org-a', issuer, domain)).toBe(false);
+    await expect(directory.createSession(issuer, 'org-a', 'alice', Date.now() + 60_000, 0, domain))
+      .rejects.toThrow('Verified account domain required');
+    await expect(directory.beginDomainProof(bound.identity, domain)).rejects.toThrow('Access denied');
+    expect(queries).toHaveLength(priorQueries);
+    claim(false);
+    expect(await directory.verifyBoundSessionForDomainRenewal(bound.token, domain)).toBeNull();
+  });
 });
