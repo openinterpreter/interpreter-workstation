@@ -26,6 +26,7 @@ async function fixture() {
     return result;
   };
   const store: EnterpriseStateStore = {
+    requiresPagedAudit: true,
     read: async () => decodeDirectoryState(serialized),
     change: (fn) => change(fn),
     domainClaimStatus: async (org, claimIssuer, claimDomain) =>
@@ -35,6 +36,12 @@ async function fixture() {
         throw new Error('Verified account domain required');
       }
       return change(fn);
+    },
+    probeDomainRecovery: async (org, claimIssuer, claimDomain) => {
+      const tenant = decodeDirectoryState(serialized).organizations[org];
+      const proof = tenant?.domainProofs?.[claimDomain];
+      return Boolean(org === 'org-a' && claimIssuer === tenant?.issuer && proof?.issuer === claimIssuer &&
+        proof.verifiedUntil && proof.verifiedUntil <= Date.now());
     },
   };
   const directory = new ServerDirectory(store, async (name) => {
@@ -57,6 +64,7 @@ async function fixture() {
     serialized = JSON.stringify(data); // Only this disposable fixture simulates time passing.
   };
   return { directory, bound, queries, proof, editProof,
+    recoveryCount: () => Object.values(decodeDirectoryState(serialized).sessions).filter((session) => session.recoveryOnly).length,
     dns: (values: string[][]) => { answers = values; }, outage: (value: boolean) => { outage = value; },
     duringLookup: (hook: (() => void) | null) => { duringLookup = hook; },
     claim: (value: boolean) => { claimed = value; } };
@@ -144,5 +152,68 @@ describe('domain lease renewal keeps domain-bound sessions usable', () => {
     claim(false);
     expect(await directory.verifyBoundSessionForDomainRenewal(bound.token, domain)).toBeNull();
     await expect(directory.beginDomainProof(bound.identity, domain)).rejects.toThrow();
+  });
+
+  test('a lapsed lease with no surviving bound administrator session needs operator recovery', async () => {
+    const { directory, bound, editProof, claim, queries } = await fixture();
+    const priorQueries = queries.length;
+    await directory.revokeSession(bound.identity);
+    editProof((value) => { value.verifiedUntil = Date.now() - 1; });
+    expect(await directory.verifyBoundSessionForDomainRenewal(bound.token, domain)).toBeNull();
+    expect(await directory.domainClaimVerifiedForLogin('org-a', issuer, domain)).toBe(false);
+    await expect(directory.createSession(issuer, 'org-a', 'alice', Date.now() + 60_000, 0, domain))
+      .rejects.toThrow('Verified account domain required');
+    await expect(directory.beginDomainProof(bound.identity, domain)).rejects.toThrow('Access denied');
+    expect(queries).toHaveLength(priorQueries);
+    claim(false);
+    expect(await directory.verifyBoundSessionForDomainRenewal(bound.token, domain)).toBeNull();
+  });
+  test('a recovery-only administrator session cannot become an ordinary admin cookie', async () => {
+    const { directory, bound, editProof, dns, proof, claim } = await fixture();
+    await directory.revokeSession(bound.identity);
+    editProof((value) => { value.verifiedUntil = Date.now() - 1; });
+    const recovery = await directory.createDomainRecoverySession(issuer, 'org-a', 'alice',
+      Date.now() + 60_000, 0, domain);
+    expect(await directory.verifySession(recovery.token)).toBeNull();
+    expect(await directory.verifyBoundSession(recovery.token, domain)).toBeNull();
+    expect(await directory.sessionIsActive(recovery.identity)).toBe(false);
+    expect(await directory.readAdmin(recovery.identity, 'members')).toBeNull();
+    expect((await directory.verifyBoundSessionForDomainRenewal(recovery.token, domain))?.subject).toBe('alice');
+    await expect(directory.beginDomainProof(recovery.identity, 'other.example')).rejects.toThrow('Access denied');
+    const next = await directory.beginDomainProof(recovery.identity, domain);
+    dns([[next.value]]);
+    await directory.confirmDomainProof(recovery.identity, domain);
+    expect(proof().verifiedUntil).toBeGreaterThan(Date.now());
+    expect(await directory.verifySession(recovery.token)).toBeNull();
+    expect((await directory.createSession(issuer, 'org-a', 'alice', Date.now() + 60_000, 0, domain)).identity.subject).toBe('alice');
+    claim(false);
+    expect(await directory.verifyBoundSessionForDomainRenewal(recovery.token, domain)).toBeNull();
+  });
+  test('recovery requires expired prior proof, current admin, epoch and held domain claim', async () => {
+    const { directory, bound, editProof, claim } = await fixture();
+    const attempt = () => directory.createDomainRecoverySession(issuer, 'org-a', 'alice', Date.now() + 60_000, 0, domain);
+    await expect(attempt()).rejects.toThrow('Domain recovery is unavailable');
+    editProof((value) => { value.verifiedUntil = Date.now() - 1; });
+    await expect(directory.createDomainRecoverySession(issuer, 'org-a', 'alice', Date.now() + 60_000, 1, domain))
+      .rejects.toThrow('Domain recovery is unavailable');
+    await expect(directory.createDomainRecoverySession(issuer, 'org-a', 'alice', Date.now() + 11 * 60_000, 0, domain))
+      .rejects.toThrow('Invalid recovery identity');
+    claim(false);
+    await expect(attempt()).rejects.toThrow('Verified account domain required');
+    expect(await directory.verifySession(bound.token)).toBeNull();
+  });
+  test('repeated recovery exchanges remove superseded token hashes and audit rotation', async () => {
+    const { directory, editProof, recoveryCount } = await fixture();
+    editProof((value) => { value.verifiedUntil = Date.now() - 1; });
+    let prior: string | null = null;
+    for (let index = 0; index < 12; index++) {
+      const session = await directory.createDomainRecoverySession(issuer, 'org-a', 'alice', Date.now() + 60_000, 0, domain);
+      if (prior) expect(await directory.verifyBoundSessionForDomainRenewal(prior, domain)).toBeNull();
+      expect((await directory.verifyBoundSessionForDomainRenewal(session.token, domain))?.subject).toBe('alice');
+      prior = session.token;
+    }
+    expect(recoveryCount()).toBe(1);
+    const events = await directory.auditSummary('org-a');
+    expect(events.eventCount).toBeGreaterThan(12);
   });
 });

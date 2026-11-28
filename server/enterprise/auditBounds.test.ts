@@ -57,6 +57,10 @@ describe('member-driven audit growth is bounded and a full tenant stays recovera
     }
     expect(size() - before).toBeLessThan(2048);
     expect(raw()).not.toContain('x'.repeat(100));
+    const denial = decodeDirectoryState(raw()).pendingAudit!.find(({ event }) =>
+      event.action === 'organization.members.cross-tenant')?.event;
+    expect(denial).toMatchObject({ count: 5000, targetKind: 'organization', mixedTargets: true });
+    expect(denial?.targetDigest).toBeUndefined(); // Not falsely attributed to the first target.
   });
 
   test('the collapsed event carries the repeat count and a closed window is appended once without rewriting history', async () => {
@@ -86,7 +90,7 @@ describe('member-driven audit growth is bounded and a full tenant stays recovera
     expect(state.pendingAudit!.map(({ event }) => [event.action, event.count])).toEqual([['organization.members.read', 1]]);
   });
 
-  test('real mutations and denied mutation attempts are still audited as individual events', async () => {
+  test('successful mutations stay individual while repeated denied mutations retain a count', async () => {
     const { directory, admin, member } = await setup();
     await directory.createWorkspace(admin.identity, 'alpha', 'Alpha');
     await directory.createWorkspace(admin.identity, 'beta', 'Beta');
@@ -98,11 +102,50 @@ describe('member-driven audit growth is bounded and a full tenant stays recovera
       ['alpha', 'allowed', undefined], ['beta', 'allowed', undefined],
     ]);
     expect(events.filter((event) => event.action === 'organization.member.deactivate' && event.outcome === 'denied')
-      .map((event) => [event.subject, event.targetSubject, event.count])).toEqual([
-      ['carol', 'alice', undefined], ['carol', 'alice', undefined], ['carol', 'alice', undefined],
+      .map((event) => [event.subject, event.targetSubject, event.count,
+        event.targetDigest])).toEqual([
+      ['carol', undefined, 3, `member:${sha256('alice').slice(0, 16)}`],
     ]);
     expect(events.at(-1)).toMatchObject({ action: 'organization.member.sessions.revoke', subject: 'alice',
       targetSubject: 'carol', outcome: 'allowed' });
+  });
+
+  test('a member cannot fill the tenant snapshot by repeating denied mutations', async () => {
+    const { directory, member, admin, size } = await setup();
+    const before = size();
+    for (let i = 0; i < 5000; i++) {
+      await expect(directory.deactivateMember(member.identity, 'alice')).rejects.toThrow('Access denied');
+    }
+    expect(size() - before).toBeLessThan(2048);
+    expect((await directory.listAudit(admin.identity).then((events) => events.filter((event) =>
+      event.action === 'organization.member.deactivate' && event.outcome === 'denied')))
+      .map((event) => event.count)).toEqual([5000]);
+    await directory.createWorkspace(admin.identity, 'still-available', 'Still available');
+  }, 60_000);
+
+  test('a closed member-denial window appends once without rewriting an intervening successful mutation', async () => {
+    const { directory, member, admin, edit, raw } = await setup();
+    const initialAudit = decodeDirectoryState(raw()).audit;
+    for (let i = 0; i < 3; i++) await expect(directory.deactivateMember(member.identity, 'alice'))
+      .rejects.toThrow('Access denied');
+    edit((data) => {
+      for (const entry of data.pendingAudit!) {
+        entry.event.firstAt = new Date(Date.now() - AUDIT_COLLAPSE_WINDOW_MS - 1000).toISOString();
+      }
+    });
+    await directory.createWorkspace(admin.identity, 'safe', 'Safe');
+    await expect(directory.deactivateMember(member.identity, 'alice')).rejects.toThrow('Access denied');
+    const state = decodeDirectoryState(raw());
+    expect(state.audit.slice(0, initialAudit.length)).toEqual(initialAudit);
+    expect(state.audit.slice(initialAudit.length).map((event) => [event.action, event.count])).toEqual([
+      ['organization.workspace.create', undefined], ['organization.member.deactivate', 3],
+    ]);
+    expect(state.pendingAudit!.map(({ position, event }) => [position, event.action, event.count])).toEqual([
+      [state.audit.length, 'organization.member.deactivate', 1],
+    ]);
+    const view = await directory.listAudit(admin.identity);
+    expect(view.filter((event) => event.action === 'organization.member.deactivate')
+      .map((event) => event.count)).toEqual([3, 1]);
   });
 
   test('a snapshot filled to its cap still lets an administrator deactivate, revoke sessions and sign in', async () => {

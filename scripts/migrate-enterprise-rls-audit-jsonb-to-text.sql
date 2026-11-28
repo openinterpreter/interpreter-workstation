@@ -1,12 +1,23 @@
 -- Operator-only, offline migration for the opt-in RLS tenant audit ledger.
 -- Take and verify a database backup first; stop all application writers. Run
--- once as the schema owner through a trusted, TLS-verified database connection
--- using psql -X -v ON_ERROR_STOP=1 -f this-file. Never run from an HTTP request.
+-- once as a schema-capable superuser or BYPASSRLS operator through a trusted,
+-- TLS-verified database connection using psql -X -v ON_ERROR_STOP=1 -f this-file.
+-- FORCE RLS applies to an ordinary schema owner: such an owner cannot inspect
+-- every tenant, and must never claim a migration completed on invisible rows.
+-- Never run from an HTTP request or with an application tenant role.
 -- A corrupt or unexpected old ledger aborts the transaction without dropping
 -- any events. The application refuses the old jsonb type until this commits.
 BEGIN;
 SET LOCAL lock_timeout = '2s';
 SET LOCAL statement_timeout = '120s';
+DO $operator$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles
+    WHERE rolname = current_user AND (rolsuper OR rolbypassrls)) THEN
+    RAISE EXCEPTION 'Audit migration requires an operator who bypasses FORCE RLS';
+  END IF;
+END
+$operator$;
 LOCK TABLE public.interpreter_enterprise_rls_directory IN SHARE MODE;
 LOCK TABLE public.interpreter_enterprise_rls_audit IN ACCESS EXCLUSIVE MODE;
 DO $migration$

@@ -1,8 +1,12 @@
 import pg, { type Pool, type PoolClient } from 'pg';
+import type { VerifiedIdentity } from './controlPlane';
 import {
-  blankDirectoryState, decodeDirectoryState, EnterpriseDomainClaimConflict, MAX_DIRECTORY_BYTES, validateDirectoryState,
+  appendScopedAudit, blankDirectoryState, decodeDirectoryState, EnterpriseAccessDenied, EnterpriseDomainClaimConflict,
+  MAX_DIRECTORY_BYTES, RECOVERY_RESERVE_BYTES, validateDirectoryState,
   type DirectoryState, type EnterpriseStateStore,
 } from './serverDirectory';
+import { auditDigest, MAX_AUDIT_PAGE_EVENT_BYTES } from './rlsAuditMigration';
+import { evaluateTenantPolicy } from './tenantPolicy';
 
 /** Applied by a database operator, never by a browser request or application bootstrap. */
 export const ENTERPRISE_DIRECTORY_SCHEMA = `CREATE TABLE public.interpreter_enterprise_directory (
@@ -70,9 +74,13 @@ CREATE POLICY enterprise_domain_role_scope ON public.interpreter_enterprise_rls_
   WITH CHECK (database_role = current_user AND organization_id IN
     (SELECT d.organization_id FROM public.interpreter_enterprise_rls_directory d WHERE d.database_role = current_user))`;
 
-type QueryResult = { rows: Array<{ content?: unknown; audit_contents?: unknown; boundary_ok?: unknown }>; rowCount: number | null };
+type QueryResult = { rows: Array<{ content?: unknown; audit_contents?: unknown;
+  audit_count?: unknown; audit_last_id?: unknown; audit_last_content?: unknown;
+  id?: unknown; boundary_ok?: unknown }>; rowCount: number | null };
 type TransactionClient = Pick<PoolClient, 'query' | 'release'>;
 type DirectoryPool = { query(sql: string, values?: unknown[]): Promise<QueryResult>; connect(): Promise<TransactionClient> };
+export type TenantAuditPage = Readonly<{ upperId: number; nextId: number | null; pendingCount: number;
+  events: readonly { id: number; event: DirectoryState['audit'][number] }[] }>;
 
 /** This is a per-operation guard, not a substitute for an operator's grants,
  * migration or independent role audit. Never cache a positive result across
@@ -80,20 +88,26 @@ type DirectoryPool = { query(sql: string, values?: unknown[]): Promise<QueryResu
 const RLS_BOUNDARY_QUERY = `SELECT
   (SELECT NOT r.rolsuper AND NOT r.rolbypassrls AND NOT r.rolinherit
     FROM pg_catalog.pg_roles r WHERE r.rolname = current_user)
+  -- NOINHERIT alone is insufficient: SET ROLE can activate a granted tenant
+  -- role. Runtime tenant roles must have no granted role memberships at all.
+  AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m
+    JOIN pg_catalog.pg_roles r ON r.oid = m.member WHERE r.rolname = current_user)
   AND (SELECT count(*) = 3 AND bool_and(c.relrowsecurity AND c.relforcerowsecurity
       AND NOT pg_catalog.pg_has_role(current_user, c.relowner, 'MEMBER'))
     FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public' AND c.relname IN
       ('interpreter_enterprise_rls_directory', 'interpreter_enterprise_rls_audit',
        'interpreter_enterprise_rls_domain_claim') AND c.relkind = 'r')
-  AND NOT pg_catalog.has_table_privilege(current_user, 'public.interpreter_enterprise_rls_directory', 'INSERT, DELETE')
+  -- RLS does not protect TRUNCATE: it empties every tenant, including rows
+  -- this tenant's role cannot SELECT. A drifted grant must fail closed.
+  AND NOT pg_catalog.has_table_privilege(current_user, 'public.interpreter_enterprise_rls_directory', 'INSERT, DELETE, TRUNCATE')
   AND NOT pg_catalog.has_column_privilege(current_user, 'public.interpreter_enterprise_rls_directory', 'organization_id', 'UPDATE')
   AND NOT pg_catalog.has_column_privilege(current_user, 'public.interpreter_enterprise_rls_directory', 'database_role', 'UPDATE')
   AND (SELECT a.atttypid = 'text'::regtype FROM pg_catalog.pg_attribute a
     WHERE a.attrelid = 'public.interpreter_enterprise_rls_audit'::regclass
       AND a.attname = 'content' AND a.attnum > 0 AND NOT a.attisdropped)
-  AND NOT pg_catalog.has_table_privilege(current_user, 'public.interpreter_enterprise_rls_audit', 'UPDATE, DELETE')
-  AND NOT pg_catalog.has_table_privilege(current_user, 'public.interpreter_enterprise_rls_domain_claim', 'UPDATE, DELETE')
+  AND NOT pg_catalog.has_table_privilege(current_user, 'public.interpreter_enterprise_rls_audit', 'UPDATE, DELETE, TRUNCATE')
+  AND NOT pg_catalog.has_table_privilege(current_user, 'public.interpreter_enterprise_rls_domain_claim', 'UPDATE, DELETE, TRUNCATE')
   AND pg_catalog.has_column_privilege(current_user, 'public.interpreter_enterprise_rls_domain_claim', 'database_role', 'UPDATE')
   AND NOT pg_catalog.has_column_privilege(current_user, 'public.interpreter_enterprise_rls_domain_claim', 'domain', 'UPDATE')
   AND NOT pg_catalog.has_column_privilege(current_user, 'public.interpreter_enterprise_rls_domain_claim', 'organization_id', 'UPDATE')
@@ -104,7 +118,8 @@ const RLS_BOUNDARY_QUERY = `SELECT
  * URI sslmode overrides can silently replace a pinned CA in node-postgres. */
 export function createEnterprisePostgresPool(config: Readonly<{
   host: string; port: number; database: string; user: string; password: string; caCertificate: string;
-}>): Pool {
+}>, options?: Readonly<{ offlineMigration?: true }>): Pool {
+  if (options && options.offlineMigration !== true) throw new Error('Invalid enterprise database pool mode');
   if (!config.host || /[\s:/@\\]/.test(config.host) || !Number.isInteger(config.port) ||
       config.port < 1 || config.port > 65535 || !config.database || !config.user ||
       !config.password || !config.caCertificate.includes('-----BEGIN CERTIFICATE-----')) {
@@ -113,10 +128,11 @@ export function createEnterprisePostgresPool(config: Readonly<{
   return new pg.Pool({
     host: config.host, port: config.port, database: config.database, user: config.user,
     password: config.password, ssl: { ca: config.caCertificate, rejectUnauthorized: true, servername: config.host },
-    max: 8, connectionTimeoutMillis: 3000, idleTimeoutMillis: 10_000,
+    max: options?.offlineMigration ? 1 : 8, connectionTimeoutMillis: 3000, idleTimeoutMillis: 10_000,
     // Reads do not use the transactional SET LOCAL below. Bound them too,
     // including a stalled network response after a connection was established.
-    statement_timeout: 5000, query_timeout: 6000,
+    statement_timeout: options?.offlineMigration ? 120_000 : 5000,
+    query_timeout: options?.offlineMigration ? 125_000 : 6000,
     application_name: 'interpreter-enterprise-directory',
   });
 }
@@ -197,25 +213,74 @@ function assertAuditMatches(state: DirectoryState, result: QueryResult): void {
   }
 }
 
+const RLS_AUDIT_CURSOR_COLUMNS = `
+  (SELECT count(*)::text FROM public.interpreter_enterprise_rls_audit a
+    WHERE a.organization_id = d.organization_id) AS audit_count,
+  (SELECT a.id::text FROM public.interpreter_enterprise_rls_audit a
+    WHERE a.organization_id = d.organization_id ORDER BY a.id DESC LIMIT 1) AS audit_last_id,
+  (SELECT a.content FROM public.interpreter_enterprise_rls_audit a
+    WHERE a.organization_id = d.organization_id ORDER BY a.id DESC LIMIT 1) AS audit_last_content`;
+
+function assertLedgerCheckpoint(state: DirectoryState, result: QueryResult): void {
+  const row = result.rows[0];
+  const rawCount = row?.audit_count;
+  const count = typeof rawCount === 'string' && /^(?:0|[1-9]\d*)$/.test(rawCount) ? Number(rawCount) : NaN;
+  const rawId = row?.audit_last_id;
+  const lastId = rawId === null ? 0 : typeof rawId === 'string' && /^[1-9]\d*$/.test(rawId) ? Number(rawId) : NaN;
+  let latestAt: string | null = null;
+  try {
+    if (typeof row?.audit_last_content === 'string') {
+      const last = JSON.parse(row.audit_last_content);
+      latestAt = last?.at;
+    }
+  } catch { throw new Error('Tenant audit checkpoint is out of sync'); }
+  if (state.version !== 2 || state.audit.length !== 0 || !state.auditCursor ||
+      !Number.isSafeInteger(count) || !Number.isSafeInteger(lastId) ||
+      state.auditCursor.count !== count || state.auditCursor.lastId !== lastId ||
+      state.auditCursor.tailDigest !== (count ? typeof row?.audit_last_content === 'string'
+        ? auditDigest(row.audit_last_content) : null : null) ||
+      state.auditCursor.latestAt !== latestAt) {
+    throw new Error('Tenant audit checkpoint is out of sync');
+  }
+}
+
 /** One pinned organization per row/ServerDirectory instance. The legacy pilot
  * uses a shared table role. The opt-in 'rls' mode uses an operator-provisioned
- * row and separate database role, and never inserts an absent row. Neither
- * mode is selected by the desktop. */
+ * row and separate database role, and never inserts an absent row. The
+ * experimental 'rls-v2' protocol requires a separately migrated version-2
+ * checkpoint, keeps committed audit out of the persisted directory, and
+ * fails closed on any legacy row. It checks count plus indexed tail on
+ * every read/change, but has no paginated authenticated export yet: do not
+ * select it in a production composition. No mode is selected by desktop. */
 export class TenantPostgresDirectoryStore implements EnterpriseStateStore {
   private readonly table: 'public.interpreter_enterprise_tenant_directory' | 'public.interpreter_enterprise_rls_directory';
+  private readonly ledgerOnly: boolean;
+  readonly requiresPagedAudit: boolean;
 
   constructor(private readonly pool: DirectoryPool, private readonly organizationId: string,
-    mode: 'pilot' | 'rls' = 'pilot') {
+    mode: 'pilot' | 'rls' | 'rls-v2' = 'pilot') {
     if (!/^[a-zA-Z0-9._@:-]{1,160}$/.test(organizationId) ||
         ['__proto__', 'constructor', 'prototype'].includes(organizationId)) throw new Error('Invalid pinned tenant');
-    if (mode !== 'pilot' && mode !== 'rls') throw new Error('Invalid tenant storage mode');
+    if (mode !== 'pilot' && mode !== 'rls' && mode !== 'rls-v2') throw new Error('Invalid tenant storage mode');
+    this.ledgerOnly = mode === 'rls-v2'; // Never selected by desktop or existing opt-in composition.
+    this.requiresPagedAudit = this.ledgerOnly;
     // Fixed, schema-qualified identifiers cannot be shadowed by a pg_temp
     // relation on a pooled connection or replaced by an input-derived schema.
-    this.table = mode === 'rls' ? 'public.interpreter_enterprise_rls_directory' : 'public.interpreter_enterprise_tenant_directory';
+    this.table = mode === 'pilot' ? 'public.interpreter_enterprise_tenant_directory' : 'public.interpreter_enterprise_rls_directory';
   }
 
   private state(result: QueryResult): DirectoryState {
-    return scopedTenantState(stateFrom(result), this.organizationId);
+    const state = scopedTenantState(stateFrom(result), this.organizationId);
+    if (this.table === 'public.interpreter_enterprise_rls_directory' &&
+        state.version !== (this.ledgerOnly ? 2 : 1)) throw new Error('Tenant audit migration is required');
+    return state;
+  }
+
+  snapshotBytes(state: DirectoryState): number {
+    if (!this.ledgerOnly) return Buffer.byteLength(JSON.stringify(state), 'utf8');
+    if (state.version !== 2 || !state.auditCursor) throw new Error('Tenant audit migration is required');
+    return Buffer.byteLength(JSON.stringify({ ...state, audit: [],
+      auditCursor: { ...state.auditCursor, count: state.auditCursor.count + state.audit.length } }), 'utf8');
   }
 
   private async assertRlsBoundary(connection: Pick<DirectoryPool, 'query'>): Promise<void> {
@@ -230,29 +295,208 @@ export class TenantPostgresDirectoryStore implements EnterpriseStateStore {
    * must not be mistaken for a verified globally unique domain. */
   async domainClaimStatus(organizationId: string, issuer: string, domain: string): Promise<boolean> {
     if (organizationId !== this.organizationId || this.table !== 'public.interpreter_enterprise_rls_directory') return false;
-    await this.assertRlsBoundary(this.pool);
-    const result = await this.pool.query(`SELECT domain FROM public.interpreter_enterprise_rls_domain_claim
-      WHERE domain = $1 AND organization_id = $2 AND issuer = $3 AND database_role = current_user`,
-    [domain, organizationId, issuer]);
-    return result.rowCount === 1;
+    const client = await this.pool.connect();
+    try {
+      await this.assertRlsBoundary(client);
+      const result = await client.query(`SELECT domain FROM public.interpreter_enterprise_rls_domain_claim
+        WHERE domain = $1 AND organization_id = $2 AND issuer = $3 AND database_role = current_user`,
+      [domain, organizationId, issuer]);
+      return result.rowCount === 1;
+    } finally { client.release(); }
+  }
+
+  /** Bounded negative-only tenant snapshot: anonymous recovery start must
+   * not count or hydrate the historical ledger. This never creates a
+   * session; the claim and proof are rechecked under a locked write. */
+  async probeDomainRecovery(organizationId: string, issuer: string, domain: string): Promise<boolean> {
+    if (organizationId !== this.organizationId || this.table !== 'public.interpreter_enterprise_rls_directory') return false;
+    const client = await this.pool.connect();
+    try {
+      await this.assertRlsBoundary(client);
+      const state = this.state(await client.query(`SELECT content FROM ${this.table}
+        WHERE organization_id = $1`, [this.organizationId]));
+      if (this.ledgerOnly && state.audit.length !== 0) throw new Error('Tenant audit checkpoint is out of sync');
+      const org = state.organizations[organizationId];
+      const proof = org?.domainProofs?.[domain];
+      return Boolean(org?.issuer === issuer && proof?.issuer === issuer && proof.verifiedUntil &&
+        proof.verifiedUntil <= Date.now());
+    } finally { client.release(); }
   }
 
   async read(): Promise<DirectoryState> {
     if (this.table === 'public.interpreter_enterprise_rls_directory') {
-      await this.assertRlsBoundary(this.pool);
-      // One statement snapshot: check ordered event content, not just count;
-      // a concurrent committed write cannot split the directory and ledger.
-      // This detects drift but is not a cryptographic proof against a database
-      // operator who can deliberately rewrite both copies and backups.
-      const result = await this.pool.query(`SELECT d.content,
-        COALESCE((SELECT array_agg(a.content ORDER BY a.id)
-          FROM public.interpreter_enterprise_rls_audit a WHERE a.organization_id = d.organization_id), ARRAY[]::text[]) AS audit_contents
-        FROM ${this.table} d WHERE d.organization_id = $1`, [this.organizationId]);
-      const state = this.state(result);
-      assertAuditMatches(state, result);
-      return state;
+      const client = await this.pool.connect();
+      try {
+        await this.assertRlsBoundary(client);
+        if (this.ledgerOnly) {
+          const result = await client.query(`SELECT d.content, ${RLS_AUDIT_CURSOR_COLUMNS}
+            FROM ${this.table} d WHERE d.organization_id = $1`, [this.organizationId]);
+          const state = this.state(result);
+          assertLedgerCheckpoint(state, result);
+          return state;
+        }
+        // One statement snapshot: check ordered event content, not just count;
+        // a concurrent committed write cannot split the directory and ledger.
+        // This detects drift but is not a cryptographic proof against a database
+        // operator who can deliberately rewrite both copies and backups.
+        const result = await client.query(`SELECT d.content,
+          COALESCE((SELECT array_agg(a.content ORDER BY a.id)
+            FROM public.interpreter_enterprise_rls_audit a WHERE a.organization_id = d.organization_id), ARRAY[]::text[]) AS audit_contents
+          FROM ${this.table} d WHERE d.organization_id = $1`, [this.organizationId]);
+        const state = this.state(result);
+        assertAuditMatches(state, result);
+        return state;
+      } finally { client.release(); }
     }
     return this.state(await this.pool.query(`SELECT content FROM ${this.table} WHERE organization_id = $1`, [this.organizationId]));
+  }
+
+  /** Unknown callback states must not scan a growing audit index. This
+   * bounded tenant-snapshot probe grants nothing: a matching candidate is
+   * consumed only through change(), which rechecks the full ledger checkpoint
+   * under the row lock. Boundary or directory outage still fails closed. */
+  async probeAttempt(stateKey: string): Promise<DirectoryState['attempts'][string] | undefined> {
+    if (!/^[a-f0-9]{64}$/.test(stateKey)) throw new Error('Invalid attempt key');
+    if (this.table !== 'public.interpreter_enterprise_rls_directory') {
+      return (await this.read()).attempts[stateKey];
+    }
+    const client = await this.pool.connect();
+    try {
+      await this.assertRlsBoundary(client);
+      const state = this.state(await client.query(`SELECT content FROM ${this.table}
+        WHERE organization_id = $1`, [this.organizationId]));
+      if (this.ledgerOnly && state.audit.length !== 0) throw new Error('Tenant audit checkpoint is out of sync');
+      return state.attempts[stateKey];
+    } finally { client.release(); }
+  }
+
+  /** Commit this page request's events and snapshot atomically. Only called
+   * with a locked version-2 tenant row, never by a production route. */
+  private async commitPageAudit(client: TransactionClient, state: DirectoryState): Promise<void> {
+    for (const event of state.audit) {
+      const serialized = JSON.stringify(event);
+      if (Buffer.byteLength(serialized, 'utf8') > MAX_AUDIT_PAGE_EVENT_BYTES) {
+        throw new Error('Tenant audit event exceeds page bound');
+      }
+      const inserted = await client.query(`INSERT INTO public.interpreter_enterprise_rls_audit
+        (organization_id, content) VALUES ($1, $2) RETURNING id`, [this.organizationId, serialized]);
+      const id = inserted.rows[0]?.id;
+      if (inserted.rowCount !== 1 || !/^[1-9]\d*$/.test(String(id)) || !Number.isSafeInteger(Number(id)) ||
+          Number(id) <= state.auditCursor!.lastId) throw new Error('Tenant audit checkpoint is out of sync');
+      state.auditCursor = { count: state.auditCursor!.count + 1, lastId: Number(id),
+        tailDigest: auditDigest(serialized), latestAt: event.at };
+    }
+    const content = JSON.stringify({ ...state, audit: [] });
+    if (Buffer.byteLength(content, 'utf8') > MAX_DIRECTORY_BYTES - RECOVERY_RESERVE_BYTES) {
+      throw new Error('Tenant directory capacity reached');
+    }
+    const updated = await client.query(`UPDATE ${this.table} SET content = $1 WHERE organization_id = $2`,
+      [content, this.organizationId]);
+    if (updated.rowCount !== 1) throw new Error('Tenant directory changed unexpectedly');
+  }
+
+  /** Experimental v2-only committed-event page. No HTTP route selects it.
+   * Authorization, global claim, the stable upper cursor, read-request audit
+   * and page query share one locked tenant transaction. Open denial windows
+   * are reported by count, not silently presented as exported events. */
+  async readAuditPage(identity: VerifiedIdentity, afterId: number, upperId?: number,
+    limit = 100, purpose: 'view' | 'export' = 'view'): Promise<TenantAuditPage> {
+    if (!this.ledgerOnly || identity.organizationId !== this.organizationId ||
+        !Number.isSafeInteger(afterId) || afterId < 0 ||
+        (upperId !== undefined && (!Number.isSafeInteger(upperId) || upperId < afterId)) ||
+        !Number.isSafeInteger(limit) || limit < 1 || limit > 100 ||
+        (purpose !== 'view' && purpose !== 'export')) throw new EnterpriseAccessDenied();
+    const client = await this.pool.connect();
+    let transaction = false;
+    let discard = false;
+    try {
+      await client.query('BEGIN');
+      transaction = true;
+      await client.query("SET LOCAL lock_timeout = '2000ms'");
+      await client.query("SET LOCAL statement_timeout = '5000ms'");
+      await this.assertRlsBoundary(client);
+      const state = this.state(await client.query(
+        `SELECT content FROM ${this.table} WHERE organization_id = $1 FOR UPDATE`, [this.organizationId]));
+      const cursor = await client.query(`SELECT ${RLS_AUDIT_CURSOR_COLUMNS}
+        FROM public.interpreter_enterprise_rls_directory d WHERE d.organization_id = $1`, [this.organizationId]);
+      if (cursor.rowCount !== 1) throw new Error('Tenant audit checkpoint is out of sync');
+      assertLedgerCheckpoint(state, cursor);
+      const org = state.organizations[this.organizationId];
+      const member = org?.members[identity.subject];
+      const session = state.sessions[identity.sessionId];
+      const domain = session?.accountDomain;
+      const proof = domain ? org?.domainProofs?.[domain] : undefined;
+      const now = Date.now();
+      const active = Boolean(session && !session.revoked && session.expiresAt > now &&
+        session.organizationId === identity.organizationId && session.issuer === identity.issuer &&
+        session.subject === identity.subject && org?.issuer === identity.issuer &&
+        domain && proof?.issuer === identity.issuer && (proof.verifiedUntil ?? 0) > now);
+      if (!org || !domain || !active) throw new EnterpriseAccessDenied();
+      const claim = await client.query(`SELECT domain FROM public.interpreter_enterprise_rls_domain_claim
+        WHERE domain = $1 AND organization_id = $2 AND issuer = $3 AND database_role = current_user FOR KEY SHARE`,
+      [domain, this.organizationId, identity.issuer]);
+      if (claim.rowCount !== 1) throw new EnterpriseAccessDenied();
+      const permitted = evaluateTenantPolicy({ identity, organizationId: this.organizationId,
+        issuer: org.issuer, member, sessionActive: true, action: 'audit.read' });
+      if (!permitted) {
+        appendScopedAudit(state, { organizationId: this.organizationId, subject: identity.subject,
+          action: `organization.audit.page.${purpose}`, outcome: 'denied', at: new Date().toISOString() });
+        validateDirectoryState(state);
+        await this.commitPageAudit(client, state);
+        await client.query('COMMIT');
+        transaction = false;
+        throw new EnterpriseAccessDenied();
+      }
+      // A fresh export first closes at most one page of open denial windows
+      // under this same tenant lock. An export must not silently omit them.
+      // A continuation with an explicit upper bound keeps its original stable
+      // snapshot; callers must start another export if pendingCount remains.
+      if (purpose === 'export' && upperId === undefined && state.pendingAudit?.length) {
+        state.audit.push(...state.pendingAudit.splice(0, 100).map(({ event }) => event));
+        validateDirectoryState(state);
+        await this.commitPageAudit(client, state);
+        state.audit = [];
+      }
+      const upper = upperId ?? state.auditCursor!.lastId;
+      if (upper > state.auditCursor!.lastId || afterId > upper) throw new EnterpriseAccessDenied();
+      const result = await client.query(`SELECT id::text AS id,
+        CASE WHEN octet_length(content) <= ${MAX_AUDIT_PAGE_EVENT_BYTES} THEN content ELSE NULL END AS content
+        FROM public.interpreter_enterprise_rls_audit
+        WHERE organization_id = $1 AND id > $2 AND id <= $3 ORDER BY id LIMIT $4`,
+      [this.organizationId, String(afterId), String(upper), limit + 1]);
+      if (result.rowCount !== result.rows.length || result.rows.length > limit + 1) {
+        throw new Error('Tenant audit page is invalid');
+      }
+      let prior = afterId;
+      const decoded = result.rows.map((row) => {
+        const id = typeof row.id === 'string' && /^[1-9]\d*$/.test(row.id) ? Number(row.id) : NaN;
+        if (!Number.isSafeInteger(id) || id <= prior || id > upper || typeof row.content !== 'string') {
+          throw new Error('Tenant audit page is invalid');
+        }
+        prior = id;
+        let event: DirectoryState['audit'][number];
+        try { event = JSON.parse(row.content); } catch { throw new Error('Tenant audit page is invalid'); }
+        if (event.organizationId !== this.organizationId || JSON.stringify(event) !== row.content) {
+          throw new Error('Tenant audit page is invalid');
+        }
+        return { id, event };
+      });
+      const events = decoded.slice(0, limit);
+      validateDirectoryState({ ...state, audit: events.map(({ event }) => event) });
+      appendScopedAudit(state, { organizationId: this.organizationId, subject: identity.subject,
+        action: `organization.audit.page.${purpose}`, outcome: 'allowed', at: new Date().toISOString() });
+      validateDirectoryState(state);
+      await this.commitPageAudit(client, state);
+      await client.query('COMMIT');
+      transaction = false;
+      return { upperId: upper, nextId: decoded.length > limit ? events[events.length - 1]!.id : null,
+        pendingCount: state.pendingAudit?.length ?? 0, events };
+    } catch (error) {
+      if (transaction) {
+        try { await client.query('ROLLBACK'); } catch { discard = true; }
+      }
+      throw error;
+    } finally { client.release(discard); }
   }
 
   async change<T>(fn: (state: DirectoryState) => T, create = false): Promise<T> {
@@ -295,13 +539,15 @@ export class TenantPostgresDirectoryStore implements EnterpriseStateStore {
         if (owned.rowCount !== 1) throw new Error('Verified account domain required');
       }
       if (this.table === 'public.interpreter_enterprise_rls_directory') {
-        const ledger = await client.query(
-          `SELECT COALESCE((SELECT array_agg(a.content ORDER BY a.id)
+        const ledger = await client.query(this.ledgerOnly
+          ? `SELECT ${RLS_AUDIT_CURSOR_COLUMNS}
+            FROM public.interpreter_enterprise_rls_directory d WHERE d.organization_id = $1`
+          : `SELECT COALESCE((SELECT array_agg(a.content ORDER BY a.id)
             FROM public.interpreter_enterprise_rls_audit a WHERE a.organization_id = d.organization_id), ARRAY[]::text[]) AS audit_contents
-            FROM public.interpreter_enterprise_rls_directory d WHERE d.organization_id = $1`,
-          [this.organizationId]);
+            FROM public.interpreter_enterprise_rls_directory d WHERE d.organization_id = $1`, [this.organizationId]);
         if (ledger.rowCount !== 1) throw new Error('Tenant audit ledger is out of sync');
-        assertAuditMatches(state, ledger);
+        if (this.ledgerOnly) assertLedgerCheckpoint(state, ledger);
+        else assertAuditMatches(state, ledger);
       }
       const originalAudit = this.table === 'public.interpreter_enterprise_rls_directory'
         ? JSON.stringify(state.audit) : '';
@@ -315,8 +561,6 @@ export class TenantPostgresDirectoryStore implements EnterpriseStateStore {
           JSON.stringify(state.audit.slice(0, originalAuditCount)) !== originalAudit)) {
         throw new Error('Tenant audit history cannot be rewritten');
       }
-      const content = JSON.stringify(state);
-      if (Buffer.byteLength(content, 'utf8') > MAX_DIRECTORY_BYTES) throw new Error('Tenant directory capacity reached');
       if (this.table === 'public.interpreter_enterprise_rls_directory') {
         // A claim row exists only for a verified domain. Take it when this
         // transaction sets or extends a live lease (successful DNS
@@ -342,10 +586,24 @@ export class TenantPostgresDirectoryStore implements EnterpriseStateStore {
           if (inserted.rowCount !== 1) throw new EnterpriseDomainClaimConflict();
         }
         for (const event of state.audit.slice(originalAuditCount)) {
-          await client.query('INSERT INTO public.interpreter_enterprise_rls_audit (organization_id, content) VALUES ($1, $2)',
-            [this.organizationId, JSON.stringify(event)]);
+          const serialized = JSON.stringify(event);
+          if (this.ledgerOnly && Buffer.byteLength(serialized, 'utf8') > MAX_AUDIT_PAGE_EVENT_BYTES) {
+            throw new Error('Tenant audit event exceeds page bound');
+          }
+          const inserted = await client.query(`INSERT INTO public.interpreter_enterprise_rls_audit
+            (organization_id, content) VALUES ($1, $2) RETURNING id`,
+            [this.organizationId, serialized]);
+          if (this.ledgerOnly) {
+            const id = inserted.rows[0]?.id;
+            if (inserted.rowCount !== 1 || !/^[1-9]\d*$/.test(String(id)) || !Number.isSafeInteger(Number(id)) ||
+                Number(id) <= state.auditCursor!.lastId) throw new Error('Tenant audit checkpoint is out of sync');
+            state.auditCursor = { count: state.auditCursor!.count + 1, lastId: Number(id),
+              tailDigest: auditDigest(serialized), latestAt: event.at };
+          }
         }
       }
+      const content = JSON.stringify(this.ledgerOnly ? { ...state, audit: [] } : state);
+      if (Buffer.byteLength(content, 'utf8') > MAX_DIRECTORY_BYTES) throw new Error('Tenant directory capacity reached');
       const updated = await client.query(
         `UPDATE ${this.table} SET content = $1 WHERE organization_id = $2`,
         [content, this.organizationId]);

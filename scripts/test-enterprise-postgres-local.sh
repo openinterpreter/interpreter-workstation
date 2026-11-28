@@ -99,6 +99,11 @@ WHERE organization_id = 'rls-migration' AND id =
   (SELECT min(id) FROM public.interpreter_enterprise_rls_audit WHERE organization_id = 'rls-migration');
 SQL
 original_audit_ids="$("${psql_local[@]}" -d enterprise_fixture -tA -c "SELECT string_agg(id::text, ',' ORDER BY id) FROM public.interpreter_enterprise_rls_audit WHERE organization_id = 'rls-migration'")"
+if printf 'SET ROLE enterprise_fixture_a;\n\\i scripts/migrate-enterprise-rls-audit-jsonb-to-text.sql\n' | \
+  "${psql_local[@]}" -d enterprise_fixture >/dev/null 2>&1; then
+  echo 'Tenant-scoped operator unexpectedly migrated a FORCE RLS ledger' >&2; exit 1
+fi
+[[ "$("${psql_local[@]}" -d enterprise_fixture -tA -c "SELECT atttypid::regtype FROM pg_attribute WHERE attrelid = 'public.interpreter_enterprise_rls_audit'::regclass AND attname = 'content'")" == jsonb ]]
 ENTERPRISE_TEST_DB_PORT="$port" ENTERPRISE_TEST_DB_CA="$fixture/ca.pem" ENTERPRISE_TEST_DB_PASSWORD_A="$tenant_a_password" bun -e '
 import { readFileSync } from "node:fs";
 import { ServerDirectory } from "./server/enterprise/serverDirectory.ts";

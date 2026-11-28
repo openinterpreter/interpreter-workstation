@@ -79,9 +79,14 @@ describe('separately opted-in unmounted domain setup HTTP boundary', () => {
     expect(events.some((event) => event.action === 'organization.domain.challenge.cross-tenant' &&
       event.targetDigest === `organization:${createHash('sha256').update('org-b').digest('hex').slice(0, 16)}` &&
       event.targetOrganizationId === undefined && event.outcome === 'denied')).toBe(true);
+    const deniedDomain = `domain:${createHash('sha256').update('example.test').digest('hex').slice(0, 16)}`;
+    expect(events.filter((event) => event.targetDigest === deniedDomain)
+      .map((event) => [event.action, event.outcome, event.count])).toEqual([
+        ['organization.domain.challenge', 'denied', 1], ['organization.domain.verify', 'denied', 1],
+      ]);
     expect(events.filter((event) => event.targetDomain === 'example.test')
       .map((event) => [event.outcome, event.targetDomain])).toEqual([
-        ['denied', 'example.test'], ['denied', 'example.test'], ['allowed', 'example.test'], ['allowed', 'example.test'],
+        ['allowed', 'example.test'], ['allowed', 'example.test'],
       ]);
     expect((await status(member)).status).toBe(403);
     expect((await status(admin, 'org-b')).status).toBe(403);

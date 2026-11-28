@@ -36,6 +36,58 @@ function fixture() {
 }
 
 describe('unmounted HTTP boundary, deterministic local callback fixture', () => {
+  test('domain recovery is absent by default and opt-in callback stays on its pinned renewal destination', async () => {
+    const pinned = { ...config, accountDomain: 'acme.example' };
+    const recoveryPath = '/settings/enterprise/domain-recovery';
+    const calls: string[] = [];
+    const integration = {
+      begin: async () => ({ authorizationUrl: config.authorizationEndpoint, state, browserBinding: binding }),
+      beginDomainRecovery: async () => {
+        calls.push('recovery-start');
+        return { authorizationUrl: config.authorizationEndpoint, state, browserBinding: binding };
+      },
+      complete: async (input: { code: string }, options: { allowDomainRecovery?: boolean }) => {
+        calls.push(options.allowDomainRecovery ? 'callback-opted-in' : 'callback-disabled');
+        return input.code === 'normal' ? { token: session, expiresAt: Date.now() + 60_000 }
+          : { token: session, expiresAt: Date.now() + 60_000, recoveryOnly: true as const };
+      },
+    } as unknown as OidcIntegration;
+    const start = '/organizations/org-a/domain-recovery/login';
+    const callback = `/enterprise/callback?code=fixture-code&state=${state}`;
+    const defaults = express();
+    defaults.use(createOidcHttpRouter({ config: pinned, integration, applicationOrigin: origin, successPath: '/settings' }));
+    expect((await request(defaults).get(start).set('Host', host)).status).toBe(404);
+    const disabled = await request(defaults).get(callback).set('Host', host)
+      .set('Cookie', `interpreter-oidc-binding=${binding}`);
+    expect(disabled.status).toBe(401);
+    expect(String(disabled.headers['set-cookie'])).not.toContain(`interpreter-enterprise-session=${session}`);
+    expect(calls).toEqual(['callback-disabled']);
+    for (const unsafe of ['//untrusted.test', '/settings?recovery=1', '/settings', '/\\untrusted.test']) {
+      expect(() => createOidcHttpRouter({ config: pinned, integration, applicationOrigin: origin,
+        successPath: '/settings', recoverySuccessPath: unsafe })).toThrow('Invalid application origin');
+    }
+    const enabled = express();
+    enabled.use(createOidcHttpRouter({ config: pinned, integration, applicationOrigin: origin,
+      successPath: '/settings', recoverySuccessPath: recoveryPath }));
+    expect((await request(enabled).get(start).set('Host', 'untrusted.test')).status).toBe(403);
+    expect((await request(enabled).get('/organizations/org-b/domain-recovery/login').set('Host', host)).status).toBe(403);
+    expect(calls).toEqual(['callback-disabled']);
+    const login = await request(enabled).get(start).set('Host', host);
+    expect(login.status).toBe(302);
+    expect(String(login.headers['set-cookie'])).toContain(`interpreter-oidc-binding=${binding}`);
+    const result = await request(enabled).get(callback).set('Host', host)
+      .set('Cookie', `interpreter-oidc-binding=${binding}`);
+    expect(result.status).toBe(303);
+    expect(result.headers.location).toBe(recoveryPath);
+    expect(String(result.headers['set-cookie'])).toContain(`interpreter-enterprise-session=${session}`);
+    expect(String(result.headers['set-cookie'])).toContain('HttpOnly');
+    expect(String(result.headers['set-cookie'])).toContain('SameSite=Lax');
+    const normal = await request(enabled).get(`/enterprise/callback?code=normal&state=${state}`)
+      .set('Host', host).set('Cookie', `interpreter-oidc-binding=${binding}`);
+    expect(normal.status).toBe(303);
+    expect(normal.headers.location).toBe('/settings');
+    expect(calls).toEqual(['callback-disabled', 'recovery-start', 'callback-opted-in', 'callback-opted-in']);
+  });
   test('production cannot opt into the plaintext test bypass at any independent seam', () => {
     const prior = process.env.NODE_ENV;
     try {
