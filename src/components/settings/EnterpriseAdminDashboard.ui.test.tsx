@@ -340,6 +340,74 @@ describe('admin dashboard shell', () => {
     download.mockRestore();
   });
 
+  test('paged timeline navigates a stable tenant cursor and refreshes from the start without legacy reads', async () => {
+    const pageRequests: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes('/activity/page?')) {
+        pageRequests.push(url);
+        const second = url.includes('after=1');
+        return { ok: true, headers: new Headers(), json: async () => ({ organizationId: 'org-a',
+          upperId: second ? 3 : pageRequests.length === 1 ? 3 : 4, nextId: second ? null : 1,
+          pendingCount: 0, events: [{ id: second ? 3 : 1, event: { organizationId: 'org-a', subject: 'alice',
+            action: second ? 'second.audit' : 'first.audit', outcome: 'allowed', at: '2026-11-28T10:00:00Z' } }] }) };
+      }
+      return { ok: true, json: async () => url.endsWith('/members')
+        ? { organizationId: 'org-a', members: [] } : overview };
+    }));
+    render(<EnterpriseAdminDashboard organizationId="org-a" pagedAuditEnabled />);
+    fireEvent.click(await screen.findByRole('button', { name: 'View recent activity' }));
+    expect(await screen.findByText(/first.audit/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Next audit page' }));
+    expect(await screen.findByText(/second.audit/)).toBeInTheDocument();
+    expect(pageRequests[1]).toContain('after=1&limit=20&purpose=view&upper=3');
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh activity' }));
+    await waitFor(() => expect(pageRequests).toHaveLength(3));
+    expect(pageRequests[2]).toContain('after=0&limit=20&purpose=view');
+    expect(pageRequests[2]).not.toContain('upper=');
+    expect(pageRequests.every((url) => !url.endsWith('/activity'))).toBe(true);
+  });
+
+  test('paged full export downloads only a complete bounded same-tenant snapshot, never a prefix', async () => {
+    const download = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    vi.stubGlobal('URL', Object.assign(class extends URL {}, {
+      createObjectURL: vi.fn(() => 'blob:enterprise-test'), revokeObjectURL: vi.fn(),
+    }));
+    const queries: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (url.includes('/activity/page?')) {
+        queries.push(url);
+        const next = url.includes('after=1');
+        return { ok: true, headers: new Headers(), json: async () => ({ organizationId: 'org-a',
+          upperId: 2, nextId: next ? null : 1, pendingCount: 0,
+          events: [{ id: next ? 2 : 1, event: { organizationId: 'org-a', subject: 'alice',
+            action: next ? 'second' : 'first', outcome: 'allowed', at: '2026-11-28T10:00:00Z' } }] }) };
+      }
+      return { ok: true, json: async () => url.endsWith('/members')
+        ? { organizationId: 'org-a', members: [] } : overview };
+    }));
+    render(<EnterpriseAdminDashboard organizationId="org-a" pagedAuditEnabled />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Export audit JSON' }));
+    await waitFor(() => expect(download).toHaveBeenCalledTimes(1));
+    expect(queries[1]).toContain('after=1&limit=100&purpose=export&upper=2');
+    download.mockRestore();
+  });
+
+  for (const failure of ['pending', 'foreign', 'outage'] as const) test(`paged export ${failure} never downloads or retains stale tenant data`, async () => {
+    const download = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url.includes('/activity/page?')
+      ? { ok: failure !== 'outage', headers: new Headers(), json: async () => ({ organizationId: failure === 'foreign' ? 'org-b' : 'org-a',
+        upperId: 2, nextId: null, pendingCount: failure === 'pending' ? 1 : 0, events: [{ id: 1, event: { organizationId: 'org-a',
+          subject: 'foreign', action: 'denied', outcome: 'denied', at: '2026-11-28T10:00:00Z' } }] }) }
+      : { ok: true, json: async () => url.endsWith('/members')
+        ? { organizationId: 'org-a', members: [] } : overview }));
+    render(<EnterpriseAdminDashboard organizationId="org-a" pagedAuditEnabled />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Export audit JSON' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('could not be verified');
+    expect(screen.queryByText('Acme')).not.toBeInTheDocument();
+    expect(download).not.toHaveBeenCalled();
+    download.mockRestore();
+  });
+
   test('a cross-tenant or failed audit export never downloads and hides stale directory', async () => {
     const download = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     vi.stubGlobal('fetch', vi.fn(async (url: string) => url.endsWith('/activity/export')

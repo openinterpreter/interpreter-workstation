@@ -64,6 +64,45 @@ describe('explicit tenant-scoped admin route mount', () => {
     expect(() => mountEnterpriseAdminRoutes(app, { ...config, issuer: '' })).toThrow('requires a verified tenant');
   });
 
+  it('exposes paged audit only with an explicit tenant-scoped opt-in and denies foreign, revoked and invalid cursors', async () => {
+    const app = express();
+    const identity = { organizationId: 'a', issuer: 'https://issuer.invalid/a', subject: 'alice', sessionId: 'session-a' };
+    const pageCalls: number[] = [];
+    let outage = false;
+    const directory = Object.assign(new ServerDirectory('/nonexistent'), {
+      listAuditPage: async (_identity: typeof identity, after: number) => {
+        if (outage) throw new Error('Synthetic store outage');
+        pageCalls.push(after);
+        return { upperId: 3, nextId: null, pendingCount: 0, events: [] };
+      },
+      recordTenantDenial: async () => { /* Synthetic same-tenant audit denial. */ },
+    });
+    const options = { enabled: true as const, applicationOrigin: 'http://127.0.0.1:39394',
+      organizationId: 'a', issuer: identity.issuer, directory,
+      verifySession: async (token: string) => token === 'v'.repeat(43) ? identity : null,
+      allowInsecureLoopbackForTests: true };
+    expect(mountEnterpriseAdminRoutes(app, options)).toBe(true);
+    const url = '/api/enterprise/organizations/a/activity/page?limit=20';
+    const get = (path: string, token = 'v'.repeat(43)) => request(app).get(path).set('Host', '127.0.0.1:39394')
+      .set('Cookie', `interpreter-enterprise-session=${token}`);
+    expect((await get(url)).status).toBe(404);
+    expect(pageCalls).toHaveLength(0);
+    const paged = express();
+    expect(() => mountEnterpriseAdminRoutes(express(), { ...options, enablePagedAudit: 'yes' as unknown as boolean }))
+      .toThrow('requires a verified tenant');
+    expect(mountEnterpriseAdminRoutes(paged, { ...options, enablePagedAudit: true })).toBe(true);
+    const page = (path: string, token = 'v'.repeat(43)) => request(paged).get(path).set('Host', '127.0.0.1:39394')
+      .set('Cookie', `interpreter-enterprise-session=${token}`);
+    expect((await page(url)).status).toBe(200);
+    expect((await page(url.replace('/a/', '/b/'))).status).toBe(403);
+    expect((await page(url, 'r'.repeat(43))).status).toBe(403);
+    expect((await page(`${url}&after=2&after=3`)).status).toBe(403);
+    expect((await page(`${url}&limit=101`)).status).toBe(403);
+    outage = true;
+    expect((await page(url)).status).toBe(503);
+    expect(pageCalls).toEqual([0]);
+  });
+
   it('rejects plaintext loopback outside isolated test mode', () => {
     const previous = process.env.NODE_ENV;
     try {

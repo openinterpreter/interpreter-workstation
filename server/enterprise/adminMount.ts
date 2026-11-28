@@ -3,7 +3,7 @@ import type { EnterpriseDirectory, VerifiedIdentity } from './controlPlane';
 import type { OidcConfiguration } from './oidc';
 import { getWorkstationHostPolicy } from '../workstationConnection';
 import { verifiedDomainName, type ServerDirectory } from './serverDirectory';
-import { createEnterpriseAdminMutationRouter, createEnterpriseBrowserRouter, createEnterpriseDomainProofRouter, createEnterpriseLogoutRouter, createEnterpriseWorkspaceRouter } from './oidcHttp';
+import { createEnterpriseAdminMutationRouter, createEnterpriseAuditPageRouter, createEnterpriseBrowserRouter, createEnterpriseDomainProofRouter, createEnterpriseLogoutRouter, createEnterpriseWorkspaceRouter } from './oidcHttp';
 
 type ScopedAdminMount = Readonly<{
   enabled: true;
@@ -16,12 +16,14 @@ type ScopedAdminMount = Readonly<{
   /** The same operator-pinned identity mapping used by the OIDC callback.
    * A production admin surface cannot be composed from independent pins. */
   oidc?: Pick<OidcConfiguration, 'organizationId' | 'issuer' | 'accountDomain' | 'redirectUri'>;
-  directory: EnterpriseDirectory & Pick<ServerDirectory, 'deactivateMember' | 'demoteAdministrator' | 'revokeMemberSessions' | 'revokeOrganizationSessions' | 'revokeSession' | 'verifyBoundSession' | 'verifyBoundSessionForDomainRenewal' | 'listAudit' | 'recordTenantDenial' | 'beginDomainProof' | 'confirmDomainProof' | 'domainProofStatus' | 'listWorkspaces' | 'createWorkspace' | 'deactivateWorkspace' | 'listWorkspaceGrants' | 'setRuntimeGrant'>;
+  directory: EnterpriseDirectory & Pick<ServerDirectory, 'deactivateMember' | 'demoteAdministrator' | 'revokeMemberSessions' | 'revokeOrganizationSessions' | 'revokeSession' | 'verifyBoundSession' | 'verifyBoundSessionForDomainRenewal' | 'listAudit' | 'listAuditPage' | 'recordTenantDenial' | 'beginDomainProof' | 'confirmDomainProof' | 'domainProofStatus' | 'listWorkspaces' | 'createWorkspace' | 'deactivateWorkspace' | 'listWorkspaceGrants' | 'setRuntimeGrant'>;
   verifySession: (token: string) => Promise<VerifiedIdentity | null>;
   /** Separately opt in to setup; no login or SSO activation follows. */
   enableDomainSetup?: boolean;
   /** Administrative registry only. No workspace files or agent permissions. */
   enableWorkspaceAdministration?: boolean;
+  /** Experimental RLS-v2 ledger only. Never silently expose partial history as a full export. */
+  enablePagedAudit?: boolean;
   /** Only an explicitly isolated test process may permit plaintext loopback. */
   allowInsecureLoopbackForTests?: boolean;
 }>;
@@ -60,6 +62,8 @@ export function mountEnterpriseAdminRoutes(app: Application, options?: ScopedAdm
       !options.directory || typeof options.verifySession !== 'function' ||
       (options.enableDomainSetup !== undefined && typeof options.enableDomainSetup !== 'boolean') ||
       (options.enableWorkspaceAdministration !== undefined && typeof options.enableWorkspaceAdministration !== 'boolean') ||
+      (options.enablePagedAudit !== undefined && typeof options.enablePagedAudit !== 'boolean') ||
+      (options.enablePagedAudit === true && typeof options.directory.listAuditPage !== 'function') ||
       (options.enableDomainSetup === true && (typeof options.directory.beginDomainProof !== 'function' ||
         typeof options.directory.confirmDomainProof !== 'function' || typeof options.directory.domainProofStatus !== 'function')) ||
       (options.enableWorkspaceAdministration === true && (typeof options.directory.listWorkspaces !== 'function' ||
@@ -104,6 +108,7 @@ export function mountEnterpriseAdminRoutes(app: Application, options?: ScopedAdm
   const domains = options.enableDomainSetup === true
     ? createEnterpriseDomainProofRouter({ ...scoped, verifySession: verifyRenewalSession }) : null;
   const workspaces = options.enableWorkspaceAdministration === true ? createEnterpriseWorkspaceRouter(scoped) : null;
+  const pagedAudit = options.enablePagedAudit === true ? createEnterpriseAuditPageRouter(scoped) : null;
   // The host access mode is currently read from the environment on every
   // request. A later switch to remote must not bypass the startup refusal.
   // Keep this gate ahead of all enterprise routes, including read endpoints.
@@ -116,5 +121,6 @@ export function mountEnterpriseAdminRoutes(app: Application, options?: ScopedAdm
   app.use('/api/enterprise', logout);
   if (domains) app.use('/api/enterprise', domains);
   if (workspaces) app.use('/api/enterprise', workspaces);
+  if (pagedAudit) app.use('/api/enterprise', pagedAudit);
   return true;
 }

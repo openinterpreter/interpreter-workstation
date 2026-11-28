@@ -86,6 +86,23 @@ describe.skipIf(!fixture)('real TLS PostgreSQL domain recovery across tenants an
       expect((await get(`${base}/overview`)).status).toBe(403); // Never elevate a recovery cookie.
       const normal = await a.createSession(issuerA, 'f4-a', 'alice', Date.now() + 60_000, 1, domain);
       expect((await a.verifyBoundSession(normal.token, domain))?.subject).toBe('alice');
+      const pagedApp = express();
+      expect(mountEnterpriseAdminRoutes(pagedApp, { enabled: true, enablePagedAudit: true,
+        organizationId: 'f4-a', issuer: issuerA, accountDomain: domain, applicationOrigin: origin,
+        allowInsecureLoopbackForTests: true, directory: other,
+        verifySession: (token) => other.verifyBoundSession(token, domain) })).toBe(true);
+      const pageSession = await a.createSession(issuerA, 'f4-a', 'alice', Date.now() + 60_000, 1, domain);
+      const auditPage = (tenant: string, token: string) => request(pagedApp)
+        .get(`/api/enterprise/organizations/${tenant}/activity/page?limit=20&purpose=view`)
+        .set('Host', '127.0.0.1:39394').set('Cookie', `interpreter-enterprise-session=${token}`);
+      expect((await auditPage('f4-a', pageSession.token)).status).toBe(200);
+      expect((await auditPage('f4-b', pageSession.token)).status).toBe(403);
+      await a.setMember(normal.identity, { organizationId: 'f4-a', subject: 'carol',
+        displayName: 'Carol', role: 'member', active: true });
+      const memberSession = await a.createSession(issuerA, 'f4-a', 'carol', Date.now() + 60_000, 1, domain);
+      expect((await auditPage('f4-a', memberSession.token)).status).toBe(403);
+      await a.revokeSession(pageSession.identity);
+      expect((await auditPage('f4-a', pageSession.token)).status).toBe(403);
       // TLS is mandatory even on loopback and an unrelated CA is not accepted.
       const plaintext = new pg.Client({ host: '127.0.0.1', port: 55439, database: 'enterprise_f4_fixture',
         user: 'enterprise_f4_a', password: readFileSync(`${fixture}/pass-0`, 'utf8'), ssl: false });
@@ -102,6 +119,7 @@ describe.skipIf(!fixture)('real TLS PostgreSQL domain recovery across tenants an
       // errors before the Bun HTTP harness can reliably observe the result.
       await aOtherPool.end();
       expect((await get(`${base}/domains/status?domain=${domain}`)).status).toBe(503);
+      expect((await auditPage('f4-a', normal.token)).status).toBe(503);
       expect((await a.verifyBoundSession(normal.token, domain))?.subject).toBe('alice');
     } finally {
       await Promise.allSettled([aPool.end(), aOtherPool.end(), bPool.end()]);
