@@ -12,19 +12,38 @@ type Overview = {
 type Member = { subject: string; displayName: string; role: 'admin' | 'member'; active: boolean };
 type Activity = { organizationId: string; subject: string; targetSubject?: string; targetOrganizationId?: string; targetDomain?: string;
   action: string; outcome: 'allowed' | 'denied'; at: string };
+type AuditPage = { organizationId: string; upperId: number; nextId: number | null; pendingCount: number;
+  events: { id: number; event: Activity }[] };
+
+function validAuditPage(value: unknown, organizationId: string, after: number, limit: number, upper?: number): value is AuditPage {
+  if (!value || typeof value !== 'object') return false;
+  const page = value as AuditPage;
+  if (page.organizationId !== organizationId || !Number.isSafeInteger(page.upperId) || page.upperId < after ||
+      (upper !== undefined && page.upperId !== upper) || !Number.isSafeInteger(page.pendingCount) || page.pendingCount < 0 ||
+      !Array.isArray(page.events) || page.events.length > limit) return false;
+  let last = after;
+  for (const item of page.events) {
+    if (!Number.isSafeInteger(item.id) || item.id <= last || item.id > page.upperId ||
+        item.event?.organizationId !== organizationId || typeof item.event.subject !== 'string' ||
+        typeof item.event.action !== 'string' || !['allowed', 'denied'].includes(item.event.outcome) ||
+        typeof item.event.at !== 'string') return false;
+    last = item.id;
+  }
+  return page.nextId === null || (page.events.length > 0 && page.nextId === last && last < page.upperId);
+}
 
 /** Tenant changes remount the entire view before paint. An old request or
  * mutation may still finish, but cannot write its notice or directory into
  * a newly selected organization's UI. The session stays in HttpOnly cookies. */
-export function EnterpriseAdminDashboard({ organizationId, domainSetupEnabled = false, workspaceAdministrationEnabled = false }:
-  { organizationId: string; domainSetupEnabled?: boolean; workspaceAdministrationEnabled?: boolean }) {
+export function EnterpriseAdminDashboard({ organizationId, domainSetupEnabled = false, workspaceAdministrationEnabled = false, pagedAuditEnabled = false }:
+  { organizationId: string; domainSetupEnabled?: boolean; workspaceAdministrationEnabled?: boolean; pagedAuditEnabled?: boolean }) {
   return <EnterpriseAdminDashboardTenant key={organizationId} organizationId={organizationId}
-    domainSetupEnabled={domainSetupEnabled} workspaceAdministrationEnabled={workspaceAdministrationEnabled} />;
+    domainSetupEnabled={domainSetupEnabled} workspaceAdministrationEnabled={workspaceAdministrationEnabled} pagedAuditEnabled={pagedAuditEnabled} />;
 }
 
 /** Same-origin browser admin UI; the HttpOnly session is never a prop. Unmounted. */
-function EnterpriseAdminDashboardTenant({ organizationId, domainSetupEnabled, workspaceAdministrationEnabled }:
-  { organizationId: string; domainSetupEnabled: boolean; workspaceAdministrationEnabled: boolean }) {
+function EnterpriseAdminDashboardTenant({ organizationId, domainSetupEnabled, workspaceAdministrationEnabled, pagedAuditEnabled }:
+  { organizationId: string; domainSetupEnabled: boolean; workspaceAdministrationEnabled: boolean; pagedAuditEnabled: boolean }) {
   const [view, setView] = useState<{ overview: Overview; members: Member[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -33,6 +52,7 @@ function EnterpriseAdminDashboardTenant({ organizationId, domainSetupEnabled, wo
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
   const [activity, setActivity] = useState<Activity[] | null>(null);
+  const [activityPage, setActivityPage] = useState<{ upper: number; next: number | null } | null>(null);
   const [loadingActivity, setLoadingActivity] = useState(false);
   const [exporting, setExporting] = useState(false);
   const activityRequest = useRef<AbortController | null>(null);
@@ -43,6 +63,7 @@ function EnterpriseAdminDashboardTenant({ organizationId, domainSetupEnabled, wo
   useEffect(() => {
     setView(null);
     setActivity(null);
+    setActivityPage(null);
     setLoadingActivity(false);
     setExporting(false);
     setError(null);
@@ -74,6 +95,19 @@ function EnterpriseAdminDashboardTenant({ organizationId, domainSetupEnabled, wo
     return () => { controller.abort(); activityRequest.current?.abort(); exportRequest.current?.abort(); };
   }, [organizationId, revision]);
 
+  async function fetchAuditPage(after: number, limit: number, purpose: 'view' | 'export',
+    signal: AbortSignal, upper?: number): Promise<AuditPage> {
+    const query = new URLSearchParams({ after: String(after), limit: String(limit), purpose });
+    if (upper !== undefined) query.set('upper', String(upper));
+    const response = await fetch(`/api/enterprise/organizations/${encodeURIComponent(organizationId)}/activity/page?${query}`, {
+      credentials: 'same-origin', cache: 'no-store', signal,
+    });
+    if (!response.ok || Number(response.headers?.get('content-length') ?? 0) > 2_000_000) throw new Error('Audit page unavailable');
+    const payload: unknown = await response.json();
+    if (!validAuditPage(payload, organizationId, after, limit, upper)) throw new Error('Invalid audit page');
+    return payload;
+  }
+
   async function exportAudit() {
     if (!view || busy || exporting) return;
     const controller = new AbortController();
@@ -81,6 +115,43 @@ function EnterpriseAdminDashboardTenant({ organizationId, domainSetupEnabled, wo
     setExporting(true);
     setError(null);
     try {
+      if (pagedAuditEnabled) {
+        const events: Activity[] = [];
+        let exportBytes = 128 + new TextEncoder().encode(organizationId).byteLength;
+        let after = 0;
+        let upper: number | undefined;
+        // The ledger is unbounded. Refuse an incomplete download rather than
+        // label a size-limited prefix a full audit export.
+        for (let pageNumber = 0; pageNumber < 1000; pageNumber++) {
+          const page = await fetchAuditPage(after, 100, 'export', controller.signal, upper);
+          if (page.pendingCount !== 0) throw new Error('Uncommitted audit windows');
+          upper = page.upperId;
+          for (const { event } of page.events) {
+            exportBytes += new TextEncoder().encode(JSON.stringify(event)).byteLength + 1;
+            if (exportBytes > 9_000_000) throw new Error('Export exceeds browser bound');
+            events.push(event);
+          }
+          if (page.nextId === null) {
+            if (controller.signal.aborted) return;
+            const body = JSON.stringify({ organizationId, upperId: upper, events });
+            if (new TextEncoder().encode(body).byteLength > 9_000_000) throw new Error('Export exceeds browser bound');
+            const url = URL.createObjectURL(new Blob([body], { type: 'application/json' }));
+            try {
+              const link = document.createElement('a');
+              link.href = url;
+              link.download = 'organization-audit.json';
+              document.body.appendChild(link);
+              link.click();
+              link.remove();
+            } finally { window.setTimeout(() => URL.revokeObjectURL(url), 1000); }
+            setNotice('Organization audit snapshot prepared. Keep this sensitive file in an approved location.');
+            setRevision((value) => value + 1);
+            return;
+          }
+          after = page.nextId;
+        }
+        throw new Error('Export page bound reached');
+      }
       const response = await fetch(`/api/enterprise/organizations/${encodeURIComponent(organizationId)}/activity/export`, {
         credentials: 'same-origin', cache: 'no-store', signal: controller.signal,
       });
@@ -116,13 +187,22 @@ function EnterpriseAdminDashboardTenant({ organizationId, domainSetupEnabled, wo
     }
   }
 
-  async function loadActivity() {
+  async function loadActivity(next = false) {
     if (!view || busy || exporting || loadingActivity) return;
     const controller = new AbortController();
     activityRequest.current?.abort();
     activityRequest.current = controller;
     setLoadingActivity(true);
     try {
+      if (pagedAuditEnabled) {
+        const page = await fetchAuditPage(next ? activityPage?.next ?? 0 : 0, 20, 'view', controller.signal,
+          next ? activityPage?.upper : undefined);
+        if (!controller.signal.aborted) {
+          setActivity(page.events.map(({ event }) => event));
+          setActivityPage({ upper: page.upperId, next: page.nextId });
+        }
+        return;
+      }
       const response = await fetch(`/api/enterprise/organizations/${encodeURIComponent(organizationId)}/activity`, {
         credentials: 'same-origin', cache: 'no-store', signal: controller.signal,
       });
@@ -316,7 +396,9 @@ function EnterpriseAdminDashboardTenant({ organizationId, domainSetupEnabled, wo
           <section className="rounded-xl border border-border p-4" aria-label="Recent organization activity">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div><h3 className="text-sm font-semibold text-foreground">Recent activity</h3>
-                <p className="mt-1 text-xs text-muted-foreground">Up to 20 tenant-scoped events. Full export is a sensitive JSON file.</p></div>
+                <p className="mt-1 text-xs text-muted-foreground">{pagedAuditEnabled
+                  ? 'Tenant audit timeline, oldest first in pages of 20. Export is a sensitive JSON file.'
+                  : 'Up to 20 tenant-scoped events. Full export is a sensitive JSON file.'}</p></div>
               <button type="button" disabled={busy || exporting || loadingActivity} onClick={() => void loadActivity()}
                 className="rounded-md border border-border px-3 py-1 text-xs font-medium hover:bg-muted disabled:opacity-50">
                 {loadingActivity ? 'Loading activity…' : activity ? 'Refresh activity' : 'View recent activity'}
@@ -330,10 +412,16 @@ function EnterpriseAdminDashboardTenant({ organizationId, domainSetupEnabled, wo
                 <span className="text-muted-foreground">{event.outcome} · {event.at}</span>
               </li>)}
             </ol> : <p className="mt-3 text-sm text-muted-foreground">No activity yet.</p>)}
+            {pagedAuditEnabled && activityPage?.next !== null && activityPage && <button type="button"
+              disabled={busy || exporting || loadingActivity} onClick={() => void loadActivity(true)}
+              className="mt-3 rounded-md border border-border px-3 py-1 text-xs font-medium hover:bg-muted disabled:opacity-50">
+              Next audit page
+            </button>}
           </section>
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-muted/20 p-4">
             <div><h3 className="text-sm font-semibold text-foreground">Full audit export</h3>
-              <p className="mt-1 text-xs text-muted-foreground">Includes member identifiers. Store the JSON file only in an approved location; retention is not configured.</p></div>
+              <p className="mt-1 text-xs text-muted-foreground">Includes member identifiers. Store the JSON file only in an approved location; retention is not configured.
+                {pagedAuditEnabled && ' Large or uncommitted histories cannot be exported from this browser; no partial file is offered.'}</p></div>
             <button type="button" disabled={busy || exporting} onClick={() => void exportAudit()}
               className="rounded-md border border-border px-3 py-2 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50">
               {exporting ? 'Preparing export…' : 'Export audit JSON'}
