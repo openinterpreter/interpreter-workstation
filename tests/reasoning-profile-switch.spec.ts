@@ -236,9 +236,8 @@ test.describe('Reasoning and profile switching', () => {
       await expectPopoverClosed(popover);
       expect(await page.locator(sel.agentTabAny()).count()).toBe(initialTabCount);
 
-      // Wait for Radix's exit animation to remove the previous popover before
-      // opening it again; its closed state alone is not a stable reentry point.
-      await expect(popover).toHaveCount(0, { timeout: 5000 });
+      // Radix may retain a closed popover in the DOM after its exit animation.
+      // Reopen through the settings trigger rather than requiring unmounting.
       await settingsButton.click();
       await expect(popover).toBeVisible({ timeout: 5000 });
 
