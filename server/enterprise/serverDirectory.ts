@@ -601,7 +601,7 @@ export class ServerDirectory implements EnterpriseDirectory {
    * global claim. File, pilot and unknown stores fail closed. */
   async domainClaimHeldForRecovery(organizationId: string, issuer: string, inputDomain: string): Promise<boolean> {
     const domain = verifiedDomainName(inputDomain);
-    if (!domain || domain !== inputDomain || !this.store?.probeDomainRecovery ||
+    if (!domain || domain !== inputDomain || this.store?.requiresPagedAudit !== true || !this.store.probeDomainRecovery ||
         !this.store.domainClaimStatus || !this.store.changeWithDomainClaim) return false;
     if (!await this.store.probeDomainRecovery(organizationId, issuer, domain)) return false;
     return this.store.domainClaimStatus(organizationId, issuer, domain);
@@ -1086,7 +1086,8 @@ export class ServerDirectory implements EnterpriseDirectory {
   async createDomainRecoverySession(issuer: string, organizationId: string, subject: string,
     expiry: number, expectedAuthEpoch: number, accountDomain: string): Promise<{ token: string; identity: VerifiedIdentity }> {
     if (!key(organizationId) || !subjectIdentifier(subject) || !issuer ||
-        verifiedDomainName(accountDomain) !== accountDomain || !this.store?.changeWithDomainClaim ||
+        verifiedDomainName(accountDomain) !== accountDomain || this.store?.requiresPagedAudit !== true ||
+        !this.store.changeWithDomainClaim ||
         !Number.isSafeInteger(expectedAuthEpoch) || expectedAuthEpoch < 0 ||
         expiry <= Date.now() || expiry > Date.now() + 10 * 60_000) throw new Error('Invalid recovery identity');
     const token = randomBytes(32).toString('base64url');
@@ -1102,14 +1103,20 @@ export class ServerDirectory implements EnterpriseDirectory {
           otherActiveDomainClaim(data, organizationId, accountDomain, Date.now())) {
         throw new Error('Domain recovery is unavailable');
       }
-      for (const session of Object.values(data.sessions)) {
+      let replaced = false;
+      for (const [previousHash, session] of Object.entries(data.sessions)) {
         if (session.organizationId === organizationId && session.subject === subject && session.recoveryOnly) {
-          session.revoked = true;
+          // A replaced token is invalid once its hash is gone. Retaining
+          // every revoked hash lets repeated recovery logins fill the bounded
+          // snapshot even when the audit ledger is separately paged.
+          delete data.sessions[previousHash];
+          replaced = true;
         }
       }
       data.sessions[sessionId] = { issuer, organizationId, subject, expiresAt: expiry, revoked: false,
         accountDomain, recoveryOnly: true };
-      appendScopedAudit(data, { organizationId, subject, action: 'session.domain-recovery.create',
+      appendScopedAudit(data, { organizationId, subject,
+        action: replaced ? 'session.domain-recovery.replace' : 'session.domain-recovery.create',
         outcome: 'allowed', at: new Date().toISOString() });
     }, () => true)); // Admin recovery remains possible near the snapshot cap.
     return { token, identity: { issuer, organizationId, subject, sessionId } };

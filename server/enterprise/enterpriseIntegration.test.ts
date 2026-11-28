@@ -194,6 +194,7 @@ describe('server-owned directory and local OIDC fixture', () => {
     let claimOutage = false;
     let dns: string[][] = [];
     const store: EnterpriseStateStore = {
+      requiresPagedAudit: true,
       read: async () => state,
       change: async (fn) => fn(state),
       domainClaimStatus: async (org, issuer, domain) => {

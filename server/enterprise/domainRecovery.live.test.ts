@@ -4,6 +4,7 @@ import express from 'express';
 import request from 'supertest';
 import pg from 'pg';
 import { createEnterprisePostgresPool, TenantPostgresDirectoryStore } from './postgresDirectoryStore';
+import { migrateEnterpriseRlsAuditSnapshots } from './rlsAuditMigration';
 import { ServerDirectory } from './serverDirectory';
 import { mountEnterpriseAdminRoutes } from './adminMount';
 
@@ -21,11 +22,11 @@ describe.skipIf(!fixture)('real TLS PostgreSQL domain recovery across tenants an
     try {
       const issuerA = 'https://idp.invalid/f4-a', issuerB = 'https://idp.invalid/f4-b';
       const domain = 'recovery.example';
-      const aStore = new TenantPostgresDirectoryStore(aPool, 'f4-a', 'rls');
-      const a = new ServerDirectory(aStore);
+      let aStore = new TenantPostgresDirectoryStore(aPool, 'f4-a', 'rls');
+      let a = new ServerDirectory(aStore);
       let answer: string[][] = [];
-      const other = new ServerDirectory(new TenantPostgresDirectoryStore(aOtherPool, 'f4-a', 'rls'), async () => answer);
-      const b = new ServerDirectory(new TenantPostgresDirectoryStore(bPool, 'f4-b', 'rls'));
+      let other = new ServerDirectory(new TenantPostgresDirectoryStore(aOtherPool, 'f4-a', 'rls'), async () => answer);
+      let b = new ServerDirectory(new TenantPostgresDirectoryStore(bPool, 'f4-b', 'rls'));
       await a.bootstrap('f4-a', 'Acme', issuerA,
         { organizationId: 'f4-a', subject: 'alice', displayName: 'Alice', role: 'admin', active: true });
       await b.bootstrap('f4-b', 'Beta', issuerB,
@@ -38,6 +39,16 @@ describe.skipIf(!fixture)('real TLS PostgreSQL domain recovery across tenants an
       expect(await b.domainClaimHeldForRecovery('f4-b', issuerB, domain)).toBe(false);
       const bound = await a.createSession(issuerA, 'f4-a', 'alice', Date.now() + 60_000, 0, domain);
       await aStore.change((state) => { state.organizations['f4-a']!.domainProofs![domain]!.verifiedUntil = Date.now() - 1; });
+      expect(await a.domainClaimHeldForRecovery('f4-a', issuerA, domain)).toBe(false); // Legacy snapshot cannot recover.
+      await expect(a.createDomainRecoverySession(issuerA, 'f4-a', 'alice', Date.now() + 60_000, 0, domain))
+        .rejects.toThrow('Invalid recovery identity');
+      const operator = new pg.Pool({ host: fixture, port: 55439, database: 'enterprise_f4_fixture', user: 'killianlucas' });
+      try { expect(await migrateEnterpriseRlsAuditSnapshots(operator)).toBe(2); }
+      finally { await operator.end(); }
+      aStore = new TenantPostgresDirectoryStore(aPool, 'f4-a', 'rls-v2');
+      a = new ServerDirectory(aStore);
+      other = new ServerDirectory(new TenantPostgresDirectoryStore(aOtherPool, 'f4-a', 'rls-v2'), async () => answer);
+      b = new ServerDirectory(new TenantPostgresDirectoryStore(bPool, 'f4-b', 'rls-v2'));
       expect(await a.domainClaimHeldForRecovery('f4-a', issuerA, domain)).toBe(true);
       expect(await b.domainClaimHeldForRecovery('f4-a', issuerA, domain)).toBe(false);
       expect(await a.domainClaimHeldForRecovery('f4-b', issuerB, domain)).toBe(false);

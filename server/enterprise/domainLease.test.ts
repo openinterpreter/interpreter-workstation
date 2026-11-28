@@ -26,6 +26,7 @@ async function fixture() {
     return result;
   };
   const store: EnterpriseStateStore = {
+    requiresPagedAudit: true,
     read: async () => decodeDirectoryState(serialized),
     change: (fn) => change(fn),
     domainClaimStatus: async (org, claimIssuer, claimDomain) =>
@@ -35,6 +36,12 @@ async function fixture() {
         throw new Error('Verified account domain required');
       }
       return change(fn);
+    },
+    probeDomainRecovery: async (org, claimIssuer, claimDomain) => {
+      const tenant = decodeDirectoryState(serialized).organizations[org];
+      const proof = tenant?.domainProofs?.[claimDomain];
+      return Boolean(org === 'org-a' && claimIssuer === tenant?.issuer && proof?.issuer === claimIssuer &&
+        proof.verifiedUntil && proof.verifiedUntil <= Date.now());
     },
   };
   const directory = new ServerDirectory(store, async (name) => {
@@ -57,6 +64,7 @@ async function fixture() {
     serialized = JSON.stringify(data); // Only this disposable fixture simulates time passing.
   };
   return { directory, bound, queries, proof, editProof,
+    recoveryCount: () => Object.values(decodeDirectoryState(serialized).sessions).filter((session) => session.recoveryOnly).length,
     dns: (values: string[][]) => { answers = values; }, outage: (value: boolean) => { outage = value; },
     duringLookup: (hook: (() => void) | null) => { duringLookup = hook; },
     claim: (value: boolean) => { claimed = value; } };
@@ -193,5 +201,19 @@ describe('domain lease renewal keeps domain-bound sessions usable', () => {
     claim(false);
     await expect(attempt()).rejects.toThrow('Verified account domain required');
     expect(await directory.verifySession(bound.token)).toBeNull();
+  });
+  test('repeated recovery exchanges remove superseded token hashes and audit rotation', async () => {
+    const { directory, editProof, recoveryCount } = await fixture();
+    editProof((value) => { value.verifiedUntil = Date.now() - 1; });
+    let prior: string | null = null;
+    for (let index = 0; index < 12; index++) {
+      const session = await directory.createDomainRecoverySession(issuer, 'org-a', 'alice', Date.now() + 60_000, 0, domain);
+      if (prior) expect(await directory.verifyBoundSessionForDomainRenewal(prior, domain)).toBeNull();
+      expect((await directory.verifyBoundSessionForDomainRenewal(session.token, domain))?.subject).toBe('alice');
+      prior = session.token;
+    }
+    expect(recoveryCount()).toBe(1);
+    const events = await directory.auditSummary('org-a');
+    expect(events.eventCount).toBeGreaterThan(12);
   });
 });
