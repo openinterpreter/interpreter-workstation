@@ -5,8 +5,9 @@ type Status = { domain: string; challengeExpiresAt: number | null; verifiedUntil
 
 /** Opt-in admin setup surface; an explicit scoped server mount is required.
  * DNS proof is a preliminary signal, not a live SSO enrollment decision. */
-export function EnterpriseDomainSetup({ organizationId }: { organizationId: string }) {
-  const [domain, setDomain] = useState('');
+export function EnterpriseDomainSetup({ organizationId, recoveryDomain }: { organizationId: string; recoveryDomain?: string }) {
+  const recovery = recoveryDomain !== undefined;
+  const [domain, setDomain] = useState(recoveryDomain ?? '');
   const [challenge, setChallenge] = useState<Challenge | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
   const [clock, setClock] = useState(() => Date.now());
@@ -14,9 +15,9 @@ export function EnterpriseDomainSetup({ organizationId }: { organizationId: stri
   const [error, setError] = useState<string | null>(null);
   const request = useRef<AbortController | null>(null);
   useEffect(() => {
-    setDomain(''); setChallenge(null); setStatus(null); setError(null); setBusy(false);
+    setDomain(recoveryDomain ?? ''); setChallenge(null); setStatus(null); setError(null); setBusy(false);
     return () => request.current?.abort();
-  }, [organizationId]);
+  }, [organizationId, recoveryDomain]);
   useEffect(() => {
     const deadlines = [status?.verifiedUntil, status?.challengeExpiresAt, challenge?.expiresAt]
       .filter((value): value is number => typeof value === 'number' && value > clock);
@@ -79,14 +80,16 @@ export function EnterpriseDomainSetup({ organizationId }: { organizationId: stri
 
   return <section className="rounded-xl border border-border bg-muted/10 p-4" aria-label="Domain setup">
     <div className="flex flex-wrap items-start justify-between gap-2">
-      <div><h3 className="text-sm font-semibold text-foreground">Domain setup</h3>
-        <p className="mt-1 max-w-prose text-xs text-muted-foreground">Prove control of a DNS name with a short-lived TXT record. This does not activate SSO or assign accounts.</p></div>
-      <span className="rounded-full border border-border px-2 py-1 text-xs text-muted-foreground">Identity setup · DNS step</span>
+      <div><h3 className="text-sm font-semibold text-foreground">{recovery ? 'Restore domain access' : 'Domain setup'}</h3>
+        <p className="mt-1 max-w-prose text-xs text-muted-foreground">{recovery
+          ? 'Your prior DNS proof has expired. Re-prove only the domain assigned to this organization. This limited session cannot administer people or workspaces.'
+          : 'Prove control of a DNS name with a short-lived TXT record. This does not activate SSO or assign accounts.'}</p></div>
+      <span className="rounded-full border border-border px-2 py-1 text-xs text-muted-foreground">{recovery ? 'Identity recovery · DNS step' : 'Identity setup · DNS step'}</span>
     </div>
     <label htmlFor="enterprise-domain" className="mt-4 block text-xs font-medium text-foreground">Organization domain</label>
     <div className="mt-1 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
-      <input id="enterprise-domain" type="text" autoComplete="off" spellCheck={false} value={domain}
-        onChange={(event) => { setDomain(event.target.value.trim().toLowerCase()); setChallenge(null); setStatus(null); setError(null); }}
+      <input id="enterprise-domain" type="text" autoComplete="off" spellCheck={false} value={domain} readOnly={recovery}
+        onChange={(event) => { if (!recovery) { setDomain(event.target.value.trim().toLowerCase()); setChallenge(null); setStatus(null); setError(null); } }}
         placeholder="example.com" disabled={busy}
         className="min-w-0 w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground" />
       <button type="button" disabled={!domain || busy} onClick={() => void act('challenge')}
@@ -107,12 +110,16 @@ export function EnterpriseDomainSetup({ organizationId }: { organizationId: stri
     </div>}
     {challenge && challenge.expiresAt <= clock && <p role="status" className="mt-3 text-sm text-foreground">The DNS challenge expired. Create a new challenge before retrying verification.</p>}
     {status && <p role="status" className="mt-3 text-sm text-foreground">{status.verifiedUntil && status.verifiedUntil > clock
-      ? `DNS proof observed; valid until ${new Date(status.verifiedUntil).toLocaleString()}. SSO remains off until the other identity and deployment checks pass.`
+      ? recovery ? `DNS proof renewed until ${new Date(status.verifiedUntil).toLocaleString()}. Sign in again; this limited session cannot administer the organization.`
+        : `DNS proof observed; valid until ${new Date(status.verifiedUntil).toLocaleString()}. SSO remains off until the other identity and deployment checks pass.`
       : status.verifiedUntil ? `DNS proof expired ${new Date(status.verifiedUntil).toLocaleString()}. Create a new challenge to renew it; ordinary administration remains unavailable until verification succeeds.`
       : status.challengeExpiresAt && status.challengeExpiresAt > clock
         ? `A DNS challenge expires ${new Date(status.challengeExpiresAt).toLocaleString()}. Create a new challenge if you no longer have the TXT value.`
       : status.challengeExpiresAt ? 'The DNS challenge expired. Create a new challenge before retrying verification.'
         : 'No current DNS confirmation is recorded for this domain. SSO remains off.'}</p>}
     {error && <p role="alert" className="mt-3 text-sm text-destructive">{error}</p>}
+    {recovery && status?.verifiedUntil && status.verifiedUntil > clock &&
+      <a className="mt-3 inline-flex rounded-md border border-border px-3 py-2 text-xs font-medium hover:bg-muted"
+        href={`/organizations/${encodeURIComponent(organizationId)}/login`}>Sign in again</a>}
   </section>;
 }

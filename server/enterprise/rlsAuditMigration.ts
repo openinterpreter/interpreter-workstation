@@ -43,8 +43,8 @@ export function prepareLedgerOnlySnapshot(organizationId: string, serialized: st
   }
   const next: DirectoryState = { ...state, version: 2, audit: [], auditCursor: {
     count: rows.length, lastId,
-    tailDigest: rows.length ? auditDigest(rows.at(-1)!.content) : null,
-    latestAt: state.audit.at(-1)?.at ?? null,
+    tailDigest: rows.length ? auditDigest(rows[rows.length - 1]!.content) : null,
+    latestAt: state.audit[state.audit.length - 1]?.at ?? null,
   } };
   validateDirectoryState(next);
   const content = JSON.stringify(next);

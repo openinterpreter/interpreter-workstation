@@ -425,7 +425,7 @@ export class TenantPostgresDirectoryStore implements EnterpriseStateStore {
       const member = org?.members[identity.subject];
       const session = state.sessions[identity.sessionId];
       const domain = session?.accountDomain;
-      const proof = domain && org?.domainProofs?.[domain];
+      const proof = domain ? org?.domainProofs?.[domain] : undefined;
       const now = Date.now();
       const active = Boolean(session && !session.revoked && session.expiresAt > now &&
         session.organizationId === identity.organizationId && session.issuer === identity.issuer &&

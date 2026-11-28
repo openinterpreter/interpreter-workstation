@@ -51,7 +51,7 @@ describe('unmounted HTTP boundary, deterministic local callback fixture', () => 
         return input.code === 'normal' ? { token: session, expiresAt: Date.now() + 60_000 }
           : { token: session, expiresAt: Date.now() + 60_000, recoveryOnly: true as const };
       },
-    } as OidcIntegration;
+    } as unknown as OidcIntegration;
     const start = '/organizations/org-a/domain-recovery/login';
     const callback = `/enterprise/callback?code=fixture-code&state=${state}`;
     const defaults = express();
@@ -60,7 +60,7 @@ describe('unmounted HTTP boundary, deterministic local callback fixture', () => 
     const disabled = await request(defaults).get(callback).set('Host', host)
       .set('Cookie', `interpreter-oidc-binding=${binding}`);
     expect(disabled.status).toBe(401);
-    expect(disabled.headers['set-cookie'].join(';')).not.toContain(`interpreter-enterprise-session=${session}`);
+    expect(String(disabled.headers['set-cookie'])).not.toContain(`interpreter-enterprise-session=${session}`);
     expect(calls).toEqual(['callback-disabled']);
     for (const unsafe of ['//untrusted.test', '/settings?recovery=1', '/settings', '/\\untrusted.test']) {
       expect(() => createOidcHttpRouter({ config: pinned, integration, applicationOrigin: origin,
@@ -74,14 +74,14 @@ describe('unmounted HTTP boundary, deterministic local callback fixture', () => 
     expect(calls).toEqual(['callback-disabled']);
     const login = await request(enabled).get(start).set('Host', host);
     expect(login.status).toBe(302);
-    expect(login.headers['set-cookie'].join(';')).toContain(`interpreter-oidc-binding=${binding}`);
+    expect(String(login.headers['set-cookie'])).toContain(`interpreter-oidc-binding=${binding}`);
     const result = await request(enabled).get(callback).set('Host', host)
       .set('Cookie', `interpreter-oidc-binding=${binding}`);
     expect(result.status).toBe(303);
     expect(result.headers.location).toBe(recoveryPath);
-    expect(result.headers['set-cookie'].join(';')).toContain(`interpreter-enterprise-session=${session}`);
-    expect(result.headers['set-cookie'].join(';')).toContain('HttpOnly');
-    expect(result.headers['set-cookie'].join(';')).toContain('SameSite=Lax');
+    expect(String(result.headers['set-cookie'])).toContain(`interpreter-enterprise-session=${session}`);
+    expect(String(result.headers['set-cookie'])).toContain('HttpOnly');
+    expect(String(result.headers['set-cookie'])).toContain('SameSite=Lax');
     const normal = await request(enabled).get(`/enterprise/callback?code=normal&state=${state}`)
       .set('Host', host).set('Cookie', `interpreter-oidc-binding=${binding}`);
     expect(normal.status).toBe(303);
