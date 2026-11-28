@@ -1,9 +1,8 @@
-<!-- release-notes-for: 0.2.267 -->
+<!-- release-notes-for: 0.2.268 -->
 ## What's new
 
-- Adds confirmed, revocable device pairing with tighter session and origin protections.
-- Makes Goal retry and notification delivery more reliable under transient capacity errors.
-- Stabilizes the profile-switch interaction test when reopening settings.
+- Makes profile-switch settings re-entry reliable when a closed popover remains mounted.
+- Updates the bundled Open Interpreter runtime pin to rust-v0.0.65.
 
 ## Distribution
 
