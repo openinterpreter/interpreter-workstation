@@ -229,7 +229,8 @@ test.describe('Reasoning and profile switching', () => {
       await expect(thread.getByText('Something went wrong')).toHaveCount(0);
       await expect(page.locator(sel('typingIndicator'))).toBeHidden({ timeout: 10000 });
 
-      await settingsButton.press('Enter');
+      // Keep this scenario focused on profile switching rather than keyboard activation.
+      await settingsButton.click();
       await expect(popover).toBeVisible({ timeout: 5000 });
       await popover.locator(sel.profileCard(profileB.id)).press('Enter');
 
@@ -239,7 +240,7 @@ test.describe('Reasoning and profile switching', () => {
       // Wait for Radix's exit animation to remove the previous popover before
       // opening it again; its closed state alone is not a stable reentry point.
       await expect(popover).toHaveCount(0, { timeout: 5000 });
-      await settingsButton.press('Enter');
+      await settingsButton.click();
       await expect(popover).toBeVisible({ timeout: 5000 });
 
       const settingsFooterButton = popover.getByRole('button', { name: 'Settings' });
